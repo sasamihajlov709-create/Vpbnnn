@@ -160,7 +160,7 @@ object ServiceChecker {
                 
                 // Adaptive delay: check faster if key services are down
                 val youtubeDown = _statuses.value.find { it.name == "YouTube" }?.isUp == false
-                val delayTime = if (youtubeDown) 5000L else 15000L
+                val delayTime = if (youtubeDown) 30000L else 60000L
                 delay(delayTime)
             }
         }

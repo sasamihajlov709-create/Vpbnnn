@@ -93,15 +93,6 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
-    var hasAutoStarted by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        if (!isActive && !hasAutoStarted) {
-            hasAutoStarted = true
-            onToggle()
-        }
-    }
-
     val bgColor1 = Color(0xFF15020A) // Almost black with pink tint
     val bgColor2 = Color(0xFF2A0614) // Very dark pink/burgundy
     val bgColor3 = Color(0xFF420B20) // Dark muted pink
