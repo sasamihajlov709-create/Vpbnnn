@@ -15,6 +15,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -53,6 +55,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
         enableEdgeToEdge()
         setContent {
             val isVpnActive by PinkVpnService.isRunning.collectAsStateWithLifecycle(initialValue = false)
@@ -69,18 +72,27 @@ class MainActivity : ComponentActivity() {
         if (isActive) {
             stopVpnService()
         } else {
-            val intent = VpnService.prepare(this)
-            if (intent != null) {
-                vpnLauncher.launch(intent)
-            } else {
-                startVpnService()
+            try {
+                val intent = VpnService.prepare(this)
+                if (intent != null) {
+                    vpnLauncher.launch(intent)
+                } else {
+                    startVpnService()
+                }
+            } catch (e: SecurityException) {
+                android.util.Log.e("MainActivity", "VPN preparation failed", e)
+                android.widget.Toast.makeText(
+                    this,
+                    "VPN setup failed: package/UID system conflict. Please restart the application.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
     private fun startVpnService() {
         val intent = Intent(this, PinkVpnService::class.java)
-        startService(intent)
+        androidx.core.content.ContextCompat.startForegroundService(this, intent)
     }
 
     private fun stopVpnService() {
@@ -119,11 +131,27 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
     val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
     
+    val context = LocalContext.current
+    
+    // Check and request notification permission unconditionally at the root
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { }
+    
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            val notificationPermission = "android.permission.POST_NOTIFICATIONS"
+            val permissionCheck = androidx.core.content.ContextCompat.checkSelfPermission(context, notificationPermission)
+            if (permissionCheck != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                launcher.launch(notificationPermission)
+            }
+        }
+    }
+
     // Derived states for smoother UI
     val speedKb = (speedBytes / 1024.0)
-    val speedText = if (speedKb > 1024) String.format("%.1f MB/s", speedKb / 1024.0) else String.format("%.0f KB/s", speedKb)
+    val speedText = if (speedKb > 1024) String.format(java.util.Locale.US, "%.1f MB/s", speedKb / 1024.0) else String.format(java.util.Locale.US, "%.0f KB/s", speedKb)
 
-    val context = LocalContext.current
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -147,15 +175,20 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 .blur(radius = 48.dp)
         )
 
-        // Content Layer
+        // Content Layer - Scrollable to prevent clipping or overflow on compact devices
+        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxHeight()
+                .widthIn(max = 600.dp)
+                .align(Alignment.TopCenter)
+                .verticalScroll(scrollState)
                 .padding(WindowInsets.safeDrawing.asPaddingValues())
                 .padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Top
         ) {
+            Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = stringResource(R.string.app_name),
                 fontSize = 42.sp,
@@ -211,8 +244,22 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
             // Stats row
             if (isActive) {
                 val connectivityScore by ServiceChecker.connectivityScore.collectAsStateWithLifecycle(initialValue = 0)
-                val pm = context.getSystemService(android.os.PowerManager::class.java)
-                val isIgnoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) == true
+                
+                var isIgnoringBattery by remember { mutableStateOf(true) }
+                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                
+                DisposableEffect(lifecycleOwner) {
+                    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                            val pm = context.getSystemService(android.os.PowerManager::class.java)
+                            isIgnoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) == true
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
+                    }
+                }
                 
                 if (!isIgnoringBattery) {
                     Text(
@@ -224,13 +271,17 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             .padding(bottom = 12.dp)
                             .clickable {
                                 try {
-                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                        data = android.net.Uri.parse("package:${context.packageName}")
-                                    }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
                                     val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                                     context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    try {
+                                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                            data = android.net.Uri.parse("package:${context.packageName}")
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (ex: Exception) {
+                                        android.widget.Toast.makeText(context, "Battery settings are not accessible", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                             .background(Color(0xFFFFB74D).copy(alpha = 0.1f), RoundedCornerShape(4.dp))
@@ -239,19 +290,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 }
 
                 // Check and request notification permission
-                if (android.os.Build.VERSION.SDK_INT >= 33) {
-                    val notificationPermission = android.Manifest.permission.POST_NOTIFICATIONS
-                    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
-                        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-                    ) { }
-                    
-                    val permissionCheck = androidx.core.content.ContextCompat.checkSelfPermission(context, notificationPermission)
-                    androidx.compose.runtime.LaunchedEffect(Unit) {
-                        if (permissionCheck != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                            launcher.launch(notificationPermission)
-                        }
-                    }
-                }
+                // Moved to root of composable
 
                 Row(
                     modifier = Modifier
@@ -405,14 +444,16 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         )
                     }
                 }
-                LazyColumn(
+                val logsScrollState = rememberScrollState()
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 100.dp)
+                        .heightIn(max = 120.dp)
                         .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                        .verticalScroll(logsScrollState)
                         .padding(8.dp)
                 ) {
-                    items(recoveryLog) { log ->
+                    recoveryLog.forEach { log ->
                         Text(
                             text = log,
                             color = if (log.contains("Healing") || log.contains("Optimizing")) Color(0xFFF06292) else Color(0xFFF48FB1).copy(alpha = 0.6f),
@@ -450,15 +491,14 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     }
                 }
 
-                LazyColumn(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
                         .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(16.dp))
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(serviceStatuses) { status ->
+                    serviceStatuses.forEach { status ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -502,7 +542,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 }
                 Spacer(modifier = Modifier.height(24.dp))
             } else {
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(32.dp))
             }
         }
     }

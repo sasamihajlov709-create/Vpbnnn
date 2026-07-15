@@ -1,6 +1,6 @@
 {
   "name": "PinkProxy",
-  "description": "Educational proxy tool with a muted pink glassmorphism UI.",
+  "description": "High-performance secure VPN client & DPI bypass proxy server with a stunning pink glassmorphism UI.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

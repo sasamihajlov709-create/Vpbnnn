@@ -15,8 +15,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,7 +46,8 @@ class PinkVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var proxyServer: PinkProxyServer? = null
-    private val PROXY_PORT = 8080
+    private val PROXY_PORT = 18080
+    private val proxyMutex = kotlinx.coroutines.sync.Mutex()
     
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectivityManager: ConnectivityManager? = null
@@ -52,6 +56,19 @@ class PinkVpnService : VpnService() {
         override fun onAvailable(network: Network) {
             super.onAvailable(network)
             ProxyStats.logRecovery("Network Changed: Re-checking connectivity")
+            ServiceChecker.triggerCheck()
+        }
+    }
+
+    private suspend fun restartProxyServer(reason: String) {
+        proxyMutex.withLock {
+            ProxyStats.logRecovery(reason)
+            RobustResolver.clearCache()
+            proxyServer?.stop()
+            ProxyStats.reset(clearLog = false)
+            delay(1000)
+            proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
+            proxyServer?.start()
             ServiceChecker.triggerCheck()
         }
     }
@@ -65,20 +82,14 @@ class PinkVpnService : VpnService() {
         }
         if (action == "RESTART") {
             serviceScope.launch {
-                ProxyStats.logRecovery("Manual Optimization Triggered")
-                proxyServer?.stop()
-                ProxyStats.reset(clearLog = false)
                 BypassConfig.rotateStrategy()
-                delay(1000)
-                proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
-                proxyServer?.start()
-                ServiceChecker.triggerCheck()
+                restartProxyServer("Manual Optimization Triggered")
                 ProxyStats.logRecovery("Core System Re-Started")
             }
             return START_STICKY
         }
         
-        if (intent != null) {
+        if (!_isRunning.value) {
             _isRunning.value = true
             startVpn()
             checkBatteryOptimization()
@@ -104,6 +115,19 @@ class PinkVpnService : VpnService() {
             networkCallback
         )
 
+        // Sanity check: ensure we are prepared BEFORE starting foreground
+        try {
+            if (prepare(this) != null) {
+                Log.e("PinkVpnService", "VPN not prepared. Stopping.")
+                stopSelf()
+                return
+            }
+        } catch (e: SecurityException) {
+            Log.e("PinkVpnService", "SecurityException during prepare check", e)
+            stopSelf()
+            return
+        }
+
         createNotificationChannel()
         val notificationIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -119,55 +143,61 @@ class PinkVpnService : VpnService() {
             .setOngoing(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(1, notification)
         }
 
-        // Sanity check: ensure we are prepared
-        if (prepare(this) != null) {
-            Log.e("PinkVpnService", "VPN not prepared. Stopping.")
-            stopSelf()
-            return
-        }
-
         try {
             ServiceChecker.proxyPort = PROXY_PORT
+            ProxyStats.reset(clearLog = true)
+            ProxyStats.logRecovery("System Initialized: All components READY")
+            ProxyStats.logRecovery("Mode: DPI Bypass / HTTP Tunnel")
             // Start local HTTP proxy server for DPI Bypass
             proxyServer = PinkProxyServer(this, PROXY_PORT)
             proxyServer?.start()
 
             val builder = Builder()
                 .addAddress("10.0.0.2", 24)
-                .addDnsServer("8.8.8.8")
-                .addDnsServer("1.1.1.1")
                 // We rely on setHttpProxy for most traffic. 
                 // Global routing without packet processing causes connectivity loss.
                 .setSession("PinkProxy")
-                .setBlocking(false)
                 .setMtu(1400)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Route traffic through our local proxy
-                builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT))
-            }
+            // Route traffic through our local proxy
+            builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT))
             
             builder.addDisallowedApplication(packageName)
             builder.addRoute("10.0.0.0", 8) // Internal route to keep VPN active
 
-            vpnInterface = builder.establish()
+            try {
+                vpnInterface = builder.establish()
+                if (vpnInterface == null) {
+                    throw IllegalStateException("Failed to establish VPN interface. Device may not support it or VPN permissions revoked.")
+                }
+            } catch (e: Exception) {
+                Log.e("PinkVpnService", "Error establishing VPN interface", e)
+                stopVpn()
+                return
+            }
             
             // Minimal TUN reader to prevent buffer overflow
             serviceScope.launch(Dispatchers.IO) {
                 val fd = vpnInterface?.fileDescriptor ?: return@launch
                 val inputStream = FileInputStream(fd)
-                val buffer = ByteBuffer.allocate(16384)
                 val bytes = ByteArray(16384)
                 try {
                     while (isRunning.value) {
-                        val read = inputStream.read(bytes)
-                        if (read <= 0) {
+                        val read = try {
+                            inputStream.read(bytes)
+                        } catch (e: Exception) {
+                            -1
+                        }
+                        if (read < 0) {
+                            break
+                        }
+                        if (read == 0) {
                             delay(50) // Reduce CPU usage when idle
                             continue
                         }
@@ -176,6 +206,8 @@ class PinkVpnService : VpnService() {
                     }
                 } catch (e: Exception) {
                     Log.e("PinkVpnService", "TUN reader error", e)
+                } finally {
+                    try { inputStream.close() } catch (e: Exception) {}
                 }
             }
             
@@ -198,6 +230,7 @@ class PinkVpnService : VpnService() {
                 var lastLogTime = System.currentTimeMillis()
                 var ytDownCount = 0
                 var lastStatusMap = mutableMapOf<String, Boolean>()
+                var lastRecoveryTime = 0L
                 
                 combine(
                     ServiceChecker.proxyHealth,
@@ -215,7 +248,11 @@ class PinkVpnService : VpnService() {
                     statuses.forEach { status ->
                         if (status.isUp && lastStatusMap[status.name] == false) {
                             ProxyStats.logRecovery("Recovered: ${status.name}")
-                            ProxyStats.recordSuccess(BypassConfig.strategy.value)
+                            // Quality check: Only record success for major endpoints to avoid bias
+                            val isCriticalEndpoint = status.name in listOf("YouTube", "Telegram", "YT Video Stream")
+                            if (isCriticalEndpoint) {
+                                ProxyStats.recordSuccess(BypassConfig.strategy.value)
+                            }
                         }
                         lastStatusMap[status.name] = status.isUp
                     }
@@ -248,6 +285,13 @@ class PinkVpnService : VpnService() {
                     Triple(needsRestart, isInternetUp, reason)
                 }.collect { (needsRestart, isInternetUp, reason) ->
                     if (needsRestart && isInternetUp && isRunning.value) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastRecoveryTime < 30000) {
+                            // Skip restart within 30-second cooldown to let components warm up and verify connection
+                            return@collect
+                        }
+                        lastRecoveryTime = now
+                        
                         ProxyStats.logRecovery("Self-Healing: $reason")
                         
                         // Penalize current strategy if it's a specific block
@@ -257,15 +301,7 @@ class PinkVpnService : VpnService() {
                         }
                         
                         Log.w("PinkVpnService", "Watchdog: Automated recovery triggered ($reason). Restarting core...")
-                        proxyServer?.stop()
-                        ProxyStats.reset(clearLog = false)
-                        delay(1000)
-                        proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
-                        proxyServer?.start()
-                        
-                        // Force a service check after restart
-                        ServiceChecker.triggerCheck()
-                        
+                        restartProxyServer("Self-Healing: $reason")
                         ProxyStats.logRecovery("Core System Re-Optimized")
                     }
                 }
@@ -278,6 +314,7 @@ class PinkVpnService : VpnService() {
     }
 
     private fun updateNotification(speed: String, servicesInfo: String) {
+        if (!_isRunning.value) return
         val notificationIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, notificationIntent,
@@ -293,15 +330,15 @@ class PinkVpnService : VpnService() {
             .setOnlyAlertOnce(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(1, notification)
-        }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(1, notification)
     }
 
     private fun stopVpn() {
         _isRunning.value = false
+        try {
+            serviceScope.coroutineContext.cancelChildren()
+        } catch (e: Exception) {}
         try {
             connectivityManager?.unregisterNetworkCallback(networkCallback)
         } catch (e: Exception) {}

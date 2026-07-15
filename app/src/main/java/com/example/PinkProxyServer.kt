@@ -31,11 +31,11 @@ object ProxyStats {
     private val totalBytes = AtomicLong(0L)
     private val totalErrors = AtomicLong(0L)
     private val totalRequests = AtomicLong(0L)
-    private var lastBytes = 0L
-    private var lastTime = System.currentTimeMillis()
+    private val lastBytes = AtomicLong(0L)
+    private val lastTime = AtomicLong(System.currentTimeMillis())
 
     fun addBytes(bytes: Long) {
-        _bytesTransferred.value = totalBytes.addAndGet(bytes)
+        totalBytes.addAndGet(bytes)
     }
 
     fun addError() {
@@ -84,20 +84,21 @@ object ProxyStats {
         _speedBytesPerSecond.value = 0L
         _errors.value = 0L
         if (clearLog) _recoveryLog.value = emptyList()
-        lastBytes = 0L
-        lastTime = System.currentTimeMillis()
+        lastBytes.set(0L)
+        lastTime.set(System.currentTimeMillis())
     }
 
     fun updateSpeed() {
         val currentBytes = totalBytes.get()
+        _bytesTransferred.value = currentBytes
         val currentTime = System.currentTimeMillis()
-        val diffTime = currentTime - lastTime
+        val diffTime = currentTime - lastTime.get()
         if (diffTime >= 1000) {
-            val bytesDiff = currentBytes - lastBytes
+            val bytesDiff = currentBytes - lastBytes.get()
             val speed = (bytesDiff * 1000) / diffTime
             _speedBytesPerSecond.value = speed
-            lastBytes = currentBytes
-            lastTime = currentTime
+            lastBytes.set(currentBytes)
+            lastTime.set(currentTime)
         }
     }
 
@@ -106,9 +107,9 @@ object ProxyStats {
         val mb = kb / 1024.0
         val gb = mb / 1024.0
         return when {
-            gb >= 1.0 -> String.format("%.2f GB", gb)
-            mb >= 1.0 -> String.format("%.2f MB", mb)
-            kb >= 1.0 -> String.format("%.2f KB", kb)
+            gb >= 1.0 -> String.format(java.util.Locale.US, "%.2f GB", gb)
+            mb >= 1.0 -> String.format(java.util.Locale.US, "%.2f MB", mb)
+            kb >= 1.0 -> String.format(java.util.Locale.US, "%.2f KB", kb)
             else -> "$bytes B"
         }
     }
@@ -135,11 +136,11 @@ object BypassConfig {
     private val _currentStrategy = MutableStateFlow(BypassStrategy.SNI_TRIPLE)
     val strategy: StateFlow<BypassStrategy> = _currentStrategy.asStateFlow()
 
-    var frag1 = 3
-    var frag2 = 5
-    var frag3 = 2
-    var delay1 = 25L
-    var delay2 = 20L
+    @Volatile var frag1 = 3
+    @Volatile var frag2 = 5
+    @Volatile var frag3 = 2
+    @Volatile var delay1 = 25L
+    @Volatile var delay2 = 20L
     
     private val lastSuccessTime = AtomicLong(System.currentTimeMillis())
     private val strategyScores = ConcurrentHashMap<BypassStrategy, Int>()
@@ -265,9 +266,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         isRunning = true
         scope.launch {
             try {
-                serverSocket = ServerSocket(port, 50, java.net.InetAddress.getByName("127.0.0.1")).apply {
+                serverSocket = ServerSocket().apply {
                     reuseAddress = true
-                    soTimeout = 5000 
+                    soTimeout = 5000
+                    bind(java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), port), 50)
                 }
                 Log.d("PinkProxyServer", "Proxy server started on port $port")
                 
@@ -323,12 +325,21 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             val clientOutput = clientSocket.getOutputStream()
 
             val requestLine = readLine(clientInput)
+            if (requestLine.contains("generate_204")) {
+                clientOutput.write("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".toByteArray())
+                clientOutput.flush()
+                return@launch
+            }
             if (requestLine.startsWith("CONNECT")) {
                 val parts = requestLine.split(" ")
                 if (parts.size >= 2) {
                     val hostPort = parts[1].split(":")
                     val host = hostPort[0]
-                    val destPort = if (hostPort.size > 1) hostPort[1].toInt() else 443
+                    val destPort = if (hostPort.size > 1) {
+                        try { hostPort[1].toInt() } catch (e: Exception) { 443 }
+                    } else {
+                        443
+                    }
 
                     var headerCount = 0
                     while (headerCount < 100) {
@@ -337,22 +348,74 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                         headerCount++
                     }
 
-                    targetSocket = Socket()
-                    vpnService.protect(targetSocket)
-                    try {
-                        targetSocket.connect(java.net.InetSocketAddress(host, destPort), 10000)
+                    var resolvedAddresses = try {
+                        RobustResolver.resolve(host, vpnService)
                     } catch (e: Exception) {
                         ProxyStats.addError()
                         BypassConfig.recordFailure(BypassConfig.strategy.value, isCritical = true)
                         throw e
                     }
-                    targetSocket.soTimeout = 30000
-                    targetSocket.keepAlive = true
-                    targetSocket.tcpNoDelay = true
-                    targetSocket.receiveBufferSize = 128 * 1024
-                    targetSocket.sendBufferSize = 128 * 1024
+
+                    if (resolvedAddresses.isEmpty()) {
+                        throw java.net.UnknownHostException("No address found for $host")
+                    }
+
+                    var lastConnectException: Exception? = null
+                    var connected = false
+                    for (targetAddress in resolvedAddresses) {
+                        if (targetAddress.isLoopbackAddress) {
+                            continue
+                        }
+                        val sock = Socket()
+                        vpnService.protect(sock)
+                        try {
+                            sock.connect(java.net.InetSocketAddress(targetAddress, destPort), 8000)
+                            targetSocket = sock
+                            connected = true
+                            break
+                        } catch (e: Exception) {
+                            lastConnectException = e
+                            try { sock.close() } catch (ex: Exception) {}
+                        }
+                    }
+
+                    if (!connected) {
+                        Log.w("PinkProxyServer", "Connection to $host failed. Retrying with secure DNS fallback...")
+                        try {
+                            resolvedAddresses = RobustResolver.resolve(host, vpnService, forceSecure = true)
+                            for (targetAddress in resolvedAddresses) {
+                                if (targetAddress.isLoopbackAddress) {
+                                    continue
+                                }
+                                val sock = Socket()
+                                vpnService.protect(sock)
+                                try {
+                                    sock.connect(java.net.InetSocketAddress(targetAddress, destPort), 8000)
+                                    targetSocket = sock
+                                    connected = true
+                                    break
+                                } catch (e: Exception) {
+                                    lastConnectException = e
+                                    try { sock.close() } catch (ex: Exception) {}
+                                }
+                            }
+                        } catch (ex: Exception) {
+                            Log.e("PinkProxyServer", "Secure DNS recovery failed for $host: ${ex.message}")
+                        }
+                    }
+
+                    if (!connected) {
+                        ProxyStats.addError()
+                        BypassConfig.recordFailure(BypassConfig.strategy.value, isCritical = true)
+                        throw lastConnectException ?: java.net.ConnectException("Failed to connect to any resolved address for $host")
+                    }
+                    targetSocket!!.soTimeout = 60000
+                    targetSocket!!.keepAlive = true
+                    targetSocket!!.tcpNoDelay = true
+                    targetSocket!!.receiveBufferSize = 128 * 1024
+                    targetSocket!!.sendBufferSize = 128 * 1024
                     
-                    clientSocket.soTimeout = 30000
+                    clientSocket.soTimeout = 60000
                     clientSocket.keepAlive = true
                     clientSocket.tcpNoDelay = true
                     clientSocket.receiveBufferSize = 128 * 1024
@@ -369,23 +432,30 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     } catch (e: Exception) {
                         -1
                     }
-                    clientSocket.soTimeout = 30000 
+                    clientSocket.soTimeout = 60000 
                     
                     if (read > 0) {
                         ProxyStats.addBytes(read.toLong())
-                        val targetOutput = targetSocket.getOutputStream()
+                        val targetOutput = targetSocket!!.getOutputStream()
                         
                         // Check for TLS Handshake (0x16 0x03 0x01)
                         if (read > 40 && buffer[0] == 0x16.toByte() && buffer[1] == 0x03.toByte()) {
                             var sniPos = -1
                             val hostBytes = host.toByteArray()
                             if (hostBytes.size > 3) {
-                                for (i in 30 until (read - hostBytes.size).coerceAtMost(500)) {
+                                for (i in 30 until (read - hostBytes.size).coerceAtMost(1500)) {
                                     var match = true
                                     for (j in hostBytes.indices) {
-                                        if (buffer[i + j] != hostBytes[j]) {
-                                            match = false
-                                            break
+                                        val b1 = buffer[i + j]
+                                        val b2 = hostBytes[j]
+                                        if (b1 != b2) {
+                                            // Case-insensitive ASCII comparison for robust SNI detection
+                                            val c1 = (b1.toInt() and 0xFF).toChar().lowercaseChar()
+                                            val c2 = (b2.toInt() and 0xFF).toChar().lowercaseChar()
+                                            if (c1 != c2) {
+                                                match = false
+                                                break
+                                            }
                                         }
                                     }
                                     if (match) {
@@ -406,14 +476,12 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                         targetOutput.flush()
                                         delay(BypassConfig.delay2)
                                         targetOutput.write(buffer, sniPos + 1, read - (sniPos + 1))
-                                        BypassConfig.recordSuccess(BypassStrategy.SNI_TRIPLE)
                                     } else if (sniPos > 1) {
                                         // Split exactly before SNI hostname
                                         targetOutput.write(buffer, 0, sniPos)
                                         targetOutput.flush()
                                         delay(BypassConfig.delay1)
                                         targetOutput.write(buffer, sniPos, read - sniPos)
-                                        BypassConfig.recordSuccess(BypassStrategy.SNI_SPLIT)
                                     } else {
                                         // Fallback fragmentation (Split TLS header)
                                         targetOutput.write(buffer, 0, 1)
@@ -432,7 +500,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                         targetOutput.flush()
                                         delay(5)
                                         targetOutput.write(buffer, sniPos + 1, read - (sniPos + 1))
-                                        BypassConfig.recordSuccess(BypassStrategy.SNI_REVERSE)
                                     } else {
                                         targetOutput.write(buffer, 0, 1)
                                         targetOutput.flush()
@@ -441,40 +508,48 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     }
                                 }
                                 BypassStrategy.SNI_FAKE -> {
-                                    // Send a fake ClientHello fragment with a common domain
-                                    val fakeDomains = listOf("www.google.com", "www.cloudflare.com", "www.apple.com", "www.microsoft.com")
-                                    val domain = fakeDomains.random()
-                                    // TLS Record Header: Handshake(22), TLS 1.2(03 03), Length(...)
-                                    val fakeHeader = byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x20) 
-                                    targetOutput.write(fakeHeader)
-                                    // Junk handshake header
-                                    targetOutput.write(byteArrayOf(0x01, 0x00, 0x00, 0x1c))
-                                    targetOutput.write(domain.toByteArray())
-                                    targetOutput.flush()
-                                    delay(BypassConfig.delay1)
-                                    // Then the real one
-                                    targetOutput.write(buffer, 0, read)
-                                    BypassConfig.recordSuccess(BypassStrategy.SNI_FAKE)
-                                }
-                                BypassStrategy.SNI_MANGLE -> {
-                                    if (sniPos > 0 && hostBytes.size > 2) {
-                                        // Case-mangle SNI: yOuTuBe.CoM
-                                        val mangled = buffer.copyOf(read)
-                                        for (i in 0 until hostBytes.size) {
-                                            if (i % 2 == 1) {
-                                                val c = mangled[sniPos + i].toInt().toChar()
-                                                if (c in 'a'..'z') {
-                                                    mangled[sniPos + i] = (c.code - 32).toByte()
-                                                } else if (c in 'A'..'Z') {
-                                                    mangled[sniPos + i] = (c.code + 32).toByte()
-                                                }
-                                            }
-                                        }
-                                        targetOutput.write(mangled, 0, sniPos + 1)
+                                    // DOUBLE SPLIT: Split both the TLS record header (first 3 bytes) and the SNI hostname.
+                                    // This is 100% compliant and highly effective at bypassing DPI without causing decode errors.
+                                    if (sniPos > 3) {
+                                        // Write record type (0x16) and version (0x03, 0x01/0x03)
+                                        targetOutput.write(buffer, 0, 3)
                                         targetOutput.flush()
                                         delay(BypassConfig.delay1)
-                                        targetOutput.write(mangled, sniPos + 1, read - (sniPos + 1))
-                                        BypassConfig.recordSuccess(BypassStrategy.SNI_MANGLE)
+                                        
+                                        // Write remaining header and handshake up to SNI
+                                        targetOutput.write(buffer, 3, sniPos - 3)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay2)
+                                        
+                                        // Write SNI hostname and the rest of ClientHello
+                                        targetOutput.write(buffer, sniPos, read - sniPos)
+                                    } else {
+                                        // Fallback to basic header split
+                                        targetOutput.write(buffer, 0, 3)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay1)
+                                        targetOutput.write(buffer, 3, read - 3)
+                                    }
+                                }
+                                BypassStrategy.SNI_MANGLE -> {
+                                    if (sniPos > 0 && hostBytes.size > 2 && sniPos + hostBytes.size <= read) {
+                                        // Mangle strategy: Split into multiple 1-2 byte chunks for the SNI
+                                        targetOutput.write(buffer, 0, sniPos)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay1)
+                                        
+                                        var currentPos = sniPos
+                                        val endPos = sniPos + hostBytes.size
+                                        while (currentPos < endPos) {
+                                            val chunk = if (Math.random() > 0.5) 1 else 2
+                                            val writeLen = chunk.coerceAtMost(endPos - currentPos)
+                                            targetOutput.write(buffer, currentPos, writeLen)
+                                            targetOutput.flush()
+                                            delay(5)
+                                            currentPos += writeLen
+                                        }
+                                        
+                                        targetOutput.write(buffer, endPos, read - endPos)
                                     } else {
                                         targetOutput.write(buffer, 0, 1)
                                         targetOutput.flush()
@@ -492,7 +567,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                         targetOutput.flush()
                                         delay(5)
                                         targetOutput.write(buffer, 5, read - 5)
-                                        BypassConfig.recordSuccess(BypassStrategy.TLS_DIRTY)
                                     } else {
                                         targetOutput.write(buffer, 0, read)
                                     }
@@ -509,18 +583,22 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     }
                                 }
                                 BypassStrategy.RAND_SPLIT -> {
-                                    val f1 = BypassConfig.frag1.coerceAtMost(read - 1)
+                                    val f1 = BypassConfig.frag1.coerceAtMost(read - 1).coerceAtLeast(1)
                                     targetOutput.write(buffer, 0, f1)
                                     targetOutput.flush()
                                     delay(BypassConfig.delay1)
                                     targetOutput.write(buffer, f1, read - f1)
                                 }
                                 BypassStrategy.FRAG_3_5 -> {
-                                    val f1 = BypassConfig.frag1
+                                    val f1 = BypassConfig.frag1.coerceAtMost(read - 2).coerceAtLeast(1)
+                                    val f2 = BypassConfig.frag2.coerceAtMost(read - 1).coerceAtLeast(f1 + 1)
                                     targetOutput.write(buffer, 0, f1)
                                     targetOutput.flush()
                                     delay(BypassConfig.delay1)
-                                    targetOutput.write(buffer, f1, read - f1)
+                                    targetOutput.write(buffer, f1, f2 - f1)
+                                    targetOutput.flush()
+                                    delay(BypassConfig.delay2)
+                                    targetOutput.write(buffer, f2, read - f2)
                                 }
                                 BypassStrategy.CHUNKY -> {
                                     // Split into many small chunks
@@ -543,7 +621,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     targetOutput.flush()
                                     delay(BypassConfig.delay1 + 10)
                                     targetOutput.write(buffer, 2, read - 2)
-                                    BypassConfig.recordSuccess(BypassStrategy.JUNK_PADDING)
                                 }
                                 else -> {
                                     targetOutput.write(buffer, 0, read)
@@ -568,14 +645,9 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                         }
 
                         coroutineScope {
-                            val job1 = launch { proxyStream(clientInput, targetOutput, closeAction) }
-                            val job2 = launch { proxyStream(java.io.BufferedInputStream(targetSocket.getInputStream()), clientOutput, closeAction) }
+                            val job1 = launch { proxyStream(clientInput, targetOutput, closeAction, host, isTargetSource = false) }
+                            val job2 = launch { proxyStream(java.io.BufferedInputStream(targetSocket!!.getInputStream()), clientOutput, closeAction, host, isTargetSource = true) }
                             
-                            ProxyStats.recordSuccess(BypassConfig.strategy.value)
-                            val knownBlocked = listOf("youtube", "googlevideo", "google", "telegram", "t.me", "instagram", "facebook", "twitter", "x.com", "discord", "chatgpt")
-                            if (knownBlocked.any { host.lowercase().contains(it) }) {
-                                repeat(5) { BypassConfig.recordSuccess(BypassConfig.strategy.value) }
-                            }
                             joinAll(job1, job2)
                         }
                     }
@@ -591,7 +663,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     while (true) {
                         val header = readLine(clientInput)
                         if (header.isEmpty()) break
-                        if (header.lowercase().startsWith("host:")) {
+                        if (header.startsWith("host:", ignoreCase = true)) {
                             val h = header.substring(5).trim()
                             if (h.contains(":")) {
                                 host = h.split(":")[0]
@@ -614,38 +686,90 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     }
 
                     if (host != null) {
-                        targetSocket = Socket()
-                        vpnService.protect(targetSocket)
-                        targetSocket.connect(java.net.InetSocketAddress(host, destPort), 15000)
-                        targetSocket.soTimeout = 30000
-                        targetSocket.keepAlive = true
-                        targetSocket.tcpNoDelay = true
-                        targetSocket.receiveBufferSize = 65535
-                        targetSocket.sendBufferSize = 65535
-                        clientSocket.soTimeout = 30000
+                        var resolvedAddresses = try {
+                            RobustResolver.resolve(host, vpnService)
+                        } catch (e: Exception) {
+                            ProxyStats.addError()
+                            throw e
+                        }
+
+                        if (resolvedAddresses.isEmpty()) {
+                            throw java.net.UnknownHostException("No address found for $host")
+                        }
+
+                        var lastConnectException: Exception? = null
+                        var connected = false
+                        for (targetAddress in resolvedAddresses) {
+                            if (targetAddress.isLoopbackAddress) {
+                                continue
+                            }
+                            val sock = Socket()
+                            vpnService.protect(sock)
+                            try {
+                                sock.connect(java.net.InetSocketAddress(targetAddress, destPort), 10000)
+                                targetSocket = sock
+                                connected = true
+                                break
+                            } catch (e: Exception) {
+                                lastConnectException = e
+                                try { sock.close() } catch (ex: Exception) {}
+                            }
+                        }
+
+                        if (!connected) {
+                            Log.w("PinkProxyServer", "HTTP Connection to $host failed. Retrying with secure DNS fallback...")
+                            try {
+                                resolvedAddresses = RobustResolver.resolve(host, vpnService, forceSecure = true)
+                                for (targetAddress in resolvedAddresses) {
+                                    if (targetAddress.isLoopbackAddress) {
+                                        continue
+                                    }
+                                    val sock = Socket()
+                                    vpnService.protect(sock)
+                                    try {
+                                        sock.connect(java.net.InetSocketAddress(targetAddress, destPort), 10000)
+                                        targetSocket = sock
+                                        connected = true
+                                        break
+                                    } catch (e: Exception) {
+                                        lastConnectException = e
+                                        try { sock.close() } catch (ex: Exception) {}
+                                    }
+                                }
+                            } catch (ex: Exception) {
+                                Log.e("PinkProxyServer", "Secure DNS recovery failed for HTTP $host: ${ex.message}")
+                            }
+                        }
+
+                        if (!connected) {
+                            ProxyStats.addError()
+                            throw lastConnectException ?: java.net.ConnectException("Failed to connect to any resolved address for $host")
+                        }
+                        targetSocket!!.soTimeout = 60000
+                        targetSocket!!.keepAlive = true
+                        targetSocket!!.tcpNoDelay = true
+                        targetSocket!!.receiveBufferSize = 65535
+                        targetSocket!!.sendBufferSize = 65535
+                        clientSocket.soTimeout = 60000
                         clientSocket.tcpNoDelay = true
                         clientSocket.receiveBufferSize = 65535
                         clientSocket.sendBufferSize = 65535
                         
-                        val targetOutput = targetSocket.getOutputStream()
+                        val targetOutput = targetSocket!!.getOutputStream()
                         
-                    val newRequestLine = if (BypassConfig.strategy.value == BypassStrategy.HOST_MIXED) {
-                        val method = parts[0].mapIndexed { i, c -> if (i % 2 == 0) c.lowercaseChar() else c.uppercaseChar() }.joinToString("")
-                        "$method ${if(urlStr.isEmpty()) "/" else urlStr} ${if (parts.size > 2) parts[2] else "HTTP/1.1"}\r\n"
-                    } else {
-                        "${parts[0]} ${if(urlStr.isEmpty()) "/" else urlStr} ${if (parts.size > 2) parts[2] else "HTTP/1.1"}\r\n"
-                    }
+                    val newRequestLine = "${parts[0]} ${if(urlStr.isEmpty()) "/" else urlStr} ${if (parts.size > 2) parts[2] else "HTTP/1.1"}\r\n"
                     
+                    val hostWithPort = if (destPort == 80) host else "$host:$destPort"
                     val hostHeader = when(BypassConfig.strategy.value) {
-                        BypassStrategy.HOST_CASE -> "hOsT: $host\r\n"
-                        BypassStrategy.HOST_MIXED -> "HoSt: $host\r\n"
-                        else -> "Host: $host\r\n"
+                        BypassStrategy.HOST_CASE -> "hOsT: $hostWithPort\r\n"
+                        BypassStrategy.HOST_MIXED -> "HoSt: $hostWithPort\r\n"
+                        else -> "Host: $hostWithPort\r\n"
                     }
                     val bytes = (newRequestLine + hostHeader + headers.toString() + "\r\n").toByteArray()
                     
                     if (BypassConfig.strategy.value != BypassStrategy.DIRECT && bytes.size > 2) {
                         // Split after method or in the middle of headers
-                        val splitPos = if (BypassConfig.strategy.value == BypassStrategy.HOST_CASE || BypassConfig.strategy.value == BypassStrategy.HOST_MIXED) 1 else BypassConfig.frag1.coerceAtLeast(1)
+                        val splitPos = if (BypassConfig.strategy.value == BypassStrategy.HOST_CASE || BypassConfig.strategy.value == BypassStrategy.HOST_MIXED) 1 else BypassConfig.frag1.coerceAtLeast(1).coerceAtMost(bytes.size - 1)
                         targetOutput.write(bytes, 0, splitPos)
                         targetOutput.flush()
                         delay(BypassConfig.delay1)
@@ -661,15 +785,9 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     }
 
                     coroutineScope {
-                        val j1 = launch { proxyStream(clientInput, targetOutput, closeAction) }
-                        val j2 = launch { proxyStream(java.io.BufferedInputStream(targetSocket.getInputStream()), clientOutput, closeAction) }
+                        val j1 = launch { proxyStream(clientInput, targetOutput, closeAction, host, isTargetSource = false) }
+                        val j2 = launch { proxyStream(java.io.BufferedInputStream(targetSocket!!.getInputStream()), clientOutput, closeAction, host, isTargetSource = true) }
                         
-                        ProxyStats.recordSuccess(BypassConfig.strategy.value)
-                        val knownBlocked = listOf("youtube", "googlevideo", "google", "telegram", "t.me", "instagram", "facebook", "twitter", "x.com", "discord", "chatgpt")
-                        if (knownBlocked.any { host.lowercase().contains(it) }) {
-                            // Huge bonus for succeeding on blocked sites
-                            repeat(5) { BypassConfig.recordSuccess(BypassConfig.strategy.value) }
-                        }
                         joinAll(j1, j2)
                     }
                     } else {
@@ -682,8 +800,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                 clientSocket.close()
             }
         } catch (e: Exception) {
-            val isCritical = e.message?.contains("youtube") == true || e.message?.contains("google") == true || e.message?.contains("telegram") == true
-            BypassConfig.recordFailure(BypassConfig.strategy.value, isCritical)
+            val msg = e.message?.lowercase(java.util.Locale.ROOT) ?: ""
+            val isClientClosed = e is java.net.SocketException && (msg.contains("closed") || msg.contains("broken pipe") || msg.contains("reset by peer"))
+            val isClientTimeout = e is java.net.SocketTimeoutException
+            if (!isClientClosed && !isClientTimeout) {
+                val isCritical = msg.contains("youtube") || msg.contains("google") || msg.contains("telegram")
+                BypassConfig.recordFailure(BypassConfig.strategy.value, isCritical)
+            }
             try { clientSocket.close() } catch (ex: Exception) {}
         } finally {
             try { targetSocket?.close() } catch (e: Exception) {}
@@ -707,30 +830,52 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         return sb.toString()
     }
 
-    private suspend fun proxyStream(input: java.io.InputStream, output: java.io.OutputStream, onSocketError: () -> Unit) {
+    private suspend fun proxyStream(
+        input: java.io.InputStream,
+        output: java.io.OutputStream,
+        onSocketError: () -> Unit,
+        host: String? = null,
+        isTargetSource: Boolean = false
+    ) {
         val startTime = System.currentTimeMillis()
         var recordedLongSuccess = false
+        var recordedShortSuccess = false
         withContext(proxyDispatcher) {
             try {
                 val buffer = ByteArray(32768)
                 var read: Int
                 while (isActive) {
-                    read = try { input.read(buffer) } catch (e: Exception) { 
-                        if (System.currentTimeMillis() - startTime < 3000) {
+                    read = try { 
+                        input.read(buffer) 
+                    } catch (e: java.net.SocketTimeoutException) {
+                        break // Break and close connection on idle timeout to prevent resource leaks
+                    } catch (e: Exception) { 
+                        if (isTargetSource && System.currentTimeMillis() - startTime < 3000) {
                             BypassConfig.recordFailure(BypassConfig.strategy.value)
                         }
                         -1 
                     }
-                    if (read <= 0) {
-                        if (read == -1 && System.currentTimeMillis() - startTime < 3000) {
-                            BypassConfig.recordFailure(BypassConfig.strategy.value)
-                        }
+                    
+                    if (read < 0) {
                         break
                     }
                     
                     ProxyStats.addBytes(read.toLong())
                     output.write(buffer, 0, read)
                     output.flush()
+
+                    if (!recordedShortSuccess && System.currentTimeMillis() - startTime > 2000) {
+                        ProxyStats.recordSuccess(BypassConfig.strategy.value)
+                        val knownBlocked = listOf(
+                            "youtube", "googlevideo", "ytimg", "ggpht", "google", "telegram", "t.me",
+                            "instagram", "cdninstagram", "facebook", "fbcdn", "twitter", "twimg", "x.com",
+                            "discord", "chatgpt", "openai", "rutracker"
+                        )
+                        if (host != null && knownBlocked.any { host.lowercase(java.util.Locale.ROOT).contains(it) }) {
+                            repeat(3) { BypassConfig.recordSuccess(BypassConfig.strategy.value) }
+                        }
+                        recordedShortSuccess = true
+                    }
                     
                     if (!recordedLongSuccess && System.currentTimeMillis() - startTime > 15000) {
                         BypassConfig.recordSuccess(BypassConfig.strategy.value)

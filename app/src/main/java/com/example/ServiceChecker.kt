@@ -10,7 +10,7 @@ import java.net.Proxy
 import java.net.InetSocketAddress
 
 object ServiceChecker {
-    var proxyPort = 8080
+    var proxyPort = 18080
     data class ServiceStatus(val name: String, val url: String, val isUp: Boolean, val latencyMs: Long)
     data class GlobalStatus(val isProxyRunning: Boolean, val services: List<ServiceStatus>)
 
@@ -41,37 +41,50 @@ object ServiceChecker {
     }
 
     private suspend fun checkServices(servicesToCheck: List<Pair<String, String>>) {
-        var proxyResponsive = true
+        val proxyResponsive = java.util.concurrent.atomic.AtomicBoolean(true)
         var internetUp = false
 
         // Baseline check: multiple reliable domains (without proxy)
         val baselineDomains = listOf("https://ya.ru", "https://www.google.com/generate_204", "https://www.apple.com/library/test/success.html")
         for (domain in baselineDomains) {
+            var conn: HttpURLConnection? = null
             try {
-                val conn = URL(domain).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+                conn = URL(domain).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
                 conn.requestMethod = "GET"
                 if (conn.responseCode in 200..499) {
                     internetUp = true
-                    conn.disconnect()
                     break
                 }
-                conn.disconnect()
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+            } finally {
+                try { conn?.inputStream?.close() } catch (e: Exception) {}
+                try { conn?.errorStream?.close() } catch (e: Exception) {}
+                try { conn?.disconnect() } catch (e: Exception) {}
+            }
         }
         _internetAvailable.value = internetUp
+        if (!internetUp) {
+            _statuses.value = servicesToCheck.map { ServiceStatus(it.first, it.second, false, 0) }
+            _connectivityScore.value = 0
+            return
+        }
 
-        val results = servicesToCheck.map { (name, url) ->
-            coroutineScope {
+        val results = coroutineScope {
+            servicesToCheck.map { (name, url) ->
                 async {
                     val start = System.currentTimeMillis()
                     var isUp = false
                     var attempt = 0
+                    var successfulLatency = 0L
                     while (attempt < 2 && !isUp) {
+                        attempt++
+                        var connection: HttpURLConnection? = null
+                        val attemptStart = System.currentTimeMillis()
                         try {
                             val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
-                            val connection = URL(url).openConnection(proxy) as HttpURLConnection
+                            connection = URL(url).openConnection(proxy) as HttpURLConnection
                             connection.connectTimeout = 8000
                             connection.readTimeout = 8000
                             connection.instanceFollowRedirects = true
@@ -81,29 +94,33 @@ object ServiceChecker {
                             val code = connection.responseCode
                             isUp = (code in 200..499)
                             
-                            // Throttling detection: if latency > 6s for critical services, consider it "down"
-                            val latencyThreshold = if (name.contains("Stream")) 4000 else 6000
-                            if (isUp && (name.contains("YouTube") || name.contains("Telegram")) && System.currentTimeMillis() - start > latencyThreshold) {
-                                isUp = false 
+                            val attemptDuration = System.currentTimeMillis() - attemptStart
+                            if (isUp) {
+                                successfulLatency = attemptDuration
                             }
                             
-                            connection.disconnect()
+                            // Throttling detection: if latency > 6s for critical services, consider it "down"
+                            val latencyThreshold = if (name.contains("Stream")) 4000 else 6000
+                            if (isUp && (name.contains("YouTube") || name.contains("Telegram")) && attemptDuration > latencyThreshold) {
+                                isUp = false 
+                            }
                         } catch (e: Exception) {
                             isUp = false
-                            if (e is java.net.ConnectException && e.message?.contains("127.0.0.1") == true) {
-                                proxyResponsive = false
+                            if (e is java.net.ConnectException || e.message?.contains("127.0.0.1") == true || e.message?.contains("refused") == true) {
+                                proxyResponsive.set(false)
                             }
-                            if (!isUp) {
-                                attempt++
-                                if (attempt < 2) delay(1000)
-                            }
+                        } finally {
+                            try { connection?.inputStream?.close() } catch (e: Exception) {}
+                            try { connection?.errorStream?.close() } catch (e: Exception) {}
+                            try { connection?.disconnect() } catch (e: Exception) {}
                         }
+                        if (!isUp && attempt < 2) delay(1000)
                     }
-                    val latency = System.currentTimeMillis() - start
+                    val latency = if (isUp && successfulLatency > 0) successfulLatency else (System.currentTimeMillis() - start)
                     ServiceStatus(name, url, isUp, if (isUp) latency else 0)
                 }
-            }
-        }.awaitAll()
+            }.awaitAll()
+        }
         
         // Weighted Score Calculation for RU users
         var totalWeightedScore = 0f
@@ -128,7 +145,7 @@ object ServiceChecker {
         _connectivityScore.value = totalWeightedScore.toInt().coerceIn(0, 100)
         
         _statuses.value = results
-        _proxyHealth.value = proxyResponsive
+        _proxyHealth.value = proxyResponsive.get()
         _lastCheckTime.value = System.currentTimeMillis()
     }
 
@@ -158,10 +175,12 @@ object ServiceChecker {
             while (isActive) {
                 checkServices(servicesToCheck)
                 
-                // Adaptive delay: check faster if key services are down
+                // Adaptive delay: check faster if key services are down to allow fast healing
                 val youtubeDown = _statuses.value.find { it.name == "YouTube" }?.isUp == false
-                val delayTime = if (youtubeDown) 30000L else 60000L
-                delay(delayTime)
+                val delayTime = if (youtubeDown) 15000L else 60000L // 15 seconds when down, 60 seconds when up
+                // Add minor jitter to avoid synchronized wakeups
+                val jitter = (Math.random() * 3000).toLong()
+                delay(delayTime + jitter)
             }
         }
     }
@@ -169,6 +188,7 @@ object ServiceChecker {
     fun stopChecking() {
         job?.cancel()
         job = null
+        internalScope = null
         _statuses.value = emptyList()
     }
 }
