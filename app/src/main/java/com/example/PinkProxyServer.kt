@@ -621,22 +621,30 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     }
                                 }
                                 BypassStrategy.RAND_SPLIT -> {
-                                    val f1 = BypassConfig.frag1.coerceAtMost(read - 1).coerceAtLeast(1)
-                                    targetOutput.write(buffer, 0, f1)
-                                    targetOutput.flush()
-                                    delay(BypassConfig.delay1)
-                                    targetOutput.write(buffer, f1, read - f1)
+                                    if (read > 1) {
+                                        val f1 = BypassConfig.frag1.coerceAtMost(read - 1).coerceAtLeast(1)
+                                        targetOutput.write(buffer, 0, f1)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay1)
+                                        targetOutput.write(buffer, f1, read - f1)
+                                    } else {
+                                        targetOutput.write(buffer, 0, read)
+                                    }
                                 }
                                 BypassStrategy.FRAG_3_5 -> {
-                                    val f1 = BypassConfig.frag1.coerceAtMost(read - 2).coerceAtLeast(1)
-                                    val f2 = BypassConfig.frag2.coerceAtMost(read - 1).coerceAtLeast(f1 + 1)
-                                    targetOutput.write(buffer, 0, f1)
-                                    targetOutput.flush()
-                                    delay(BypassConfig.delay1)
-                                    targetOutput.write(buffer, f1, f2 - f1)
-                                    targetOutput.flush()
-                                    delay(BypassConfig.delay2)
-                                    targetOutput.write(buffer, f2, read - f2)
+                                    if (read > 2) {
+                                        val f1 = BypassConfig.frag1.coerceAtMost(read - 2).coerceAtLeast(1)
+                                        val f2 = BypassConfig.frag2.coerceAtMost(read - 1).coerceAtLeast(f1 + 1)
+                                        targetOutput.write(buffer, 0, f1)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay1)
+                                        targetOutput.write(buffer, f1, f2 - f1)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay2)
+                                        targetOutput.write(buffer, f2, read - f2)
+                                    } else {
+                                        targetOutput.write(buffer, 0, read)
+                                    }
                                 }
                                 BypassStrategy.CHUNKY -> {
                                     // Split into many small chunks
@@ -651,21 +659,29 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     }
                                 }
                                 BypassStrategy.JUNK_PADDING -> {
-                                    // Split TLS header into 3 fragments with increasing delays
-                                    targetOutput.write(buffer, 0, 1)
-                                    targetOutput.flush()
-                                    delay(BypassConfig.delay1)
-                                    targetOutput.write(buffer, 1, 1)
-                                    targetOutput.flush()
-                                    delay(BypassConfig.delay1 + 10)
-                                    targetOutput.write(buffer, 2, read - 2)
+                                    if (read > 2) {
+                                        // Split TLS header into 3 fragments with increasing delays
+                                        targetOutput.write(buffer, 0, 1)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay1)
+                                        targetOutput.write(buffer, 1, 1)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay1 + 10)
+                                        targetOutput.write(buffer, 2, read - 2)
+                                    } else {
+                                        targetOutput.write(buffer, 0, read)
+                                    }
                                 }
                                 BypassStrategy.TCP_OOB_DESYNC -> {
-                                    try { targetSocket?.sendUrgentData(0xFF) } catch (e: Exception) {}
-                                    targetOutput.write(buffer, 0, 1)
-                                    targetOutput.flush()
-                                    delay(BypassConfig.delay1)
-                                    targetOutput.write(buffer, 1, read - 1)
+                                    if (read > 1) {
+                                        try { targetSocket?.sendUrgentData(0xFF) } catch (e: Exception) {}
+                                        targetOutput.write(buffer, 0, 1)
+                                        targetOutput.flush()
+                                        delay(BypassConfig.delay1)
+                                        targetOutput.write(buffer, 1, read - 1)
+                                    } else {
+                                        targetOutput.write(buffer, 0, read)
+                                    }
                                 }
                                 BypassStrategy.TCP_DESYNC_FAKE -> {
                                     // Send a fake ClientHello with a small TTL so it is dropped before reaching the server
@@ -676,7 +692,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                         val fd = pfd.fileDescriptor
                                         
                                         // Set low TTL
-                                        android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, BypassConfig.fakeTtl)
+                                        val isIpv6 = targetSocket!!.inetAddress is java.net.Inet6Address
+                                        val proto = if (isIpv6) android.system.OsConstants.IPPROTO_IPV6 else android.system.OsConstants.IPPROTO_IP
+                                        val ttlOpt = if (isIpv6) android.system.OsConstants.IPV6_UNICAST_HOPS else android.system.OsConstants.IP_TTL
+                                        android.system.Os.setsockoptInt(fd, proto, ttlOpt, BypassConfig.fakeTtl)
                                         
                                         // Send Fake ClientHello (Short but structurally valid headers)
                                         val fakePacket = byteArrayOf(
@@ -702,7 +721,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                         delay(BypassConfig.delay1)
                                         
                                         // Restore default TTL (64 is a safe default)
-                                        android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, 64)
+                                        android.system.Os.setsockoptInt(fd, proto, ttlOpt, 64)
                                     } catch (e: Exception) {
                                         // Ignore TTL failure and just proceed
                                     } finally {
@@ -883,7 +902,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                             pfd = android.os.ParcelFileDescriptor.fromSocket(targetSocket!!)
                             val fd = pfd.fileDescriptor
                             
-                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, BypassConfig.fakeTtl)
+                            val isIpv6 = targetSocket!!.inetAddress is java.net.Inet6Address
+                            val proto = if (isIpv6) android.system.OsConstants.IPPROTO_IPV6 else android.system.OsConstants.IPPROTO_IP
+                            val ttlOpt = if (isIpv6) android.system.OsConstants.IPV6_UNICAST_HOPS else android.system.OsConstants.IP_TTL
+                            android.system.Os.setsockoptInt(fd, proto, ttlOpt, BypassConfig.fakeTtl)
                             
                             // Send Fake HTTP Request
                             val fakePacket = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n".toByteArray()
@@ -891,7 +913,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                             targetOutput.flush()
                             delay(BypassConfig.delay1)
                             
-                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, 64)
+                            android.system.Os.setsockoptInt(fd, proto, ttlOpt, 64)
                         } catch (e: Exception) {} finally {
                             try { pfd?.close() } catch (e: Exception) {}
                         }
@@ -1012,7 +1034,11 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     }
                 }
             } catch (e: Exception) {
-                ProxyStats.addError()
+                val msg = e.message?.lowercase(java.util.Locale.ROOT) ?: ""
+                val isNormalDisconnect = e is java.net.SocketException && (msg.contains("closed") || msg.contains("broken pipe") || msg.contains("reset by peer"))
+                if (!isNormalDisconnect) {
+                    ProxyStats.addError()
+                }
             } finally {
                 onSocketError()
             }

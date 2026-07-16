@@ -304,7 +304,9 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             .padding(bottom = 12.dp)
                             .clickable {
                                 try {
-                                    val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = android.net.Uri.parse("package:${context.packageName}")
+                                    }
                                     context.startActivity(intent)
                                 } catch (e: Exception) {
                                     try {
@@ -403,7 +405,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     ) {
                         val maxSpeed = speedHistory.maxOrNull()?.coerceAtLeast(1024L) ?: 1024L
                         val path = Path()
-                        val widthPerPoint = size.width / (60 - 1).coerceAtLeast(1)
+                        val widthPerPoint = size.width / (speedHistory.size - 1).coerceAtLeast(1)
                         
                         // Draw line with smooth cubic bezier curves
                         val firstY = size.height - (speedHistory.firstOrNull() ?: 0L) / maxSpeed.toFloat() * size.height

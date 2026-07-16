@@ -68,6 +68,7 @@ object ServiceChecker {
         if (!internetUp) {
             _statuses.value = servicesToCheck.map { ServiceStatus(it.first, it.second, false, 0) }
             _connectivityScore.value = 0
+            _proxyHealth.value = proxyResponsive.get()
             return
         }
 
@@ -88,7 +89,7 @@ object ServiceChecker {
                             connection.connectTimeout = 8000
                             connection.readTimeout = 8000
                             connection.instanceFollowRedirects = true
-                            connection.requestMethod = "HEAD"
+                            connection.requestMethod = "GET"
                             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                             
                             val code = connection.responseCode
