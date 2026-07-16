@@ -22,6 +22,9 @@ object ProxyStats {
     private val _speedBytesPerSecond = MutableStateFlow(0L)
     val speedBytesPerSecond: StateFlow<Long> = _speedBytesPerSecond.asStateFlow()
 
+    private val _speedHistory = MutableStateFlow<List<Long>>(emptyList())
+    val speedHistory: StateFlow<List<Long>> = _speedHistory.asStateFlow()
+
     private val _errors = MutableStateFlow(0L)
     val errors: StateFlow<Long> = _errors.asStateFlow()
 
@@ -82,6 +85,7 @@ object ProxyStats {
         _bytesTransferred.value = 0L
         _activeConnections.value = 0
         _speedBytesPerSecond.value = 0L
+        _speedHistory.value = emptyList()
         _errors.value = 0L
         if (clearLog) _recoveryLog.value = emptyList()
         lastBytes.set(0L)
@@ -97,6 +101,7 @@ object ProxyStats {
             val bytesDiff = currentBytes - lastBytes.get()
             val speed = (bytesDiff * 1000) / diffTime
             _speedBytesPerSecond.value = speed
+            _speedHistory.update { (it + speed).takeLast(60) }
             lastBytes.set(currentBytes)
             lastTime.set(currentTime)
         }
@@ -129,6 +134,9 @@ enum class BypassStrategy {
     RAND_SPLIT,     // Split at random position in ClientHello
     HEADER_SPLIT,   // Split TLS record header
     JUNK_PADDING,   // Add random bytes before handshake
+    TCP_OOB_DESYNC, // Out-of-band data (fake packet equivalent) for DPI confusion
+    TCP_DESYNC_FAKE,// Fake ClientHello with short TTL (Zapret trick)
+    HTTP_SPACE,     // HTTP method space/desync trick
     DIRECT          // No bypass
 }
 
@@ -141,6 +149,12 @@ object BypassConfig {
     @Volatile var frag3 = 2
     @Volatile var delay1 = 25L
     @Volatile var delay2 = 20L
+    @Volatile var fakeTtl = 3
+    
+    fun setStrategy(newStrategy: BypassStrategy) {
+        _currentStrategy.value = newStrategy
+        mutateParams()
+    }
     
     private val lastSuccessTime = AtomicLong(System.currentTimeMillis())
     private val strategyScores = ConcurrentHashMap<BypassStrategy, Int>()
@@ -236,6 +250,18 @@ object BypassConfig {
                 frag1 = 2 + (Math.random() * 10).toInt()
                 delay1 = 5L + (Math.random() * 15).toLong()
             }
+            BypassStrategy.TCP_OOB_DESYNC -> {
+                frag1 = 1
+                delay1 = 10L + (Math.random() * 30).toLong()
+            }
+            BypassStrategy.TCP_DESYNC_FAKE -> {
+                fakeTtl = 2 + (Math.random() * 4).toInt()
+                delay1 = 15L + (Math.random() * 30).toLong()
+            }
+            BypassStrategy.HTTP_SPACE -> {
+                frag1 = 1
+                delay1 = 5L + (Math.random() * 15).toLong()
+            }
             BypassStrategy.DIRECT -> {
                 frag1 = 0
                 delay1 = 0
@@ -320,7 +346,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         ProxyStats.addRequest()
         var targetSocket: Socket? = null
         try {
-            clientSocket.soTimeout = 60000 
+            clientSocket.soTimeout = 300000 
             val clientInput = java.io.BufferedInputStream(clientSocket.getInputStream())
             val clientOutput = clientSocket.getOutputStream()
 
@@ -409,13 +435,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                         BypassConfig.recordFailure(BypassConfig.strategy.value, isCritical = true)
                         throw lastConnectException ?: java.net.ConnectException("Failed to connect to any resolved address for $host")
                     }
-                    targetSocket!!.soTimeout = 60000
+                    targetSocket!!.soTimeout = 300000
                     targetSocket!!.keepAlive = true
                     targetSocket!!.tcpNoDelay = true
                     targetSocket!!.receiveBufferSize = 128 * 1024
                     targetSocket!!.sendBufferSize = 128 * 1024
                     
-                    clientSocket.soTimeout = 60000
+                    clientSocket.soTimeout = 300000
                     clientSocket.keepAlive = true
                     clientSocket.tcpNoDelay = true
                     clientSocket.receiveBufferSize = 128 * 1024
@@ -432,7 +458,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     } catch (e: Exception) {
                         -1
                     }
-                    clientSocket.soTimeout = 60000 
+                    clientSocket.soTimeout = 300000 
                     
                     if (read > 0) {
                         ProxyStats.addBytes(read.toLong())
@@ -508,27 +534,38 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     }
                                 }
                                 BypassStrategy.SNI_FAKE -> {
-                                    // DOUBLE SPLIT: Split both the TLS record header (first 3 bytes) and the SNI hostname.
-                                    // This is 100% compliant and highly effective at bypassing DPI without causing decode errors.
+                                    // Send a completely fake ClientHello to trick DPI, then send the real one
+                                    // This assumes DPI will stop tracking after seeing what it thinks is a completed handshake.
+                                    val fakeSNI = "google.com"
+                                    
+                                    // Basic TLS 1.2 ClientHello header
+                                    val fakePacket = byteArrayOf(
+                                        0x16, 0x03, 0x01, 0x00, 0x42, // TLS Record (66 bytes)
+                                        0x01, 0x00, 0x00, 0x3E,       // ClientHello (62 bytes)
+                                        0x03, 0x03,                   // TLS 1.2
+                                        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // Random (32)
+                                        0x00,                         // Session ID length 0
+                                        0x00, 0x02, 0x13, 0x01,       // Cipher Suites (2)
+                                        0x01, 0x00,                   // Compression (1)
+                                        0x00, 0x13,                   // Extensions Length (19)
+                                        0x00, 0x00,                   // SNI Type
+                                        0x00, 0x0F,                   // SNI Ext Length (15)
+                                        0x00, 0x0D,                   // SNI List Length (13)
+                                        0x00,                         // Hostname type
+                                        0x00, 0x0A,                   // Hostname length (10)
+                                        'g'.code.toByte(), 'o'.code.toByte(), 'o'.code.toByte(), 'g'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte(), '.'.code.toByte(), 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte()
+                                    )
+                                    targetOutput.write(fakePacket)
+                                    targetOutput.flush()
+                                    delay(BypassConfig.delay1)
+                                    // Now send the actual buffer, but possibly split it too to be safe
                                     if (sniPos > 3) {
-                                        // Write record type (0x16) and version (0x03, 0x01/0x03)
-                                        targetOutput.write(buffer, 0, 3)
-                                        targetOutput.flush()
-                                        delay(BypassConfig.delay1)
-                                        
-                                        // Write remaining header and handshake up to SNI
-                                        targetOutput.write(buffer, 3, sniPos - 3)
+                                        targetOutput.write(buffer, 0, sniPos)
                                         targetOutput.flush()
                                         delay(BypassConfig.delay2)
-                                        
-                                        // Write SNI hostname and the rest of ClientHello
                                         targetOutput.write(buffer, sniPos, read - sniPos)
                                     } else {
-                                        // Fallback to basic header split
-                                        targetOutput.write(buffer, 0, 3)
-                                        targetOutput.flush()
-                                        delay(BypassConfig.delay1)
-                                        targetOutput.write(buffer, 3, read - 3)
+                                        targetOutput.write(buffer, 0, read)
                                     }
                                 }
                                 BypassStrategy.SNI_MANGLE -> {
@@ -621,6 +658,62 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     targetOutput.flush()
                                     delay(BypassConfig.delay1 + 10)
                                     targetOutput.write(buffer, 2, read - 2)
+                                }
+                                BypassStrategy.TCP_OOB_DESYNC -> {
+                                    try { targetSocket?.sendUrgentData(0xFF) } catch (e: Exception) {}
+                                    targetOutput.write(buffer, 0, 1)
+                                    targetOutput.flush()
+                                    delay(BypassConfig.delay1)
+                                    targetOutput.write(buffer, 1, read - 1)
+                                }
+                                BypassStrategy.TCP_DESYNC_FAKE -> {
+                                    // Send a fake ClientHello with a small TTL so it is dropped before reaching the server
+                                    // but processed by DPI (Zapret/ByeDPI fake packet trick)
+                                    var pfd: android.os.ParcelFileDescriptor? = null
+                                    try {
+                                        pfd = android.os.ParcelFileDescriptor.fromSocket(targetSocket!!)
+                                        val fd = pfd.fileDescriptor
+                                        
+                                        // Set low TTL
+                                        android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, BypassConfig.fakeTtl)
+                                        
+                                        // Send Fake ClientHello (Short but structurally valid headers)
+                                        val fakePacket = byteArrayOf(
+                                            0x16, 0x03, 0x01, 0x00, 0x42, // TLS Record (66 bytes)
+                                            0x01, 0x00, 0x00, 0x3E,       // ClientHello (62 bytes)
+                                            0x03, 0x03,                   // TLS 1.2
+                                            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // Random (32)
+                                            0x00,                         // Session ID length 0
+                                            0x00, 0x02, 0x13, 0x01,       // Cipher Suites (2)
+                                            0x01, 0x00,                   // Compression (1)
+                                            0x00, 0x13,                   // Extensions Length (19)
+                                            0x00, 0x00,                   // SNI Type
+                                            0x00, 0x0F,                   // SNI Ext Length (15)
+                                            0x00, 0x0D,                   // SNI List Length (13)
+                                            0x00,                         // Hostname type
+                                            0x00, 0x0A,                   // Hostname length (10)
+                                            'g'.code.toByte(), 'o'.code.toByte(), 'o'.code.toByte(), 'g'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte(), '.'.code.toByte(), 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte()
+                                        )
+                                        targetOutput.write(fakePacket)
+                                        targetOutput.flush()
+                                        
+                                        // Wait briefly for DPI to process
+                                        delay(BypassConfig.delay1)
+                                        
+                                        // Restore default TTL (64 is a safe default)
+                                        android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, 64)
+                                    } catch (e: Exception) {
+                                        // Ignore TTL failure and just proceed
+                                    } finally {
+                                        try { pfd?.close() } catch (e: Exception) {}
+                                    }
+                                    
+                                    // Send the actual ClientHello
+                                    targetOutput.write(buffer, 0, read)
+                                }
+                                BypassStrategy.HTTP_SPACE -> {
+                                    // Fallback for TLS
+                                    targetOutput.write(buffer, 0, read)
                                 }
                                 else -> {
                                     targetOutput.write(buffer, 0, read)
@@ -745,29 +838,56 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                             ProxyStats.addError()
                             throw lastConnectException ?: java.net.ConnectException("Failed to connect to any resolved address for $host")
                         }
-                        targetSocket!!.soTimeout = 60000
+                        targetSocket!!.soTimeout = 300000
                         targetSocket!!.keepAlive = true
                         targetSocket!!.tcpNoDelay = true
                         targetSocket!!.receiveBufferSize = 65535
                         targetSocket!!.sendBufferSize = 65535
-                        clientSocket.soTimeout = 60000
+                        clientSocket.soTimeout = 300000
                         clientSocket.tcpNoDelay = true
                         clientSocket.receiveBufferSize = 65535
                         clientSocket.sendBufferSize = 65535
                         
                         val targetOutput = targetSocket!!.getOutputStream()
                         
-                    val newRequestLine = "${parts[0]} ${if(urlStr.isEmpty()) "/" else urlStr} ${if (parts.size > 2) parts[2] else "HTTP/1.1"}\r\n"
+                        val methodStr = if (BypassConfig.strategy.value == BypassStrategy.HTTP_SPACE) "${parts[0]}\t" else parts[0]
+                    val newRequestLine = "$methodStr ${if(urlStr.isEmpty()) "/" else urlStr} ${if (parts.size > 2) parts[2] else "HTTP/1.1"}\r\n"
                     
                     val hostWithPort = if (destPort == 80) host else "$host:$destPort"
                     val hostHeader = when(BypassConfig.strategy.value) {
                         BypassStrategy.HOST_CASE -> "hOsT: $hostWithPort\r\n"
                         BypassStrategy.HOST_MIXED -> "HoSt: $hostWithPort\r\n"
+                        BypassStrategy.HTTP_SPACE -> " Host: $hostWithPort\r\n"
                         else -> "Host: $hostWithPort\r\n"
                     }
                     val bytes = (newRequestLine + hostHeader + headers.toString() + "\r\n").toByteArray()
                     
-                    if (BypassConfig.strategy.value != BypassStrategy.DIRECT && bytes.size > 2) {
+                    if (BypassConfig.strategy.value == BypassStrategy.TCP_OOB_DESYNC) {
+                        try { targetSocket?.sendUrgentData(0xFF) } catch (e: Exception) {}
+                        targetOutput.write(bytes, 0, 1)
+                        targetOutput.flush()
+                        delay(BypassConfig.delay1)
+                        targetOutput.write(bytes, 1, bytes.size - 1)
+                    } else if (BypassConfig.strategy.value == BypassStrategy.TCP_DESYNC_FAKE) {
+                        var pfd: android.os.ParcelFileDescriptor? = null
+                        try {
+                            pfd = android.os.ParcelFileDescriptor.fromSocket(targetSocket!!)
+                            val fd = pfd.fileDescriptor
+                            
+                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, BypassConfig.fakeTtl)
+                            
+                            // Send Fake HTTP Request
+                            val fakePacket = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n".toByteArray()
+                            targetOutput.write(fakePacket)
+                            targetOutput.flush()
+                            delay(BypassConfig.delay1)
+                            
+                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TTL, 64)
+                        } catch (e: Exception) {} finally {
+                            try { pfd?.close() } catch (e: Exception) {}
+                        }
+                        targetOutput.write(bytes)
+                    } else if (BypassConfig.strategy.value != BypassStrategy.DIRECT && bytes.size > 2) {
                         // Split after method or in the middle of headers
                         val splitPos = if (BypassConfig.strategy.value == BypassStrategy.HOST_CASE || BypassConfig.strategy.value == BypassStrategy.HOST_MIXED) 1 else BypassConfig.frag1.coerceAtLeast(1).coerceAtMost(bytes.size - 1)
                         targetOutput.write(bytes, 0, splitPos)

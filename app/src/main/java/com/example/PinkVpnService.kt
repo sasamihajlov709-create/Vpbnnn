@@ -62,6 +62,7 @@ class PinkVpnService : VpnService() {
 
     private suspend fun restartProxyServer(reason: String) {
         proxyMutex.withLock {
+            if (!_isRunning.value) return@withLock
             ProxyStats.logRecovery(reason)
             RobustResolver.clearCache()
             proxyServer?.stop()
@@ -85,6 +86,13 @@ class PinkVpnService : VpnService() {
                 BypassConfig.rotateStrategy()
                 restartProxyServer("Manual Optimization Triggered")
                 ProxyStats.logRecovery("Core System Re-Started")
+            }
+            return START_STICKY
+        }
+        if (action == "CHANGE_STRATEGY") {
+            serviceScope.launch {
+                restartProxyServer("Strategy Manually Changed")
+                ProxyStats.logRecovery("Core System Re-Started with New Strategy")
             }
             return START_STICKY
         }
@@ -169,7 +177,15 @@ class PinkVpnService : VpnService() {
             builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT))
             
             builder.addDisallowedApplication(packageName)
-            builder.addRoute("10.0.0.0", 8) // Internal route to keep VPN active
+            // Add a dummy route to make Android treat this VPN as active for the HTTP proxy to apply globally.
+            // Some devices might require a broader route, but routing 0.0.0.0/0 without a tun2socks implementation
+            // blackholes all non-HTTP proxy traffic (like native games, UDP apps, etc).
+            // Many apps ignore the HTTP proxy. If we don't route 0.0.0.0/0, they will just bypass the VPN.
+            builder.addRoute("10.0.0.0", 8) 
+            
+            // Note: We do NOT use addRoute("0.0.0.0", 0) because we don't have a TUN-to-TCP (tun2socks) layer.
+            // Any app ignoring the proxy would otherwise lose internet.
+
 
             try {
                 vpnInterface = builder.establish()

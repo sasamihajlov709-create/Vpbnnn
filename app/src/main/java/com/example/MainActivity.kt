@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -20,18 +21,27 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalContext
@@ -122,6 +132,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
     val bytesTransferred by ProxyStats.bytesTransferred.collectAsStateWithLifecycle(initialValue = 0L)
     val activeConnections by ProxyStats.activeConnections.collectAsStateWithLifecycle(initialValue = 0)
     val speedBytes by ProxyStats.speedBytesPerSecond.collectAsStateWithLifecycle(initialValue = 0L)
+    val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle(initialValue = emptyList())
     val errorCount by ProxyStats.errors.collectAsStateWithLifecycle(initialValue = 0L)
     val serviceStatuses by ServiceChecker.statuses.collectAsStateWithLifecycle(initialValue = emptyList())
     val isProxyHealthy by ServiceChecker.proxyHealth.collectAsStateWithLifecycle(initialValue = true)
@@ -130,6 +141,19 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
 
     val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
+    var showStrategyMenu by remember { mutableStateOf(false) }
+    
+    var sessionTime by remember { mutableStateOf(0L) }
+    LaunchedEffect(isActive) {
+        if (isActive) {
+            while (isActive) {
+                delay(1000)
+                sessionTime++
+            }
+        } else {
+            sessionTime = 0L
+        }
+    }
     
     val context = LocalContext.current
     
@@ -151,6 +175,15 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
     // Derived states for smoother UI
     val speedKb = (speedBytes / 1024.0)
     val speedText = if (speedKb > 1024) String.format(java.util.Locale.US, "%.1f MB/s", speedKb / 1024.0) else String.format(java.util.Locale.US, "%.0f KB/s", speedKb)
+    
+    val hours = sessionTime / 3600
+    val minutes = (sessionTime % 3600) / 60
+    val seconds = sessionTime % 60
+    val formattedSessionTime = if (hours > 0) {
+        String.format(java.util.Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
+    }
 
     Box(
         modifier = Modifier
@@ -324,7 +357,21 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             color = Color.White
                         )
                         Text(
-                            text = stringResource(R.string.label_speed),
+                            text = ProxyStats.formatBytes(bytesTransferred),
+                            fontSize = 10.sp,
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.8f),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "$activeConnections",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "CONNS",
                             fontSize = 10.sp,
                             color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                             fontWeight = FontWeight.Bold
@@ -345,6 +392,51 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         )
                     }
                 }
+                
+                // Speed Graph
+                if (speedHistory.size > 1) {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        val maxSpeed = speedHistory.maxOrNull()?.coerceAtLeast(1024L) ?: 1024L
+                        val path = Path()
+                        val widthPerPoint = size.width / (60 - 1).coerceAtLeast(1)
+                        
+                        // Draw line with smooth cubic bezier curves
+                        val firstY = size.height - (speedHistory.firstOrNull() ?: 0L) / maxSpeed.toFloat() * size.height
+                        path.moveTo(0f, firstY)
+                        
+                        for (i in 0 until speedHistory.size - 1) {
+                            val x1 = i * widthPerPoint
+                            val y1 = size.height - (speedHistory[i] / maxSpeed.toFloat() * size.height)
+                            val x2 = (i + 1) * widthPerPoint
+                            val y2 = size.height - (speedHistory[i + 1] / maxSpeed.toFloat() * size.height)
+                            
+                            val cx = (x1 + x2) / 2f
+                            path.cubicTo(cx, y1, cx, y2, x2, y2)
+                        }
+                        
+                        drawPath(
+                            path = path,
+                            color = Color(0xFFF48FB1),
+                            style = Stroke(width = 2.dp.toPx())
+                        )
+                        
+                        // Draw fill gradient
+                        path.lineTo(size.width, size.height)
+                        path.lineTo(0f, size.height)
+                        path.close()
+                        drawPath(
+                            path = path,
+                            brush = Brush.verticalGradient(
+                                colors = listOf(Color(0xFFF48FB1).copy(alpha = 0.4f), Color.Transparent)
+                            )
+                        )
+                    }
+                }
             } else {
                 Spacer(modifier = Modifier.height(86.dp))
             }
@@ -354,28 +446,62 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 animationSpec = tween(500), label = "btnColor"
             )
             
+            val pulseScale by infiniteTransition.animateFloat(
+                initialValue = 1f,
+                targetValue = if (isActive) 1.15f else 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1500, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ), label = "pulse"
+            )
+            
+            val pulseAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.5f,
+                targetValue = if (isActive) 0f else 0f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1500, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart
+                ), label = "pulseAlpha"
+            )
+            
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(140.dp)
-                    .clip(CircleShape)
-                    .background(buttonColor)
-                    .clickable { onToggle() }
-                    .padding(8.dp)
+                    .size(160.dp)
             ) {
+                if (isActive) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .scale(pulseScale)
+                            .clip(CircleShape)
+                            .background(Color(0xFFB0124D).copy(alpha = pulseAlpha))
+                    )
+                }
+                
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .fillMaxSize()
+                        .size(140.dp)
                         .clip(CircleShape)
-                        .background(if (isActive) Color(0xFF7A0A38) else Color(0xFF1A030D))
+                        .background(buttonColor)
+                        .clickable { onToggle() }
+                        .padding(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PowerSettingsNew,
-                        contentDescription = "Power",
-                        tint = if (isActive) Color(0xFFF8BBD0) else Color(0xFF880E4F),
-                        modifier = Modifier.size(56.dp)
-                    )
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(CircleShape)
+                            .background(if (isActive) Color(0xFF7A0A38) else Color(0xFF1A030D))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PowerSettingsNew,
+                            contentDescription = "Power",
+                            tint = if (isActive) Color(0xFFF8BBD0) else Color(0xFF880E4F),
+                            modifier = Modifier.size(56.dp)
+                        )
+                    }
                 }
             }
             
@@ -387,6 +513,17 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
                 color = if (isActive) Color(0xFFF8BBD0) else Color(0xFFAD1457)
             )
+            
+            if (isActive) {
+                Text(
+                    text = "SESSION TIME: $formattedSessionTime",
+                    fontSize = 11.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFF48FB1).copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
             
             Spacer(modifier = Modifier.height(16.dp))
             
@@ -426,25 +563,126 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 val youtubeStatus = serviceStatuses.find { it.name == "YouTube" }
                 val blockDetected = youtubeStatus != null && !youtubeStatus.isUp && serviceStatuses.any { it.name.contains("Control") && it.isUp }
                 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stringResource(R.string.label_active_strategy, activeStrategy.name),
-                        fontSize = 8.sp,
-                        color = Color.White.copy(alpha = 0.3f),
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                    if (blockDetected) {
-                        Spacer(modifier = Modifier.width(8.dp))
+                // Advanced Strategy Display
+                Box {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                            .background(Color(0xFF2A1B24), RoundedCornerShape(12.dp))
+                            .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                            .clickable { showStrategyMenu = true }
+                            .padding(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "ACTIVE DPI EVASION ▾",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFF48FB1),
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = activeStrategy.name.replace("_", " "),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White
+                                )
+                            }
+                            if (blockDetected) {
+                                Row(
+                                    modifier = Modifier
+                                        .background(Color(0xFFE57373).copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFE57373), modifier = Modifier.size(10.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "BLOCK DETECTED",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE57373)
+                                    )
+                                }
+                            } else {
+                                Row(
+                                    modifier = Modifier
+                                        .background(Color(0xFF81C784).copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF81C784), modifier = Modifier.size(10.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "BYPASS ACTIVE",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF81C784)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = stringResource(R.string.msg_block_detected),
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFE57373),
-                            modifier = Modifier.padding(bottom = 4.dp)
+                            text = "FRAG: ${BypassConfig.frag1}/${BypassConfig.frag2}/${BypassConfig.frag3} | DELAY: ${BypassConfig.delay1}ms/${BypassConfig.delay2}ms | TTL: ${BypassConfig.fakeTtl}",
+                            fontSize = 9.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = Color(0xFF81C784),
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Text(
+                            text = when (activeStrategy.name) {
+                                "TCP_OOB_DESYNC" -> "Injects Out-of-Band (Urgent) TCP data to desynchronize DPI state while the target server discards the garbage."
+                                "TCP_DESYNC_FAKE" -> "Sends a fake ClientHello with reduced IP TTL. The DPI analyzes the fake packet, but routers drop it before it reaches the server."
+                                "SNI_FAKE" -> "Performs a double split by sending a complete fake TLS handshake header followed by the real one, confusing deep packet inspection."
+                                "HTTP_SPACE" -> "Injects horizontal tabs and spaces into HTTP methods to evade regex-based filters on transparent proxies."
+                                "SNI_TRIPLE" -> "Divides the TLS Server Name Indication (SNI) into three fragmented chunks, bypassing DPI substring matching."
+                                "TLS_DIRTY", "JUNK_PADDING" -> "Pads the TLS header with random byte garbage that gets ignored by the server but crashes DPI parsers."
+                                else -> "Applies advanced payload fragmentation and byte-level manipulation to evade Deep Packet Inspection systems."
+                            },
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.6f),
+                            lineHeight = 14.sp
                         )
                     }
+                    
+                    DropdownMenu(
+                        expanded = showStrategyMenu,
+                        onDismissRequest = { showStrategyMenu = false },
+                        modifier = Modifier.background(Color(0xFF2A1B24)).heightIn(max = 300.dp)
+                    ) {
+                        BypassStrategy.entries.forEach { strategy ->
+                            DropdownMenuItem(
+                                text = { Text(strategy.name.replace("_", " "), color = Color.White, fontSize = 12.sp) },
+                                onClick = {
+                                    showStrategyMenu = false
+                                    BypassConfig.setStrategy(strategy)
+                                    val intent = Intent(context, PinkVpnService::class.java).apply {
+                                        action = "CHANGE_STRATEGY"
+                                    }
+                                    context.startService(intent)
+                                }
+                            )
+                        }
+                    }
                 }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+
                 val logsScrollState = rememberScrollState()
+                
+                LaunchedEffect(recoveryLog.size) {
+                    if (recoveryLog.isNotEmpty()) {
+                        logsScrollState.animateScrollTo(logsScrollState.maxValue)
+                    }
+                }
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -481,13 +719,27 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         color = Color.White.copy(alpha = 0.4f),
                         letterSpacing = 1.sp
                     )
-                    if (lastCheckTime > 0) {
-                        Text(
-                            text = stringResource(R.string.label_updated, SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastCheckTime))),
-                            fontSize = 9.sp,
-                            color = Color.White.copy(alpha = 0.3f),
-                            fontWeight = FontWeight.Bold
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (lastCheckTime > 0) {
+                            Text(
+                                text = stringResource(R.string.label_updated, SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastCheckTime))),
+                                fontSize = 9.sp,
+                                color = Color.White.copy(alpha = 0.3f),
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { ServiceChecker.triggerCheck() },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh",
+                                tint = Color.White.copy(alpha = 0.5f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
 
