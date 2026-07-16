@@ -137,6 +137,7 @@ enum class BypassStrategy {
     TCP_OOB_DESYNC, // Out-of-band data (fake packet equivalent) for DPI confusion
     TCP_DESYNC_FAKE,// Fake ClientHello with short TTL (Zapret trick)
     HTTP_SPACE,     // HTTP method space/desync trick
+    HTTP_TAB,       // HTTP method tab trick
     DIRECT          // No bypass
 }
 
@@ -258,7 +259,7 @@ object BypassConfig {
                 fakeTtl = 2 + (Math.random() * 4).toInt()
                 delay1 = 15L + (Math.random() * 30).toLong()
             }
-            BypassStrategy.HTTP_SPACE -> {
+            BypassStrategy.HTTP_SPACE, BypassStrategy.HTTP_TAB -> {
                 frag1 = 1
                 delay1 = 5L + (Math.random() * 15).toLong()
             }
@@ -715,6 +716,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     // Fallback for TLS
                                     targetOutput.write(buffer, 0, read)
                                 }
+                                BypassStrategy.HTTP_TAB -> {
+                                    // Fallback for TLS
+                                    targetOutput.write(buffer, 0, read)
+                                }
                                 else -> {
                                     targetOutput.write(buffer, 0, read)
                                 }
@@ -850,14 +855,18 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                         
                         val targetOutput = targetSocket!!.getOutputStream()
                         
-                        val methodStr = if (BypassConfig.strategy.value == BypassStrategy.HTTP_SPACE) "${parts[0]}\t" else parts[0]
+                        val methodStr = when (BypassConfig.strategy.value) {
+                            BypassStrategy.HTTP_SPACE -> "${parts[0]} "
+                            BypassStrategy.HTTP_TAB -> "${parts[0]}\t"
+                            else -> parts[0]
+                        }
                     val newRequestLine = "$methodStr ${if(urlStr.isEmpty()) "/" else urlStr} ${if (parts.size > 2) parts[2] else "HTTP/1.1"}\r\n"
                     
                     val hostWithPort = if (destPort == 80) host else "$host:$destPort"
                     val hostHeader = when(BypassConfig.strategy.value) {
                         BypassStrategy.HOST_CASE -> "hOsT: $hostWithPort\r\n"
                         BypassStrategy.HOST_MIXED -> "HoSt: $hostWithPort\r\n"
-                        BypassStrategy.HTTP_SPACE -> " Host: $hostWithPort\r\n"
+                        BypassStrategy.HTTP_SPACE, BypassStrategy.HTTP_TAB -> " Host: $hostWithPort\r\n"
                         else -> "Host: $hostWithPort\r\n"
                     }
                     val bytes = (newRequestLine + hostHeader + headers.toString() + "\r\n").toByteArray()

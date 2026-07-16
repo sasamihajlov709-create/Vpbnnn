@@ -168,6 +168,7 @@ class PinkVpnService : VpnService() {
 
             val builder = Builder()
                 .addAddress("10.0.0.2", 24)
+                .addAddress("fd00:1:2:3::2", 120)
                 // We rely on setHttpProxy for most traffic. 
                 // Global routing without packet processing causes connectivity loss.
                 .setSession("PinkProxy")
@@ -181,7 +182,8 @@ class PinkVpnService : VpnService() {
             // Some devices might require a broader route, but routing 0.0.0.0/0 without a tun2socks implementation
             // blackholes all non-HTTP proxy traffic (like native games, UDP apps, etc).
             // Many apps ignore the HTTP proxy. If we don't route 0.0.0.0/0, they will just bypass the VPN.
-            builder.addRoute("10.0.0.0", 8) 
+            builder.addRoute("10.0.0.0", 8)
+            builder.addRoute("fc00::", 7) // IPv6 Unique Local Address space dummy route 
             
             // Note: We do NOT use addRoute("0.0.0.0", 0) because we don't have a TUN-to-TCP (tun2socks) layer.
             // Any app ignoring the proxy would otherwise lose internet.
