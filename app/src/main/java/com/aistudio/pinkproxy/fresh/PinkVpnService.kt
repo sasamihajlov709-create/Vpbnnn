@@ -408,7 +408,7 @@ class PinkVpnService : VpnService() {
                                                     
                                                     // Fallback to normal UDP relay if hijack failed
                                                     val realDstIp = if (dstIp == "10.0.0.3") "8.8.8.8" else dstIp
-                                                    val s = UdpSession(realDstIp, dstPort, this@PinkVpnService) { reply ->
+                                                    val s = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
                                                         try {
                                                             val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
                                                             synchronized(outputStream) {
@@ -425,7 +425,7 @@ class PinkVpnService : VpnService() {
                                             }
 
                                             val realDstIp = if (dstIp == "10.0.0.3") "8.8.8.8" else dstIp
-                                            session = UdpSession(realDstIp, dstPort, this@PinkVpnService) { reply ->
+                                            session = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
                                                 try {
                                                     val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
                                                     synchronized(outputStream) {
@@ -712,7 +712,13 @@ class PinkVpnService : VpnService() {
         manager?.createNotificationChannel(channel)
     }
 
-    private class UdpSession(val dstIp: String, val dstPort: Int, val vpn: VpnService, val onReply: (ByteArray) -> Unit) {
+    private class UdpSession(
+        val dstIp: String,
+        val dstPort: Int,
+        val vpn: VpnService,
+        val scope: kotlinx.coroutines.CoroutineScope,
+        val onReply: (ByteArray) -> Unit
+    ) {
         private val socket = DatagramSocket()
         @Volatile var isClosed = false
         @Volatile var lastActivity = System.currentTimeMillis()
@@ -720,7 +726,7 @@ class PinkVpnService : VpnService() {
         init {
             vpn.protect(socket)
             socket.soTimeout = 1000
-            Thread {
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val buffer = ByteArray(16384)
                 while (!isClosed) {
                     try {
@@ -735,24 +741,26 @@ class PinkVpnService : VpnService() {
                     }
                 }
                 close()
-            }.start()
+            }
         }
         
         fun send(data: ByteArray) {
             lastActivity = System.currentTimeMillis()
-            try {
-                val addr = InetAddress.getByName(dstIp)
-                // QUIC Bypass: Fragment if it looks like a ClientHello (long packet to port 443)
-                if (dstPort == 443 && data.size > 1000) {
-                    val f1 = 1 + (Math.random() * 10).toInt()
-                    socket.send(DatagramPacket(data, 0, f1, addr, dstPort))
-                    Thread.sleep(5)
-                    socket.send(DatagramPacket(data, f1, data.size - f1, addr, dstPort))
-                } else {
-                    socket.send(DatagramPacket(data, data.size, addr, dstPort))
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    val addr = InetAddress.getByName(dstIp)
+                    // QUIC Bypass: Fragment if it looks like a ClientHello (long packet to port 443)
+                    if (dstPort == 443 && data.size > 1000) {
+                        val f1 = 1 + (Math.random() * 10).toInt()
+                        socket.send(DatagramPacket(data, 0, f1, addr, dstPort))
+                        kotlinx.coroutines.delay(5)
+                        socket.send(DatagramPacket(data, f1, data.size - f1, addr, dstPort))
+                    } else {
+                        socket.send(DatagramPacket(data, data.size, addr, dstPort))
+                    }
+                } catch (e: Exception) {
+                    close()
                 }
-            } catch (e: Exception) {
-                close()
             }
         }
         

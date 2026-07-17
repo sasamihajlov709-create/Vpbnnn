@@ -247,17 +247,25 @@ object HostClassifier {
     fun classify(host: String): HostCategory {
         val lower = host.lowercase(java.util.Locale.ROOT)
         return when {
-            lower.contains("youtube") || lower.contains("googlevideo") || lower.contains("ytimg") || 
-            lower.contains("ggpht") || lower.contains("twitch") || lower.contains("netflix") || 
-            lower.contains("vimeo") || lower.contains("dailymotion") -> HostCategory.STREAMING
-            
-            lower.contains("instagram") || lower.contains("cdninstagram") || lower.contains("facebook") || 
-            lower.contains("fbcdn") || lower.contains("twitter") || lower.contains("twimg") || 
-            lower.contains("x.com") || lower.contains("tiktok") -> HostCategory.SOCIAL
-            
-            lower.contains("telegram") || lower.contains("t.me") || lower.contains("discord") || 
-            lower.contains("whatsapp") || lower.contains("viber") -> HostCategory.MESSENGER
-            
+            // Streaming/Video
+            lower.contains("youtube") || lower.contains("googlevideo") || lower.contains("ytimg") ||
+            lower.contains("ggpht") || lower.contains("twitch") || lower.contains("netflix") ||
+            lower.contains("vimeo") || lower.contains("dailymotion") || lower.contains("hulu") ||
+            lower.contains("disney") || lower.contains("hbomax") || lower.contains("primevideo") ||
+            lower.contains("tiktok") -> HostCategory.STREAMING
+
+            // Social & Images
+            lower.contains("instagram") || lower.contains("cdninstagram") || lower.contains("facebook") ||
+            lower.contains("fbcdn") || lower.contains("twitter") || lower.contains("twimg") ||
+            lower.contains("x.com") || lower.contains("pinterest") || lower.contains("reddit") ||
+            lower.contains("snapchat") || lower.contains("tumblr") -> HostCategory.SOCIAL
+
+            // Messengers
+            lower.contains("telegram") || lower.contains("t.me") || lower.contains("discord") ||
+            lower.contains("whatsapp") || lower.contains("viber") || lower.contains("signal") ||
+            lower.contains("messenger") -> HostCategory.MESSENGER
+
+            // Others
             else -> HostCategory.OTHER
         }
     }
@@ -346,14 +354,30 @@ object BypassConfig {
         if (!isAutoTuning) return
         
         val successRate = ProxyStats.getSuccessRate()
+        val censorshipIntensity = ProxyStats.censorshipIntensity.value
         
-        if (successRate > 90) {
+        // Select network-specific strategy scores
+        val currentScores = when (_currentNetworkType.value) {
+            NetworkType.WIFI -> {
+                if (wifiStrategyScores.isEmpty()) wifiStrategyScores.putAll(defaultScores)
+                wifiStrategyScores
+            }
+            else -> {
+                if (mobileStrategyScores.isEmpty()) mobileStrategyScores.putAll(defaultScores)
+                mobileStrategyScores
+            }
+        }
+
+        // Auto-switch trigger: High censorship or poor success rate
+        val needsStrategySwitch = successRate < 50 || (censorshipIntensity > 70 && successRate < 80)
+
+        if (successRate > 90 && censorshipIntensity < 30) {
             // Very stable, rarely mutate
             if (Math.random() > 0.95) {
                 frag1 = (frag1 + listOf(-1, 1).random()).coerceIn(1, 10)
                 ProxyStats.logRecovery("Micro-tuning frag1 to $frag1 (Stable Network)")
             }
-        } else if (successRate > 70) {
+        } else if (successRate > 70 && censorshipIntensity < 60) {
             // Good, but can improve
             if (Math.random() > 0.7) {
                 frag1 = (frag1 + listOf(-2, -1, 1, 2).random()).coerceIn(1, 10)
@@ -361,20 +385,23 @@ object BypassConfig {
                 ProxyStats.logRecovery("Auto-tuning parameters: frag1=$frag1, frag2=$frag2")
             }
         } else {
-            // Poor performance, mutate aggressively
-            frag1 = (1..15).random()
-            frag2 = (1..20).random()
-            delay1 = (10L..50L).random()
+            // Poor performance, mutate more controlled
             if (Math.random() > 0.5) {
-                fakeTtl = (2..10).random()
-            }
-            ProxyStats.logRecovery("Aggressive re-tuning: frag1=$frag1, frag2=$frag2, delay=$delay1, ttl=$fakeTtl")
-            
-            // Periodically switch default strategy if things are really bad
-            if (Math.random() > 0.7 && successRate < 50) {
-                val newStrat = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT && it != _currentStrategy.value }.random()
-                _currentStrategy.value = newStrat
-                ProxyStats.logRecovery("Auto-switched base strategy to ${newStrat.name} due to low success rate")
+                // Re-attempt with slightly different parameters
+                frag1 = (2..8).random()
+                frag2 = (3..12).random()
+                ProxyStats.logRecovery("Tuning parameters: frag1=$frag1, frag2=$frag2")
+            } else {
+                // Periodically switch default strategy if things are really bad
+                if (needsStrategySwitch) {
+                    val bestStrategy = currentScores.maxByOrNull { it.value }?.key 
+                        ?: BypassStrategy.entries.filter { it != BypassStrategy.DIRECT && it != _currentStrategy.value }.random()
+                    
+                    if (bestStrategy != _currentStrategy.value) {
+                        _currentStrategy.value = bestStrategy
+                        ProxyStats.logRecovery("Auto-switched base strategy for ${_currentNetworkType.value} to best-performing: ${bestStrategy.name} (SuccessRate: $successRate, Censorship: $censorshipIntensity)")
+                    }
+                }
             }
         }
     }
@@ -492,9 +519,23 @@ object BypassConfig {
 
     fun getCurrentFragSize() = _currentFragSize.get()
 
+    private fun getNetworkScoresMap(): ConcurrentHashMap<BypassStrategy, Int> {
+        val map = when (_currentNetworkType.value) {
+            NetworkType.WIFI -> wifiStrategyScores
+            else -> mobileStrategyScores
+        }
+        if (map.isEmpty()) map.putAll(defaultScores)
+        return map
+    }
+
     fun recordSuccess(strategy: BypassStrategy, context: android.content.Context? = null) {
         val currentScore = strategyScores[strategy] ?: 100
         strategyScores[strategy] = (currentScore + 30).coerceAtMost(1000)
+        
+        // Update network-specific score
+        val networkScores = getNetworkScoresMap()
+        networkScores[strategy] = (networkScores[strategy] ?: 100) + 30
+        
         if (context != null) saveScores(context)
     }
 
@@ -528,6 +569,10 @@ object BypassConfig {
         scoresMap[strategy] = (scoresMap[strategy] ?: 100) + 10
         strategyScores[strategy] = (strategyScores[strategy] ?: 100) + 2
         
+        // Boost network-specific score
+        val networkScores = getNetworkScoresMap()
+        networkScores[strategy] = (networkScores[strategy] ?: 100) + 5
+        
         if (context != null) {
             saveScores(context)
         }
@@ -542,6 +587,10 @@ object BypassConfig {
         val penalty = if (isCritical) 25 else 10
         scoresMap[strategy] = ((scoresMap[strategy] ?: 100) - penalty).coerceAtLeast(0)
         strategyScores[strategy] = ((strategyScores[strategy] ?: 100) - 2).coerceAtLeast(0)
+        
+        // Add network-specific penalty
+        val networkScores = getNetworkScoresMap()
+        networkScores[strategy] = ((networkScores[strategy] ?: 100) - (penalty / 2)).coerceAtLeast(10)
         
         // Add to failed history
         val failedSet = hostFailedStrategies.getOrPut(host) { java.util.Collections.synchronizedSet(mutableSetOf()) }
@@ -1819,8 +1868,8 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                         ProxyStats.addBytes(read.toLong())
                         output.write(buffer, 0, read)
                         
-                        // Smart Flush: flush immediately only for small packets (interactive)
-                        if (read < 1500 || totalRead < 262144) {
+                        // Smart Flush: flush immediately only for small packets, or if there is no more data currently available to read
+                        if (read < 1500 || totalRead < 262144 || input.available() == 0) {
                             // Add tiny jitter for better desync (0-5ms)
                             if (totalRead < 1048576 && (0..10).random() > 7) {
                                 delay((0..5).random().toLong())

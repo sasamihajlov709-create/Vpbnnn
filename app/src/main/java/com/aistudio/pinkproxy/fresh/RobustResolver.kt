@@ -104,8 +104,47 @@ object RobustResolver {
 
     private var proberJob: kotlinx.coroutines.Job? = null
 
+    private suspend fun preheatDnsCache(vpnService: VpnService?) {
+        val criticalDomains = listOf(
+            "www.youtube.com", "youtube.com", "redirector.googlevideo.com", "googlevideo.com",
+            "t.me", "telegram.org", "www.google.com", "google.com", "chatgpt.com",
+            "discord.com", "github.com", "instagram.com", "www.instagram.com"
+        )
+        Log.i("RobustResolver", "Starting DNS cache preheating for ${criticalDomains.size} critical domains...")
+        
+        // Wait up to 2 seconds for initial warmup probe to populate providerLatencies
+        var attempts = 0
+        while (providerLatencies.isEmpty() && attempts < 10) {
+            kotlinx.coroutines.delay(200)
+            attempts++
+        }
+        
+        kotlinx.coroutines.coroutineScope {
+            criticalDomains.forEach { domain ->
+                launch {
+                    try {
+                        resolve(domain, vpnService, forceSecure = false)
+                    } catch (e: Exception) {
+                        // Ignore failures during preheating to maintain background stability
+                    }
+                }
+            }
+        }
+        Log.i("RobustResolver", "DNS cache preheating completed successfully.")
+        ProxyStats.logRecovery("DNS Pre-Optimized: 13 critical domains resolved asynchronously")
+    }
+
     fun startBackgroundProber(scope: kotlinx.coroutines.CoroutineScope, vpnService: VpnService?) {
         proberJob?.cancel()
+        
+        // Launch asynchronous DNS cache preheating
+        scope.launch(Dispatchers.IO) {
+            try {
+                preheatDnsCache(vpnService)
+            } catch (e: Exception) {
+                Log.e("RobustResolver", "DNS preheating failed: ${e.message}")
+            }
+        }
         
         // Immediate non-blocking warmup DNS latency probe to build routing weights instantly
         scope.launch(Dispatchers.IO) {
