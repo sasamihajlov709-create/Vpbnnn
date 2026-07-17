@@ -1,0 +1,71 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
+@@ -1543,6 +1543,68 @@
+                 )
+ 
++                // Auto-Tuning Toggle
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
++                    horizontalArrangement = Arrangement.SpaceBetween,
++                    verticalAlignment = Alignment.CenterVertically
++                ) {
++                    Column(modifier = Modifier.weight(1f)) {
++                        Text(
++                            text = "DPI AUTO-TUNING",
++                            fontSize = 11.sp,
++                            fontWeight = FontWeight.Bold,
++                            color = Color(0xFFF8BBD0)
++                        )
++                        Text(
++                            text = "Автоматическая подстройка DPI",
++                            fontSize = 9.sp,
++                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
++                        )
++                    }
++                    Switch(
++                        checked = isAutoTuning,
++                        onCheckedChange = { 
++                            isAutoTuning = it
++                            BypassConfig.isAutoTuning = it
++                            BypassConfig.saveTuningSettings(context)
++                        },
++                        colors = SwitchDefaults.colors(
++                            checkedThumbColor = Color(0xFFF48FB1),
++                            checkedTrackColor = Color(0xFFF48FB1).copy(alpha = 0.5f)
++                        )
++                    )
++                }
++                
++                // QUIC Blocking Toggle
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
++                    horizontalArrangement = Arrangement.SpaceBetween,
++                    verticalAlignment = Alignment.CenterVertically
++                ) {
++                    Column(modifier = Modifier.weight(1f)) {
++                        Text(
++                            text = "BLOCK QUIC (UDP 443)",
++                            fontSize = 11.sp,
++                            fontWeight = FontWeight.Bold,
++                            color = Color(0xFFF8BBD0)
++                        )
++                        Text(
++                            text = "Блокировка QUIC, fallback to TCP (рекомендуется)",
++                            fontSize = 9.sp,
++                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
++                        )
++                    }
++                    Switch(
++                        checked = BypassConfig.blockQuic,
++                        onCheckedChange = { 
++                            BypassConfig.blockQuic = it
++                            BypassConfig.saveTuningSettings(context)
++                        },
++                        colors = SwitchDefaults.colors(
++                            checkedThumbColor = Color(0xFFF48FB1),
++                            checkedTrackColor = Color(0xFFF48FB1).copy(alpha = 0.5f)
++                        )
++                    )
++                }
++
+                 // 1. DNS Settings Section

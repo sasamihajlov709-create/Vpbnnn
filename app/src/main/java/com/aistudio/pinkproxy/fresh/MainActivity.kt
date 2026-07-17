@@ -81,7 +81,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         
         val prefs = getSharedPreferences("pink_proxy_settings", MODE_PRIVATE)
-        val autoConnect = prefs.getBoolean("auto_connect_on_launch", false)
+        val autoConnect = prefs.getBoolean("auto_connect_on_launch", true)
         
         setContent {
             val isVpnActive by PinkVpnService.isRunning.collectAsStateWithLifecycle(initialValue = false)
@@ -138,9 +138,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
-    val bgColor1 = Color(0xFF15020A) // Almost black with pink tint
-    val bgColor2 = Color(0xFF2A0614) // Very dark pink/burgundy
-    val bgColor3 = Color(0xFF420B20) // Dark muted pink
+    val bgColor1 = Color.Black // Almost black with pink tint
+    val bgColor2 = Color.Black // Very dark pink/burgundy
+    val bgColor3 = Color.Black // Dark muted pink
     
     val infiniteTransition = rememberInfiniteTransition(label = "bg_anim")
     val offsetX by infiniteTransition.animateFloat(
@@ -157,6 +157,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
     val speedBytes by ProxyStats.speedBytesPerSecond.collectAsStateWithLifecycle(initialValue = 0L)
     val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle(initialValue = emptyList())
     val errorCount by ProxyStats.errors.collectAsStateWithLifecycle(initialValue = 0L)
+    val censorshipIntensity by ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
     val serviceStatuses by ServiceChecker.statuses.collectAsStateWithLifecycle(initialValue = emptyList())
     val isProxyHealthy by ServiceChecker.proxyHealth.collectAsStateWithLifecycle(initialValue = true)
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
@@ -408,7 +409,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             text = "${ProxyStats.formatBytes(speedBytes)}/s",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = Color(0xFFF8BBD0)
                         )
                         Text(
                             text = ProxyStats.formatBytes(bytesTransferred),
@@ -422,7 +423,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             text = "$activeConnections",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = Color(0xFFF8BBD0)
                         )
                         Text(
                             text = "CONNS",
@@ -436,7 +437,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             text = errorCount.toString(),
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (errorCount > 0) Color(0xFFE57373) else Color.White
+                            color = if (errorCount > 0) Color(0xFFE57373) else Color(0xFFF8BBD0)
                         )
                         Text(
                             text = stringResource(R.string.label_errors),
@@ -496,7 +497,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
             }
             
             val buttonColor by animateColorAsState(
-                targetValue = if (isActive) Color(0xFFB0124D) else Color.White.copy(alpha = 0.05f),
+                targetValue = if (isActive) Color(0xFFB0124D) else Color(0xFFF8BBD0).copy(alpha = 0.05f),
                 animationSpec = tween(500), label = "btnColor"
             )
             
@@ -547,7 +548,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(CircleShape)
-                            .background(if (isActive) Color(0xFF7A0A38) else Color(0xFF1A030D))
+                            .background(if (isActive) Color(0xFF7A0A38) else Color.Black)
                     ) {
                         Icon(
                             imageVector = Icons.Default.PowerSettingsNew,
@@ -602,9 +603,9 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         text = "RTT: ${currentRttMs}ms (x${"%.1f".format((currentRttMs.toDouble() / 50.0).coerceIn(0.5, 3.0))})",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFF81D4FA),
+                        color = Color(0xFFF8BBD0),
                         modifier = Modifier
-                            .background(Color(0xFF81D4FA).copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .background(Color(0xFFF8BBD0).copy(alpha = 0.15f), RoundedCornerShape(4.dp))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
@@ -622,7 +623,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         text = stringResource(R.string.label_autopilot_actions),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.4f),
+                        color = Color(0xFFF8BBD0).copy(alpha = 0.4f),
                         letterSpacing = 1.sp
                     )
                     val youtubeDown = serviceStatuses.any { it.name == "YouTube" && !it.isUp }
@@ -633,10 +634,10 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             text = "FLUSH DNS",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF81D4FA),
+                            color = Color(0xFFF8BBD0),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0xFF81D4FA).copy(alpha = 0.1f))
+                                .background(Color(0xFFF8BBD0).copy(alpha = 0.1f))
                                 .clickable { 
                                     RobustResolver.clearCache()
                                     ProxyStats.logRecovery("DNS Cache Flushed Manually")
@@ -648,7 +649,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             text = if (isOptimizing) stringResource(R.string.action_force_reoptimize) else stringResource(R.string.action_optimize),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (isOptimizing) Color.White else Color(0xFFF48FB1),
+                            color = if (isOptimizing) Color(0xFFF8BBD0) else Color(0xFFF48FB1),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(if (isOptimizing) Color(0xFFD81B60) else Color(0xFFF48FB1).copy(alpha = 0.1f))
@@ -671,7 +672,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp)
-                            .background(Color(0xFF2A1B24), RoundedCornerShape(12.dp))
+                            .background(Color(0xFF111111), RoundedCornerShape(12.dp))
                             .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.2f), RoundedCornerShape(12.dp))
                             .clickable { showStrategyMenu = true }
                             .padding(12.dp)
@@ -693,7 +694,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                     text = activeStrategy.name.replace("_", " "),
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = Color.White
+                                    color = Color(0xFFF8BBD0)
                                 )
                             }
                             if (blockDetected) {
@@ -749,7 +750,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                 else -> "Applies advanced payload fragmentation and byte-level manipulation to evade Deep Packet Inspection systems."
                             },
                             fontSize = 11.sp,
-                            color = Color.White.copy(alpha = 0.6f),
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
                             lineHeight = 14.sp
                         )
                     }
@@ -757,7 +758,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     DropdownMenu(
                         expanded = showStrategyMenu,
                         onDismissRequest = { showStrategyMenu = false },
-                        modifier = Modifier.background(Color(0xFF2A1B24)).heightIn(max = 300.dp)
+                        modifier = Modifier.background(Color(0xFF111111)).heightIn(max = 300.dp)
                     ) {
                         BypassStrategy.entries.forEach { strategy ->
                             val score = BypassConfig.getStrategyScore(strategy)
@@ -768,7 +769,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(strategy.name.replace("_", " "), color = Color.White, fontSize = 12.sp)
+                                        Text(strategy.name.replace("_", " "), color = Color(0xFFF8BBD0), fontSize = 12.sp)
                                         Spacer(modifier = Modifier.width(16.dp))
                                         Text(
                                             text = "$score pts", 
@@ -800,7 +801,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 // Network Status Intelligence Card
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8BBD0).copy(alpha = 0.05f)),
                     shape = RoundedCornerShape(12.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF48FB1).copy(alpha = 0.1f))
                 ) {
@@ -812,19 +813,54 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             Text("NETWORK INTELLIGENCE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1), letterSpacing = 1.sp)
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("DNS: ", fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f))
+                                Text("DNS: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
                                 Text(if (RobustResolver.dnsMode == "Smart DoH") "PROTECTED (DoH)" else "STANDARD", fontSize = 11.sp, color = if (RobustResolver.dnsMode == "Smart DoH") Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
                             }
+                            if (RobustResolver.dnsMode == "Smart DoH") {
+                                val bestDns = RobustResolver.getBestProviderAndLatency()
+                                if (bestDns != null) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("  ↳ Active Server: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.5f))
+                                        Text("${bestDns.first} (${bestDns.second}ms)", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Bypass Efficiency: ", fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f))
+                                Text("QUIC (UDP 443): ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                Text(if (BypassConfig.blockQuic) "BLOCKED (TCP Fallback)" else "ALLOWED", fontSize = 11.sp, color = if (BypassConfig.blockQuic) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("TCP Kernel: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                Text("FAST_OPEN + NODELAY", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Bypass Efficiency: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
                                 val successRate = ProxyStats.getSuccessRate()
                                 Text("$successRate%", fontSize = 11.sp, color = if (successRate > 80) Color(0xFF81C784) else if (successRate > 50) Color(0xFFFFB74D) else Color(0xFFE57373), fontWeight = FontWeight.Bold)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Censorship Level: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                val cLevelStr = when {
+                                    censorshipIntensity < 25 -> "LOW ($censorshipIntensity%)"
+                                    censorshipIntensity < 65 -> "MEDIUM ($censorshipIntensity%)"
+                                    else -> "HIGH ($censorshipIntensity%)"
+                                }
+                                val cLevelColor = when {
+                                    censorshipIntensity < 25 -> Color(0xFF81C784)
+                                    censorshipIntensity < 65 -> Color(0xFFFFB74D)
+                                    else -> Color(0xFFE57373)
+                                }
+                                Text(cLevelStr, fontSize = 11.sp, color = cLevelColor, fontWeight = FontWeight.Bold)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Auto-Tuning: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                Text(if (BypassConfig.isAutoTuning) "ACTIVE" else "MANUAL", fontSize = 11.sp, color = if (BypassConfig.isAutoTuning) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
                             }
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             val rttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
-                            Text("RTT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.4f), letterSpacing = 1.sp)
-                            Text("${rttMs}ms", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                            Text("RTT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0).copy(alpha = 0.4f), letterSpacing = 1.sp)
+                            Text("${rttMs}ms", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFF8BBD0))
                         }
                     }
                 }
@@ -869,7 +905,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     text = "LIVE TRAFFIC",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.4f),
+                    color = Color(0xFFF8BBD0).copy(alpha = 0.4f),
                     letterSpacing = 1.sp,
                     modifier = Modifier.align(Alignment.Start).padding(bottom = 8.dp)
                 )
@@ -907,7 +943,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         text = stringResource(R.string.label_service_monitor),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.4f),
+                        color = Color(0xFFF8BBD0).copy(alpha = 0.4f),
                         letterSpacing = 1.sp
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -915,7 +951,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             Text(
                                 text = stringResource(R.string.label_updated, SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastCheckTime))),
                                 fontSize = 9.sp,
-                                color = Color.White.copy(alpha = 0.3f),
+                                color = Color(0xFFF8BBD0).copy(alpha = 0.3f),
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(end = 8.dp)
                             )
@@ -927,7 +963,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "Refresh",
-                                tint = Color.White.copy(alpha = 0.5f),
+                                tint = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -937,7 +973,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(16.dp))
+                        .background(Color(0xFFF8BBD0).copy(alpha = 0.03f), RoundedCornerShape(16.dp))
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -945,7 +981,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color.White.copy(alpha = 0.02f), RoundedCornerShape(8.dp))
+                                .background(Color(0xFFF8BBD0).copy(alpha = 0.02f), RoundedCornerShape(8.dp))
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -953,13 +989,13 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             Column {
                                 Text(
                                     text = status.name,
-                                    color = Color.White,
+                                    color = Color(0xFFF8BBD0),
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = status.url.removePrefix("https://").removePrefix("www."),
-                                    color = Color.White.copy(alpha = 0.3f),
+                                    color = Color(0xFFF8BBD0).copy(alpha = 0.3f),
                                     fontSize = 10.sp
                                 )
                             }
@@ -1009,7 +1045,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF2A1B24).copy(alpha = 0.8f)
+                    containerColor = Color(0xFF111111).copy(alpha = 0.8f)
                 )
             ) {
                 Column(
@@ -1035,7 +1071,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                "• Официальные приложения (YouTube, etc):\n" +
                                "  Некоторые приложения полностью игнорируют системный прокси. Если видео в приложении YouTube не грузятся, используйте веб-версию в Chrome или Yandex Browser.",
                         fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.8f),
+                        color = Color(0xFFF8BBD0).copy(alpha = 0.8f),
                         lineHeight = 16.sp
                     )
                 }
@@ -1047,7 +1083,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
 @Composable
 fun AutoConnectCard(context: android.content.Context) {
     val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
-    var autoConnect by remember { mutableStateOf(prefs.getBoolean("auto_connect_on_launch", false)) }
+    var autoConnect by remember { mutableStateOf(prefs.getBoolean("auto_connect_on_launch", true)) }
 
     Card(
         modifier = Modifier
@@ -1056,7 +1092,7 @@ fun AutoConnectCard(context: android.content.Context) {
             .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1A030D).copy(alpha = 0.5f)
+            containerColor = Color.Black.copy(alpha = 0.5f)
         )
     ) {
         Row(
@@ -1071,12 +1107,12 @@ fun AutoConnectCard(context: android.content.Context) {
                     text = stringResource(R.string.label_auto_connect),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = Color(0xFFF8BBD0)
                 )
                 Text(
                     text = stringResource(R.string.desc_auto_connect),
                     fontSize = 11.sp,
-                    color = Color.White.copy(alpha = 0.6f),
+                    color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
                     lineHeight = 14.sp
                 )
             }
@@ -1104,7 +1140,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
             .border(1.dp, Color(0xFFFFB74D).copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF2E1C0A).copy(alpha = 0.6f)
+            containerColor = Color.Black.copy(alpha = 0.6f)
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -1127,7 +1163,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
             Text(
                 text = stringResource(R.string.desc_battery_optimization),
                 fontSize = 11.sp,
-                color = Color.White.copy(alpha = 0.8f),
+                color = Color(0xFFF8BBD0).copy(alpha = 0.8f),
                 lineHeight = 15.sp
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -1152,7 +1188,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
                 modifier = Modifier.fillMaxWidth().height(36.dp),
                 contentPadding = PaddingValues(0.dp)
             ) {
-                Text(stringResource(R.string.action_disable), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(stringResource(R.string.action_disable), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
             }
         }
     }
@@ -1167,10 +1203,10 @@ fun AppFilterCard(context: android.content.Context) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .border(1.dp, Color(0xFF81D4FA).copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
+            .border(1.dp, Color(0xFFF8BBD0).copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF010A1A).copy(alpha = 0.5f)
+            containerColor = Color.Black.copy(alpha = 0.5f)
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -1184,19 +1220,19 @@ fun AppFilterCard(context: android.content.Context) {
                         text = stringResource(R.string.label_app_filter),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = Color(0xFFF8BBD0)
                     )
                     Text(
                         text = stringResource(R.string.desc_app_filter),
                         fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.6f),
+                        color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
                         lineHeight = 14.sp
                     )
                 }
                 Icon(
                     imageVector = Icons.Default.FilterList,
                     contentDescription = null,
-                    tint = Color(0xFF81D4FA),
+                    tint = Color(0xFFF8BBD0),
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -1211,7 +1247,7 @@ fun AppFilterCard(context: android.content.Context) {
                 Text(
                     text = if (isExcludeMode) stringResource(R.string.label_exclude_mode) else stringResource(R.string.label_include_mode),
                     fontSize = 12.sp,
-                    color = Color(0xFF81D4FA),
+                    color = Color(0xFFF8BBD0),
                     fontWeight = FontWeight.Medium
                 )
                 Switch(
@@ -1222,8 +1258,8 @@ fun AppFilterCard(context: android.content.Context) {
                         PinkVpnService.saveFilterSettings(context)
                     },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color(0xFF81D4FA),
-                        checkedTrackColor = Color(0xFF0277BD)
+                        checkedThumbColor = Color(0xFFF8BBD0),
+                        checkedTrackColor = Color(0xFFD81B60)
                     )
                 )
             }
@@ -1232,7 +1268,7 @@ fun AppFilterCard(context: android.content.Context) {
             
             Button(
                 onClick = { showDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0277BD)),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD81B60)),
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth().height(40.dp)
             ) {
@@ -1240,7 +1276,7 @@ fun AppFilterCard(context: android.content.Context) {
                     text = "${stringResource(R.string.action_select_apps)} ($selectedCount)",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = Color(0xFFF8BBD0)
                 )
             }
         }
@@ -1285,7 +1321,7 @@ fun AppSelectionDialog(
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = Color(0xFF0A0005)
+            color = Color.Black
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // Header
@@ -1296,13 +1332,13 @@ fun AppSelectionDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color(0xFFF8BBD0))
                     }
                     Text(
                         stringResource(R.string.action_select_apps),
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = Color(0xFFF8BBD0)
                     )
                 }
 
@@ -1313,15 +1349,15 @@ fun AppSelectionDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
-                    placeholder = { Text("Search apps...", color = Color.White.copy(alpha = 0.5f)) },
+                    placeholder = { Text("Search apps...", color = Color(0xFFF8BBD0).copy(alpha = 0.5f)) },
                     colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.White.copy(alpha = 0.05f),
-                        unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
+                        focusedContainerColor = Color(0xFFF8BBD0).copy(alpha = 0.05f),
+                        unfocusedContainerColor = Color(0xFFF8BBD0).copy(alpha = 0.05f),
                         focusedIndicatorColor = Color(0xFFF48FB1),
                         unfocusedIndicatorColor = Color.Transparent,
                         cursorColor = Color(0xFFF48FB1),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        focusedTextColor = Color(0xFFF8BBD0),
+                        unfocusedTextColor = Color(0xFFF8BBD0)
                     ),
                     shape = RoundedCornerShape(12.dp)
                 )
@@ -1363,12 +1399,12 @@ fun AppSelectionDialog(
                                 Box(
                                     modifier = Modifier
                                         .size(40.dp)
-                                        .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
+                                        .background(Color(0xFFF8BBD0).copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = app.loadLabel(pm).toString().take(1).uppercase(),
-                                        color = Color.White,
+                                        color = Color(0xFFF8BBD0),
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
@@ -1378,13 +1414,13 @@ fun AppSelectionDialog(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = app.loadLabel(pm).toString(),
-                                        color = Color.White,
+                                        color = Color(0xFFF8BBD0),
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
                                         text = pkg,
-                                        color = Color.White.copy(alpha = 0.5f),
+                                        color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                                         fontSize = 12.sp
                                     )
                                 }
@@ -1394,7 +1430,7 @@ fun AppSelectionDialog(
                                     onCheckedChange = null, // Handled by row click
                                     colors = CheckboxDefaults.colors(
                                         checkedColor = Color(0xFFF48FB1),
-                                        uncheckedColor = Color.White.copy(alpha = 0.3f)
+                                        uncheckedColor = Color(0xFFF8BBD0).copy(alpha = 0.3f)
                                     )
                                 )
                             }
@@ -1424,7 +1460,7 @@ fun ExpertSettingsCard(
 
     var dnsMode by remember { mutableStateOf(RobustResolver.dnsMode) }
     var customDnsIp by remember { mutableStateOf(RobustResolver.customDnsIp) }
-    var autoConnect by remember { mutableStateOf(context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).getBoolean("auto_connect_on_launch", false)) }
+    var autoConnect by remember { mutableStateOf(context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).getBoolean("auto_connect_on_launch", true)) }
 
     val customServices by ServiceChecker.customServices.collectAsStateWithLifecycle(initialValue = emptyList())
     var newServiceName by remember { mutableStateOf("") }
@@ -1453,7 +1489,7 @@ fun ExpertSettingsCard(
             .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF2A1B24).copy(alpha = 0.8f)
+            containerColor = Color(0xFF111111).copy(alpha = 0.8f)
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -1506,12 +1542,12 @@ fun ExpertSettingsCard(
                             text = "AUTO-CONNECT ON LAUNCH",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = Color(0xFFF8BBD0)
                         )
                         Text(
                             text = "Автоматический запуск при открытии приложения",
                             fontSize = 9.sp,
-                            color = Color.White.copy(alpha = 0.4f)
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
                         )
                     }
                     Switch(
@@ -1520,6 +1556,73 @@ fun ExpertSettingsCard(
                             autoConnect = it
                             context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
                                 .edit().putBoolean("auto_connect_on_launch", it).apply()
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFFF48FB1),
+                            checkedTrackColor = Color(0xFFF48FB1).copy(alpha = 0.5f)
+                        )
+                    )
+                }
+
+                // Auto-Tuning Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "DPI AUTO-TUNING",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFF8BBD0)
+                        )
+                        Text(
+                            text = "Автоматическая подстройка DPI",
+                            fontSize = 9.sp,
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
+                        )
+                    }
+                    Switch(
+                        checked = isAutoTuning,
+                        onCheckedChange = { 
+                            isAutoTuning = it
+                            BypassConfig.isAutoTuning = it
+                            BypassConfig.saveTuningSettings(context)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFFF48FB1),
+                            checkedTrackColor = Color(0xFFF48FB1).copy(alpha = 0.5f)
+                        )
+                    )
+                }
+                
+                // QUIC Blocking Toggle
+                var blockQuicState by remember { mutableStateOf(BypassConfig.blockQuic) }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "BLOCK QUIC (UDP 443)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFF8BBD0)
+                        )
+                        Text(
+                            text = "Блокировка QUIC, fallback to TCP (рекомендуется)",
+                            fontSize = 9.sp,
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
+                        )
+                    }
+                    Switch(
+                        checked = blockQuicState,
+                        onCheckedChange = { 
+                            blockQuicState = it
+                            BypassConfig.blockQuic = it
+                            BypassConfig.saveTuningSettings(context)
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color(0xFFF48FB1),
@@ -1539,7 +1642,7 @@ fun ExpertSettingsCard(
                     text = "1. НАСТРОЙКИ SECURE DNS (DoH)",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.9f),
+                    color = Color(0xFFF8BBD0).copy(alpha = 0.9f),
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
 
@@ -1560,7 +1663,7 @@ fun ExpertSettingsCard(
                         modifier = Modifier.weight(1f).height(36.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text("Smart DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Smart DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
                     }
 
                     Button(
@@ -1573,7 +1676,7 @@ fun ExpertSettingsCard(
                         modifier = Modifier.weight(1f).height(36.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text("Custom DNS/DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Custom DNS/DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
                     }
                 }
 
@@ -1585,7 +1688,7 @@ fun ExpertSettingsCard(
                             RobustResolver.saveDnsSettings(context, "Custom", it)
                         },
                         label = { Text("DNS IP (e.g. 9.9.9.9) or DoH URL", color = Color(0xFFF48FB1).copy(alpha = 0.5f), fontSize = 11.sp) },
-                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 12.sp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF8BBD0), fontSize = 12.sp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color(0xFFF48FB1),
                             unfocusedBorderColor = Color(0xFFF48FB1).copy(alpha = 0.4f),
@@ -1612,13 +1715,13 @@ fun ExpertSettingsCard(
                         text = "2. ПАРАМЕТРЫ ОБХОДА DPI",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.9f)
+                        color = Color(0xFFF8BBD0).copy(alpha = 0.9f)
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Auto-Tuning",
                             fontSize = 10.sp,
-                            color = Color.White.copy(alpha = 0.6f),
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
                             modifier = Modifier.padding(end = 6.dp)
                         )
                         Switch(
@@ -1650,7 +1753,7 @@ fun ExpertSettingsCard(
                     Text(
                         text = "Ручной режим активен. Ползунки управляют фрагментацией и задержкой пакетов ClientHello в реальном времени.",
                         fontSize = 10.sp,
-                        color = Color.White.copy(alpha = 0.5f),
+                        color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                         lineHeight = 14.sp,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
@@ -1659,7 +1762,7 @@ fun ExpertSettingsCard(
                     // 1. frag1
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Размер 1-го фрагмента (frag1):", fontSize = 10.sp, color = Color.White.copy(alpha = 0.8f))
+                            Text("Размер 1-го фрагмента (frag1):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
                             Text("${frag1.toInt()} байт", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
                         }
                         Slider(
@@ -1680,7 +1783,7 @@ fun ExpertSettingsCard(
                     // 2. frag2
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Размер 2-го фрагмента (frag2):", fontSize = 10.sp, color = Color.White.copy(alpha = 0.8f))
+                            Text("Размер 2-го фрагмента (frag2):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
                             Text("${frag2.toInt()} байт", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
                         }
                         Slider(
@@ -1701,7 +1804,7 @@ fun ExpertSettingsCard(
                     // 3. delay1
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Задержка 1-го фрагмента (delay1):", fontSize = 10.sp, color = Color.White.copy(alpha = 0.8f))
+                            Text("Задержка 1-го фрагмента (delay1):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
                             Text("${delay1.toInt()} мс", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
                         }
                         Slider(
@@ -1722,7 +1825,7 @@ fun ExpertSettingsCard(
                     // 4. delay2
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Задержка 2-го фрагмента (delay2):", fontSize = 10.sp, color = Color.White.copy(alpha = 0.8f))
+                            Text("Задержка 2-го фрагмента (delay2):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
                             Text("${delay2.toInt()} мс", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
                         }
                         Slider(
@@ -1743,7 +1846,7 @@ fun ExpertSettingsCard(
                     // 5. fakeTtl
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("IP TTL для фейк-пакетов (fakeTtl):", fontSize = 10.sp, color = Color.White.copy(alpha = 0.8f))
+                            Text("IP TTL для фейк-пакетов (fakeTtl):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
                             Text("${fakeTtl.toInt()}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
                         }
                         Slider(
@@ -1764,14 +1867,14 @@ fun ExpertSettingsCard(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                            .background(Color(0xFFF8BBD0).copy(alpha = 0.05f), RoundedCornerShape(8.dp))
                             .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "ℹ️ Автоматический тюнинг параметров активен. Система динамически подбирает задержки (delay: ${delay1.toInt()}/${delay2.toInt()}ms) и размеры фрагментов (frag: ${frag1.toInt()}/${frag2.toInt()}) для текущей стратегии обхода DPI.",
                             fontSize = 10.sp,
-                            color = Color.White.copy(alpha = 0.7f),
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.7f),
                             lineHeight = 14.sp
                         )
                     }
@@ -1788,13 +1891,13 @@ fun ExpertSettingsCard(
                     text = "3. МОНИТОРИНГ СОБСТВЕННЫХ САЙТОВ",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.9f),
+                    color = Color(0xFFF8BBD0).copy(alpha = 0.9f),
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Text(
                     text = "Добавьте сайт, который хотите разблокировать, чтобы авто-пилот отслеживал его доступность и подбирал лучшие стратегии.",
                     fontSize = 10.sp,
-                    color = Color.White.copy(alpha = 0.5f),
+                    color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                     lineHeight = 14.sp,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
@@ -1808,7 +1911,7 @@ fun ExpertSettingsCard(
                         value = newServiceName,
                         onValueChange = { newServiceName = it },
                         label = { Text("Название (e.g. Meduza)", color = Color(0xFFF48FB1).copy(alpha = 0.5f), fontSize = 10.sp) },
-                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 11.sp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF8BBD0), fontSize = 11.sp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color(0xFFF48FB1),
                             unfocusedBorderColor = Color(0xFFF48FB1).copy(alpha = 0.4f),
@@ -1822,7 +1925,7 @@ fun ExpertSettingsCard(
                         value = newServiceUrl,
                         onValueChange = { newServiceUrl = it },
                         label = { Text("https://...", color = Color(0xFFF48FB1).copy(alpha = 0.5f), fontSize = 10.sp) },
-                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 11.sp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF8BBD0), fontSize = 11.sp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color(0xFFF48FB1),
                             unfocusedBorderColor = Color(0xFFF48FB1).copy(alpha = 0.4f),
@@ -1852,7 +1955,7 @@ fun ExpertSettingsCard(
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Add",
-                            tint = Color.White,
+                            tint = Color(0xFFF8BBD0),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -1862,7 +1965,7 @@ fun ExpertSettingsCard(
                     Text(
                         text = "Добавленные сайты (нажмите корзину для удаления):",
                         fontSize = 10.sp,
-                        color = Color.White.copy(alpha = 0.7f),
+                        color = Color(0xFFF8BBD0).copy(alpha = 0.7f),
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
 
@@ -1874,14 +1977,14 @@ fun ExpertSettingsCard(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFF8BBD0).copy(alpha = 0.04f), RoundedCornerShape(8.dp))
                                     .padding(horizontal = 10.dp, vertical = 6.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(service.first, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    Text(service.second, color = Color.White.copy(alpha = 0.4f), fontSize = 9.sp)
+                                    Text(service.first, color = Color(0xFFF8BBD0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(service.second, color = Color(0xFFF8BBD0).copy(alpha = 0.4f), fontSize = 9.sp)
                                 }
                                 IconButton(
                                     onClick = { ServiceChecker.removeCustomService(context, service.first) },
@@ -1910,13 +2013,13 @@ fun ExpertSettingsCard(
                     text = "4. СБРОС И ПЕРЕЗАГРУЗКА",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.9f),
+                    color = Color(0xFFF8BBD0).copy(alpha = 0.9f),
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Text(
                     text = stringResource(R.string.desc_clear_scores),
                     fontSize = 10.sp,
-                    color = Color.White.copy(alpha = 0.5f),
+                    color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                     lineHeight = 14.sp,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
@@ -1933,7 +2036,7 @@ fun ExpertSettingsCard(
                     modifier = Modifier.fillMaxWidth().height(36.dp),
                     contentPadding = PaddingValues(0.dp)
                 ) {
-                    Text(stringResource(R.string.action_clear_scores), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(stringResource(R.string.action_clear_scores), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
                 }
             }
         }

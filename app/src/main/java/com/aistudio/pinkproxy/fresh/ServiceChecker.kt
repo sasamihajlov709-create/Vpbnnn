@@ -39,9 +39,17 @@ object ServiceChecker {
         val now = System.currentTimeMillis()
         if (now - lastStallCheck > 15000) { // Check every 15 seconds
             val diff = currentBytes - lastTotalBytes
-            // If we have active connections but no bytes moved for 15 seconds, it's a stall
             val activeConns = ProxyStats.activeConnections.value
-            _isStalled.value = activeConns > 0 && diff == 0L
+            val stalled = activeConns > 0 && diff == 0L
+            _isStalled.value = stalled
+            
+            if (stalled) {
+                ProxyStats.logRecovery("WARNING: Traffic stall detected (active connections but 0 bytes moved for 15s). Self-healing started...")
+                RobustResolver.clearCache()
+                appContext?.let { ctx ->
+                    runActiveProbing(ctx)
+                }
+            }
             
             lastTotalBytes = currentBytes
             lastStallCheck = now
@@ -117,6 +125,10 @@ object ServiceChecker {
             false
         }
         _proxyHealth.value = relayResponsive
+        
+        if (!relayResponsive && internetUp) {
+            ProxyStats.forceRecovery("Local proxy port $proxyPort unresponsive during check")
+        }
 
         val results = coroutineScope {
             servicesToCheck.map { (name, url) ->

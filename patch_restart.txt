@@ -1,0 +1,8 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/PinkVpnService.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/PinkVpnService.kt
+@@ -118,6 +118,7 @@
+             ProxyStats.logRecovery(reason)
+             RobustResolver.clearCache()
++            BypassConfig.reOptimize()
+             proxyServer?.stop()
+             ProxyStats.reset(clearLog = false)

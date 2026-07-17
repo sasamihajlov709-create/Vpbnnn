@@ -42,7 +42,10 @@
     <string name="desc_app_filter">Choose which apps should go through the secure tunnel.</string>
     <string name="label_exclude_mode">Exclude Mode</string>
     <string name="label_include_mode">Include Only Mode</string>
-    <string name="msg_apps_count">%1$d apps selected</string>
+    <plurals name="msg_apps_count">
+        <item quantity="one">%1$d app selected</item>
+        <item quantity="other">%1$d apps selected</item>
+    </plurals>
     <string name="action_select_apps">SELECT APPS</string>
     <string name="label_bypass_quality">BYPASS Q</string>
 </resources>

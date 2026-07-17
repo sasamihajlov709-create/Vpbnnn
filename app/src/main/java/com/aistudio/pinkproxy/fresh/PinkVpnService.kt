@@ -107,7 +107,8 @@ class PinkVpnService : VpnService() {
 
         override fun onAvailable(network: Network) {
             super.onAvailable(network)
-            ProxyStats.logRecovery("Network connection restored. Re-checking services...")
+            ProxyStats.logRecovery("Network connection restored. Re-checking services and updating ECS subnet...")
+            RobustResolver.updatePublicIpSubnet(this@PinkVpnService)
             ServiceChecker.triggerCheck()
         }
     }
@@ -116,6 +117,7 @@ class PinkVpnService : VpnService() {
         proxyMutex.withLock {
             if (!_isRunning.value) return@withLock
             ProxyStats.logRecovery(reason)
+            BypassConfig.reOptimize()
             RobustResolver.clearCache()
             proxyServer?.stop()
             ProxyStats.reset(clearLog = false)
@@ -227,6 +229,7 @@ class PinkVpnService : VpnService() {
             BypassConfig.initialize(this)
             proxyServer = PinkProxyServer(this, PROXY_PORT)
             proxyServer?.start()
+            proxyServer?.testInitialStrategies()
 
             // Self-healing monitor and stats persistence
             serviceScope.launch {
@@ -246,11 +249,13 @@ class PinkVpnService : VpnService() {
             val builder = Builder()
                 .addAddress("10.0.0.2", 24)
                 .addAddress("fd00:1:2:3::2", 120)
+                .addRoute("::", 0) // Blackhole all IPv6 to prevent leaks bypassing the proxy
                 .addDnsServer("10.0.0.3")
                 // We rely on setHttpProxy for most traffic. 
                 // Global routing without packet processing causes connectivity loss.
                 .setSession("PinkProxy")
-                .setMtu(1400)
+                // Adaptive MTU: 1420 on WiFi for high throughput, 1280 on Mobile to prevent carrier fragmentation overhead
+                .setMtu(if (BypassConfig.currentNetworkType.value == NetworkType.WIFI) 1420 else 1280)
 
             // Route traffic through our local proxy
             builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT))
@@ -354,6 +359,14 @@ class PinkVpnService : VpnService() {
                                     val payloadOffset = ihl + 8
                                     val payloadLen = read - payloadOffset
                                     if (payloadLen > 0) {
+                                        if (BypassConfig.blockQuic && dstPort == 443) {
+                                            // Generate ICMP Port Unreachable to reject QUIC immediately
+                                            val rejectPacket = IcmpHelper.createIcmpPortUnreachablePacket(packet, read)
+                                            synchronized(outputStream) {
+                                                outputStream.write(rejectPacket)
+                                            }
+                                            continue@tunLoop
+                                        }
                                         val key = "$srcIp:$srcPort->$dstIp:$dstPort"
                                         var session = udpRelays[key]
                                         if (session == null || session.isClosed) {
@@ -362,12 +375,25 @@ class PinkVpnService : VpnService() {
                                                 val dnsPayload = packet.copyOfRange(payloadOffset, read)
                                                 serviceScope.launch(Dispatchers.IO) {
                                                     try {
-                                                        val qname = parseDnsQName(dnsPayload)
-                                                        if (qname != null && qname.contains(".")) {
-                                                            val ips = RobustResolver.resolve(qname, this@PinkVpnService)
-                                                            val ipv4List = ips.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
-                                                            if (ipv4List.isNotEmpty()) {
-                                                                val dnsReply = buildDnsReply(dnsPayload, ipv4List)
+                                                        val parsedQuery = parseDnsQName(dnsPayload)
+                                                        if (parsedQuery != null && parsedQuery.qname.contains(".")) {
+                                                            val isIpv6 = parsedQuery.qtype == 28
+                                                            if (isIpv6) {
+                                                                // Fast fallback: return empty answer for IPv6 queries to force immediate IPv4 fallback.
+                                                                // Since we drop IPv6 traffic to prevent leaks, this completely eliminates slow timeouts.
+                                                                val dnsReply = buildDnsReply(dnsPayload, emptyList(), isIpv6 = true)
+                                                                val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, dnsReply)
+                                                                synchronized(outputStream) {
+                                                                    outputStream.write(replyPacket)
+                                                                    outputStream.flush()
+                                                                }
+                                                                return@launch
+                                                            }
+                                                            
+                                                            val ips = RobustResolver.resolve(parsedQuery.qname, this@PinkVpnService)
+                                                            val matchedList = ips.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
+                                                            if (matchedList.isNotEmpty()) {
+                                                                val dnsReply = buildDnsReply(dnsPayload, matchedList, isIpv6 = false)
                                                                 val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, dnsReply)
                                                                 synchronized(outputStream) {
                                                                     outputStream.write(replyPacket)
@@ -381,7 +407,8 @@ class PinkVpnService : VpnService() {
                                                     }
                                                     
                                                     // Fallback to normal UDP relay if hijack failed
-                                                    val s = UdpSession(dstIp, dstPort, this@PinkVpnService) { reply ->
+                                                    val realDstIp = if (dstIp == "10.0.0.3") "8.8.8.8" else dstIp
+                                                    val s = UdpSession(realDstIp, dstPort, this@PinkVpnService) { reply ->
                                                         try {
                                                             val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
                                                             synchronized(outputStream) {
@@ -397,7 +424,8 @@ class PinkVpnService : VpnService() {
                                                 continue@tunLoop
                                             }
 
-                                            session = UdpSession(dstIp, dstPort, this@PinkVpnService) { reply ->
+                                            val realDstIp = if (dstIp == "10.0.0.3") "8.8.8.8" else dstIp
+                                            session = UdpSession(realDstIp, dstPort, this@PinkVpnService) { reply ->
                                                 try {
                                                     val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
                                                     synchronized(outputStream) {
@@ -431,6 +459,7 @@ class PinkVpnService : VpnService() {
             
             BypassConfig.loadTuningSettings(this)
             RobustResolver.loadDnsSettings(this)
+            RobustResolver.startBackgroundProber(serviceScope, this)
             ServiceChecker.startChecking(serviceScope, this)
             
             serviceScope.launch {
@@ -452,6 +481,7 @@ class PinkVpnService : VpnService() {
                         lowConnectivityCount++
                         if (lowConnectivityCount >= 3) { // 1.5 minutes of low connectivity
                             ProxyStats.logRecovery("AUTO-HEAL: Performance drop. Rotating Strategy...")
+                            BypassConfig.rotateGlobalStrategy()
                             restartProxyServer("Performance Optimization")
                             RobustResolver.clearCache()
                             lowConnectivityCount = 0
@@ -462,7 +492,7 @@ class PinkVpnService : VpnService() {
                     
                     // Periodic Parameter Mutation for active strategy
                     if (isRunning.value && (System.currentTimeMillis() % 300000 < 30000)) {
-                         // BypassConfig.reOptimize() removed
+                         BypassConfig.reOptimize()
                     }
                     
                     // Independent connectivity check
@@ -637,6 +667,7 @@ class PinkVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        RobustResolver.stopBackgroundProber()
         val prefs = getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("vpn_was_active", false).apply()
 
@@ -672,15 +703,13 @@ class PinkVpnService : VpnService() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "pink_proxy_channel",
-                "PinkProxy Service",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
-        }
+        val channel = NotificationChannel(
+            "pink_proxy_channel",
+            "PinkProxy Service",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.createNotificationChannel(channel)
     }
 
     private class UdpSession(val dstIp: String, val dstPort: Int, val vpn: VpnService, val onReply: (ByteArray) -> Unit) {
@@ -812,7 +841,9 @@ class PinkVpnService : VpnService() {
         return buffer.array()
     }
 
-    private fun parseDnsQName(payload: ByteArray): String? {
+    data class ParsedDnsQuery(val qname: String, val qtype: Int)
+
+    private fun parseDnsQName(payload: ByteArray): ParsedDnsQuery? {
         try {
             if (payload.size < 13) return null
             val qcount = ((payload[4].toInt() and 0xFF) shl 8) or (payload[5].toInt() and 0xFF)
@@ -828,13 +859,17 @@ class PinkVpnService : VpnService() {
                 sb.append(String(payload, pos + 1, len))
                 pos += (len + 1)
             }
-            return sb.toString()
+            if (pos + 2 < payload.size) {
+                val qtype = ((payload[pos + 1].toInt() and 0xFF) shl 8) or (payload[pos + 2].toInt() and 0xFF)
+                return ParsedDnsQuery(sb.toString(), qtype)
+            }
+            return ParsedDnsQuery(sb.toString(), 1)
         } catch (e: Exception) {
             return null
         }
     }
 
-    private fun buildDnsReply(query: ByteArray, ips: List<String>): ByteArray {
+    private fun buildDnsReply(query: ByteArray, ips: List<String>, isIpv6: Boolean): ByteArray {
         val bos = java.io.ByteArrayOutputStream()
         // ID
         bos.write(query[0].toInt())
@@ -858,7 +893,7 @@ class PinkVpnService : VpnService() {
             val len = query[pos].toInt() and 0xFF
             if (len == 0) {
                 bos.write(0)
-                // Type A (0x0001) and Class IN (0x0001)
+                // Type (A = 1, AAAA = 28) and Class IN (0x0001)
                 bos.write(query[pos + 1].toInt())
                 bos.write(query[pos + 2].toInt())
                 bos.write(query[pos + 3].toInt())
@@ -875,16 +910,30 @@ class PinkVpnService : VpnService() {
             // Name: pointer to offset 12 (0xc00c)
             bos.write(0xc0)
             bos.write(0x0c)
-            // Type A
-            bos.write(0); bos.write(1)
-            // Class IN
-            bos.write(0); bos.write(1)
-            // TTL (60s)
-            bos.write(0); bos.write(0); bos.write(0); bos.write(60)
-            // Data length (4 bytes for IPv4)
-            bos.write(0); bos.write(4)
-            // IP address
-            ip.split(".").forEach { bos.write(it.toInt()) }
+            if (isIpv6) {
+                // Type AAAA (28 = 0x001c)
+                bos.write(0); bos.write(28)
+                // Class IN
+                bos.write(0); bos.write(1)
+                // TTL (60s)
+                bos.write(0); bos.write(0); bos.write(0); bos.write(60)
+                // Data length (16 bytes for IPv6)
+                bos.write(0); bos.write(16)
+                // Parse and write IPv6
+                val addr = InetAddress.getByName(ip)
+                bos.write(addr.address)
+            } else {
+                // Type A (1 = 0x0001)
+                bos.write(0); bos.write(1)
+                // Class IN
+                bos.write(0); bos.write(1)
+                // TTL (60s)
+                bos.write(0); bos.write(0); bos.write(0); bos.write(60)
+                // Data length (4 bytes for IPv4)
+                bos.write(0); bos.write(4)
+                // IP address
+                ip.split(".").forEach { bos.write(it.toInt()) }
+            }
         }
         
         return bos.toByteArray()
