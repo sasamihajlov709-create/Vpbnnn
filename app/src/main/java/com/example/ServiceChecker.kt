@@ -29,8 +29,30 @@ object ServiceChecker {
     private val _connectivityScore = MutableStateFlow(0)
     val connectivityScore: StateFlow<Int> = _connectivityScore.asStateFlow()
 
+    private val _isStalled = MutableStateFlow(false)
+    val isStalled: StateFlow<Boolean> = _isStalled.asStateFlow()
+
+    private var lastTotalBytes = 0L
+    private var lastStallCheck = System.currentTimeMillis()
+
+    fun checkStall(currentBytes: Long) {
+        val now = System.currentTimeMillis()
+        if (now - lastStallCheck > 15000) { // Check every 15 seconds
+            val diff = currentBytes - lastTotalBytes
+            // If we have active connections but no bytes moved for 15 seconds, it's a stall
+            val activeConns = ProxyStats.activeConnections.value
+            _isStalled.value = activeConns > 0 && diff == 0L
+            
+            lastTotalBytes = currentBytes
+            lastStallCheck = now
+        }
+    }
+
     private var job: Job? = null
     private var internalScope: CoroutineScope? = null
+    private val isProbing = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastProbeTime = 0L
+    private var appContext: android.content.Context? = null
     
     fun triggerCheck() {
         val scope = internalScope ?: return
@@ -55,6 +77,19 @@ object ServiceChecker {
                 conn.requestMethod = "GET"
                 if (conn.responseCode in 200..499) {
                     internetUp = true
+                    
+                    // Hijack Detection: If google.com resolves to something suspicious
+                    if (domain.contains("google.com")) {
+                        try {
+                            val addr = java.net.InetAddress.getByName("google.com")
+                            val hostName = addr.canonicalHostName.lowercase()
+                            if (hostName.contains(".ru") || hostName.contains("rostelecom") || hostName.contains("mts.ru")) {
+                                ProxyStats.logRecovery("ALERT: DNS Hijacking Detected. Forcing Robust DNS Mode.")
+                                RobustResolver.dnsMode = "Smart DoH" // Force DoH
+                            }
+                        } catch (e: Exception) {}
+                    }
+                    
                     break
                 }
             } catch (e: Exception) {
@@ -71,6 +106,17 @@ object ServiceChecker {
             _proxyHealth.value = proxyResponsive.get()
             return
         }
+
+        // Deep Proxy Integrity Check
+        val relayResponsive = try {
+            val sock = java.net.Socket()
+            sock.connect(java.net.InetSocketAddress("127.0.0.1", proxyPort), 1000)
+            sock.close()
+            true
+        } catch (e: Exception) {
+            false
+        }
+        _proxyHealth.value = relayResponsive
 
         val results = coroutineScope {
             servicesToCheck.map { (name, url) ->
@@ -145,15 +191,76 @@ object ServiceChecker {
         
         _connectivityScore.value = totalWeightedScore.toInt().coerceIn(0, 100)
         
+        // Track minimum latency of all working bypass channels to estimate current network RTT
+        val activeLatencies = results.filter { it.isUp && it.latencyMs > 0 }.map { it.latencyMs }
+        if (activeLatencies.isNotEmpty()) {
+            val minRtt = activeLatencies.minOrNull() ?: 50L
+            BypassConfig.updateRtt(minRtt)
+        }
+
         _statuses.value = results
         _proxyHealth.value = proxyResponsive.get()
         _lastCheckTime.value = System.currentTimeMillis()
+
+        // Autopilot Active Prober: If key services are blocked but we have internet, probe for a working strategy
+        val youtubeDown = results.find { it.name == "YouTube" }?.isUp == false
+        val streamDown = results.find { it.name == "YT Video Stream" }?.isUp == false
+        if (internetUp && (youtubeDown || streamDown || totalWeightedScore < 40f) && BypassConfig.isAutoTuning && !isProbing.get()) {
+            val now = System.currentTimeMillis()
+            if (now - lastProbeTime > 120000) { // 2 minute cooldown between probes
+                lastProbeTime = now
+                appContext?.let { runActiveProbing(it) }
+            }
+        }
     }
 
-    fun startChecking(scope: CoroutineScope) {
+    private val _customServices = MutableStateFlow<List<Pair<String, String>>>(emptyList())
+    val customServices: StateFlow<List<Pair<String, String>>> = _customServices.asStateFlow()
+
+    fun loadCustomServices(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
+        val saved = prefs.getString("custom_services", "") ?: ""
+        if (saved.isNotEmpty()) {
+            val list = saved.split(";").mapNotNull {
+                val parts = it.split("|")
+                if (parts.size == 2) Pair(parts[0], parts[1]) else null
+            }
+            _customServices.value = list
+        } else {
+            _customServices.value = emptyList()
+        }
+    }
+
+    fun addCustomService(context: android.content.Context, name: String, url: String) {
+        val current = _customServices.value.toMutableList()
+        if (current.none { it.first == name }) {
+            current.add(Pair(name, url))
+            _customServices.value = current
+            saveCustomServices(context, current)
+            triggerCheck()
+        }
+    }
+
+    fun removeCustomService(context: android.content.Context, name: String) {
+        val current = _customServices.value.filter { it.first != name }
+        _customServices.value = current
+        saveCustomServices(context, current)
+        triggerCheck()
+    }
+
+    private fun saveCustomServices(context: android.content.Context, list: List<Pair<String, String>>) {
+        val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
+        val serialized = list.joinToString(";") { "${it.first}|${it.second}" }
+        prefs.edit().putString("custom_services", serialized).apply()
+    }
+
+    fun startChecking(scope: CoroutineScope, context: android.content.Context) {
         if (job?.isActive == true) return
         internalScope = scope
-        val servicesToCheck = listOf(
+        appContext = context.applicationContext
+        loadCustomServices(context)
+        
+        val defaultServices = listOf(
             Pair("YouTube", "https://www.youtube.com"),
             Pair("YT Video Stream", "https://redirector.googlevideo.com/report_mapping"),
             Pair("Telegram", "https://t.me"),
@@ -169,18 +276,21 @@ object ServiceChecker {
             Pair("Gosuslugi (Control)", "https://www.gosuslugi.ru")
         )
         
-        _statuses.value = servicesToCheck.map { ServiceStatus(it.first, it.second, false, 0) }
+        val initialServices = defaultServices + _customServices.value
+        _statuses.value = initialServices.map { ServiceStatus(it.first, it.second, false, 0) }
 
         job = scope.launch(Dispatchers.IO) {
             delay(2000)
             while (isActive) {
-                checkServices(servicesToCheck)
+                val currentServices = defaultServices + _customServices.value
+                checkServices(currentServices)
                 
                 // Adaptive delay: check faster if key services are down to allow fast healing
                 val youtubeDown = _statuses.value.find { it.name == "YouTube" }?.isUp == false
-                val delayTime = if (youtubeDown) 15000L else 60000L // 15 seconds when down, 60 seconds when up
+                val streamDown = _statuses.value.find { it.name == "YT Video Stream" }?.isUp == false
+                val delayTime = if (youtubeDown || streamDown) 8000L else 30000L // 8s down, 30s up
                 // Add minor jitter to avoid synchronized wakeups
-                val jitter = (Math.random() * 3000).toLong()
+                val jitter = (Math.random() * 2000).toLong()
                 delay(delayTime + jitter)
             }
         }
@@ -191,5 +301,79 @@ object ServiceChecker {
         job = null
         internalScope = null
         _statuses.value = emptyList()
+    }
+
+    fun runActiveProbing(context: android.content.Context) {
+        if (!isProbing.compareAndSet(false, true)) return
+        val scope = internalScope ?: run {
+            isProbing.set(false)
+            return
+        }
+        
+        ProxyStats.logRecovery("Autopilot: Low connectivity detected. Launching Strategy Probe Sequence...")
+        
+        val testUrl = "https://redirector.googlevideo.com/report_mapping" // Lightweight Google video diagnostic endpoint
+        val proxyPort = proxyPort
+        
+        scope.launch(Dispatchers.IO) {
+            val originalStrategy = BypassConfig.strategy.value
+            val strategiesToTest = BypassStrategy.values().filter { it != BypassStrategy.DIRECT }
+            
+            var bestStrategy: BypassStrategy? = null
+            var bestLatency = Long.MAX_VALUE
+            
+            for (strategy in strategiesToTest) {
+                ProxyStats.logRecovery("Autopilot: Testing ${strategy.name}...")
+                BypassConfig.setStrategy(strategy)
+                delay(250) // Allow proxy parameters to stabilize
+                
+                var isUp = false
+                val start = System.currentTimeMillis()
+                var connection: HttpURLConnection? = null
+                try {
+                    val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
+                    connection = URL(testUrl).openConnection(proxy) as HttpURLConnection
+                    connection.connectTimeout = 3000
+                    connection.readTimeout = 3000
+                    connection.requestMethod = "GET"
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    
+                    val code = connection.responseCode
+                    isUp = (code in 200..499)
+                } catch (e: Exception) {
+                    isUp = false
+                } finally {
+                    try { connection?.inputStream?.close() } catch (e: Exception) {}
+                    try { connection?.disconnect() } catch (e: Exception) {}
+                }
+                
+                val latency = System.currentTimeMillis() - start
+                if (isUp) {
+                    ProxyStats.logRecovery("Autopilot: ${strategy.name} working! Latency: ${latency}ms")
+                    BypassConfig.recordSuccess(strategy = strategy, context = context)
+                    if (latency < bestLatency) {
+                        bestLatency = latency
+                        bestStrategy = strategy
+                    }
+                    // Instant success fallback if we find a super responsive strategy (< 800ms)
+                    if (latency < 800) {
+                        break
+                    }
+                } else {
+                    ProxyStats.logRecovery("Autopilot: ${strategy.name} blocked or high latency.")
+                    BypassConfig.recordFailure(strategy = strategy, isCritical = false, context = context)
+                }
+            }
+            
+            if (bestStrategy != null) {
+                BypassConfig.setStrategy(bestStrategy)
+                ProxyStats.logRecovery("Autopilot Selected Optimal Strategy -> ${bestStrategy.name} (${bestLatency}ms)")
+            } else {
+                BypassConfig.setStrategy(originalStrategy)
+                ProxyStats.logRecovery("Autopilot: No working strategy resolved. Restored ${originalStrategy.name}")
+            }
+            isProbing.set(false)
+            triggerCheck()
+        }
     }
 }

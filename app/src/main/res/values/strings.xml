@@ -29,4 +29,19 @@
     <string name="msg_block_detected">TARGETED BLOCK DETECTED</string>
     <string name="label_service_monitor">AUTOMATIC SERVICE MONITOR</string>
     <string name="label_updated">UPDATED: %1$s</string>
+    <string name="label_settings">SETTINGS</string>
+    <string name="label_auto_connect">Auto-connect on App Start</string>
+    <string name="desc_auto_connect">Automatically start the secure tunnel when you open the app.</string>
+    <string name="label_battery_optimization">Battery Optimization</string>
+    <string name="desc_battery_optimization">Disable to prevent the system from killing the proxy in background.</string>
+    <string name="action_disable">DISABLE</string>
+    <string name="action_enabled">ENABLED</string>
+    <string name="action_clear_scores">CLEAR BYPASS SCORES</string>
+    <string name="desc_clear_scores">Reset all strategy performance data for the current network.</string>
+    <string name="label_app_filter">APP FILTERING (SPLIT TUNNELING)</string>
+    <string name="desc_app_filter">Choose which apps should go through the secure tunnel.</string>
+    <string name="label_exclude_mode">Exclude Mode</string>
+    <string name="label_include_mode">Include Only Mode</string>
+    <string name="msg_apps_count">%1$d apps selected</string>
+    <string name="action_select_apps">SELECT APPS</string>
 </resources>

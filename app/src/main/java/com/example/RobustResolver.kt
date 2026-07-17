@@ -13,168 +13,291 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
 
 object RobustResolver {
-    private val dnsServers = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "77.88.8.8")
+    private val defaultDnsServers = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "77.88.8.8")
     private val CACHE_TTL_MS = 10 * 60 * 1000L // 10 minutes DNS cache TTL
     private val dnsCache = ConcurrentHashMap<String, Pair<List<InetAddress>, Long>>()
+
+    @Volatile var dnsMode = "Smart DoH" // "Smart DoH" or "Custom"
+    @Volatile var customDnsIp = "1.1.1.1"
+
+    private val dohEndpoints = listOf(
+        "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112", 
+        "208.67.222.222", "94.140.14.14", "45.11.45.11", "223.5.5.5", "185.222.222.222", "116.202.176.26"
+    )
+
+    private val providerFailures = ConcurrentHashMap<String, Long>()
+
+    fun loadDnsSettings(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
+        dnsMode = prefs.getString("dns_mode", "Smart DoH") ?: "Smart DoH"
+        customDnsIp = prefs.getString("custom_dns_ip", "1.1.1.1") ?: "1.1.1.1"
+        clearCache()
+    }
+
+    fun saveDnsSettings(context: android.content.Context, mode: String, ip: String) {
+        dnsMode = mode
+        customDnsIp = ip
+        val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("dns_mode", mode)
+            .putString("custom_dns_ip", ip)
+            .apply()
+        clearCache()
+    }
 
     fun clearCache() {
         dnsCache.clear()
         Log.d("RobustResolver", "DNS Cache cleared")
     }
 
+    private fun getDoHEndpointsForHost(host: String): List<String> {
+        val endpoints = mutableListOf<String>()
+        val lHost = host.lowercase(java.util.Locale.ROOT)
+        
+        val now = System.currentTimeMillis()
+        val healthyProviders = dohEndpoints.filter { 
+            val lastFailure = providerFailures[it] ?: 0L
+            now - lastFailure > 300000 // 5 minutes cool-down
+        }
+        val pool = if (healthyProviders.size >= 3) healthyProviders else dohEndpoints
+
+        if (lHost.contains("google") || lHost.contains("youtube") || lHost.contains("gstatic")) {
+            endpoints.addAll(listOf("8.8.8.8", "8.8.4.4", "1.1.1.1").filter { pool.contains(it) })
+            if (endpoints.size < 2) endpoints.addAll(pool.shuffled().take(2))
+        } else if (lHost.contains("facebook") || lHost.contains("instagram") || lHost.contains("whatsapp")) {
+            endpoints.addAll(listOf("1.1.1.1", "9.9.9.9", "8.8.8.8").filter { pool.contains(it) })
+            if (endpoints.size < 2) endpoints.addAll(pool.shuffled().take(2))
+        } else if (lHost.contains("telegram") || lHost.contains("t.me")) {
+            endpoints.addAll(listOf("149.154.167.91", "1.1.1.1", "8.8.8.8").filter { pool.contains(it) })
+            if (endpoints.size < 2) endpoints.addAll(pool.shuffled().take(2))
+        } else {
+            endpoints.addAll(pool.shuffled().take(3))
+        }
+        return endpoints.distinct()
+    }
+
+    private val emergencyFallback = mapOf(
+        "youtube.com" to listOf("142.250.180.142", "142.251.46.206", "2a00:1450:4001:828::200e"),
+        "googlevideo.com" to listOf("172.217.16.14", "172.217.16.110"),
+        "google.com" to listOf("8.8.8.8", "8.8.4.4", "2001:4860:4860::8888"),
+        "telegram.org" to listOf("149.154.167.99", "149.154.167.51"),
+        "t.me" to listOf("149.154.167.99")
+    )
+
     fun resolve(host: String, vpnService: VpnService? = null, forceSecure: Boolean = false): List<InetAddress> {
-        // If it's already an IP address, return it
         if (isIpAddress(host)) {
             try {
                 return listOf(InetAddress.getByName(host))
-            } catch (e: Exception) {
-                // Fallback
-            }
+            } catch (e: Exception) {}
         }
 
-        if (dnsCache.size > 1000) {
-            val now = System.currentTimeMillis()
+        // Cache lookup
+        val now = System.currentTimeMillis()
+        if (dnsCache.size > 2000) {
             dnsCache.entries.removeIf { now - it.value.second > CACHE_TTL_MS }
         }
 
-        // Check cache with TTL (ignore/remove cache if forceSecure is requested)
-        if (forceSecure) {
-            dnsCache.remove(host)
-        } else {
+        if (!forceSecure) {
             dnsCache[host]?.let { (addresses, timestamp) ->
-                if (System.currentTimeMillis() - timestamp < CACHE_TTL_MS) {
+                if (now - timestamp < CACHE_TTL_MS) {
                     return addresses
-                } else {
-                    dnsCache.remove(host)
                 }
             }
         }
 
-        // Try standard resolution first for uncensored domains to avoid overhead
+        val lHost = host.lowercase(java.util.Locale.ROOT)
         val knownBlocked = listOf(
             "youtube", "googlevideo", "ytimg", "ggpht", "google", "telegram", "t.me",
             "instagram", "cdninstagram", "facebook", "fbcdn", "twitter", "twimg", "x.com",
             "discord", "chatgpt", "openai", "rutracker", "bbc", "dw", "meduza", "svoboda",
             "pornhub", "xvideos", "torproject", "proton", "viber", "whatsapp"
         )
-        val isCensored = knownBlocked.any { host.lowercase(java.util.Locale.ROOT).contains(it) }
+        val isCensored = knownBlocked.any { lHost.contains(it) }
 
-        if (!isCensored && !forceSecure) {
+        // Smart Logic: Parallel DoH Race
+        if (isCensored || forceSecure || dnsMode == "Smart DoH") {
             try {
-                val addresses = InetAddress.getAllByName(host).toList()
-                // Filter out obviously poisoned addresses (like 127.0.0.1, 0.0.0.0, or private IPs if resolving public domains)
-                val clean = addresses.filter { !isPoisoned(it, host) }
-                if (clean.isNotEmpty()) {
-                    dnsCache[host] = clean to System.currentTimeMillis()
-                    return clean
+                val endpoints = getDoHEndpointsForHost(host)
+                val resolved = runBlocking {
+                    val results = java.util.Collections.synchronizedList(mutableListOf<InetAddress>())
+                    val deferreds = endpoints.flatMap { dns ->
+                        listOf(
+                            async(Dispatchers.IO) {
+                                withTimeoutOrNull(3000) {
+                                    val r = queryDoh(host, dns, "A", vpnService)
+                                    if (r.isNotEmpty()) synchronized(results) { results.addAll(r) }
+                                    r
+                                }
+                            },
+                            async(Dispatchers.IO) {
+                                withTimeoutOrNull(3000) {
+                                    val r = queryDoh(host, dns, "AAAA", vpnService)
+                                    if (r.isNotEmpty()) synchronized(results) { results.addAll(r) }
+                                    r
+                                }
+                            }
+                        )
+                    }
+                    
+                    // Wait for the first success or timeout
+                    var attempts = 0
+                    while (attempts < 15 && results.isEmpty()) {
+                        kotlinx.coroutines.delay(100)
+                        attempts++
+                    }
+                    
+                    if (results.isNotEmpty()) {
+                        // Let other queries run for a bit more to get AAAA if A arrived first
+                        kotlinx.coroutines.delay(100)
+                        results.distinct().toList()
+                    } else {
+                        null
+                    }
                 }
-            } catch (e: Exception) {
-                Log.w("RobustResolver", "Standard DNS failed for $host, trying secure fallback...")
-            }
-        } else {
-            Log.d("RobustResolver", "Censored host detected: $host. Skipping standard DNS to prevent ISP hijacking.")
-        }
-
-        // Try DNS-over-HTTPS (DoH) fallback to bypass ISP port 53 blocking/hijacking
-        val dohServers = listOf("1.1.1.1", "8.8.8.8", "1.0.0.1", "8.8.4.4")
-        for (dns in dohServers) {
-            try {
-                val resolved = queryDoh(host, dns, vpnService)
-                if (resolved.isNotEmpty()) {
-                    dnsCache[host] = resolved to System.currentTimeMillis()
+                
+                if (resolved != null && resolved.isNotEmpty()) {
+                    dnsCache[host] = resolved to now
                     return resolved
                 }
             } catch (e: Exception) {
-                Log.w("RobustResolver", "DoH query failed to $dns for $host: ${e.message}")
+                Log.w("RobustResolver", "DoH Race failed for $host")
             }
         }
 
-        // Try UDP DNS queries to public DNS servers
-        for (dns in dnsServers) {
+        // Emergency Fallback for critical domains
+        for ((domain, ips) in emergencyFallback) {
+            if (lHost == domain || lHost.endsWith(".$domain")) {
+                val emergency = ips.mapNotNull { try { InetAddress.getByName(it) } catch(e: Exception) { null } }
+                if (emergency.isNotEmpty()) {
+                    Log.i("RobustResolver", "Using emergency fallback for $host")
+                    return emergency
+                }
+            }
+        }
+
+        // Fallback Resolution with Poisoning Detection
+        try {
+            val addresses = InetAddress.getAllByName(host).toList()
+            val clean = addresses.filter { !isPoisoned(it, host) }
+            if (clean.isNotEmpty()) {
+                val suspiciousIps = listOf("127.0.0.1", "0.0.0.0", "10.10.10.10", "192.168.1.1") 
+                if (clean.size == 1 && suspiciousIps.contains(clean[0].hostAddress)) {
+                    return resolve(host, vpnService, forceSecure = true)
+                }
+                dnsCache[host] = clean to now
+                return clean
+            }
+        } catch (e: Exception) {}
+
+        // Last resort: UDP DNS with rotation
+        val udpServers = if (dnsMode == "Custom") listOf(customDnsIp) else defaultDnsServers.shuffled()
+        for (dns in udpServers) {
             try {
                 val resolved = queryUdpDns(host, dns, vpnService)
                 if (resolved.isNotEmpty()) {
                     dnsCache[host] = resolved to System.currentTimeMillis()
                     return resolved
                 }
-            } catch (e: Exception) {
-                Log.w("RobustResolver", "UDP DNS query failed to $dns for $host: ${e.message}")
-            }
+            } catch (e: Exception) {}
         }
 
-        // Try TCP DNS queries to public DNS servers (port 53)
-        for (dns in dnsServers) {
-            try {
-                val resolved = queryTcpDns(host, dns, vpnService)
-                if (resolved.isNotEmpty()) {
-                    dnsCache[host] = resolved to System.currentTimeMillis()
-                    return resolved
-                }
-            } catch (e: Exception) {
-                Log.w("RobustResolver", "TCP DNS query failed to $dns for $host: ${e.message}")
-            }
-        }
-
-        throw java.net.UnknownHostException("Could not resolve $host via any mechanism")
+        throw java.net.UnknownHostException("Resolution failed for $host")
     }
 
     private fun isIpAddress(host: String): Boolean {
         return host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")) || host.contains(":")
     }
 
+    private val poisonedIps = setOf(
+        "127.0.0.1", "0.0.0.0", "10.10.10.10", "192.168.1.1", "1.2.3.4",
+        "203.0.113.1", "198.51.100.1", "185.199.108.153", "146.112.61.106",
+        "10.10.34.34", "10.10.34.35", "93.184.216.34"
+    )
+
     private fun isPoisoned(address: InetAddress, host: String): Boolean {
         val ip = address.hostAddress ?: return true
-        if (ip == "127.0.0.1" || ip == "0.0.0.0") return true
+        if (poisonedIps.contains(ip)) return true
         if (address.isLoopbackAddress || address.isAnyLocalAddress) return true
         
-        // Private IP spaces (unless the host is local)
-        val isLocalHost = host.endsWith(".local") || host.contains("localhost") || host.startsWith("192.168.") || host.startsWith("10.")
+        val isLocalHost = host.endsWith(".local") || host.contains("localhost") || 
+                          host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")
+                          
         if (!isLocalHost) {
+            // If the host is definitely external but we get a private/local IP, it's poisoned
             if (address.isLinkLocalAddress || address.isSiteLocalAddress) return true
+            
+            // Heuristic for common "blocked" IPs or internal redirects
+            if (ip.startsWith("10.")) return true
+            if (ip.startsWith("127.")) return true
         }
         return false
     }
 
-    private fun queryDoh(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    private fun queryDoh(host: String, dnsIp: String, type: String, vpnService: VpnService?): List<InetAddress> {
         var conn: java.net.HttpURLConnection? = null
         try {
+            val typeNum = if (type == "AAAA") 28 else 1
             val urlStr = if (dnsIp == "1.1.1.1" || dnsIp == "1.0.0.1") {
-                "https://$dnsIp/dns-query?name=$host&type=A"
+                "https://$dnsIp/dns-query?name=$host&type=$type"
+            } else if (dnsIp == "223.5.5.5") {
+                "https://$dnsIp/resolve?name=$host&type=$typeNum"
             } else {
-                "https://$dnsIp/resolve?name=$host&type=1"
+                "https://$dnsIp/resolve?name=$host&type=$typeNum"
             }
             val url = java.net.URL(urlStr)
             conn = url.openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
             conn.connectTimeout = 4000
             conn.readTimeout = 4000
             conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
             
             if (dnsIp == "1.1.1.1" || dnsIp == "1.0.0.1") {
                 conn.setRequestProperty("Accept", "application/dns-json")
             }
             
-            val responseCode = conn.responseCode
-            if (responseCode == 200) {
+            if (conn.responseCode != 200) {
+                providerFailures[dnsIp] = System.currentTimeMillis()
+                return emptyList()
+            }
+            
+            if (conn.responseCode == 200) {
                 val responseText = conn.inputStream.bufferedReader().use { it.readText() }
-                val regex = """"data"\s*:\s*"([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})"""".toRegex()
-                val matches = regex.findAll(responseText)
-                val resolved = matches.map { it.groupValues[1] }
-                    .distinct()
-                    .mapNotNull {
-                        try { InetAddress.getByName(it) } catch(e: Exception) { null }
+                
+                // Try different JSON formats (Google/Cloudflare/AdGuard)
+                val ips = mutableListOf<String>()
+                
+                // 1. IPv4 "data" field
+                val ipv4Regex = """"data"\s*:\s*"([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})"""".toRegex()
+                // 2. IPv6 "data" field
+                val ipv6Regex = """"data"\s*:\s*"([0-9a-fA-F:]+)"""".toRegex()
+                
+                val targetRegex = if (type == "AAAA") ipv6Regex else ipv4Regex
+                ips.addAll(targetRegex.findAll(responseText).map { it.groupValues[1] })
+                
+                // 3. "Answer" array with "data" property
+                if (ips.isEmpty()) {
+                    val answerRegex = """"Answer"\s*:\s*\[.*?]""".toRegex(RegexOption.DOT_MATCHES_ALL)
+                    val answerBlock = answerRegex.find(responseText)?.value
+                    if (answerBlock != null) {
+                        ips.addAll(targetRegex.findAll(answerBlock).map { it.groupValues[1] })
                     }
+                }
+
+                return ips.distinct()
+                    .mapNotNull { try { InetAddress.getByName(it) } catch(e: Exception) { null } }
                     .filter { !isPoisoned(it, host) }
                     .toList()
-                return resolved
             }
         } catch (e: Exception) {
-            Log.w("RobustResolver", "DoH failed for $host via $dnsIp: ${e.message}")
+            // Log.v("RobustResolver", "DoH failed: ${e.message}")
         } finally {
-            try { conn?.inputStream?.close() } catch (e: Exception) {}
-            try { conn?.errorStream?.close() } catch (e: Exception) {}
             try { conn?.disconnect() } catch (e: Exception) {}
         }
         return emptyList()
@@ -185,23 +308,15 @@ object RobustResolver {
         try {
             socket.soTimeout = 3000
             vpnService?.protect(socket)
-
             val query = buildDnsQuery(host)
             val address = InetAddress.getByName(dnsServer)
-            val packet = DatagramPacket(query, query.size, address, 53)
-            socket.send(packet)
-
+            socket.send(DatagramPacket(query, query.size, address, 53))
             val responseBuffer = ByteArray(1024)
             val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
             socket.receive(responsePacket)
-
             return parseDnsResponse(responseBuffer, responsePacket.length)
         } finally {
-            try {
-                socket.close()
-            } catch (e: Exception) {
-                // Ignore
-            }
+            try { socket.close() } catch (e: Exception) {}
         }
     }
 
@@ -211,21 +326,16 @@ object RobustResolver {
             vpnService?.protect(socket)
             socket.connect(InetSocketAddress(dnsServer, 53), 3000)
             socket.soTimeout = 3000
-
             val query = buildDnsQuery(host)
             val output = socket.getOutputStream()
-            val len = query.size
-            output.write(len shr 8)
-            output.write(len and 0xFF)
+            output.write(query.size shr 8)
+            output.write(query.size and 0xFF)
             output.write(query)
             output.flush()
-
             val input = socket.getInputStream()
             val len1 = input.read()
             val len2 = input.read()
-            if (len1 == -1 || len2 == -1) {
-                return emptyList()
-            }
+            if (len1 == -1 || len2 == -1) return emptyList()
             val responseLen = (len1 shl 8) or len2
             val responseBuffer = ByteArray(responseLen)
             var read = 0
@@ -234,93 +344,62 @@ object RobustResolver {
                 if (r == -1) break
                 read += r
             }
-
             return parseDnsResponse(responseBuffer, read)
         } finally {
-            try {
-                socket.close()
-            } catch (e: Exception) {
-                // Ignore
-            }
+            try { socket.close() } catch (e: Exception) {}
         }
     }
 
     private fun buildDnsQuery(host: String): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
-
-        // Transaction ID (2 bytes)
         dos.writeShort(0x1234)
-        // Flags: Standard query (0x0100)
         dos.writeShort(0x0100)
-        // Questions count (1)
         dos.writeShort(1)
-        // Answers resource records count (0)
         dos.writeShort(0)
-        // Authority resource records count (0)
         dos.writeShort(0)
-        // Additional resource records count (0)
         dos.writeShort(0)
-
-        // Name (encoded as label lengths and bytes)
-        val parts = host.split(".")
-        for (part in parts) {
+        host.split(".").forEach { part ->
             val bytes = part.toByteArray(StandardCharsets.US_ASCII)
             dos.writeByte(bytes.size)
             dos.write(bytes)
         }
-        dos.writeByte(0) // Null byte terminates the domain name
-
-        // Type: A record (0x0001)
+        dos.writeByte(0)
         dos.writeShort(1)
-        // Class: IN (0x0001)
         dos.writeShort(1)
-
         return baos.toByteArray()
     }
 
     private fun parseDnsResponse(buffer: ByteArray, len: Int): List<InetAddress> {
         val ips = mutableListOf<InetAddress>()
         try {
-            val bais = ByteArrayInputStream(buffer, 0, len)
-            val dis = DataInputStream(bais)
-
-            val id = dis.readShort()
-            val flags = dis.readShort()
+            val dis = DataInputStream(ByteArrayInputStream(buffer, 0, len))
+            dis.readShort() // id
+            dis.readShort() // flags
             val qdCount = dis.readUnsignedShort()
             val anCount = dis.readUnsignedShort()
-            val nsCount = dis.readUnsignedShort()
-            val arCount = dis.readUnsignedShort()
-
-            // Skip questions
+            dis.readShort() // nsCount
+            dis.readShort() // arCount
             for (i in 0 until qdCount) {
                 skipName(dis)
-                val qType = dis.readShort()
-                val qClass = dis.readShort()
+                dis.readInt() // type & class
             }
-
-            // Parse Answers
             for (i in 0 until anCount) {
                 skipName(dis)
                 val type = dis.readUnsignedShort()
-                val clazz = dis.readUnsignedShort()
-                val ttl = dis.readInt()
+                dis.readUnsignedShort() // class
+                dis.readInt() // ttl
                 val rdLength = dis.readUnsignedShort()
-
-                if (type == 1 && rdLength == 4) { // A record (IPv4)
+                if (type == 1 && rdLength == 4) {
                     val ipBytes = ByteArray(4)
                     dis.readFully(ipBytes)
                     val addr = InetAddress.getByAddress(ipBytes)
-                    if (!isPoisoned(addr, "")) {
-                        ips.add(addr)
-                    }
+                    if (!isPoisoned(addr, "")) ips.add(addr)
                 } else {
                     dis.skipBytes(rdLength)
                 }
             }
-        } catch (e: Exception) {
-            Log.e("RobustResolver", "Failed to parse DNS response", e)
-        }
+        } catch (e: Exception) {}
         return ips
     }
 
@@ -328,7 +407,6 @@ object RobustResolver {
         var len = dis.readUnsignedByte()
         while (len != 0) {
             if ((len and 0xC0) == 0xC0) {
-                // Compression pointer (2 bytes total, we already read 1)
                 dis.readByte()
                 break
             } else {
