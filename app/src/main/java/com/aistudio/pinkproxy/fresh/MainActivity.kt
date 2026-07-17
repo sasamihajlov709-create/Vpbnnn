@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 import android.app.Activity
 import android.content.Intent
@@ -55,7 +55,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.ui.theme.MyApplicationTheme
+import com.aistudio.pinkproxy.fresh.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -379,6 +379,25 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         )
                         Text(
                             text = stringResource(R.string.label_health),
+                            fontSize = 10.sp,
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        val successRate by ProxyStats.successRate.collectAsStateWithLifecycle(initialValue = 100)
+                        Text(
+                            text = "$successRate%",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                successRate > 80 -> Color(0xFF81C784)
+                                successRate > 40 -> Color(0xFFFFB74D)
+                                else -> Color(0xFFE57373)
+                            }
+                        )
+                        Text(
+                            text = stringResource(R.string.label_bypass_quality),
                             fontSize = 10.sp,
                             color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                             fontWeight = FontWeight.Bold

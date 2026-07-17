@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 import android.net.VpnService
 import android.util.Log
@@ -29,7 +29,8 @@ object RobustResolver {
 
     private val dohEndpoints = listOf(
         "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112", 
-        "208.67.222.222", "94.140.14.14", "45.11.45.11", "223.5.5.5", "185.222.222.222", "116.202.176.26"
+        "208.67.222.222", "94.140.14.14", "45.11.45.11", "223.5.5.5", "185.222.222.222", "116.202.176.26",
+        "77.88.8.8", "77.88.8.1", "dns.adguard.com", "dns.quad9.net", "doh.cleanbrowsing.org"
     )
 
     private val providerFailures = ConcurrentHashMap<String, Long>()
@@ -188,7 +189,7 @@ object RobustResolver {
             val clean = addresses.filter { !isPoisoned(it, host) }
             if (clean.isNotEmpty()) {
                 val suspiciousIps = listOf("127.0.0.1", "0.0.0.0", "10.10.10.10", "192.168.1.1") 
-                if (clean.size == 1 && suspiciousIps.contains(clean[0].hostAddress)) {
+                if (clean.size == 1 && suspiciousIps.contains(clean[0].hostAddress ?: "")) {
                     return resolve(host, vpnService, forceSecure = true)
                 }
                 dnsCache[host] = clean to now

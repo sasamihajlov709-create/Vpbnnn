@@ -10,10 +10,10 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.aistudio.pinkproxy.fresh"
   compileSdk = 36
   defaultConfig {
-    applicationId = "com.aistudio.pinkproxy.fmgqkd"
+    applicationId = "com.aistudio.pinkproxy.fresh"
     minSdk = 29
     targetSdk = 35
     versionCode = 1

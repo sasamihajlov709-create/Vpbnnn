@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 object FakePacketHelper {
     fun buildFakeClientHello(sni: String): ByteArray {

@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -44,6 +44,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 class PinkVpnService : VpnService() {
+    private val udpBufferPool = java.util.concurrent.LinkedBlockingQueue<ByteArray>(64)
+    private fun getBuffer(): ByteArray = udpBufferPool.poll() ?: ByteArray(16384)
+    private fun releaseBuffer(buffer: ByteArray) { udpBufferPool.offer(buffer) }
 
     companion object {
         private val _isRunning = MutableStateFlow(false)
@@ -243,6 +246,7 @@ class PinkVpnService : VpnService() {
             val builder = Builder()
                 .addAddress("10.0.0.2", 24)
                 .addAddress("fd00:1:2:3::2", 120)
+                .addDnsServer("10.0.0.3")
                 // We rely on setHttpProxy for most traffic. 
                 // Global routing without packet processing causes connectivity loss.
                 .setSession("PinkProxy")
@@ -305,95 +309,115 @@ class PinkVpnService : VpnService() {
                 val fd = vpnInterface?.fileDescriptor ?: return@launch
                 val inputStream = FileInputStream(fd)
                 val outputStream = FileOutputStream(fd)
-                val bytes = ByteArray(16384)
-                
                 val udpRelays = ConcurrentHashMap<String, UdpSession>()
                 
+                // Cleanup job for inactive sessions
+                serviceScope.launch {
+                    while (isRunning.value) {
+                        delay(60000)
+                        val now = System.currentTimeMillis()
+                        udpRelays.entries.removeIf { (key, session) ->
+                            if (now - session.lastActivity > 60000) {
+                                session.close()
+                                true
+                            } else false
+                        }
+                    }
+                }
+
                 try {
                     tunLoop@while (isRunning.value) {
-                        val read = try {
-                            inputStream.read(bytes)
-                        } catch (e: Exception) {
-                            -1
-                        }
-                        if (read < 0) break
-                        if (read == 0) {
-                            delay(10)
-                            continue
-                        }
-                        
-                        // Parse IP version
-                        val version = (bytes[0].toInt() shr 4) and 0x0F
-                        if (version == 4) {
-                            val protocol = bytes[9].toInt() and 0xFF
-                            if (protocol == 17) { // UDP
-                                val ihl = (bytes[0].toInt() and 0x0F) * 4
-                                val srcIp = "${bytes[12].toInt() and 0xFF}.${bytes[13].toInt() and 0xFF}.${bytes[14].toInt() and 0xFF}.${bytes[15].toInt() and 0xFF}"
-                                val dstIp = "${bytes[16].toInt() and 0xFF}.${bytes[17].toInt() and 0xFF}.${bytes[18].toInt() and 0xFF}.${bytes[19].toInt() and 0xFF}"
-                                val srcPort = ((bytes[ihl].toInt() and 0xFF) shl 8) or (bytes[ihl + 1].toInt() and 0xFF)
-                                val dstPort = ((bytes[ihl + 2].toInt() and 0xFF) shl 8) or (bytes[ihl + 3].toInt() and 0xFF)
-                                
-                                val payloadOffset = ihl + 8
-                                val payloadLen = read - payloadOffset
-                                if (payloadLen > 0) {
-                                val key = "$srcIp:$srcPort->$dstIp:$dstPort"
-                                    var session = udpRelays[key]
-                                    if (session == null || session.isClosed) {
-                                        // DNS Hijacking: if port 53, resolve via RobustResolver
-                                        if (dstPort == 53) {
-                                            serviceScope.launch(Dispatchers.IO) {
-                                                try {
-                                                    val dnsPayload = bytes.copyOfRange(payloadOffset, read)
-                                                    val qname = parseDnsQName(dnsPayload)
-                                                    if (qname != null && qname.contains(".")) {
-                                                        val ips = RobustResolver.resolve(qname, this@PinkVpnService)
-                                                        val ipv4List = ips.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
-                                                        if (ipv4List.isNotEmpty()) {
-                                                            val dnsReply = buildDnsReply(dnsPayload, ipv4List)
-                                                            val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, dnsReply)
+                        val packet = getBuffer()
+                        try {
+                            val read = try {
+                                inputStream.read(packet)
+                            } catch (e: Exception) {
+                                -1
+                            }
+                            if (read < 0) break
+                            if (read < 20) {
+                                if (read == 0) delay(10)
+                                continue
+                            }
+                            
+                            // Parse IP version
+                            val version = (packet[0].toInt() shr 4) and 0x0F
+                            if (version == 4) {
+                                val protocol = packet[9].toInt() and 0xFF
+                                if (protocol == 17) { // UDP
+                                    val ihl = (packet[0].toInt() and 0x0F) * 4
+                                    val srcIp = "${packet[12].toInt() and 0xFF}.${packet[13].toInt() and 0xFF}.${packet[14].toInt() and 0xFF}.${packet[15].toInt() and 0xFF}"
+                                    val dstIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
+                                    val srcPort = ((packet[ihl].toInt() and 0xFF) shl 8) or (packet[ihl + 1].toInt() and 0xFF)
+                                    val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or (packet[ihl + 3].toInt() and 0xFF)
+                                    
+                                    val payloadOffset = ihl + 8
+                                    val payloadLen = read - payloadOffset
+                                    if (payloadLen > 0) {
+                                        val key = "$srcIp:$srcPort->$dstIp:$dstPort"
+                                        var session = udpRelays[key]
+                                        if (session == null || session.isClosed) {
+                                            // DNS Hijacking: if port 53, resolve via RobustResolver
+                                            if (dstPort == 53) {
+                                                val dnsPayload = packet.copyOfRange(payloadOffset, read)
+                                                serviceScope.launch(Dispatchers.IO) {
+                                                    try {
+                                                        val qname = parseDnsQName(dnsPayload)
+                                                        if (qname != null && qname.contains(".")) {
+                                                            val ips = RobustResolver.resolve(qname, this@PinkVpnService)
+                                                            val ipv4List = ips.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
+                                                            if (ipv4List.isNotEmpty()) {
+                                                                val dnsReply = buildDnsReply(dnsPayload, ipv4List)
+                                                                val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, dnsReply)
+                                                                synchronized(outputStream) {
+                                                                    outputStream.write(replyPacket)
+                                                                    outputStream.flush()
+                                                                }
+                                                                return@launch
+                                                            }
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        Log.e("PinkVpnService", "DNS Hijack failed for $dstIp", e)
+                                                    }
+                                                    
+                                                    // Fallback to normal UDP relay if hijack failed
+                                                    val s = UdpSession(dstIp, dstPort, this@PinkVpnService) { reply ->
+                                                        try {
+                                                            val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
                                                             synchronized(outputStream) {
                                                                 outputStream.write(replyPacket)
                                                                 outputStream.flush()
                                                             }
-                                                            return@launch
-                                                        }
+                                                        } catch (e: Exception) {}
+                                                    }
+                                                    udpRelays[key] = s
+                                                    s.send(dnsPayload)
+                                                }
+                                                // Continue loop, packet will be released in finally
+                                                continue@tunLoop
+                                            }
+
+                                            session = UdpSession(dstIp, dstPort, this@PinkVpnService) { reply ->
+                                                try {
+                                                    val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
+                                                    synchronized(outputStream) {
+                                                        outputStream.write(replyPacket)
+                                                        outputStream.flush()
                                                     }
                                                 } catch (e: Exception) {
-                                                    Log.e("PinkVpnService", "DNS Hijack failed for $dstIp", e)
+                                                    Log.e("PinkVpnService", "Failed to inject UDP reply", e)
                                                 }
-                                                
-                                                // Fallback to normal UDP relay if hijack failed
-                                                val s = UdpSession(dstIp, dstPort, this@PinkVpnService) { reply ->
-                                                    try {
-                                                        val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
-                                                        synchronized(outputStream) {
-                                                            outputStream.write(replyPacket)
-                                                            outputStream.flush()
-                                                        }
-                                                    } catch (e: Exception) {}
-                                                }
-                                                udpRelays[key] = s
-                                                s.send(bytes.copyOfRange(payloadOffset, read))
                                             }
-                                            continue@tunLoop
+                                            udpRelays[key] = session
                                         }
-
-                                        session = UdpSession(dstIp, dstPort, this@PinkVpnService) { reply ->
-                                            try {
-                                                val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
-                                                synchronized(outputStream) {
-                                                    outputStream.write(replyPacket)
-                                                    outputStream.flush()
-                                                }
-                                            } catch (e: Exception) {
-                                                Log.e("PinkVpnService", "Failed to inject UDP reply", e)
-                                            }
-                                        }
-                                        udpRelays[key] = session
+                                        session.send(packet.copyOfRange(payloadOffset, read))
                                     }
-                                    session.send(bytes.copyOfRange(payloadOffset, read))
                                 }
+                            } else if (version == 6) {
+                                // Drop IPv6 for now
                             }
+                        } finally {
+                            releaseBuffer(packet)
                         }
                     }
                 } catch (e: Exception) {
@@ -662,11 +686,11 @@ class PinkVpnService : VpnService() {
     private class UdpSession(val dstIp: String, val dstPort: Int, val vpn: VpnService, val onReply: (ByteArray) -> Unit) {
         private val socket = DatagramSocket()
         @Volatile var isClosed = false
-        private val lastActivity = System.currentTimeMillis()
+        @Volatile var lastActivity = System.currentTimeMillis()
         
         init {
             vpn.protect(socket)
-            socket.soTimeout = 500
+            socket.soTimeout = 1000
             Thread {
                 val buffer = ByteArray(16384)
                 while (!isClosed) {
@@ -674,10 +698,11 @@ class PinkVpnService : VpnService() {
                         val packet = DatagramPacket(buffer, buffer.size)
                         socket.receive(packet)
                         if (packet.length > 0) {
+                            lastActivity = System.currentTimeMillis()
                             onReply(packet.data.copyOfRange(0, packet.length))
                         }
                     } catch (e: Exception) {
-                        if (System.currentTimeMillis() - lastActivity > 30000) break
+                        if (System.currentTimeMillis() - lastActivity > 60000) break
                     }
                 }
                 close()
@@ -685,6 +710,7 @@ class PinkVpnService : VpnService() {
         }
         
         fun send(data: ByteArray) {
+            lastActivity = System.currentTimeMillis()
             try {
                 val addr = InetAddress.getByName(dstIp)
                 // QUIC Bypass: Fragment if it looks like a ClientHello (long packet to port 443)

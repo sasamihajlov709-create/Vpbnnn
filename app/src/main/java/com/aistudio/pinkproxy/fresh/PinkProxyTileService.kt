@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 import android.content.Intent
 import android.net.VpnService
@@ -34,7 +34,14 @@ class PinkProxyTileService : TileService() {
                 val appIntent = Intent(this, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                startActivityAndCollapse(appIntent)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val pendingIntent = android.app.PendingIntent.getActivity(this, 0, appIntent, android.app.PendingIntent.FLAG_IMMUTABLE)
+                    startActivityAndCollapse(pendingIntent)
+                } else {
+                    @Suppress("DEPRECATION")
+                    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
+                    startActivityAndCollapse(appIntent)
+                }
             }
         }
         updateTile()

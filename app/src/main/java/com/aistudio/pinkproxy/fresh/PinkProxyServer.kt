@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 import android.net.VpnService
 import android.util.Log
@@ -29,6 +29,9 @@ object ProxyStats {
     private val _errors = MutableStateFlow(0L)
     val errors: StateFlow<Long> = _errors.asStateFlow()
 
+    private val _successRate = MutableStateFlow(100)
+    val successRate: StateFlow<Int> = _successRate.asStateFlow()
+
     private val _recoveryLog = MutableStateFlow<List<String>>(emptyList())
     val recoveryLog: StateFlow<List<String>> = _recoveryLog.asStateFlow()
 
@@ -39,6 +42,10 @@ object ProxyStats {
     private val totalErrors = AtomicLong(0L)
     private val totalRequests = AtomicLong(0L)
     private val consecutiveErrors = AtomicLong(0L)
+    
+    private val slidingWindow = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
+    private val WINDOW_SIZE = 100
+
     private val lastBytes = AtomicLong(0L)
     private val lastTime = AtomicLong(System.currentTimeMillis())
     
@@ -52,6 +59,7 @@ object ProxyStats {
 
     fun addError() {
         _errors.value = totalErrors.incrementAndGet()
+        addToWindow(false)
         val current = consecutiveErrors.incrementAndGet()
         if (current >= 15) {
             _proxyHealthTrigger.tryEmit("High Consecutive Errors ($current)")
@@ -65,6 +73,8 @@ object ProxyStats {
                 BypassConfig.resetToDefaults()
                 totalRequests.set(0)
                 totalErrors.set(0)
+                slidingWindow.clear()
+                updateSuccessRate()
             }
         }
     }
@@ -75,16 +85,35 @@ object ProxyStats {
 
     fun recordGlobalSuccess() {
         consecutiveErrors.set(0)
+        addToWindow(true)
+    }
+
+    private fun addToWindow(success: Boolean) {
+        synchronized(slidingWindow) {
+            slidingWindow.add(success)
+            if (slidingWindow.size > WINDOW_SIZE) {
+                slidingWindow.removeAt(0)
+            }
+        }
+        updateSuccessRate()
+    }
+
+    private fun updateSuccessRate() {
+        _successRate.value = getSuccessRate()
     }
 
     fun getActiveConnections() = _activeConnections.value
 
     fun getSuccessRate(): Int {
-        val req = totalRequests.get()
-        if (req == 0L) return 100
-        val err = totalErrors.get()
-        val rate = ((req - err).toFloat() / req.toFloat() * 100).toInt()
-        return rate.coerceIn(0, 100)
+        val window = synchronized(slidingWindow) { slidingWindow.toList() }
+        if (window.isEmpty()) {
+            val req = totalRequests.get()
+            if (req == 0L) return 100
+            val err = totalErrors.get()
+            return ((req - err).toFloat() / req.toFloat() * 100).toInt().coerceIn(0, 100)
+        }
+        val successCount = window.count { it }
+        return (successCount.toFloat() / window.size.toFloat() * 100).toInt().coerceIn(0, 100)
     }
 
     fun addConnection() {
@@ -1457,20 +1486,24 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     targetOutput.write(buffer, 1, read - 1)
                 }
             }
-            BypassStrategy.SNI_REVERSE -> {
-                if (sniPos > 0) {
-                    targetOutput.write(buffer, 0, sniPos)
+            BypassStrategy.FRAG_3_5 -> {
+                val f1 = session.frag1.coerceAtMost(read)
+                val f2 = session.frag2.coerceAtMost(read)
+                if (f2 > f1) {
+                    targetOutput.write(buffer, 0, f1)
                     targetOutput.flush()
                     delay(session.delay1)
-                    targetOutput.write(buffer, sniPos, 1)
+                    targetOutput.write(buffer, f1, f2 - f1)
                     targetOutput.flush()
-                    delay(5)
-                    targetOutput.write(buffer, sniPos + 1, read - (sniPos + 1))
+                    delay(session.delay2)
+                    if (read > f2) targetOutput.write(buffer, f2, read - f2)
+                } else if (f1 > 0 && f1 < read) {
+                    targetOutput.write(buffer, 0, f1)
+                    targetOutput.flush()
+                    delay(session.delay1)
+                    targetOutput.write(buffer, f1, read - f1)
                 } else {
-                    targetOutput.write(buffer, 0, 1)
-                    targetOutput.flush()
-                    delay(session.delay1)
-                    targetOutput.write(buffer, 1, read - 1)
+                    targetOutput.write(buffer, 0, read)
                 }
             }
             BypassStrategy.SNI_FAKE -> {
@@ -1588,7 +1621,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             }
             BypassStrategy.HEADER_SPLIT -> {
                 // Split at the first colon in any header
-                val colon = buffer.indexOf(':'.toByte())
+                val colon = buffer.indexOf(':'.code.toByte())
                 if (colon > 0 && colon < read - 1) {
                     targetOutput.write(buffer, 0, colon + 1)
                     targetOutput.flush()
@@ -1655,16 +1688,23 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                       android.system.OsConstants.IPPROTO_IPV6 else android.system.OsConstants.IPPROTO_IP
                         val ttlOpt = if (targetSocket!!.inetAddress is java.net.Inet6Address)
                                       android.system.OsConstants.IPV6_UNICAST_HOPS else android.system.OsConstants.IP_TTL
-                        val fd = android.os.ParcelFileDescriptor.fromSocket(targetSocket!!).fileDescriptor
+                        var pfd: android.os.ParcelFileDescriptor? = null
+                        try {
+                            pfd = android.os.ParcelFileDescriptor.fromSocket(targetSocket!!)
+                            val fd = pfd.fileDescriptor
+                            
+                            val reverseSni = buffer.copyOfRange(sniStart, sniStart + sniLen).reversedArray()
+                            android.system.Os.setsockoptInt(fd, proto, ttlOpt, 2)
+                            targetOutput.write(reverseSni)
+                            targetOutput.flush()
+                            delay(BypassConfig.getAdaptiveDelay2())
+                            
+                            // 2. Send real SNI in chunks
+                            android.system.Os.setsockoptInt(fd, proto, ttlOpt, 64)
+                        } finally {
+                            try { pfd?.close() } catch (e: Exception) {}
+                        }
                         
-                        val reverseSni = buffer.copyOfRange(sniStart, sniStart + sniLen).reversedArray()
-                        android.system.Os.setsockoptInt(fd, proto, ttlOpt, 2)
-                        targetOutput.write(reverseSni)
-                        targetOutput.flush()
-                        delay(BypassConfig.getAdaptiveDelay2())
-                        
-                        // 2. Send real SNI in chunks
-                        android.system.Os.setsockoptInt(fd, proto, ttlOpt, 64)
                         val mid = sniLen / 2
                         targetOutput.write(buffer, 0, sniStart + mid)
                         targetOutput.flush()
@@ -1706,6 +1746,14 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                         input.read(buffer) 
                     } catch (e: java.net.SocketTimeoutException) {
                         break 
+                    } catch (e: java.net.SocketException) {
+                        if (e.message?.contains("reset", ignoreCase = true) == true) {
+                            val activeStrat = sessionStrategy ?: BypassConfig.strategy.value
+                            if (host != null) {
+                                BypassConfig.recordFailureForHost(host = host, strategy = activeStrat, isCritical = true, context = vpnService)
+                            }
+                        }
+                        -1
                     } catch (e: Exception) { 
                         if (isTargetSource && System.currentTimeMillis() - startTime < 3000 && totalRead == 0L) {
                             val activeStrat = sessionStrategy ?: BypassConfig.strategy.value
@@ -1737,6 +1785,8 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
 
                     // Success reporting logic
                     if (!recordedShortSuccess && (System.currentTimeMillis() - startTime > 2000 || totalRead > 16384)) {
+                        recordedShortSuccess = true
+                        ProxyStats.recordGlobalSuccess()
                         val activeStrat = sessionStrategy ?: BypassConfig.strategy.value
                         if (host != null) {
                             BypassConfig.recordSuccessForHost(host, activeStrat, context = vpnService)
@@ -2106,7 +2156,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                 var pfd: android.os.ParcelFileDescriptor? = null
                 try {
                     pfd = android.os.ParcelFileDescriptor.fromSocket(this)
-                    val fd = pfd!!.fileDescriptor
+                    val fd = pfd.fileDescriptor
                     // TCP_NODELAY
                     android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_TCP, android.system.OsConstants.TCP_NODELAY, 1)
                     // TCP_KEEPALIVE options
@@ -2118,7 +2168,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     // TCP_QUICKACK
                     try { android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_TCP, 12, 1) } catch(e: Exception) {}
                     // TCP_CONGESTION (BBR if available, else CUBIC)
-                    // Note: setsockoptString is not standard in android.system.Os, using reflection or omitting if unavailable
                     try {
                         val osClass = Class.forName("android.system.Os")
                         val method = osClass.getMethod("setsockoptString", java.io.FileDescriptor::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, String::class.java)

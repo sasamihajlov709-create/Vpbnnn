@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -13,7 +13,7 @@ class BootReceiver : BroadcastReceiver() {
             
             val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
             val shouldAutoStart = prefs.getBoolean("vpn_should_be_running", false) || 
-                                 prefs.getBoolean("vpn_was_active", false)
+                                 prefs.getBoolean("vpn_was_active", false) || prefs.getBoolean("auto_connect_on_launch", false)
             
             if (shouldAutoStart) {
                 Log.d("BootReceiver", "Starting PinkProxyService after boot (sticky state)")

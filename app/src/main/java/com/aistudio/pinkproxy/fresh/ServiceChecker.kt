@@ -1,4 +1,4 @@
-package com.example
+package com.aistudio.pinkproxy.fresh
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
