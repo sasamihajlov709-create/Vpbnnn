@@ -5,12 +5,37 @@ import android.net.VpnService
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 class PinkProxyTileService : TileService() {
+    private val scope = CoroutineScope(Dispatchers.Main)
+    private var listenJob: Job? = null
 
     override fun onStartListening() {
         super.onStartListening()
-        updateTile()
+        listenJob?.cancel()
+        listenJob = scope.launch {
+            PinkVpnService.isRunning.collectLatest { running ->
+                updateTile(running)
+            }
+        }
+    }
+
+    override fun onStopListening() {
+        super.onStopListening()
+        listenJob?.cancel()
+        listenJob = null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            listenJob?.cancel()
+        } catch (e: Exception) {}
     }
 
     override fun onClick() {
@@ -42,15 +67,14 @@ class PinkProxyTileService : TileService() {
                 }
             }
         }
-        updateTile()
+        updateTile(PinkVpnService.isRunning.value)
     }
 
-    private fun updateTile() {
+    private fun updateTile(isActive: Boolean) {
         val tile = qsTile ?: return
-        val isActive = PinkVpnService.isRunning.value
-        
         tile.state = if (isActive) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = "PinkProxy"
+        tile.subtitle = if (isActive) "Active" else "Inactive"
         tile.updateTile()
     }
 }

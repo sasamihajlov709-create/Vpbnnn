@@ -16,221 +16,225 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
-    fun buildFakeClientHello(sni: String, intensity: Int = 50): ByteArray {
+    fun buildPaddingExtension(size: Int): ByteArray {
+        val padding = ByteArray(size.coerceAtLeast(0))
+        random.nextBytes(padding)
+        return buildExtension(0x0015, padding) // Type 21: Padding
+    }
+
+    fun buildFakeHttpRequest(host: String, path: String = "/"): ByteArray {
+        val userAgents = listOf(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+        )
+        val sb = StringBuilder()
+        sb.append("GET $path HTTP/1.1\r\n")
+        sb.append("Host: $host\r\n")
+        sb.append("User-Agent: ${userAgents.random()}\r\n")
+        sb.append("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n")
+        sb.append("Accept-Language: en-US,en;q=0.5\r\n")
+        sb.append("Accept-Encoding: gzip, deflate, br\r\n")
+        sb.append("Connection: keep-alive\r\n")
+        sb.append("Upgrade-Insecure-Requests: 1\r\n")
+        sb.append("Sec-Fetch-Dest: document\r\n")
+        sb.append("Sec-Fetch-Mode: navigate\r\n")
+        sb.append("Sec-Fetch-Site: none\r\n")
+        sb.append("Sec-Fetch-User: ?1\r\n")
+        sb.append("Priority: u=1\r\n")
+        sb.append("\r\n")
+        return sb.toString().toByteArray()
+    }
+
+    fun buildFakeClientHello(sni: String, intensity: Int = 50, paddingSize: Int = 0): ByteArray {
+        val isChrome = random.nextBoolean()
         val sniBytes = sni.toByteArray()
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
         
-        // 1. Build ClientHello Body
         val bodyBaos = ByteArrayOutputStream()
         val bodyDos = DataOutputStream(bodyBaos)
         
         bodyDos.writeShort(0x0303) // TLS 1.2
         val randomBytes = ByteArray(32)
         random.nextBytes(randomBytes)
-        bodyDos.write(randomBytes) // Random
+        bodyDos.write(randomBytes)
         
-        bodyDos.writeByte(0x20) // Session ID length
+        bodyDos.writeByte(0x20)
         val sessionId = ByteArray(32)
         random.nextBytes(sessionId)
         bodyDos.write(sessionId)
         
-        // Cipher Suites with deep shuffling
         val greaseValues = listOf(
             0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a,
             0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa
         )
         val greaseCipher = greaseValues.random()
         val ciphers = mutableListOf<Short>()
-        ciphers.add(greaseCipher.toShort())
         
-        val tls13Ciphers = mutableListOf(
-            0x1301.toShort(), // TLS_AES_128_GCM_SHA256
-            0x1302.toShort(), // TLS_AES_256_GCM_SHA384
-            0x1303.toShort()  // TLS_CHACHA20_POLY1305_SHA256
-        )
-        tls13Ciphers.shuffle()
-        ciphers.addAll(tls13Ciphers)
-        
-        val tls12Ciphers = mutableListOf(
-            0xc02b.toShort(), // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-            0xc02f.toShort(), // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-            0xc02c.toShort(), // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-            0xc030.toShort(), // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-            0xcca9.toShort(), // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
-            0xcca8.toShort()  // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-        )
-        tls12Ciphers.shuffle()
-        ciphers.addAll(tls12Ciphers)
+        if (isChrome) {
+            ciphers.add(greaseCipher.toShort())
+            ciphers.add(0x1301.toShort())
+            ciphers.add(0x1302.toShort())
+            ciphers.add(0x1303.toShort())
+            ciphers.add(0xc02b.toShort())
+            ciphers.add(0xc02f.toShort())
+            ciphers.add(0xc02c.toShort())
+            ciphers.add(0xc030.toShort())
+            ciphers.add(0xcca9.toShort())
+            ciphers.add(0xcca8.toShort())
+        } else {
+            ciphers.add(0x1301.toShort())
+            ciphers.add(0x1302.toShort())
+            ciphers.add(0x1303.toShort())
+            ciphers.add(0xc02b.toShort())
+            ciphers.add(0xc02f.toShort())
+            ciphers.add(0xcca9.toShort())
+            ciphers.add(0xcca8.toShort())
+            ciphers.add(0xc02c.toShort())
+            ciphers.add(0xc030.toShort())
+        }
         
         bodyDos.writeShort(ciphers.size * 2)
         ciphers.forEach { bodyDos.writeShort(it.toInt()) }
         
-        bodyDos.writeByte(0x01) // Compression methods length
-        bodyDos.writeByte(0x00) // Null compression
+        bodyDos.writeByte(0x01)
+        bodyDos.writeByte(0x00)
         
-        // Build Individual Extensions
         val greaseVal1 = greaseValues.random()
-        
-        // GREASE Extension 1
         val greaseExt1 = buildExtension(greaseVal1, byteArrayOf())
         
-        // ECH GREASE (Encrypted Client Hello) - highly effective against DPI
-        val echGreaseBaos = ByteArrayOutputStream()
-        val echGreaseDos = DataOutputStream(echGreaseBaos)
         val echLen = 64 + random.nextInt(64)
         val echBytes = ByteArray(echLen)
         random.nextBytes(echBytes)
-        echGreaseDos.write(echBytes)
-        val echExt = buildExtension(0xfe0d, echGreaseBaos.toByteArray())
+        val echExt = buildExtension(0xfe0d, echBytes)
         
-        // SNI (Type 0)
         val sniDataBaos = ByteArrayOutputStream()
         val sniDataDos = DataOutputStream(sniDataBaos)
         sniDataDos.writeShort(sniBytes.size + 3)
-        sniDataDos.writeByte(0x00) // HostName type
+        sniDataDos.writeByte(0x00)
         sniDataDos.writeShort(sniBytes.size)
         sniDataDos.write(sniBytes)
         val sniExt = buildExtension(0x0000, sniDataBaos.toByteArray())
-        
-        // ALPN (Type 16)
+
         val alpnDataBaos = ByteArrayOutputStream()
-        val alpnDataDos = DataOutputStream(alpnDataBaos)
-        alpnDataDos.writeShort(0x000c) // ALPN list length
-        alpnDataDos.writeByte(0x02) // "h2" len
-        alpnDataDos.write("h2".toByteArray())
-        alpnDataDos.writeByte(0x08) // "http/1.1" len
-        alpnDataDos.write("http/1.1".toByteArray())
+        val protocols = listOf("h2", "http/1.1")
+        alpnDataBaos.write(protocols.sumOf { it.length + 1 })
+        protocols.forEach { proto ->
+            val pBytes = proto.toByteArray()
+            alpnDataBaos.write(pBytes.size)
+            alpnDataBaos.write(pBytes)
+        }
         val alpnExt = buildExtension(0x0010, alpnDataBaos.toByteArray())
-        
-        // Supported Groups (Type 10)
+
         val groupsDataBaos = ByteArrayOutputStream()
         val groupsDataDos = DataOutputStream(groupsDataBaos)
-        groupsDataDos.writeShort(0x000a) // list length (10 bytes)
-        groupsDataDos.writeShort(greaseVal1) // GREASE
-        groupsDataDos.writeShort(0x6399) // X25519Kyber768Draft00 (Chrome Post-Quantum)
-        groupsDataDos.writeShort(0x001d) // x25519
-        groupsDataDos.writeShort(0x0017) // secp256r1
-        groupsDataDos.writeShort(0x0018) // secp384r1
+        val groups = if (isChrome) listOf(0x6399, 0x001d, 0x0017, 0x0018) else listOf(0x001d, 0x0017, 0x0018)
+        groupsDataDos.writeShort(groups.size * 2)
+        groups.forEach { groupsDataDos.writeShort(it) }
         val groupsExt = buildExtension(0x000a, groupsDataBaos.toByteArray())
         
-        // EC Point Formats (Type 11)
         val ecPointExt = buildExtension(0x000b, byteArrayOf(0x01, 0x00))
         
-        // Signature Algorithms (Type 13)
         val sigAlgDataBaos = ByteArrayOutputStream()
         val sigAlgDataDos = DataOutputStream(sigAlgDataBaos)
-        sigAlgDataDos.writeShort(0x0010) // Signature algorithms list length
-        val sigAlgs = mutableListOf(
-            0x0403, // ecdsa_secp256r1_sha256
-            0x0804, // rsa_pss_rsae_sha256
-            0x0401, // rsa_pkcs1_sha256
-            0x0503, // ecdsa_secp384r1_sha384
-            0x0805, // rsa_pss_rsae_sha384
-            0x0501, // rsa_pkcs1_sha384
-            0x0806, // rsa_pss_rsae_sha512
-            0x0601  // rsa_pkcs1_sha512
-        )
-        sigAlgs.shuffle()
+        val sigAlgs = listOf(0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601)
+        sigAlgDataDos.writeShort(sigAlgs.size * 2)
         sigAlgs.forEach { sigAlgDataDos.writeShort(it) }
         val sigAlgExt = buildExtension(0x000d, sigAlgDataBaos.toByteArray())
         
-        // Renegotiation Info (Type 65281)
-        val renegExt = buildExtension(0xff01, byteArrayOf(0x00))
-        
-        // Supported Versions (Type 43)
         val versionsDataBaos = ByteArrayOutputStream()
         val versionsDataDos = DataOutputStream(versionsDataBaos)
-        versionsDataDos.writeByte(0x06) // list length
-        versionsDataDos.writeShort(greaseVal1) // GREASE in versions
-        versionsDataDos.writeShort(0x0304) // TLS 1.3
-        versionsDataDos.writeShort(0x0303) // TLS 1.2
+        val versions = if (isChrome) listOf(greaseVal1, 0x0304, 0x0303) else listOf(0x0304, 0x0303)
+        versionsDataDos.writeByte(versions.size * 2)
+        versions.forEach { versionsDataDos.writeShort(it) }
         val versionsExt = buildExtension(0x002b, versionsDataBaos.toByteArray())
         
-        // Key Share (Type 51)
         val keyShareDataBaos = ByteArrayOutputStream()
         val keyShareDataDos = DataOutputStream(keyShareDataBaos)
-        val kyberLen = 1184 // Kyber768 public key length
-        val x25519Len = 32
+        val keyShares = if (isChrome) listOf(0x6399, 0x001d) else listOf(0x001d)
         
-        // 2 bytes for GREASE, 2 bytes for kyber, 2 bytes for x25519 (ClientHello KeyShare list)
-        val keySharesLength = 4 + 4 + kyberLen + 4 + x25519Len
-        keyShareDataDos.writeShort(keySharesLength) 
+        var ksLen = 0
+        keyShares.forEach { ks ->
+            ksLen += 4 + if (ks == 0x6399) 1184 else 32
+        }
+        keyShareDataDos.writeShort(ksLen)
         
-        // GREASE Key Share
-        keyShareDataDos.writeShort(greaseVal1)
-        keyShareDataDos.writeShort(1)
-        keyShareDataDos.writeByte(0)
-        
-        // X25519Kyber768Draft00 Key Share
-        keyShareDataDos.writeShort(0x6399) // Group: X25519Kyber768Draft00
-        keyShareDataDos.writeShort(kyberLen) 
-        val kyberShare = ByteArray(kyberLen)
-        random.nextBytes(kyberShare)
-        keyShareDataDos.write(kyberShare)
-        
-        // X25519 Key Share
-        keyShareDataDos.writeShort(0x001d) // Group: x25519
-        keyShareDataDos.writeShort(x25519Len) // Key length 32
-        val keyShare = ByteArray(x25519Len)
-        random.nextBytes(keyShare)
-        keyShareDataDos.write(keyShare)
-        
+        keyShares.forEach { ks ->
+            keyShareDataDos.writeShort(ks)
+            val len = if (ks == 0x6399) 1184 else 32
+            keyShareDataDos.writeShort(len)
+            val share = ByteArray(len); random.nextBytes(share); keyShareDataDos.write(share)
+        }
         val keyShareExt = buildExtension(0x0033, keyShareDataBaos.toByteArray())
         
-        // Shuffle the order of extensions to scramble JA3/JA4 fingerprints
-        val extensionsList = mutableListOf(
-            greaseExt1,
-            echExt,
-            sniExt,
-            alpnExt,
-            groupsExt,
-            ecPointExt,
-            sigAlgExt,
-            renegExt,
-            versionsExt,
-            keyShareExt
-        )
-        extensionsList.shuffle()
-        
-        // Write extensions to extBaos
-        val extBaos = ByteArrayOutputStream()
-        val extDos = DataOutputStream(extBaos)
-        extensionsList.forEach { extDos.write(it) }
-        
-        // Calculate needed padding to match browser payload size (prevent length analysis)
-        val currentSize = bodyBaos.size() + extBaos.size() + 2 + 9 // +2 for extensions length field, +9 for record/handshake headers
-        
-        // Scale target size based on intensity.
-        // With Kyber768 (1184 bytes), ClientHello size naturally exceeds 1500 bytes (requires TCP fragmentation).
-        val minPadding = 1600 + (intensity * 2) 
-        val maxPadding = 2000 + (intensity * 4)
-        val targetSize = minPadding + random.nextInt(maxPadding - minPadding + 1)
-        
-        val paddingNeeded = targetSize - currentSize - 4 // -4 for padding extension type and length fields
-        if (paddingNeeded > 0) {
-            val paddingData = ByteArray(paddingNeeded)
-            val paddingExt = buildExtension(0x0015, paddingData)
-            extDos.write(paddingExt)
+        val pskModesExt = buildExtension(0x002d, byteArrayOf(0x01, 0x01))
+
+        val extensionsList = if (isChrome) {
+            mutableListOf(greaseExt1, echExt, sniExt, alpnExt, groupsExt, ecPointExt, sigAlgExt, buildExtension(0xff01, byteArrayOf(0x00)), versionsExt, keyShareExt, pskModesExt)
+        } else {
+            mutableListOf(sniExt, alpnExt, groupsExt, ecPointExt, sigAlgExt, versionsExt, keyShareExt, pskModesExt)
         }
         
-        val extensions = extBaos.toByteArray()
-        bodyDos.writeShort(extensions.size)
-        bodyDos.write(extensions)
+        if (isChrome) extensionsList.shuffle()
+        
+        val extBaos = ByteArrayOutputStream()
+        extensionsList.forEach { extBaos.write(it) }
+        
+        val currentSize = bodyBaos.size() + extBaos.size() + 2 + 9
+        val targetSize = (1400 + (intensity * 3) + random.nextInt(400)).coerceAtLeast(currentSize + paddingSize + 4)
+        val paddingNeeded = targetSize - currentSize - 4
+        if (paddingNeeded > 0) {
+            extBaos.write(buildExtension(0x0015, ByteArray(paddingNeeded)))
+        }
+        
+        bodyDos.writeShort(extBaos.size())
+        bodyDos.write(extBaos.toByteArray())
         
         val clientHello = bodyBaos.toByteArray()
-        
-        // 2. Build Record Header
-        dos.writeByte(0x16) // Handshake type
-        dos.writeShort(0x0301) // TLS 1.0 (legacy record version for compatibility)
-        dos.writeShort(clientHello.size + 4)
-        
-        // 3. Build Handshake Header
-        dos.writeByte(0x01) // ClientHello
-        dos.writeByte(0x00)
-        dos.writeShort(clientHello.size)
-        dos.write(clientHello)
+        dos.writeByte(0x16); dos.writeShort(0x0301); dos.writeShort(clientHello.size + 4)
+        dos.writeByte(0x01); dos.writeByte(0x00); dos.writeShort(clientHello.size); dos.write(clientHello)
         
         return baos.toByteArray()
+    }
+
+    fun buildFakeUdpPacket(size: Int): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        
+        when (random.nextInt(3)) {
+            0 -> {
+                dos.writeShort(0x0001)
+                dos.writeShort(size.coerceAtMost(20) - 20)
+                dos.writeInt(0x2112A442)
+                val transactionId = ByteArray(12)
+                random.nextBytes(transactionId)
+                dos.write(transactionId)
+            }
+            1 -> {
+                dos.writeByte(0x16)
+                dos.writeShort(0xfeff)
+                dos.writeShort(0)
+                val sequence = ByteArray(6)
+                random.nextBytes(sequence)
+                dos.write(sequence)
+                dos.writeShort(size.coerceAtMost(100) - 13)
+                dos.writeByte(0x01)
+            }
+            else -> {
+                val data = ByteArray(size.coerceAtMost(1200))
+                random.nextBytes(data)
+                dos.write(data)
+            }
+        }
+        
+        val current = baos.toByteArray()
+        if (current.size < size) {
+            val padding = ByteArray(size - current.size)
+            random.nextBytes(padding)
+            return current + padding
+        }
+        return current
     }
 }

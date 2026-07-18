@@ -1,6 +1,7 @@
 package com.aistudio.pinkproxy.fresh
 
 import android.net.VpnService
+import android.content.Context
 import android.util.Log
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -34,7 +35,7 @@ object RobustResolver {
     @Volatile var publicIpSubnet: String? = null
 
     fun updatePublicIpSubnet(vpnService: VpnService?) {
-        kotlinx.coroutines.CoroutineScope(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()).launch {
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             var conn: java.net.HttpURLConnection? = null
             try {
                 val url = java.net.URL("https://api.ipify.org")
@@ -50,10 +51,12 @@ object RobustResolver {
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0")
                 if (conn.responseCode == 200) {
                     val ip = conn.inputStream.bufferedReader().use { it.readText() }.trim()
-                    if (isIpAddress(ip)) {
+                    if (isIpAddress(ip) && ip.contains(".")) {
                         val parts = ip.split(".")
-                        publicIpSubnet = "${parts[0]}.${parts[1]}.${parts[2]}.0/24"
-                        Log.i("RobustResolver", "ECS Optimization: Configured dynamic client subnet to $publicIpSubnet")
+                        if (parts.size >= 3) {
+                            publicIpSubnet = "${parts[0]}.${parts[1]}.${parts[2]}.0/24"
+                            Log.i("RobustResolver", "ECS Optimization: Configured dynamic client subnet to $publicIpSubnet")
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -68,7 +71,10 @@ object RobustResolver {
         "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112", 
         "208.67.222.222", "208.67.220.220", "94.140.14.14", "94.140.15.15", 
         "223.5.5.5", "223.6.6.6", "185.228.168.168", "77.88.8.8", "77.88.8.1",
-        "45.90.28.0", "45.90.30.0", "185.228.169.168", "193.110.81.0", "185.253.5.0"
+        "45.90.28.0", "45.90.30.0", "185.228.169.168", "193.110.81.0", "185.253.5.0",
+        "194.242.2.2", "45.11.45.11", "5.1.66.255", "185.95.218.42", "195.46.39.39",
+        "185.222.222.222", "45.90.28.221", "5.101.114.114", "8.26.56.26", "185.225.168.168",
+        "101.101.101.101", "101.6.6.6", "114.114.114.114", "119.29.29.29", "8.7.8.7"
     )
 
     private val providerFailures = ConcurrentHashMap<String, Long>()
@@ -108,7 +114,7 @@ object RobustResolver {
     private var prefetchJob: kotlinx.coroutines.Job? = null
     fun startPrefetching(vpnService: VpnService?) {
         prefetchJob?.cancel()
-        prefetchJob = kotlinx.coroutines.CoroutineScope(java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()).launch {
+        prefetchJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             val topHostsToPrefetch = listOf(
                 "youtube.com", "googlevideo.com", "i.ytimg.com", "yt3.ggpht.com",
                 "google.com", "t.me", "telegram.org", "instagram.com", "twitter.com", "x.com",
@@ -116,7 +122,9 @@ object RobustResolver {
             )
             while (isActive) {
                 try {
-                    for (host in topHostsToPrefetch) {
+                    val userTopHosts = ProxyStats.topHosts.value.map { it.first }
+                    val allHostsToPrefetch = (topHostsToPrefetch + userTopHosts).distinct()
+                    for (host in allHostsToPrefetch) {
                         resolve(host, vpnService, forceSecure = true)
                         kotlinx.coroutines.delay(2000)
                     }
@@ -124,7 +132,7 @@ object RobustResolver {
                 kotlinx.coroutines.delay(5 * 60 * 1000L)
             }
         }
-        Log.i("RobustResolver", "DNS Background Prefetching started")
+        Log.i("RobustResolver", "DNS Background Prefetching started with dynamic top-hosts learning")
     }
 
     private var proberJob: kotlinx.coroutines.Job? = null
@@ -163,7 +171,7 @@ object RobustResolver {
         proberJob?.cancel()
 
         // Launch asynchronous DNS cache preheating
-        scope.launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
+        scope.launch(Dispatchers.IO) {
             try {
                 preheatDnsCache(vpnService)
             } catch (e: Exception) {
@@ -172,7 +180,7 @@ object RobustResolver {
         }
 
         // Immediate non-blocking warmup DNS latency probe to build routing weights instantly
-        scope.launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
+        scope.launch(Dispatchers.IO) {
             try {
                 coroutineScope {
                     dohEndpoints.forEach { dnsIp ->
@@ -198,7 +206,7 @@ object RobustResolver {
             }
         }
 
-        proberJob = scope.launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
+        proberJob = scope.launch(Dispatchers.IO) {
             delay(5000) // Stagger startup to allow VPN routing to stabilize
             updatePublicIpSubnet(vpnService)
             var count = 0
@@ -277,12 +285,47 @@ object RobustResolver {
     }
 
     private val emergencyFallback = mapOf(
-        "youtube.com" to listOf("142.250.180.142", "142.251.46.206", "2a00:1450:4001:828::200e"),
-        "googlevideo.com" to listOf("172.217.16.14", "172.217.16.110"),
-        "google.com" to listOf("8.8.8.8", "8.8.4.4", "2001:4860:4860::8888"),
-        "telegram.org" to listOf("149.154.167.99", "149.154.167.51"),
-        "t.me" to listOf("149.154.167.99")
+        "youtube.com" to listOf("142.250.180.142", "142.251.46.206", "172.217.16.206", "142.250.186.78", "2a00:1450:4001:828::200e"),
+        "googlevideo.com" to listOf("172.217.16.14", "172.217.16.110", "142.250.185.78", "142.250.184.206"),
+        "google.com" to listOf("8.8.8.8", "8.8.4.4", "142.250.180.14", "2001:4860:4860::8888"),
+        "telegram.org" to listOf("149.154.167.99", "149.154.167.51", "149.154.165.120", "149.154.160.1"),
+        "t.me" to listOf("149.154.167.99", "149.154.175.50"),
+        "facebook.com" to listOf("157.240.1.35", "157.240.22.35", "31.13.72.36", "2a03:2880:f12f:83:face:b00c:0:2"),
+        "instagram.com" to listOf("157.240.1.174", "157.240.22.174", "31.13.72.52"),
+        "twitter.com" to listOf("104.244.42.1", "104.244.42.193", "199.16.156.6"),
+        "x.com" to listOf("104.244.42.1", "199.16.156.231"),
+        "discord.com" to listOf("162.159.138.232", "162.159.135.232", "162.159.128.233"),
+        "linkedin.com" to listOf("108.174.10.10", "144.178.48.71"),
+        "netflix.com" to listOf("54.246.79.5", "52.210.133.24", "45.57.90.1"),
+        "twitch.tv" to listOf("151.101.2.167", "151.101.66.167", "151.101.130.167"),
+        "openai.com" to listOf("104.18.6.192", "104.18.7.192"),
+        "chatgpt.com" to listOf("104.18.6.192", "104.18.7.192", "104.18.2.161"),
+        "anthropic.com" to listOf("162.159.153.247", "162.159.152.247"),
+        "gemini.google.com" to listOf("142.250.180.14"),
+        "github.com" to listOf("140.82.121.3", "140.82.121.4", "140.82.112.3"),
+        "raw.githubusercontent.com" to listOf("185.199.108.133", "185.199.109.133", "185.199.110.133", "185.199.111.133")
     )
+
+    private val ipHeatmap = ConcurrentHashMap<String, Int>()
+
+    fun initialize(context: Context) {
+        // Future initialization logic
+        Log.i("RobustResolver", "RobustResolver initialized")
+    }
+
+    fun recordIpSuccess(ip: String) {
+        val current = ipHeatmap.getOrDefault(ip, 50)
+        ipHeatmap[ip] = (current + 5).coerceAtMost(100)
+    }
+
+    fun recordIpFailure(ip: String) {
+        val current = ipHeatmap.getOrDefault(ip, 50)
+        ipHeatmap[ip] = (current - 15).coerceAtLeast(0)
+    }
+
+    fun getSortedIps(ips: List<InetAddress>): List<InetAddress> {
+        return ips.sortedByDescending { ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) }
+    }
 
     suspend fun resolve(host: String, vpnService: VpnService? = null, forceSecure: Boolean = false): List<InetAddress> {
         if (isIpAddress(host)) {
@@ -300,7 +343,7 @@ object RobustResolver {
         if (!forceSecure) {
             dnsCache[host]?.let { (addresses, timestamp) ->
                 if (now - timestamp < CACHE_TTL_MS) {
-                    return addresses
+                    return getSortedIps(addresses)
                 }
             }
         }
@@ -321,7 +364,7 @@ object RobustResolver {
                 val resolved = coroutineScope {
                     val completableDeferred = kotlinx.coroutines.CompletableDeferred<List<InetAddress>>()
                     val jobs = endpoints.map { dns ->
-                        launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
+                        launch(Dispatchers.IO) {
                             try {
                                 val ips = mutableListOf<InetAddress>()
                                 val aJob = async { queryDoh(host, dns, "A", vpnService) }
@@ -480,6 +523,7 @@ object RobustResolver {
                     val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
                     sslContext.init(null, null, null)
                     conn.sslSocketFactory = ProtectedSSLSocketFactory(sslContext.socketFactory, vpnService)
+                    conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
                 } catch (e: Exception) {}
             }
             
@@ -508,14 +552,16 @@ object RobustResolver {
             try { conn?.disconnect() } catch (e: Exception) {}
         }
 
-        // 2. Fallback to JSON-over-HTTPS GET query
+        // 2. Fallback to JSON-over-HTTPS GET query with randomized parameters
         try {
             val typeNum = if (type == "AAAA") 28 else 1
+            // Adding a random junk parameter to bypass some simple URL-based filtering/caching
+            val junk = (1000..9999).random()
             var urlStr = when (dnsIp) {
-                "1.1.1.1", "1.0.0.1" -> "https://$dnsIp/dns-query?name=$host&type=$type&ct=application/dns-json"
-                "8.8.8.8", "8.8.4.4" -> "https://dns.google/resolve?name=$host&type=$typeNum"
-                "223.5.5.5", "223.6.6.6" -> "https://dns.alidns.com/resolve?name=$host&type=$typeNum"
-                else -> "https://$dnsIp/resolve?name=$host&type=$typeNum"
+                "1.1.1.1", "1.0.0.1" -> "https://$dnsIp/dns-query?name=$host&type=$type&ct=application/dns-json&_rnd=$junk"
+                "8.8.8.8", "8.8.4.4" -> "https://dns.google/resolve?name=$host&type=$typeNum&_z=$junk"
+                "223.5.5.5", "223.6.6.6" -> "https://dns.alidns.com/resolve?name=$host&type=$typeNum&token=$junk"
+                else -> "https://$dnsIp/resolve?name=$host&type=$typeNum&_q=$junk"
             }
             
             val subnet = publicIpSubnet
@@ -530,6 +576,7 @@ object RobustResolver {
                     val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
                     sslContext.init(null, null, null)
                     conn.sslSocketFactory = ProtectedSSLSocketFactory(sslContext.socketFactory, vpnService)
+                    conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
                 } catch (e: Exception) {}
             }
             conn.connectTimeout = 3000
@@ -767,6 +814,7 @@ class ProtectedSSLSocketFactory(
     override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
     
     override fun createSocket(s: Socket?, host: String?, port: Int, autoClose: Boolean): Socket {
+        s?.let { vpnService?.protect(it) }
         val protectedSocket = delegate.createSocket(s, host, port, autoClose)
         vpnService?.protect(protectedSocket)
         return protectedSocket
@@ -779,26 +827,36 @@ class ProtectedSSLSocketFactory(
     }
     
     override fun createSocket(host: String?, port: Int): Socket {
-        val s = delegate.createSocket(host, port)
-        vpnService?.protect(s)
-        return s
+        val rawSocket = Socket()
+        vpnService?.protect(rawSocket)
+        rawSocket.connect(InetSocketAddress(host, port), 2500)
+        return delegate.createSocket(rawSocket, host, port, true)
     }
     
     override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket {
-        val s = delegate.createSocket(host, port, localHost, localPort)
-        vpnService?.protect(s)
-        return s
+        val rawSocket = Socket()
+        if (localHost != null) {
+            rawSocket.bind(InetSocketAddress(localHost, localPort))
+        }
+        vpnService?.protect(rawSocket)
+        rawSocket.connect(InetSocketAddress(host, port), 2500)
+        return delegate.createSocket(rawSocket, host, port, true)
     }
     
     override fun createSocket(address: InetAddress?, port: Int): Socket {
-        val s = delegate.createSocket(address, port)
-        vpnService?.protect(s)
-        return s
+        val rawSocket = Socket()
+        vpnService?.protect(rawSocket)
+        rawSocket.connect(InetSocketAddress(address, port), 2500)
+        return delegate.createSocket(rawSocket, address?.hostAddress, port, true)
     }
     
     override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket {
-        val s = delegate.createSocket(address, port, localAddress, localPort)
-        vpnService?.protect(s)
-        return s
+        val rawSocket = Socket()
+        if (localAddress != null) {
+            rawSocket.bind(InetSocketAddress(localAddress, localPort))
+        }
+        vpnService?.protect(rawSocket)
+        rawSocket.connect(InetSocketAddress(address, port), 2500)
+        return delegate.createSocket(rawSocket, address?.hostAddress, port, true)
     }
 }

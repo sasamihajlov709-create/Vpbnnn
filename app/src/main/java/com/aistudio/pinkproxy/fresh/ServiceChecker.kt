@@ -294,7 +294,7 @@ object ServiceChecker {
         val initialServices = defaultServices + _customServices.value
         _statuses.value = initialServices.map { ServiceStatus(it.first, it.second, false, 0) }
 
-        job = scope.launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
+        job = scope.launch(Dispatchers.IO) {
             delay(2000)
             while (isActive) {
                 val currentServices = defaultServices + _customServices.value
@@ -321,74 +321,69 @@ object ServiceChecker {
     fun runActiveProbing(context: android.content.Context) {
         if (!isProbing.compareAndSet(false, true)) return
         _isProbingState.value = true
-        val scope = internalScope ?: run {
-            isProbing.set(false)
-            _isProbingState.value = false
-            return
-        }
+        val scope = internalScope ?: CoroutineScope(Dispatchers.IO + SupervisorJob())
         
-        ProxyStats.logRecovery("Autopilot: Low connectivity detected. Launching Strategy Probe Sequence...")
+        ProxyStats.logRecovery("Autopilot: Launching Parallel Strategy Tournament (Fast Race)...")
         
-        val testUrl = "https://redirector.googlevideo.com/report_mapping" // Lightweight Google video diagnostic endpoint
-        val proxyPort = proxyPort
+        val testHost = "googlevideo.com"
         
-        scope.launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
+        scope.launch(Dispatchers.IO) {
             val originalStrategy = BypassConfig.strategy.value
-            val strategiesToTest = BypassStrategy.values().filter { it != BypassStrategy.DIRECT }
+            val strategiesToTest = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT }
             
-            var bestStrategy: BypassStrategy? = null
-            var bestLatency = Long.MAX_VALUE
-            
-            for (strategy in strategiesToTest) {
-                ProxyStats.logRecovery("Autopilot: Testing ${strategy.name}...")
-                BypassConfig.setStrategy(strategy)
-                delay(250) // Allow proxy parameters to stabilize
-                
-                var isUp = false
-                val start = System.currentTimeMillis()
-                var connection: HttpURLConnection? = null
-                try {
-                    val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
-                    connection = URL(testUrl).openConnection(proxy) as HttpURLConnection
-                    connection.connectTimeout = 3000
-                    connection.readTimeout = 3000
-                    connection.requestMethod = "GET"
-                    connection.setRequestProperty("User-Agent", "Mozilla/5.0")
-                    
-                    val code = connection.responseCode
-                    isUp = (code in 200..499)
-                } catch (e: Exception) {
-                    isUp = false
-                } finally {
-                    try { connection?.inputStream?.close() } catch (e: Exception) {}
-                    try { connection?.disconnect() } catch (e: Exception) {}
-                }
-                
-                val latency = System.currentTimeMillis() - start
-                if (isUp) {
-                    ProxyStats.logRecovery("Autopilot: ${strategy.name} working! Latency: ${latency}ms")
-                    BypassConfig.recordSuccess(strategy = strategy, context = context)
-                    if (latency < bestLatency) {
-                        bestLatency = latency
-                        bestStrategy = strategy
+            val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Pair<BypassStrategy, Long>>()
+            val jobs = strategiesToTest.map { strategy ->
+                launch {
+                    try {
+                        val start = System.currentTimeMillis()
+                        val ips = RobustResolver.resolve(testHost, null)
+                        if (ips.isNotEmpty()) {
+                            val socket = java.net.Socket()
+                            socket.soTimeout = 1500
+                            withTimeout(3500) {
+                                socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
+                                val hello = FakePacketHelper.buildFakeClientHello(testHost, (40..90).random())
+                                BypassConfig.applyBypass(
+                                    socket, 
+                                    socket.getOutputStream(), 
+                                    hello, 
+                                    hello.size, 
+                                    BypassConfig.getSessionConfig(testHost, strategy, 100L), 
+                                    testHost
+                                )
+                                socket.getOutputStream().flush()
+                                val response = ByteArray(5)
+                                if (socket.getInputStream().read(response) >= 1) {
+                                    val duration = System.currentTimeMillis() - start
+                                    resultsChannel.add(strategy to duration)
+                                    BypassConfig.recordStrategyResult(testHost, strategy, true)
+                                    BypassConfig.recordSuccess(strategy, duration, context)
+                                    ProxyStats.logRecovery("Tournament: ${strategy.name} completed in ${duration}ms")
+                                }
+                            }
+                            try { socket.close() } catch (e: Exception) {}
+                        }
+                    } catch (e: Exception) {
+                        BypassConfig.recordStrategyResult(testHost, strategy, false)
+                        BypassConfig.recordFailure(strategy, false, context)
                     }
-                    // Instant success fallback if we find a super responsive strategy (< 800ms)
-                    if (latency < 800) {
-                        break
-                    }
-                } else {
-                    ProxyStats.logRecovery("Autopilot: ${strategy.name} blocked or high latency.")
-                    BypassConfig.recordFailure(strategy = strategy, isCritical = false, context = context)
                 }
             }
             
-            if (bestStrategy != null) {
-                BypassConfig.setStrategy(bestStrategy)
-                ProxyStats.logRecovery("Autopilot Selected Optimal Strategy -> ${bestStrategy.name} (${bestLatency}ms)")
+            // Wait for tournament to complete (up to 4.5 seconds maximum)
+            withTimeoutOrNull(4500) {
+                jobs.forEach { it.join() }
+            }
+            
+            val best = resultsChannel.sortedBy { it.second }.firstOrNull()
+            if (best != null) {
+                BypassConfig.setStrategy(best.first)
+                ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} in ${best.second}ms!")
             } else {
                 BypassConfig.setStrategy(originalStrategy)
-                ProxyStats.logRecovery("Autopilot: No working strategy resolved. Restored ${originalStrategy.name}")
+                ProxyStats.logRecovery("Autopilot: No strategy bypassed DPI. Restored ${originalStrategy.name}")
             }
+            
             isProbing.set(false)
             _isProbingState.value = false
             triggerCheck()

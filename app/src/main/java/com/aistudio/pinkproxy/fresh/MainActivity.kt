@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
 
 class MainActivity : ComponentActivity() {
+    private fun formatBytes(bytes: Long) = ProxyStats.formatBytes(bytes)
     private val vpnLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             startVpnService()
@@ -81,6 +82,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         enableEdgeToEdge()
+        
+        try {
+            PinkVpnService.loadFilterSettings(this)
+            BypassConfig.loadTuningSettings(this)
+            RobustResolver.loadDnsSettings(this)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error loading initial settings", e)
+        }
         
         val prefs = getSharedPreferences("pink_proxy_settings", MODE_PRIVATE)
         val autoConnect = prefs.getBoolean("auto_connect_on_launch", true)
@@ -172,6 +181,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
     val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList())
     val trafficLog by ProxyStats.trafficLog.collectAsStateWithLifecycle(initialValue = emptyList())
     val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
+    val signalQuality by ProxyStats.signalQuality.collectAsStateWithLifecycle(initialValue = 100)
     val currentNetworkType by BypassConfig.currentNetworkType.collectAsStateWithLifecycle(initialValue = NetworkType.UNKNOWN)
     val currentRttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
     val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
@@ -908,6 +918,10 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                 }
                                 Text(cLevelStr, fontSize = 11.sp, color = cLevelColor, fontWeight = FontWeight.Bold)
                             }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Signal Quality: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                Text("$signalQuality%", fontSize = 11.sp, color = if (signalQuality > 75) Color(0xFF81C784) else if (signalQuality > 40) Color(0xFFFFB74D) else Color(0xFFE57373), fontWeight = FontWeight.Bold)
+                            }
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable {
@@ -923,6 +937,25 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             val rttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
                             Text("RTT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0).copy(alpha = 0.4f), letterSpacing = 1.sp)
                             Text("${rttMs}ms", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFF8BBD0))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        if (isProbing) Color(0xFFE57373).copy(alpha = 0.2f) else Color(0xFF81C784).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                                    .clickable(enabled = !isProbing) {
+                                        ServiceChecker.runActiveProbing(context)
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = if (isProbing) "PROBING..." else "RUN TOURNAMENT",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isProbing) Color(0xFFE57373) else Color(0xFF81C784)
+                                )
+                            }
                         }
                     }
                 }
@@ -1415,6 +1448,7 @@ fun AppSelectionDialog(
     var apps by remember { mutableStateOf<List<android.content.pm.ApplicationInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     val pm = context.packageManager
+    val selectedSet = remember { androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(PinkVpnService.selectedPackages) } }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -1489,17 +1523,18 @@ fun AppSelectionDialog(
                     ) {
                         items(filteredApps) { app ->
                             val pkg = app.packageName
-                            var isSelected by remember { mutableStateOf(PinkVpnService.selectedPackages.contains(pkg)) }
+                            val isSelected = selectedSet.contains(pkg)
 
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        isSelected = !isSelected
                                         if (isSelected) {
-                                            PinkVpnService.selectedPackages.add(pkg)
-                                        } else {
+                                            selectedSet.remove(pkg)
                                             PinkVpnService.selectedPackages.remove(pkg)
+                                        } else {
+                                            selectedSet.add(pkg)
+                                            PinkVpnService.selectedPackages.add(pkg)
                                         }
                                         onAppsSelected(PinkVpnService.selectedPackages.size)
                                     }
