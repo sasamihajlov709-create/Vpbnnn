@@ -1,0 +1,11 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/PinkVpnService.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/PinkVpnService.kt
+@@ -218,6 +218,8 @@
+             proxyServer?.start()
+             proxyServer?.testInitialStrategies()
+             
++            RobustResolver.startPrefetching(this)
++            
+             // Self-healing monitor and stats persistence
+             serviceScope.launch {
+                 launch {

@@ -1,0 +1,10 @@
+--- app/src/main/res/values/strings.xml
++++ app/src/main/res/values/strings.xml
+@@ -19,6 +19,7 @@
+     <string name="status_no_internet">NO INTERNET CONNECTION</string>
+     <string name="status_recovery">RECOVERY IN PROGRESS...</string>
+     <string name="status_autopilot">SMART AUTO-PILOT ACTIVE</string>
++    <string name="status_dns_prefetch">DNS PRE-FETCHING ACTIVE</string>
+     <string name="label_health">HEALTH</string>
+     <string name="label_speed">SPEED</string>
+     <string name="label_errors">ERRORS</string>

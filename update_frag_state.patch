@@ -1,0 +1,20 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
+@@ -493,6 +493,9 @@
+     private val hostCacheMaxEntries = 500
+ 
+     private val _currentFragSize = AtomicInteger(1)
++    private val _currentFragSizeState = MutableStateFlow(1)
++    val currentFragSizeState: StateFlow<Int> = _currentFragSizeState.asStateFlow()
++
+     private val successWindow = java.util.concurrent.ConcurrentLinkedQueue<Boolean>()
+     private val windowSize = 50
+ 
+@@ -515,6 +518,7 @@
+                 _currentFragSize.set(1)
+             }
+         }
++        _currentFragSizeState.value = _currentFragSize.get()
+     }
+ 
+     fun getCurrentFragSize() = _currentFragSize.get()

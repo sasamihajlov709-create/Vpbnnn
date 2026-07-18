@@ -1,0 +1,25 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
+@@ -165,6 +165,7 @@
+     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
+     val isStalled by ServiceChecker.isStalled.collectAsStateWithLifecycle(initialValue = false)
++    val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
+     val lastCheckTime by ServiceChecker.lastCheckTime.collectAsStateWithLifecycle(initialValue = 0L)
+ 
+     val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList())
+@@ -292,6 +293,7 @@
+                     Text(
+                         text = when {
+                             !isInternetUp -> stringResource(R.string.status_no_internet)
++                            isProbing -> "AUTOPILOT PROBING STRATEGIES..."
+                             isStalled -> "TRAFFIC STALL DETECTED"
+                             !isProxyHealthy -> stringResource(R.string.status_recovery)
+                             else -> stringResource(R.string.status_autopilot)
+@@ -300,6 +302,7 @@
+                         fontWeight = FontWeight.Bold,
+                         color = when {
+                             !isInternetUp -> Color(0xFF9E9E9E)
++                            isProbing -> Color(0xFF64B5F6) // Blue for active work
+                             isStalled -> Color(0xFFFFB74D) // Orange for warning
+                             isProxyHealthy -> Color(0xFF81C784)
+                             else -> Color(0xFFE57373)

@@ -1,0 +1,21 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
+@@ -282,12 +282,18 @@
+                         .padding(horizontal = 12.dp, vertical = 6.dp)
+                 ) {
++                    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
++                    val pulseAlpha by infiniteTransition.animateFloat(
++                        initialValue = 0.4f,
++                        targetValue = 1.0f,
++                        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
++                        label = "pulseAlpha"
++                    )
+                     Box(
+                         modifier = Modifier
+                             .size(8.dp)
+                             .background(
+-                                color = if (!isInternetUp) Color(0xFF9E9E9E) else if (isProxyHealthy) Color(0xFF81C784) else Color(0xFFE57373),
++                                color = (if (!isInternetUp) Color(0xFF9E9E9E) else if (isProxyHealthy) Color(0xFF81C784) else Color(0xFFE57373)).copy(alpha = if (isActive && isProxyHealthy) pulseAlpha else 1f),
+                                 shape = CircleShape
+                             )
+                     )

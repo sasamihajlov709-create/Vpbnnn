@@ -46,6 +46,7 @@ object ServiceChecker {
             if (stalled) {
                 ProxyStats.logRecovery("WARNING: Traffic stall detected (active connections but 0 bytes moved for 15s). Self-healing started...")
                 RobustResolver.clearCache()
+                BypassConfig.panicOptimize()
                 appContext?.let { ctx ->
                     runActiveProbing(ctx)
                 }
@@ -58,6 +59,8 @@ object ServiceChecker {
 
     private var job: Job? = null
     private var internalScope: CoroutineScope? = null
+    private val _isProbingState = MutableStateFlow(false)
+    val isProbingState: StateFlow<Boolean> = _isProbingState.asStateFlow()
     private val isProbing = java.util.concurrent.atomic.AtomicBoolean(false)
     private var lastProbeTime = 0L
     private var appContext: android.content.Context? = null
@@ -291,7 +294,7 @@ object ServiceChecker {
         val initialServices = defaultServices + _customServices.value
         _statuses.value = initialServices.map { ServiceStatus(it.first, it.second, false, 0) }
 
-        job = scope.launch(Dispatchers.IO) {
+        job = scope.launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
             delay(2000)
             while (isActive) {
                 val currentServices = defaultServices + _customServices.value
@@ -317,8 +320,10 @@ object ServiceChecker {
 
     fun runActiveProbing(context: android.content.Context) {
         if (!isProbing.compareAndSet(false, true)) return
+        _isProbingState.value = true
         val scope = internalScope ?: run {
             isProbing.set(false)
+            _isProbingState.value = false
             return
         }
         
@@ -327,7 +332,7 @@ object ServiceChecker {
         val testUrl = "https://redirector.googlevideo.com/report_mapping" // Lightweight Google video diagnostic endpoint
         val proxyPort = proxyPort
         
-        scope.launch(Dispatchers.IO) {
+        scope.launch(java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()) {
             val originalStrategy = BypassConfig.strategy.value
             val strategiesToTest = BypassStrategy.values().filter { it != BypassStrategy.DIRECT }
             
@@ -385,6 +390,7 @@ object ServiceChecker {
                 ProxyStats.logRecovery("Autopilot: No working strategy resolved. Restored ${originalStrategy.name}")
             }
             isProbing.set(false)
+            _isProbingState.value = false
             triggerCheck()
         }
     }

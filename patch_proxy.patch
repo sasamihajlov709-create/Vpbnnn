@@ -1,0 +1,16 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
+@@ -1900,6 +1900,8 @@
+         input: java.io.InputStream,
+         output: java.io.OutputStream,
+         onSocketError: () -> Unit,
+         host: String? = null,
+         isTargetSource: Boolean = false,
+         sessionStrategy: BypassStrategy = BypassStrategy.DIRECT
+     ) {
+         try {
+             val buffer = ByteArray(32768)
+             var read: Int
+             var bytesMoved = 0L
+             val startTime = System.currentTimeMillis()
+             var firstChunk = true

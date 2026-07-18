@@ -1,0 +1,28 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
+@@ -2393,6 +2393,24 @@
+                                 if (targetAddrs.isNotEmpty()) {
+                                     val targetIp = targetAddrs.first()
+                                     val payload = parsed.payload
++                                    
++                                    // UDP DPI Bypass: Inject fake UDP packet with low TTL
++                                    if (payload.size > 10 && BypassConfig.strategy.value == BypassStrategy.FAKE_PACKET) {
++                                        try {
++                                            val pfd = android.os.ParcelFileDescriptor.fromDatagramSocket(remoteSocket)
++                                            val fd = pfd.fileDescriptor
++                                            val isIpv6 = targetIp is java.net.Inet6Address
++                                            val proto = if (isIpv6) android.system.OsConstants.IPPROTO_IPV6 else android.system.OsConstants.IPPROTO_IP
++                                            val ttlOpt = if (isIpv6) android.system.OsConstants.IPV6_UNICAST_HOPS else android.system.OsConstants.IP_TTL
++                                            
++                                            android.system.Os.setsockoptInt(fd, proto, ttlOpt, BypassConfig.fakeTtl)
++                                            val fakePayload = ByteArray(payload.size) { (1..255).random().toByte() }
++                                            remoteSocket.send(java.net.DatagramPacket(fakePayload, fakePayload.size, targetIp, parsed.port))
++                                            
++                                            android.system.Os.setsockoptInt(fd, proto, ttlOpt, 64)
++                                            pfd.close()
++                                        } catch (e: Exception) {}
++                                    }
++                                    
+                                     remoteSocket.send(java.net.DatagramPacket(payload, payload.size, targetIp, parsed.port))
+                                     ProxyStats.addBytes(payload.size.toLong())
+                                 }

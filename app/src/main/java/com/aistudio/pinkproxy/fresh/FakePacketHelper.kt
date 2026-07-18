@@ -16,7 +16,7 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
-    fun buildFakeClientHello(sni: String): ByteArray {
+    fun buildFakeClientHello(sni: String, intensity: Int = 50): ByteArray {
         val sniBytes = sni.toByteArray()
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
@@ -75,6 +75,15 @@ object FakePacketHelper {
         // GREASE Extension 1
         val greaseExt1 = buildExtension(greaseVal1, byteArrayOf())
         
+        // ECH GREASE (Encrypted Client Hello) - highly effective against DPI
+        val echGreaseBaos = ByteArrayOutputStream()
+        val echGreaseDos = DataOutputStream(echGreaseBaos)
+        val echLen = 64 + random.nextInt(64)
+        val echBytes = ByteArray(echLen)
+        random.nextBytes(echBytes)
+        echGreaseDos.write(echBytes)
+        val echExt = buildExtension(0xfe0d, echGreaseBaos.toByteArray())
+        
         // SNI (Type 0)
         val sniDataBaos = ByteArrayOutputStream()
         val sniDataDos = DataOutputStream(sniDataBaos)
@@ -97,8 +106,9 @@ object FakePacketHelper {
         // Supported Groups (Type 10)
         val groupsDataBaos = ByteArrayOutputStream()
         val groupsDataDos = DataOutputStream(groupsDataBaos)
-        groupsDataDos.writeShort(0x0008) // list length
+        groupsDataDos.writeShort(0x000a) // list length (10 bytes)
         groupsDataDos.writeShort(greaseVal1) // GREASE
+        groupsDataDos.writeShort(0x6399) // X25519Kyber768Draft00 (Chrome Post-Quantum)
         groupsDataDos.writeShort(0x001d) // x25519
         groupsDataDos.writeShort(0x0017) // secp256r1
         groupsDataDos.writeShort(0x0018) // secp384r1
@@ -140,17 +150,38 @@ object FakePacketHelper {
         // Key Share (Type 51)
         val keyShareDataBaos = ByteArrayOutputStream()
         val keyShareDataDos = DataOutputStream(keyShareDataBaos)
-        keyShareDataDos.writeShort(0x0024) // Key shares length
+        val kyberLen = 1184 // Kyber768 public key length
+        val x25519Len = 32
+        
+        // 2 bytes for GREASE, 2 bytes for kyber, 2 bytes for x25519 (ClientHello KeyShare list)
+        val keySharesLength = 4 + 4 + kyberLen + 4 + x25519Len
+        keyShareDataDos.writeShort(keySharesLength) 
+        
+        // GREASE Key Share
+        keyShareDataDos.writeShort(greaseVal1)
+        keyShareDataDos.writeShort(1)
+        keyShareDataDos.writeByte(0)
+        
+        // X25519Kyber768Draft00 Key Share
+        keyShareDataDos.writeShort(0x6399) // Group: X25519Kyber768Draft00
+        keyShareDataDos.writeShort(kyberLen) 
+        val kyberShare = ByteArray(kyberLen)
+        random.nextBytes(kyberShare)
+        keyShareDataDos.write(kyberShare)
+        
+        // X25519 Key Share
         keyShareDataDos.writeShort(0x001d) // Group: x25519
-        keyShareDataDos.writeShort(0x0020) // Key length 32
-        val keyShare = ByteArray(32)
+        keyShareDataDos.writeShort(x25519Len) // Key length 32
+        val keyShare = ByteArray(x25519Len)
         random.nextBytes(keyShare)
         keyShareDataDos.write(keyShare)
+        
         val keyShareExt = buildExtension(0x0033, keyShareDataBaos.toByteArray())
         
         // Shuffle the order of extensions to scramble JA3/JA4 fingerprints
         val extensionsList = mutableListOf(
             greaseExt1,
+            echExt,
             sniExt,
             alpnExt,
             groupsExt,
@@ -169,7 +200,13 @@ object FakePacketHelper {
         
         // Calculate needed padding to match browser payload size (prevent length analysis)
         val currentSize = bodyBaos.size() + extBaos.size() + 2 + 9 // +2 for extensions length field, +9 for record/handshake headers
-        val targetSize = 512 + random.nextInt(128) // Randomized size between 512 and 640
+        
+        // Scale target size based on intensity.
+        // With Kyber768 (1184 bytes), ClientHello size naturally exceeds 1500 bytes (requires TCP fragmentation).
+        val minPadding = 1600 + (intensity * 2) 
+        val maxPadding = 2000 + (intensity * 4)
+        val targetSize = minPadding + random.nextInt(maxPadding - minPadding + 1)
+        
         val paddingNeeded = targetSize - currentSize - 4 // -4 for padding extension type and length fields
         if (paddingNeeded > 0) {
             val paddingData = ByteArray(paddingNeeded)

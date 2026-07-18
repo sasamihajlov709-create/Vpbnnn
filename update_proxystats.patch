@@ -1,0 +1,31 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
+@@ -42,6 +42,10 @@
+     private val _trafficLog = MutableStateFlow<List<String>>(emptyList())
+     val trafficLog: StateFlow<List<String>> = _trafficLog.asStateFlow()
+ 
++    private val hostCounter = ConcurrentHashMap<String, AtomicLong>()
++    private val _topHosts = MutableStateFlow<List<Pair<String, Long>>>(emptyList())
++    val topHosts: StateFlow<List<Pair<String, Long>>> = _topHosts.asStateFlow()
++
+     private val totalBytes = AtomicLong(0L)
+     private val totalErrors = AtomicLong(0L)
+     private val totalRequests = AtomicLong(0L)
+@@ -194,6 +198,8 @@
+             _speedHistory.update { (it + speed).takeLast(60) }
+             lastBytes.set(currentBytes)
+             lastTime.set(currentTime)
++            
++            _topHosts.value = hostCounter.entries.sortedByDescending { it.value.get() }.take(10).map { Pair(it.key, it.value.get()) }
+         }
+     }
+ 
+@@ -232,6 +238,8 @@
+         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+         val msg = if (strategy != null) "[$timestamp] $host via $strategy" else "[$timestamp] $host"
+         _trafficLog.update { (listOf(msg) + it).take(30) }
++        
++        hostCounter.getOrPut(host) { AtomicLong(0L) }.incrementAndGet()
+     }
+ 
+     fun recordStrategySuccess(strategy: BypassStrategy, context: android.content.Context? = null) {

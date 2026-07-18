@@ -1,0 +1,89 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/PinkProxyServer.kt
+@@ -1314,7 +1314,7 @@
+                     clientOutput.write("HTTP/1.1 200 Connection established\r\n\r\n".toByteArray())
+                     clientOutput.flush()
+ 
+-                    pipeStreams(clientSocket, targetSocket!!, host, session)
++                    pipeStreams(clientSocket, clientInput, targetSocket!!, host, session, destPort)
+                 }
+             } else {
+                 // HTTP Proxy
+@@ -1375,7 +1375,7 @@
+                 val targetOutput = targetSocket!!.getOutputStream()
+                 targetOutput.write(requestLine.toByteArray())
+                 targetOutput.write("\r\n".toByteArray())
+-                pipeStreams(clientSocket, targetSocket!!, host, session)
++                pipeStreams(clientSocket, clientInput, targetSocket!!, host, session, 80)
+             }
+         } catch (e: Exception) {
+             val msg = e.message?.lowercase(java.util.Locale.ROOT) ?: ""
+@@ -1429,9 +1429,10 @@
+ 
+     private suspend fun pipeStreams(
+         clientSocket: Socket,
++        clientInput: java.io.BufferedInputStream,
+         initialTargetSocket: Socket,
+         host: String,
+-        initialSession: SessionConfig
++        initialSession: SessionConfig,
++        destPort: Int = 443
+     ) = coroutineScope {
+         var targetSocket: Socket? = initialTargetSocket
+         var session = initialSession
+@@ -1445,39 +1446,67 @@
+         val clientToTarget = launch(proxyDispatcher) {
+             try {
+-                val clientInput = clientSocket.getInputStream()
+                 val buffer = ByteArray(32768)
+                 var isFirstPacket = true
+                 
+                 while (isActive) {
++                    if (isFirstPacket) {
++                        clientInput.mark(32768)
++                    }
+                     val read = clientInput.read(buffer)
+                     if (read == -1) break
+                     
+                     if (isFirstPacket) {
+                         isFirstPacket = false
+                         if (buffer[0] == 0x16.toByte() && BypassConfig.isAutoTuning && session.strategy != BypassStrategy.DIRECT) {
+                             // Dynamic adaptation: if the selected strategy has low success rate, override on the fly
+                             if (BypassConfig.getSuccessRate(session.strategy) < 40) {
+                                 session = BypassConfig.resolveSessionConfigForHost(host) // get a fresh one
+                                 ProxyStats.logRecovery("On-the-fly override: selected ${session.strategy.name} for $host")
+                             }
+                         }
+-                        applyBypass(targetSocket, targetOutput!!, buffer.copyOf(read), read, session, host)
++                        try {
++                            applyBypass(targetSocket, targetOutput!!, buffer.copyOf(read), read, session, host)
++                        } catch (e: Exception) {
++                            // DPI Drop detected on first packet. Transparently auto-retry with a new strategy!
++                            ProxyStats.logRecovery("DPI Drop detected for $host. Transparently auto-retrying...")
++                            BypassConfig.recordFailureForHost(host, session.strategy, isCritical = true)
++                            
++                            try { targetSocket?.close() } catch (ex: Exception) {}
++                            
++                            // Resolve new strategy
++                            session = BypassConfig.resolveSessionConfigForHost(host)
++                            ProxyStats.logRecovery("Retry Strategy: ${session.strategy.name}")
++                            
++                            // Reconnect
++                            val addrs = RobustResolver.resolve(host, vpnService, forceSecure = true)
++                            targetSocket = connectTargetWithHappyEyeballs(addrs, destPort, session.strategy)
++                            if (targetSocket == null) throw java.net.ConnectException("Auto-retry connection failed")
++                            
++                            targetOutput = targetSocket?.getOutputStream()
++                            
++                            // Reset input stream to read the original ClientHello again
++                            clientInput.reset()
++                            isFirstPacket = true
++                            continue
++                        }
+                     } else {
+                         applyPacing(read)
+                         targetOutput?.write(buffer, 0, read)
+                         targetOutput?.flush()
+                     }
+                     ProxyStats.addBytes(read.toLong())
+                 }

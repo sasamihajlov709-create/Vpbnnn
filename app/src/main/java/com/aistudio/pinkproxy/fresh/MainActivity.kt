@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -91,6 +92,8 @@ class MainActivity : ComponentActivity() {
                 if (autoConnect && !isVpnActive) {
                     toggleVpn(false) // toggleVpn(false) will start it if not active
                 }
+                RobustResolver.updatePublicIpSubnet(null)
+                RobustResolver.startWarmup(null)
             }
 
             MyApplicationTheme(dynamicColor = false) {
@@ -139,9 +142,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
-    val bgColor1 = Color.Black // Almost black with pink tint
-    val bgColor2 = Color.Black // Very dark pink/burgundy
-    val bgColor3 = Color.Black // Dark muted pink
+    val bgColor1 = Color(0xFF1a0510) // Almost black with pink tint
+    val bgColor2 = Color(0xFF2a0a18) // Very dark pink/burgundy
+    val bgColor3 = Color(0xFF381220) // Dark muted pink
     
     val infiniteTransition = rememberInfiniteTransition(label = "bg_anim")
     val offsetX by infiniteTransition.animateFloat(
@@ -163,6 +166,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
     val isProxyHealthy by ServiceChecker.proxyHealth.collectAsStateWithLifecycle(initialValue = true)
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
     val isStalled by ServiceChecker.isStalled.collectAsStateWithLifecycle(initialValue = false)
+    val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
     val lastCheckTime by ServiceChecker.lastCheckTime.collectAsStateWithLifecycle(initialValue = 0L)
 
     val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -170,6 +174,8 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
     val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
     val currentNetworkType by BypassConfig.currentNetworkType.collectAsStateWithLifecycle(initialValue = NetworkType.UNKNOWN)
     val currentRttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
+    val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
+    val topHosts by ProxyStats.topHosts.collectAsStateWithLifecycle(initialValue = emptyList())
     var showStrategyMenu by remember { mutableStateOf(false) }
     
     var sessionTime by remember { mutableStateOf(0L) }
@@ -197,6 +203,20 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
             val permissionCheck = androidx.core.content.ContextCompat.checkSelfPermission(context, notificationPermission)
             if (permissionCheck != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 launcher.launch(notificationPermission)
+            }
+        }
+        
+        // Battery optimization check - critical for VPN persistence
+        val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+        if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
+            try {
+                val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to request battery optimization ignore", e)
             }
         }
     }
@@ -278,11 +298,18 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         )
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
+                    val pulseTransition = rememberInfiniteTransition(label = "pulse")
+                    val pulseAlpha by pulseTransition.animateFloat(
+                        initialValue = 0.4f,
+                        targetValue = 1.0f,
+                        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
+                        label = "pulseAlpha"
+                    )
                     Box(
                         modifier = Modifier
                             .size(8.dp)
                             .background(
-                                color = if (!isInternetUp) Color(0xFF9E9E9E) else if (isProxyHealthy) Color(0xFF81C784) else Color(0xFFE57373),
+                                color = (if (!isInternetUp) Color(0xFF9E9E9E) else if (isProxyHealthy) Color(0xFF81C784) else Color(0xFFE57373)).copy(alpha = if (isActive && isProxyHealthy) pulseAlpha else 1f),
                                 shape = CircleShape
                             )
                     )
@@ -290,14 +317,16 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     Text(
                         text = when {
                             !isInternetUp -> stringResource(R.string.status_no_internet)
+                            isProbing -> "AUTOPILOT PROBING STRATEGIES..."
                             isStalled -> "TRAFFIC STALL DETECTED"
                             !isProxyHealthy -> stringResource(R.string.status_recovery)
-                            else -> stringResource(R.string.status_autopilot)
+                            else -> if (isActive && isProxyHealthy) stringResource(R.string.status_autopilot) + " & PREFETCH" else stringResource(R.string.status_autopilot)
                         },
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = when {
                             !isInternetUp -> Color(0xFF9E9E9E)
+                            isProbing -> Color(0xFF64B5F6) // Blue for active work
                             isStalled -> Color(0xFFFFB74D) // Orange for warning
                             isProxyHealthy -> Color(0xFF81C784)
                             else -> Color(0xFFE57373)
@@ -442,6 +471,24 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         )
                         Text(
                             text = stringResource(R.string.label_errors),
+                            fontSize = 10.sp,
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "$censorshipIntensity%",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                censorshipIntensity > 60 -> Color(0xFFE57373)
+                                censorshipIntensity > 20 -> Color(0xFFFFB74D)
+                                else -> Color(0xFFF8BBD0)
+                            }
+                        )
+                        Text(
+                            text = "DPI BLOCK",
                             fontSize = 10.sp,
                             color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
                             fontWeight = FontWeight.Bold
@@ -734,7 +781,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "FRAG: ${BypassConfig.frag1}/${BypassConfig.frag2}/${BypassConfig.frag3} | DELAY: ${BypassConfig.delay1}ms/${BypassConfig.delay2}ms | TTL: ${BypassConfig.fakeTtl}",
+                            text = "FRAG (Dyn/Base): $currentFragSize / ${BypassConfig.frag1} | DELAY: ${BypassConfig.delay1}ms | TTL: ${BypassConfig.fakeTtl}",
                             fontSize = 9.sp,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                             color = Color(0xFF81C784),
@@ -744,6 +791,8 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             text = when (activeStrategy.name) {
                                 "TCP_OOB_DESYNC" -> "Injects Out-of-Band (Urgent) TCP data to desynchronize DPI state while the target server discards the garbage."
                                 "TCP_DESYNC_FAKE" -> "Sends a fake ClientHello with reduced IP TTL. The DPI analyzes the fake packet, but routers drop it before it reaches the server."
+                                "TLS_PAD" -> "Pads the TLS ClientHello with a large padding extension to exceed 1500 bytes, forcing TCP fragmentation and confusing DPI length analysis."
+                                "TLS_GREASE" -> "Injects randomized GREASE extensions and shuffles extensions order to scramble JA3/JA4 fingerprints."
                                 "SNI_FAKE" -> "Performs a double split by sending a complete fake TLS handshake header followed by the real one, confusing deep packet inspection."
                                 "HTTP_SPACE" -> "Injects horizontal tabs and spaces into HTTP methods to evade regex-based filters on transparent proxies."
                                 "SNI_TRIPLE" -> "Divides the TLS Server Name Indication (SNI) into three fragmented chunks, bypassing DPI substring matching."
@@ -826,9 +875,15 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                     }
                                 }
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable {
+                                    BypassConfig.blockQuic = !BypassConfig.blockQuic
+                                    BypassConfig.saveTuningSettings(context)
+                                }.padding(vertical = 2.dp)
+                            ) {
                                 Text("QUIC (UDP 443): ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text(if (BypassConfig.blockQuic) "BLOCKED (TCP Fallback)" else "ALLOWED", fontSize = 11.sp, color = if (BypassConfig.blockQuic) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
+                                Text(if (BypassConfig.blockQuic) "BLOCKED (Tap to allow)" else "ALLOWED (Tap to block)", fontSize = 11.sp, color = if (BypassConfig.blockQuic) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("TCP Kernel: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
@@ -853,9 +908,15 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                 }
                                 Text(cLevelStr, fontSize = 11.sp, color = cLevelColor, fontWeight = FontWeight.Bold)
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable {
+                                    BypassConfig.isAutoTuning = !BypassConfig.isAutoTuning
+                                    BypassConfig.saveTuningSettings(context)
+                                }.padding(vertical = 2.dp)
+                            ) {
                                 Text("Auto-Tuning: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text(if (BypassConfig.isAutoTuning) "ACTIVE" else "MANUAL", fontSize = 11.sp, color = if (BypassConfig.isAutoTuning) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
+                                Text(if (BypassConfig.isAutoTuning) "ACTIVE (Tap to disable)" else "MANUAL (Tap to enable)", fontSize = 11.sp, color = if (BypassConfig.isAutoTuning) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
                             }
                         }
                         Column(horizontalAlignment = Alignment.End) {
@@ -902,6 +963,27 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 
                 Spacer(modifier = Modifier.height(12.dp))
                 
+                // Traffic Speed Graph
+                val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle()
+                if (speedHistory.isNotEmpty()) {
+                    androidx.compose.foundation.Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(40.dp)
+                            .padding(bottom = 8.dp)
+                    ) {
+                        val maxSpeed = speedHistory.maxOrNull()?.coerceAtLeast(1024L) ?: 1024L
+                        val stepX = size.width / (speedHistory.size.coerceAtLeast(2) - 1).coerceAtLeast(1)
+                        val path = androidx.compose.ui.graphics.Path()
+                        speedHistory.forEachIndexed { index, speed ->
+                            val x = index * stepX
+                            val y = size.height - (speed.toFloat() / maxSpeed * size.height).coerceIn(0f, size.height)
+                            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                        }
+                        drawPath(path, color = Color(0xFFF48FB1), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()))
+                    }
+                }
+
                 Text(
                     text = "LIVE TRAFFIC",
                     fontSize = 11.sp,
@@ -930,6 +1012,34 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
+                
+                if (topHosts.isNotEmpty()) {
+                    Text(
+                        "TOP DOMAINS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFF48FB1),
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.align(Alignment.Start).padding(bottom = 8.dp)
+                    )
+                    
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                            .padding(8.dp)
+                    ) {
+                        topHosts.forEach { (host, count) ->
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(text = host, color = Color(0xFFF8BBD0), fontSize = 10.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                                val strategyName = BypassConfig.resolveSessionConfigForHost(host).strategy.name
+                                Text(text = "$count REQ • $strategyName", color = Color(0xFFF48FB1), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
             }
 
             if (isActive && serviceStatuses.isNotEmpty()) {

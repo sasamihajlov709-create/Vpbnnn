@@ -1,0 +1,29 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/ServiceChecker.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/ServiceChecker.kt
+@@ -58,7 +58,9 @@
+     private var internalScope: CoroutineScope? = null
+ 
+-    private val isProbing = java.util.concurrent.atomic.AtomicBoolean(false)
++    private val _isProbingState = MutableStateFlow(false)
++    val isProbingState: StateFlow<Boolean> = _isProbingState.asStateFlow()
++    private val isProbing = java.util.concurrent.atomic.AtomicBoolean(false)
+     private var lastProbeTime = 0L
+     private var appContext: android.content.Context? = null
+ 
+@@ -197,6 +199,7 @@
+     fun runActiveProbing(context: android.content.Context) {
+         if (!isProbing.compareAndSet(false, true)) return
++        _isProbingState.value = true
+         val scope = internalScope ?: run {
+             isProbing.set(false)
++            _isProbingState.value = false
+             return
+         }
+ 
+@@ -258,6 +261,7 @@
+             }
+             isProbing.set(false)
++            _isProbingState.value = false
+             triggerCheck()
+         }
+     }

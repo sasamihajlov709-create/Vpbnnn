@@ -1,0 +1,44 @@
+--- app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
++++ app/src/main/java/com/aistudio/pinkproxy/fresh/MainActivity.kt
+@@ -171,6 +171,7 @@
+     val currentNetworkType by BypassConfig.currentNetworkType.collectAsStateWithLifecycle(initialValue = NetworkType.UNKNOWN)
+     val currentRttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
+     val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
++    val topHosts by ProxyStats.topHosts.collectAsStateWithLifecycle(initialValue = emptyList())
+     var showStrategyMenu by remember { mutableStateOf(false) }
+     
+     var sessionTime by remember { mutableStateOf(0L) }
+@@ -950,6 +951,33 @@
+                     }
+                 }
+                 Spacer(modifier = Modifier.height(16.dp))
++                
++                if (topHosts.isNotEmpty()) {
++                    Text(
++                        "TOP DOMAINS",
++                        fontSize = 11.sp,
++                        fontWeight = FontWeight.Bold,
++                        color = Color(0xFFF48FB1),
++                        letterSpacing = 1.sp,
++                        modifier = Modifier.align(Alignment.Start).padding(bottom = 8.dp)
++                    )
++                    
++                    Column(
++                        modifier = Modifier
++                            .fillMaxWidth()
++                            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
++                            .padding(8.dp)
++                    ) {
++                        topHosts.forEach { (host, count) ->
++                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
++                                Text(text = host, color = Color(0xFFF8BBD0), fontSize = 10.sp, maxLines = 1)
++                                Text(text = count.toString(), color = Color(0xFFF48FB1), fontSize = 10.sp, fontWeight = FontWeight.Bold)
++                            }
++                        }
++                    }
++                    
++                    Spacer(modifier = Modifier.height(16.dp))
++                }
+             }
+ 
+             if (isActive && serviceStatuses.isNotEmpty()) {
