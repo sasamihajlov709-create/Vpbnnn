@@ -83,6 +83,13 @@ object ServiceChecker {
             var conn: HttpURLConnection? = null
             try {
                 conn = URL(domain).openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+                if (conn is javax.net.ssl.HttpsURLConnection) {
+                    val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+                    sslContext.init(null, null, null)
+                    PinkVpnService.instance?.let { vpn ->
+                        conn.sslSocketFactory = ProtectedSSLSocketFactory(sslContext.socketFactory, vpn)
+                    }
+                }
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
                 conn.requestMethod = "GET"
@@ -315,6 +322,7 @@ object ServiceChecker {
         job?.cancel()
         job = null
         internalScope = null
+        appContext = null
         _statuses.value = emptyList()
     }
 
@@ -334,11 +342,13 @@ object ServiceChecker {
             val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Pair<BypassStrategy, Long>>()
             val jobs = strategiesToTest.map { strategy ->
                 launch {
+                    var socket: java.net.Socket? = null
                     try {
                         val start = System.currentTimeMillis()
-                        val ips = RobustResolver.resolve(testHost, null)
+                        val ips = RobustResolver.resolve(testHost, BypassConfig.activeVpnService)
                         if (ips.isNotEmpty()) {
-                            val socket = java.net.Socket()
+                            socket = java.net.Socket()
+                            BypassConfig.activeVpnService?.protect(socket)
                             socket.soTimeout = 1500
                             withTimeout(3500) {
                                 socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
@@ -361,11 +371,12 @@ object ServiceChecker {
                                     ProxyStats.logRecovery("Tournament: ${strategy.name} completed in ${duration}ms")
                                 }
                             }
-                            try { socket.close() } catch (e: Exception) {}
                         }
                     } catch (e: Exception) {
                         BypassConfig.recordStrategyResult(testHost, strategy, false)
                         BypassConfig.recordFailure(strategy, false, context)
+                    } finally {
+                        try { socket?.close() } catch (e: Exception) {}
                     }
                 }
             }

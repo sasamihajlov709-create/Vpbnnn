@@ -119,12 +119,13 @@ object FakePacketHelper {
         val sniExt = buildExtension(0x0000, sniDataBaos.toByteArray())
 
         val alpnDataBaos = ByteArrayOutputStream()
+        val alpnDataDos = DataOutputStream(alpnDataBaos)
         val protocols = listOf("h2", "http/1.1")
-        alpnDataBaos.write(protocols.sumOf { it.length + 1 })
+        alpnDataDos.writeShort(protocols.sumOf { it.length + 1 })
         protocols.forEach { proto ->
             val pBytes = proto.toByteArray()
-            alpnDataBaos.write(pBytes.size)
-            alpnDataBaos.write(pBytes)
+            alpnDataDos.writeByte(pBytes.size)
+            alpnDataDos.write(pBytes)
         }
         val alpnExt = buildExtension(0x0010, alpnDataBaos.toByteArray())
 
@@ -206,7 +207,7 @@ object FakePacketHelper {
         when (random.nextInt(3)) {
             0 -> {
                 dos.writeShort(0x0001)
-                dos.writeShort(size.coerceAtMost(20) - 20)
+                dos.writeShort((size - 20).coerceAtLeast(0))
                 dos.writeInt(0x2112A442)
                 val transactionId = ByteArray(12)
                 random.nextBytes(transactionId)
@@ -219,7 +220,7 @@ object FakePacketHelper {
                 val sequence = ByteArray(6)
                 random.nextBytes(sequence)
                 dos.write(sequence)
-                dos.writeShort(size.coerceAtMost(100) - 13)
+                dos.writeShort((size - 13).coerceAtLeast(0))
                 dos.writeByte(0x01)
             }
             else -> {

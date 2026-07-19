@@ -3,6 +3,20 @@ package com.aistudio.pinkproxy.fresh
 import java.nio.ByteBuffer
 
 object IcmpHelper {
+    private fun calculateChecksum(data: ByteArray, length: Int): Short {
+        var sum = 0
+        for (i in 0 until length / 2) {
+            sum += ((data[i * 2].toInt() and 0xFF) shl 8) or (data[i * 2 + 1].toInt() and 0xFF)
+        }
+        if (length % 2 != 0) {
+            sum += (data[length - 1].toInt() and 0xFF) shl 8
+        }
+        while (sum shr 16 != 0) {
+            sum = (sum and 0xFFFF) + (sum shr 16)
+        }
+        return (sum.inv() and 0xFFFF).toShort()
+    }
+
     fun createIcmpEchoReplyPacket(originalPacket: ByteArray, originalLength: Int, ipHeaderLength: Int): ByteArray {
         val buffer = ByteBuffer.allocate(originalLength)
         buffer.put(originalPacket, 0, originalLength)
@@ -14,38 +28,18 @@ object IcmpHelper {
             buffer.put(16 + i, tmp)
         }
         
-        // Clear IP checksum, it will be recalculated by network stack or we can just leave it 0 if it's going back to TUN
-        // Actually TUN requires valid IP checksum
+        // Clear IP checksum and recalculate
         buffer.putShort(10, 0)
-        val ipHeader = buffer.array().copyOfRange(0, 20)
-        var sum = 0
-        for (i in 0 until 10) {
-            sum += ((ipHeader[i * 2].toInt() and 0xFF) shl 8) or (ipHeader[i * 2 + 1].toInt() and 0xFF)
-        }
-        while (sum shr 16 != 0) {
-            sum = (sum and 0xFFFF) + (sum shr 16)
-        }
-        buffer.putShort(10, (sum.inv() and 0xFFFF).toShort())
+        val ipHeader = buffer.array().copyOfRange(0, ipHeaderLength)
+        buffer.putShort(10, calculateChecksum(ipHeader, ipHeaderLength))
         
         // Change ICMP Type from 8 (Echo Request) to 0 (Echo Reply)
         buffer.put(ipHeaderLength, 0.toByte())
         
-        // Clear ICMP Checksum
+        // Clear ICMP Checksum and recalculate
         buffer.putShort(ipHeaderLength + 2, 0)
-        
-        // Recalculate ICMP Checksum
-        var icmpSum = 0
         val icmpData = buffer.array().copyOfRange(ipHeaderLength, originalLength)
-        for (i in 0 until icmpData.size / 2) {
-            icmpSum += ((icmpData[i * 2].toInt() and 0xFF) shl 8) or (icmpData[i * 2 + 1].toInt() and 0xFF)
-        }
-        if (icmpData.size % 2 != 0) {
-            icmpSum += (icmpData.last().toInt() and 0xFF) shl 8
-        }
-        while (icmpSum shr 16 != 0) {
-            icmpSum = (icmpSum and 0xFFFF) + (icmpSum shr 16)
-        }
-        buffer.putShort(ipHeaderLength + 2, (icmpSum.inv() and 0xFFFF).toShort())
+        buffer.putShort(ipHeaderLength + 2, calculateChecksum(icmpData, icmpData.size))
         
         return buffer.array()
     }
@@ -131,15 +125,7 @@ object IcmpHelper {
         
         // Calculate IP Checksum
         val ipHeader = buffer.array().copyOfRange(0, 20)
-        var sum = 0
-        for (i in 0 until 10) {
-            val word = ((ipHeader[i * 2].toInt() and 0xFF) shl 8) or (ipHeader[i * 2 + 1].toInt() and 0xFF)
-            sum += word
-        }
-        while (sum shr 16 != 0) {
-            sum = (sum and 0xFFFF) + (sum shr 16)
-        }
-        buffer.putShort(ipChecksumPos, (sum.inv() and 0xFFFF).toShort())
+        buffer.putShort(ipChecksumPos, calculateChecksum(ipHeader, 20))
         
         // ICMP Header
         buffer.put(3.toByte()) // Type 3: Destination Unreachable
@@ -153,19 +139,7 @@ object IcmpHelper {
         
         // Calculate ICMP Checksum
         val icmpData = buffer.array().copyOfRange(20, totalLength)
-        var icmpSum = 0
-        for (i in 0 until icmpData.size / 2) {
-            val word = ((icmpData[i * 2].toInt() and 0xFF) shl 8) or (icmpData[i * 2 + 1].toInt() and 0xFF)
-            icmpSum += word
-        }
-        if (icmpData.size % 2 != 0) {
-            val word = (icmpData.last().toInt() and 0xFF) shl 8
-            icmpSum += word
-        }
-        while (icmpSum shr 16 != 0) {
-            icmpSum = (icmpSum and 0xFFFF) + (icmpSum shr 16)
-        }
-        buffer.putShort(icmpChecksumPos, (icmpSum.inv() and 0xFFFF).toShort())
+        buffer.putShort(icmpChecksumPos, calculateChecksum(icmpData, icmpData.size))
         
         return buffer.array()
     }

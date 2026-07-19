@@ -108,7 +108,15 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme(dynamicColor = false) {
                 PinkProxyApp(
                     isActive = isVpnActive,
-                    onToggle = { toggleVpn(isVpnActive) }
+                    onToggle = { toggleVpn(isVpnActive) },
+                    onRestart = { 
+                        if (isVpnActive) {
+                            stopVpnService()
+                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                startVpnService()
+                            }, 1000)
+                        }
+                    }
                 )
             }
         }
@@ -150,7 +158,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
+fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit) {
     val bgColor1 = Color(0xFF1a0510) // Almost black with pink tint
     val bgColor2 = Color(0xFF2a0a18) // Very dark pink/burgundy
     val bgColor3 = Color(0xFF381220) // Dark muted pink
@@ -213,20 +221,6 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
             val permissionCheck = androidx.core.content.ContextCompat.checkSelfPermission(context, notificationPermission)
             if (permissionCheck != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 launcher.launch(notificationPermission)
-            }
-        }
-        
-        // Battery optimization check - critical for VPN persistence
-        val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
-        if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
-            try {
-                val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = android.net.Uri.parse("package:${context.packageName}")
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to request battery optimization ignore", e)
             }
         }
     }
@@ -874,7 +868,17 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("DNS: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text(if (RobustResolver.dnsMode == "Smart DoH") "PROTECTED (DoH)" else "STANDARD", fontSize = 11.sp, color = if (RobustResolver.dnsMode == "Smart DoH") Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
+                                val dnsStatusText = when (RobustResolver.dnsMode) {
+                                    "Smart DoH" -> "PROTECTED (DoH)"
+                                    "Custom" -> "CUSTOM DNS"
+                                    else -> "STANDARD"
+                                }
+                                val dnsStatusColor = when (RobustResolver.dnsMode) {
+                                    "Smart DoH" -> Color(0xFF81C784)
+                                    "Custom" -> Color(0xFFF48FB1)
+                                    else -> Color(0xFFFFB74D)
+                                }
+                                Text(dnsStatusText, fontSize = 11.sp, color = dnsStatusColor, fontWeight = FontWeight.Bold)
                             }
                             if (RobustResolver.dnsMode == "Smart DoH") {
                                 val bestDns = RobustResolver.getBestProviderAndLatency()
@@ -883,6 +887,11 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                                         Text("  ↳ Active Server: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.5f))
                                         Text("${bestDns.first} (${bestDns.second}ms)", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.SemiBold)
                                     }
+                                }
+                            } else if (RobustResolver.dnsMode == "Custom") {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("  ↳ Target: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.5f))
+                                    Text(RobustResolver.customDnsIp, fontSize = 11.sp, color = Color(0xFFF48FB1), fontWeight = FontWeight.SemiBold)
                                 }
                             }
                             Row(
@@ -975,15 +984,16 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                     }
                 }
 
-                Column(
+                val logListState = androidx.compose.foundation.lazy.rememberLazyListState()
+                androidx.compose.foundation.lazy.LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 120.dp)
                         .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                        .verticalScroll(logsScrollState)
-                        .padding(8.dp)
+                        .padding(8.dp),
+                    state = logListState
                 ) {
-                    recoveryLog.forEach { log ->
+                    items(recoveryLog) { log ->
                         Text(
                             text = log,
                             color = if (log.contains("Healing") || log.contains("Optimizing")) Color(0xFFF06292) else Color(0xFFF48FB1).copy(alpha = 0.6f),
@@ -991,6 +1001,13 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                             modifier = Modifier.padding(vertical = 1.dp)
                         )
+                    }
+                }
+                
+                // Auto-scroll effect for LazyColumn
+                LaunchedEffect(recoveryLog.size) {
+                    if (recoveryLog.isNotEmpty()) {
+                        logListState.animateScrollToItem(0) // Since we prepended new logs
                     }
                 }
                 
@@ -1177,7 +1194,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit) {
                 BatteryOptimizationInfoCard(context = context)
             }
 
-            AppFilterCard(context = context)
+            AppFilterCard(context = context, onSettingsChanged = onRestart)
 
             ExpertSettingsCard(context = context, isVpnActive = isActive)
 
@@ -1338,7 +1355,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
     }
 }
 @Composable
-fun AppFilterCard(context: android.content.Context) {
+fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Unit) {
     var showDialog by remember { mutableStateOf(false) }
     var selectedCount by remember { mutableStateOf(PinkVpnService.selectedPackages.size) }
     var isExcludeMode by remember { mutableStateOf(PinkVpnService.isExcludeMode) }
@@ -1400,6 +1417,7 @@ fun AppFilterCard(context: android.content.Context) {
                         isExcludeMode = it
                         PinkVpnService.isExcludeMode = it
                         PinkVpnService.saveFilterSettings(context)
+                        onSettingsChanged()
                     },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color(0xFFF8BBD0),
@@ -1433,10 +1451,17 @@ fun AppFilterCard(context: android.content.Context) {
             onAppsSelected = { count ->
                 selectedCount = count
                 PinkVpnService.saveFilterSettings(context)
+                onSettingsChanged()
             }
         )
     }
 }
+
+data class AppEntry(
+    val appInfo: android.content.pm.ApplicationInfo,
+    val label: String,
+    val packageName: String
+)
 
 @Composable
 fun AppSelectionDialog(
@@ -1445,7 +1470,7 @@ fun AppSelectionDialog(
     onAppsSelected: (Int) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var apps by remember { mutableStateOf<List<android.content.pm.ApplicationInfo>>(emptyList()) }
+    var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     val pm = context.packageManager
     val selectedSet = remember { androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(PinkVpnService.selectedPackages) } }
@@ -1454,7 +1479,11 @@ fun AppSelectionDialog(
         withContext(Dispatchers.IO) {
             val installedApps = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
                 .filter { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName == "com.google.android.youtube" || it.packageName == "org.telegram.messenger" }
-                .sortedBy { it.loadLabel(pm).toString() }
+                .map { app ->
+                    val label = app.loadLabel(pm).toString()
+                    AppEntry(app, label, app.packageName)
+                }
+                .sortedBy { it.label }
             apps = installedApps
             isLoading = false
         }
@@ -1513,7 +1542,7 @@ fun AppSelectionDialog(
                     }
                 } else {
                     val filteredApps = if (searchQuery.isEmpty()) apps else {
-                        apps.filter { it.loadLabel(pm).toString().contains(searchQuery, ignoreCase = true) }
+                        apps.filter { it.label.contains(searchQuery, ignoreCase = true) }
                     }
 
                     LazyColumn(
@@ -1521,8 +1550,8 @@ fun AppSelectionDialog(
                             .fillMaxSize()
                             .padding(top = 16.dp)
                     ) {
-                        items(filteredApps) { app ->
-                            val pkg = app.packageName
+                        items(filteredApps) { entry ->
+                            val pkg = entry.packageName
                             val isSelected = selectedSet.contains(pkg)
 
                             Row(
@@ -1549,7 +1578,7 @@ fun AppSelectionDialog(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = app.loadLabel(pm).toString().take(1).uppercase(),
+                                        text = entry.label.take(1).uppercase(),
                                         color = Color(0xFFF8BBD0),
                                         fontWeight = FontWeight.Bold
                                     )
@@ -1559,7 +1588,7 @@ fun AppSelectionDialog(
                                 
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = app.loadLabel(pm).toString(),
+                                        text = entry.label,
                                         color = Color(0xFFF8BBD0),
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Medium
@@ -1758,9 +1787,9 @@ fun ExpertSettingsCard(
                             color = Color(0xFFF8BBD0)
                         )
                         Text(
-                            text = "Блокировка QUIC, fallback to TCP (рекомендуется)",
+                            text = "Блокировка QUIC (IPv6). Для IPv4 рекомендуется отключить QUIC в браузере (chrome://flags)",
                             fontSize = 9.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
+                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f)
                         )
                     }
                     Switch(
@@ -1777,8 +1806,30 @@ fun ExpertSettingsCard(
                     )
                 }
                 
+                // Reset Statistics Button
+                Button(
+                    onClick = {
+                        ProxyStats.reset(clearLog = true)
+                        BypassConfig.resetCaches()
+                        android.widget.Toast.makeText(context, "All caches and stats cleared", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp, bottom = 16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Red.copy(alpha = 0.15f),
+                        contentColor = Color.White.copy(alpha = 0.9f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color.Red.copy(alpha = 0.3f))
+                ) {
+                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("CLEAR ALL STATISTICS", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                }
+
                 HorizontalDivider(
-                    color = Color(0xFFF48FB1).copy(alpha = 0.1f),
+                    color = Color(0xFFF48FB1).copy(alpha = 0.15f),
                     thickness = 1.dp,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )

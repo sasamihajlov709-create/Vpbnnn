@@ -76,30 +76,55 @@ object ProxyStats {
     private val lastBytes = AtomicLong(0L)
     private val lastTime = AtomicLong(System.currentTimeMillis())
     
+    @Volatile var isMonitoring = false
+
     init {
         kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
             while (true) {
+                if (isMonitoring) {
+                    updateSpeed()
+                }
                 delay(1000)
-                updateSpeed()
             }
         }
 
         kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
             while (true) {
-                delay(5000)
-                _topHosts.value = hostCounter.entries
+                if (isMonitoring) {
+                    delay(5000)
+                    _topHosts.value = hostCounter.entries
                     .sortedByDescending { it.value.get() }
                     .take(10)
                     .map { it.key to it.value.get() }
                 
+                // Prune hostCounter if too large
+                if (hostCounter.size > 500) {
+                    val toKeep = hostCounter.entries
+                        .sortedByDescending { it.value.get() }
+                        .take(200)
+                        .map { it.key }
+                        .toSet()
+                    hostCounter.keys.retainAll(toKeep)
+                }
+                if (hostCounter.size > 2000) {
+                    val keysToRemove = hostCounter.entries
+                        .sortedBy { it.value.get() }
+                        .take(500)
+                        .map { it.key }
+                    keysToRemove.forEach { hostCounter.remove(it) }
+                }
+                
                 updateSuccessRate()
 
                 val nowTime = System.currentTimeMillis()
-                if (nowTime - lastDataSent.get() > 15000 && nowTime - lastDataReceived.get() > 40000 && _activeConnections.value > 0) {
+                if (nowTime - lastDataSent.get() > 15000 && nowTime - lastDataReceived.get() > 40000 && _activeConnections.value > 0) { 
                      logRecovery("WATCHDOG: Stall detected. Force re-adaptation.")
                      forceReAdaptation()
                      lastDataSent.set(nowTime)
                      lastDataReceived.set(nowTime)
+                }
+                } else {
+                    delay(5000)
                 }
             }
         }
@@ -107,7 +132,7 @@ object ProxyStats {
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             delay(30000)
             while (true) {
-                if (_activeConnections.value < 2 && _topHosts.value.isNotEmpty()) {
+                if (isMonitoring && _activeConnections.value < 2 && _topHosts.value.isNotEmpty()) {
                     val target = _topHosts.value.random().first
                     BypassConfig.shadowProbe(target)
                 }
@@ -119,25 +144,27 @@ object ProxyStats {
             val canaries = listOf("google.com", "wikipedia.org", "openai.com", "facebook.com", "github.com")
             delay(15000)
             while (true) {
-                var failures = 0
-                for (canary in canaries) {
-                    try {
-                        withTimeout(5000) {
-                            BypassConfig.shadowProbe(canary)
+                if (isMonitoring) {
+                    var failures = 0
+                    for (canary in canaries) {
+                        try {
+                            withTimeout(5000) {
+                                BypassConfig.shadowProbe(canary)
+                            }
+                        } catch (e: Exception) {
+                            failures++
                         }
-                    } catch (e: Exception) {
-                        failures++
+                        delay(2000)
                     }
-                    delay(2000)
-                }
-                
-                if (failures >= 3) {
-                    val current = _censorshipIntensity.value
-                    _censorshipIntensity.value = (current + 20).coerceAtMost(100)
-                    logRecovery("CORE: Canary failed ($failures/5). Censorship Suspected: ${_censorshipIntensity.value}%")
-                    if (_censorshipIntensity.value > 90) forceReAdaptation()
-                } else if (failures == 0) {
-                    _censorshipIntensity.value = (_censorshipIntensity.value - 5).coerceAtLeast(0)
+                    
+                    if (failures >= 3) {
+                        val current = _censorshipIntensity.value
+                        _censorshipIntensity.value = (current + 20).coerceAtMost(100)
+                        logRecovery("CORE: Canary failed ($failures/5). Censorship Suspected: ${_censorshipIntensity.value}%")
+                        if (_censorshipIntensity.value > 90) forceReAdaptation()
+                    } else if (failures == 0) {
+                        _censorshipIntensity.value = (_censorshipIntensity.value - 5).coerceAtLeast(0)
+                    }
                 }
                 delay(300000)
             }
@@ -318,12 +345,7 @@ object ProxyStats {
     }
 
     fun recordCensorshipEvent(interfered: Boolean) {
-        synchronized(censorshipWindow) {
-            censorshipWindow.add(interfered)
-            if (censorshipWindow.size > CENSOR_WINDOW_SIZE) censorshipWindow.removeAt(0)
-            val count = censorshipWindow.count { it }
-            _censorshipIntensity.value = (count.toFloat() / censorshipWindow.size.toFloat() * 100).toInt().coerceIn(0, 100)
-        }
+        addToWindow(!interfered)
     }
 
     fun reset(clearLog: Boolean = false) {
@@ -339,6 +361,8 @@ object ProxyStats {
         _censorshipIntensity.value = 0
         synchronized(censorshipWindow) { censorshipWindow.clear() }
         if (clearLog) _recoveryLog.value = emptyList()
+        _topHosts.value = emptyList()
+        hostCounter.clear()
         lastBytes.set(0L)
         lastTime.set(System.currentTimeMillis())
     }
@@ -355,20 +379,22 @@ object ProxyStats {
             _speedHistory.update { (it + speed).takeLast(60) }
             lastBytes.set(currentBytes)
             lastTime.set(currentTime)
-            _topHosts.value = hostCounter.entries.sortedByDescending { it.value.get() }.take(10).map { Pair(it.key, it.value.get()) }
+            
+            // Periodically update top hosts
+            if (bytesDiff > 0 && currentTime % 5000 < 1000) {
+                _topHosts.value = hostCounter.entries
+                    .sortedByDescending { it.value.get() }
+                    .take(10)
+                    .map { it.key to it.value.get() }
+            }
         }
     }
 
     fun formatBytes(bytes: Long): String {
-        val kb = bytes / 1024.0
-        val mb = kb / 1024.0
-        val gb = mb / 1024.0
-        return when {
-            gb >= 1.0 -> String.format(java.util.Locale.US, "%.2f GB", gb)
-            mb >= 1.0 -> String.format(java.util.Locale.US, "%.2f MB", mb)
-            kb >= 1.0 -> String.format(java.util.Locale.US, "%.2f KB", kb)
-            else -> "$bytes B"
-        }
+        if (bytes < 1024) return "$bytes B"
+        if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+        if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
     }
 
     fun recordSuccess(strategy: BypassStrategy, rtt: Long = -1L, context: android.content.Context? = null) {
@@ -415,6 +441,7 @@ object HostClassifier {
 }
 
 object BypassConfig {
+    @Volatile var activeVpnService: android.net.VpnService? = null
     var frag1 = 3
     var frag2 = 5
     var frag3 = 2
@@ -520,20 +547,24 @@ object BypassConfig {
         frag1 = 3; frag2 = 5; delay1 = 25L; currentMtu.value = 1400; _currentFragSize.set(1); _currentFragSizeState.value = 1
     }
 
+    private val baseBlockedHosts = setOf("youtube", "googlevideo", "ytimg", "ggpht", "google", "telegram", "t.me", "instagram", "facebook", "twitter", "x.com", "discord", "chatgpt", "openai")
+    private var lastPruneTime = 0L
+
     fun isHostCensored(host: String): Boolean {
         val lower = host.lowercase(java.util.Locale.ROOT)
-        val blocked = mutableListOf("youtube", "googlevideo", "ytimg", "ggpht", "google", "telegram", "t.me", "instagram", "facebook", "twitter", "x.com", "discord", "chatgpt", "openai")
+        if (baseBlockedHosts.any { lower.contains(it) }) return true
+        
         val now = System.currentTimeMillis()
-        val expired = mutableListOf<String>()
-        dynamicallyCensoredHosts.forEach { (h, time) ->
-            if (now - time < 86400000) {
-                blocked.add(h)
-            } else {
-                expired.add(h)
+        // Prune periodically instead of every call
+        if (now - lastPruneTime > 3600000) { // Every hour
+            lastPruneTime = now
+            val it = dynamicallyCensoredHosts.entries.iterator()
+            while (it.hasNext()) {
+                if (now - it.next().value > 86400000) it.remove()
             }
         }
-        expired.forEach { dynamicallyCensoredHosts.remove(it) }
-        return blocked.any { lower.contains(it) }
+
+        return dynamicallyCensoredHosts.keys.any { lower.contains(it) }
     }
 
     fun markHostAsCensored(host: String) {
@@ -600,25 +631,32 @@ object BypassConfig {
         val strategiesToTest = if (specificStrategy != null) listOf(specificStrategy) 
             else listOf(BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_TRIPLE, BypassStrategy.TLS_DIRTY)
             
-        for (strategy in strategiesToTest) {
-            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val ips = RobustResolver.resolve(host, null); if (ips.isEmpty()) return@launch
-                    val startTime = System.currentTimeMillis(); val socket = Socket()
-                    withTimeout(4000) {
-                        socket.connect(InetSocketAddress(ips.first(), 443), 2500)
-                        val hello = FakePacketHelper.buildFakeClientHello(host, (40..90).random())
-                        applyBypass(socket, socket.getOutputStream(), hello, hello.size, getSessionConfig(host, strategy, 100L), host)
-                        socket.getOutputStream().flush()
-                        val response = ByteArray(5)
-                        if (socket.getInputStream().read(response) >= 1) {
-                            recordStrategyResult(host, strategy, true)
-                            recordSuccessForHost(host, strategy, System.currentTimeMillis() - startTime)
+        val service = activeVpnService ?: return
+        if (service is PinkVpnService) {
+            for (strategy in strategiesToTest) {
+                service.getServiceScope().launch {
+                    try {
+                        val ips = RobustResolver.resolve(host, null); if (ips.isEmpty()) return@launch
+                        val startTime = System.currentTimeMillis(); val socket = Socket()
+                        service.protect(socket)
+                        try {
+                            withTimeout(4000) {
+                                socket.connect(InetSocketAddress(ips.first(), 443), 2500)
+                                val hello = FakePacketHelper.buildFakeClientHello(host, (40..90).random())
+                                applyBypass(socket, socket.getOutputStream(), hello, hello.size, getSessionConfig(host, strategy, 100L), host)
+                                socket.getOutputStream().flush()
+                                val response = ByteArray(5)
+                                if (socket.getInputStream().read(response) >= 1) {
+                                    recordStrategyResult(host, strategy, true)
+                                    recordSuccessForHost(host, strategy, System.currentTimeMillis() - startTime)
+                                }
+                            }
+                        } finally {
+                            try { socket.close() } catch (e: Exception) {}
                         }
+                    } catch (e: Exception) { 
+                        recordStrategyResult(host, strategy, false)
                     }
-                    socket.close()
-                } catch (e: Exception) { 
-                    recordStrategyResult(host, strategy, false)
                 }
             }
         }
@@ -673,10 +711,31 @@ object BypassConfig {
             }
         }
         
-        // Cleanup old DNS/Host data
-        if (strategyScores.size > 200) {
-            val keysToRemove = strategyScores.keys().asSequence().take(50).toList()
-            keysToRemove.forEach { strategyScores.remove(it) }
+        // Cleanup old DNS/Host data to prevent memory leaks
+        val now = System.currentTimeMillis()
+        if (strategyScores.size > 500) {
+            val it = strategyScores.entries.iterator()
+            var count = 0
+            while (it.hasNext() && count < 100) {
+                it.next()
+                it.remove()
+                count++
+            }
+        }
+        
+        // Prune other host-specific maps
+        listOf(hostDnas, hostFailedStrategies, hostSuccessStrategies, hostSuccessCount, 
+               hostStrategyCache, hostTtlMap, hostExplorationTtl, hostConsecutiveFailures, 
+               hostConsecutiveSuccesses, lastFailureTime, dynamicallyCensoredHosts).forEach { map ->
+            if (map.size > 1000) {
+                val it = map.entries.iterator()
+                var count = 0
+                while (it.hasNext() && count < 200) {
+                    it.next()
+                    it.remove()
+                    count++
+                }
+            }
         }
     }
 
@@ -684,6 +743,7 @@ object BypassConfig {
         if (len <= 0) return
         if (len == 1) {
             out.write(data, 0, len)
+            out.flush()
             return
         }
         when (config.strategy) {
@@ -985,18 +1045,35 @@ object BypassConfig {
     fun rotateGlobalStrategy() { _currentStrategy.value = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT && it != _currentStrategy.value }.random() }
     
     fun saveScores(context: android.content.Context) {
+        // Periodic pruning of host success maps to prevent memory bloat
+        if (hostSuccessStrategies.size > 1000) {
+            val keys = hostSuccessStrategies.keys.toList().take(500)
+            keys.forEach { hostSuccessStrategies.remove(it) }
+        }
+        if (hostSuccessCount.size > 1000) {
+            val keys = hostSuccessCount.keys.toList().take(500)
+            keys.forEach { hostSuccessCount.remove(it) }
+        }
+
         val prefs = context.getSharedPreferences("pink_proxy_scores", android.content.Context.MODE_PRIVATE)
         val edit = prefs.edit()
         
         edit.putString("current_strategy", _currentStrategy.value.name)
         
-        val censoredStr = dynamicallyCensoredHosts.entries.joinToString(";") { "${it.key}|${it.value}" }
+        val censoredStr = dynamicallyCensoredHosts.entries
+            .sortedByDescending { it.value }
+            .take(500)
+            .joinToString(";") { "${it.key}|${it.value}" }
         edit.putString("censored_hosts", censoredStr)
         
-        val successStr = hostSuccessStrategies.entries.joinToString(";") { "${it.key}|${it.value.name}" }
+        val successStr = hostSuccessStrategies.entries
+            .take(300)
+            .joinToString(";") { "${it.key}|${it.value.name}" }
         edit.putString("success_strategies", successStr)
         
-        val countStr = hostSuccessCount.entries.joinToString(";") { "${it.key}|${it.value}" }
+        val countStr = hostSuccessCount.entries
+            .take(300)
+            .joinToString(";") { "${it.key}|${it.value}" }
         edit.putString("success_counts", countStr)
 
         wifiStrategyScores.forEach { (strat, score) -> edit.putInt("wifi_${strat.name}", score) }
@@ -1006,6 +1083,9 @@ object BypassConfig {
     }
     
     fun initialize(context: android.content.Context) {
+        if (context is android.net.VpnService) {
+            activeVpnService = context
+        }
         val prefs = context.getSharedPreferences("pink_proxy_scores", android.content.Context.MODE_PRIVATE)
         
         val stratStr = prefs.getString("current_strategy", null)
@@ -1105,27 +1185,33 @@ object BypassConfig {
 data class SessionConfig(val strategy: BypassStrategy, val frag1: Int, val frag2: Int, val frag3: Int, val delay1: Long, val delay2: Long, val fakeTtl: Int)
 
 class PinkProxyServer(private val vpnService: android.net.VpnService, private val port: Int) {
-    private val proxyDispatcher = Dispatchers.IO
-    private var serverScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+    private val proxyDispatcher = java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()
+    private var serverScope = kotlinx.coroutines.CoroutineScope(proxyDispatcher + kotlinx.coroutines.SupervisorJob())
     private var serverSocket: ServerSocket? = null
     private var udpSocket: java.net.DatagramSocket? = null
     private val bufferPool = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
-    private val udpSessions = ConcurrentHashMap<String, UdpSession>()
+    private val BUFFER_SIZE = 16384
 
+    private fun getBuffer(size: Int): ByteArray {
+        val buf = bufferPool.poll()
+        return if (buf != null && buf.size >= size) buf else ByteArray(size)
+    }
+    private fun releaseBuffer(buffer: ByteArray) { 
+        if (buffer.size >= BUFFER_SIZE && bufferPool.size < 64) bufferPool.offer(buffer) 
+    }
+    private val udpSessions = ConcurrentHashMap<String, UdpSession>()
     private class UdpSession(val clientAddr: java.net.InetAddress, val clientPort: Int, val targetSocket: java.net.DatagramSocket, var lastActivity: Long = System.currentTimeMillis())
 
-    private fun getBuffer(size: Int): ByteArray = bufferPool.poll() ?: ByteArray(size)
-    private fun releaseBuffer(buffer: ByteArray) { if (bufferPool.size < 100) bufferPool.offer(buffer) }
 
     fun start() {
         try { serverScope.cancel() } catch (e: Exception) {}
-        serverScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+        serverScope = kotlinx.coroutines.CoroutineScope(proxyDispatcher + kotlinx.coroutines.SupervisorJob())
 
         serverScope.launch {
             try {
                 val s = ServerSocket()
                 s.reuseAddress = true
-                s.bind(java.net.InetSocketAddress(port))
+                s.bind(java.net.InetSocketAddress("127.0.0.1", port))
                 serverSocket = s
                 while (isActive) {
                     val clientSocket = serverSocket?.accept() ?: break
@@ -1158,7 +1244,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             try {
                 val u = java.net.DatagramSocket(null)
                 u.reuseAddress = true
-                u.bind(java.net.InetSocketAddress(port + 1))
+                u.bind(java.net.InetSocketAddress("127.0.0.1", port + 1))
                 udpSocket = u
                 val buffer = ByteArray(16384)
                 while (isActive) {
@@ -1185,32 +1271,16 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
     }
 
     private suspend fun handleUdpPacket(packet: java.net.DatagramPacket) {
-        val clientKey = "${packet.address.hostAddress}:${packet.port}"
-        val session = udpSessions.getOrPut(clientKey) {
-            val targetSocket = java.net.DatagramSocket()
-            UdpSession(packet.address, packet.port, targetSocket).also { sess ->
-                serverScope.launch {
-                    val receiveBuf = ByteArray(16384)
-                    try {
-                        while (!sess.targetSocket.isClosed) {
-                            val respPacket = java.net.DatagramPacket(receiveBuf, receiveBuf.size)
-                            sess.targetSocket.receive(respPacket)
-                            sess.lastActivity = System.currentTimeMillis()
-                            val clientPacket = java.net.DatagramPacket(respPacket.data, respPacket.length, sess.clientAddr, sess.clientPort)
-                            udpSocket?.send(clientPacket)
-                            ProxyStats.recordDataReceived()
-                        }
-                    } catch (e: Exception) {}
-                }
-            }
-        }
-        session.lastActivity = System.currentTimeMillis()
-        // Simple forward for now. In real VPN we'd need to extract target from packet (e.g. SOCKS5 UDP relay)
-        // But since this is a local proxy server, we assume the VpnService handles routing to specific targets.
+        // This UDP relay on the proxy port (PROXY_PORT + 1) is currently a placeholder.
+        // Direct UDP traffic from the TUN interface is handled by PinkVpnService directly.
+        // We log metrics here for future SOCKS5 UDP relay support if needed.
+        ProxyStats.recordDataReceived()
+        ProxyStats.recordDataSent()
     }
 
     fun stop() { 
         try { serverScope.cancel() } catch (e: Exception) {}
+        try { proxyDispatcher.close() } catch (e: Exception) {}
         try { serverSocket?.close(); serverSocket = null } catch (e: Exception) {} 
         try { udpSocket?.close(); udpSocket = null } catch (e: Exception) {}
         udpSessions.values.forEach { sess ->
@@ -1219,14 +1289,21 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         udpSessions.clear()
     }
 
+    private val MAX_CONCURRENT_CONNECTIONS = 150
+    private val activeConnectionSemaphore = kotlinx.coroutines.sync.Semaphore(MAX_CONCURRENT_CONNECTIONS)
+
     private suspend fun handleClient(client: Socket) {
+        if (!activeConnectionSemaphore.tryAcquire()) {
+            try { client.close() } catch (e: Exception) {}
+            return
+        }
         ProxyStats.addConnection()
         try {
             client.soTimeout = 10000; client.tcpNoDelay = true
             val input = client.getInputStream(); val output = client.getOutputStream()
             val headerBuffer = ByteArray(8192); val read = input.read(headerBuffer)
             if (read <= 0) { client.close(); return }
-            val header = String(headerBuffer, 0, read)
+            val header = String(headerBuffer, 0, read, Charsets.UTF_8)
             val firstLine = header.substringBefore("\r").substringBefore("\n").trim()
             if (firstLine.startsWith("CONNECT", ignoreCase = true)) {
                 val parts = firstLine.split(" ")
@@ -1240,7 +1317,13 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     client.close()
                 }
             } else { handleHttp(client, header, output, input) }
-        } catch (e: Exception) { ProxyStats.addError() } finally { client.close(); ProxyStats.removeConnection() }
+        } catch (e: Exception) { 
+            ProxyStats.addError() 
+        } finally { 
+            client.close()
+            ProxyStats.removeConnection() 
+            activeConnectionSemaphore.release()
+        }
     }
 
     private suspend fun handleHttps(client: Socket, host: String, port: Int, clientOut: OutputStream, clientIn: InputStream) {
@@ -1251,8 +1334,9 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             val ips = RobustResolver.resolve(host, vpnService); if (ips.isEmpty()) throw Exception("DNS Failed")
             for (ip in ips) {
                 val sock = Socket()
+                vpnService.protect(sock)
                 try {
-                    sock.connect(InetSocketAddress(ip, port), 4000)
+                    sock.connect(InetSocketAddress(ip, port), 2500)
                     sock.soTimeout = 30000
                     sock.tcpNoDelay = true
                     RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
@@ -1272,6 +1356,10 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             val helloBuffer = ByteArray(8192); val helloRead = clientIn.read(helloBuffer)
             if (helloRead > 0) BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, config, host)
             
+            // Optimize timeouts for the active streaming phase to prevent WebSocket and media drops
+            client.soTimeout = 90000
+            target.soTimeout = 90000
+            
             coroutineScope {
                 launch { proxyStream(clientIn, targetOut, { try { target.close() } catch(e:Exception){} }, host, false, strategy) }
                 launch { proxyStream(targetIn, clientOut, { try { client.close() } catch(e:Exception){} }, host, true, strategy) }
@@ -1284,23 +1372,30 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
     }
 
     private suspend fun handleHttp(client: Socket, header: String, clientOut: OutputStream, clientIn: InputStream) {
-        var host = ""
+        var rawHost = ""
         val lines = header.split("\r\n", "\n")
         for (line in lines) {
             if (line.startsWith("Host:", ignoreCase = true)) {
-                host = line.substring(5).trim()
+                rawHost = line.substring(5).trim()
                 break
             }
         }
-        if (host.isEmpty()) host = "google.com"
+        if (rawHost.isEmpty()) rawHost = "google.com"
+        val host = rawHost.substringBefore(":")
+        val targetPort = if (rawHost.contains(":")) {
+            rawHost.substringAfter(":").toIntOrNull() ?: 80
+        } else 80
+
         var target: Socket? = null
         var connected = false
+        val strategy = BypassConfig.resolveStrategyForHost(host)
         try {
             val ips = RobustResolver.resolve(host, vpnService); if (ips.isEmpty()) throw Exception("DNS Failed")
             for (ip in ips) {
                 val sock = Socket()
+                vpnService.protect(sock)
                 try {
-                    sock.connect(InetSocketAddress(ip, 80), 4000)
+                    sock.connect(InetSocketAddress(ip, targetPort), 2500)
                     sock.soTimeout = 30000
                     RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
                     target = sock
@@ -1313,27 +1408,45 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             }
             if (!connected || target == null) throw Exception("All IPs failed")
             
+            // Optimize timeouts for active HTTP streaming
+            client.soTimeout = 60000
+            target.soTimeout = 60000
+            
             val targetOut = target.getOutputStream()
-            val fakeHttp = FakePacketHelper.buildFakeHttpRequest(host, "/"); targetOut.write(fakeHttp); targetOut.flush()
-            targetOut.write(header.toByteArray()); targetOut.flush()
+            val config = BypassConfig.getSessionConfig(host, strategy, 100L)
+            val headerBytes = header.toByteArray()
+            BypassConfig.applyBypass(target, targetOut, headerBytes, headerBytes.size, config, host)
             coroutineScope {
-                launch { proxyStream(clientIn, targetOut, { try { target.close() } catch(e:Exception){} }, host, false, null) }
-                launch { proxyStream(target.getInputStream(), clientOut, { try { client.close() } catch(e:Exception){} }, host, true, null) }
+                launch { proxyStream(clientIn, targetOut, { try { target.close() } catch(e:Exception){} }, host, false, strategy) }
+                launch { proxyStream(target.getInputStream(), clientOut, { try { client.close() } catch(e:Exception){} }, host, true, strategy) }
             }
-        } catch (e: Exception) {} finally { try { target?.close() } catch (e: Exception) {} }
+        } catch (e: Exception) {
+            Log.e("PinkProxyServer", "Error handling HTTP request for $host", e)
+            BypassConfig.recordFailureForHost(host, strategy, true, vpnService)
+        } finally { try { target?.close() } catch (e: Exception) {} }
     }
 
     private suspend fun proxyStream(input: InputStream, output: OutputStream, onError: () -> Unit, host: String?, isRecv: Boolean, strategy: BypassStrategy?) {
         val buf = getBuffer(16384)
+        var successRecorded = false
         try {
             while (true) {
                 val r = input.read(buf); if (r <= 0) break
                 if (isRecv) ProxyStats.recordDataReceived() else ProxyStats.recordDataSent()
                 ProxyStats.addBytes(r.toLong())
-                output.write(buf, 0, r); output.flush()
+                if (isRecv && !successRecorded && host != null && strategy != null) {
+                    BypassConfig.recordSuccessForHost(host, strategy)
+                    successRecorded = true
+                }
+                output.write(buf, 0, r)
+                output.flush()
             }
+            output.flush()
         } catch (e: Exception) {
-            Log.e("PinkProxyServer", "Error proxying stream to $host", e)
+            // Log less verbosely for common socket closures
+            if (e !is java.net.SocketException && e !is java.io.IOException) {
+                Log.e("PinkProxyServer", "Error proxying stream to $host", e)
+            }
         } finally {
             releaseBuffer(buf)
             onError()

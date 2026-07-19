@@ -43,6 +43,8 @@ object TlsParser {
                 
                 pos += 4
                 
+                if (pos + extLen > extEnd) break // Bounds check
+
                 if (extType == 0x0000) { // Server Name extension
                     // Check SNI list length
                     if (pos + 1 < extEnd) {
@@ -54,6 +56,8 @@ object TlsParser {
                             val nameType = buffer[sniPos].toInt() and 0xFF
                             val nameLen = ((buffer[sniPos + 1].toInt() and 0xFF) shl 8) or (buffer[sniPos + 2].toInt() and 0xFF)
                             
+                            if (sniPos + 3 + nameLen > extEnd) break // Bounds check
+
                             if (nameType == 0) { // HostName
                                 return sniPos + 3
                             }
