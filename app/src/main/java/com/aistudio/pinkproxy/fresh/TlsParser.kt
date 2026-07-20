@@ -27,8 +27,7 @@ object TlsParser {
             
             // Compression methods length (variable)
             if (pos >= length) return -1
-            val compMethodsLen = buffer[pos].toInt() and 0xFF
-            pos += 1 + compMethodsLen
+            pos += 1 + (buffer[pos].toInt() and 0xFF)
             
             // Extensions length
             if (pos + 1 >= length) return -1
@@ -89,7 +88,7 @@ object TlsParser {
                         if (match) return i
                     }
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
         
         return -1
@@ -106,8 +105,7 @@ object TlsParser {
             val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2 + cipherSuitesLen
             if (pos >= length) return false
-            val compMethodsLen = buffer[pos].toInt() and 0xFF
-            pos += 1 + compMethodsLen
+            pos += 1 + (buffer[pos].toInt() and 0xFF)
             if (pos + 1 >= length) return false
             val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2
@@ -119,7 +117,7 @@ object TlsParser {
                 if (extType == 0xfe0d) return true
                 pos += 4 + extLen
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         return false
     }
 }

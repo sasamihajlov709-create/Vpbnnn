@@ -37,14 +37,16 @@ object ServiceChecker {
 
     fun checkStall(currentBytes: Long) {
         val now = System.currentTimeMillis()
-        if (now - lastStallCheck > 15000) { // Check every 15 seconds
+        if (now - lastStallCheck > 90000) { // Check every 90 seconds (was 15s)
             val diff = currentBytes - lastTotalBytes
             val activeConns = ProxyStats.activeConnections.value
-            val stalled = activeConns > 0 && diff == 0L
+            // Stall is only if we have high active connections and no data for a long time,
+            // or high error rate. Long polling can legitimately hold connections.
+            val stalled = activeConns > 5 && diff == 0L
             _isStalled.value = stalled
             
-            if (stalled) {
-                ProxyStats.logRecovery("WARNING: Traffic stall detected (active connections but 0 bytes moved for 15s). Self-healing started...")
+            if (stalled && ProxyStats.successRate.value < 70) {
+                ProxyStats.logRecovery("WARNING: Traffic stall detected (many active connections, 0 bytes moved for 90s, low success rate). Self-healing started...")
                 RobustResolver.clearCache()
                 BypassConfig.panicOptimize()
                 appContext?.let { ctx ->
@@ -105,16 +107,15 @@ object ServiceChecker {
                                 ProxyStats.logRecovery("ALERT: DNS Hijacking Detected. Forcing Robust DNS Mode.")
                                 RobustResolver.dnsMode = "Smart DoH" // Force DoH
                             }
-                        } catch (e: Exception) {}
+                        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     }
                     
                     break
                 }
-            } catch (e: Exception) {
-            } finally {
-                try { conn?.inputStream?.close() } catch (e: Exception) {}
-                try { conn?.errorStream?.close() } catch (e: Exception) {}
-                try { conn?.disconnect() } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } finally {
+                try { conn?.inputStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                try { conn?.errorStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                try { conn?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
         _internetAvailable.value = internetUp
@@ -179,9 +180,9 @@ object ServiceChecker {
                                 proxyResponsive.set(false)
                             }
                         } finally {
-                            try { connection?.inputStream?.close() } catch (e: Exception) {}
-                            try { connection?.errorStream?.close() } catch (e: Exception) {}
-                            try { connection?.disconnect() } catch (e: Exception) {}
+                            try { connection?.inputStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                            try { connection?.errorStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                            try { connection?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                         if (!isUp && attempt < 2) delay(1000)
                     }
@@ -376,7 +377,7 @@ object ServiceChecker {
                         BypassConfig.recordStrategyResult(testHost, strategy, false)
                         BypassConfig.recordFailure(strategy, false, context)
                     } finally {
-                        try { socket?.close() } catch (e: Exception) {}
+                        try { socket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     }
                 }
             }

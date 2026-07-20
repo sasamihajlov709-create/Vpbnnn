@@ -74,7 +74,7 @@ object RobustResolver {
                     }
                 }
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         return false
     }
 
@@ -128,7 +128,7 @@ object RobustResolver {
             } catch (e: Exception) {
                 Log.w("RobustResolver", "ECS: Failed to fetch public IP subnet: ${e.message}")
             } finally {
-                try { conn?.disconnect() } catch (e: Exception) {}
+                try { conn?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
     }
@@ -194,7 +194,7 @@ object RobustResolver {
                         resolve(host, vpnService, forceSecure = true)
                         kotlinx.coroutines.delay(2000)
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 kotlinx.coroutines.delay(5 * 60 * 1000L)
             }
         }
@@ -432,7 +432,7 @@ object RobustResolver {
         if (isIpAddress(host)) {
             try {
                 return listOf(java.net.InetAddress.getByName(host))
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
 
         // Cache cleanup handled by LRU LinkedHashMap
@@ -553,7 +553,7 @@ object RobustResolver {
                 synchronized(dnsCache) { dnsCache[host] = clean to now }
                 return clean
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
         // Last resort: UDP DNS with rotation
         val udpServers = if (dnsMode == "Custom") {
@@ -569,7 +569,7 @@ object RobustResolver {
                     synchronized(dnsCache) { dnsCache[host] = resolved to System.currentTimeMillis() }
                     return resolved
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
         
         // Deep Fallback: TCP DNS 
@@ -580,7 +580,7 @@ object RobustResolver {
                     synchronized(dnsCache) { dnsCache[host] = resolved to System.currentTimeMillis() }
                     return resolved
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
 
         synchronized(dnsCache) {
@@ -683,7 +683,7 @@ object RobustResolver {
                             }
                         }
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
             
             conn.connectTimeout = 2500
@@ -708,7 +708,7 @@ object RobustResolver {
         } catch (e: Exception) {
             // Binary DoH failed, continue to JSON fallback
         } finally {
-            try { conn?.disconnect() } catch (e: Exception) {}
+            try { conn?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
 
         // 2. Fallback to JSON-over-HTTPS GET query with randomized parameters
@@ -756,7 +756,7 @@ object RobustResolver {
                             }
                         }
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
             conn.connectTimeout = 3000
             conn.readTimeout = 3000
@@ -802,14 +802,14 @@ object RobustResolver {
             providerFailures[dnsIp] = System.currentTimeMillis()
             providerLatencies[dnsIp] = 9999L
         } finally {
-            try { conn?.disconnect() } catch (e: Exception) {}
+            try { conn?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
 
         // 3. DNS-over-TLS (DoT) Fallback on port 853
         try {
             val ips = queryDot(host, dnsIp, type, vpnService)
             if (ips.isNotEmpty()) return ips
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
         return emptyList()
     }
@@ -855,9 +855,9 @@ object RobustResolver {
         } catch (e: Exception) {
             return emptyList()
         } finally {
-            try { socket?.close() } catch (e: Exception) {}
+            try { socket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             if (socket == null) {
-                try { rawSocket?.close() } catch (e: Exception) {}
+                try { rawSocket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
     }
@@ -875,7 +875,7 @@ object RobustResolver {
             socket.receive(responsePacket)
             return parseDnsResponse(responseBuffer, responsePacket.length).filter { !isPoisoned(it, host) }
         } finally {
-            try { socket.close() } catch (e: Exception) {}
+            try { socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
     }
 
@@ -905,7 +905,7 @@ object RobustResolver {
             }
             return parseDnsResponse(responseBuffer, read).filter { !isPoisoned(it, host) }
         } finally {
-            try { socket.close() } catch (e: Exception) {}
+            try { socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
     }
 
@@ -963,7 +963,7 @@ object RobustResolver {
                     dis.skipBytes(rdLength)
                 }
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         return ips
     }
 
@@ -993,7 +993,7 @@ object RobustResolver {
                         resolve(host, vpnService)
                         delay(1500)
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
     }

@@ -117,7 +117,10 @@ object ProxyStats {
                 updateSuccessRate()
 
                 val nowTime = System.currentTimeMillis()
-                if (nowTime - lastDataSent.get() > 15000 && nowTime - lastDataReceived.get() > 40000 && _activeConnections.value > 0) { 
+                // Long polling and idle connections are common. Only trigger stall watchdog
+                // if there are many active connections but no traffic for a longer period (e.g. 2 minutes),
+                // and we are experiencing connection issues.
+                if (nowTime - lastDataSent.get() > 120000 && nowTime - lastDataReceived.get() > 120000 && _activeConnections.value > 5 && _successRate.value < 80) { 
                      logRecovery("WATCHDOG: Stall detected. Force re-adaptation.")
                      forceReAdaptation()
                      lastDataSent.set(nowTime)
@@ -652,7 +655,7 @@ object BypassConfig {
                                 }
                             }
                         } finally {
-                            try { socket.close() } catch (e: Exception) {}
+                            try { socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                     } catch (e: Exception) { 
                         recordStrategyResult(host, strategy, false)
@@ -667,7 +670,7 @@ object BypassConfig {
         
         // Intelligent selection based on past performance
         val dna = getDnaForHost(host)
-        if (dna.strategy != null && (hostSuccessCount[host] ?: 0) > 10) return dna.strategy!!
+        val cachedStrategy = dna.strategy; if (cachedStrategy != null && (hostSuccessCount[host] ?: 0) > 10) return cachedStrategy
         
         val scores = strategyScores.getOrPut(host) { ConcurrentHashMap() }
         val bestInScore = scores.entries.filter { it.value > 70 }.maxByOrNull { it.value }?.key
@@ -765,7 +768,7 @@ object BypassConfig {
             BypassStrategy.TCP_OOB_DESYNC -> {
                 try {
                     socket.sendUrgentData(0xFF)
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 out.write(data, 0, len)
             }
             BypassStrategy.GHOST_PACKETS -> {
@@ -948,7 +951,7 @@ object BypassConfig {
                     socket.sendUrgentData(0xAA)
                     delay(5)
                     socket.sendUrgentData(0xBB)
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 out.write(data, 0, len)
             }
             else -> { out.write(data, 0, len) }
@@ -1090,7 +1093,7 @@ object BypassConfig {
         
         val stratStr = prefs.getString("current_strategy", null)
         if (stratStr != null) {
-            try { _currentStrategy.value = BypassStrategy.valueOf(stratStr) } catch(e: Exception) {}
+            try { _currentStrategy.value = BypassStrategy.valueOf(stratStr) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
         
         val censoredStr = prefs.getString("censored_hosts", "") ?: ""
@@ -1114,7 +1117,7 @@ object BypassConfig {
                         hostSuccessStrategies[parts[0]] = strat
                         val dna = getDnaForHost(parts[0])
                         dna.strategy = strat
-                    } catch(e: Exception) {}
+                    } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 }
             }
         }
@@ -1204,7 +1207,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
 
 
     fun start() {
-        try { serverScope.cancel() } catch (e: Exception) {}
+        try { serverScope.cancel() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         serverScope = kotlinx.coroutines.CoroutineScope(proxyDispatcher + kotlinx.coroutines.SupervisorJob())
 
         serverScope.launch {
@@ -1279,12 +1282,12 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
     }
 
     fun stop() { 
-        try { serverScope.cancel() } catch (e: Exception) {}
-        try { proxyDispatcher.close() } catch (e: Exception) {}
-        try { serverSocket?.close(); serverSocket = null } catch (e: Exception) {} 
-        try { udpSocket?.close(); udpSocket = null } catch (e: Exception) {}
+        try { serverScope.cancel() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        try { proxyDispatcher.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        try { serverSocket?.close(); serverSocket = null } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } 
+        try { udpSocket?.close(); udpSocket = null } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         udpSessions.values.forEach { sess ->
-            try { sess.targetSocket.close() } catch (e: Exception) {}
+            try { sess.targetSocket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
         udpSessions.clear()
     }
@@ -1294,7 +1297,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
 
     private suspend fun handleClient(client: Socket) {
         if (!activeConnectionSemaphore.tryAcquire()) {
-            try { client.close() } catch (e: Exception) {}
+            try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             return
         }
         ProxyStats.addConnection()
@@ -1320,7 +1323,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         } catch (e: Exception) { 
             ProxyStats.addError() 
         } finally { 
-            client.close()
+            try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             ProxyStats.removeConnection() 
             activeConnectionSemaphore.release()
         }
@@ -1344,7 +1347,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     connected = true
                     break
                 } catch (e: Exception) {
-                    try { sock.close() } catch (ex: Exception) {}
+                    try { sock.close() } catch (ex: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${ex.message}") }
                     RobustResolver.recordIpFailure(ip.hostAddress ?: "")
                 }
             }
@@ -1361,13 +1364,13 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             target.soTimeout = 90000
             
             coroutineScope {
-                launch { proxyStream(clientIn, targetOut, { try { target.close() } catch(e:Exception){} }, host, false, strategy) }
-                launch { proxyStream(targetIn, clientOut, { try { client.close() } catch(e:Exception){} }, host, true, strategy) }
+                launch { proxyStream(clientIn, targetOut, { try { target.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, false, strategy) }
+                launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, true, strategy) }
             }
         } catch (e: Exception) { 
             BypassConfig.recordFailureForHost(host, strategy, true, vpnService) 
         } finally { 
-            try { target?.close() } catch (e: Exception) {} 
+            try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } 
         }
     }
 
@@ -1402,7 +1405,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     connected = true
                     break
                 } catch (e: Exception) {
-                    try { sock.close() } catch (ex: Exception) {}
+                    try { sock.close() } catch (ex: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${ex.message}") }
                     RobustResolver.recordIpFailure(ip.hostAddress ?: "")
                 }
             }
@@ -1417,13 +1420,13 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             val headerBytes = header.toByteArray()
             BypassConfig.applyBypass(target, targetOut, headerBytes, headerBytes.size, config, host)
             coroutineScope {
-                launch { proxyStream(clientIn, targetOut, { try { target.close() } catch(e:Exception){} }, host, false, strategy) }
-                launch { proxyStream(target.getInputStream(), clientOut, { try { client.close() } catch(e:Exception){} }, host, true, strategy) }
+                launch { proxyStream(clientIn, targetOut, { try { target.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, false, strategy) }
+                launch { proxyStream(target.getInputStream(), clientOut, { try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, true, strategy) }
             }
         } catch (e: Exception) {
             Log.e("PinkProxyServer", "Error handling HTTP request for $host", e)
             BypassConfig.recordFailureForHost(host, strategy, true, vpnService)
-        } finally { try { target?.close() } catch (e: Exception) {} }
+        } finally { try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }
     }
 
     private suspend fun proxyStream(input: InputStream, output: OutputStream, onError: () -> Unit, host: String?, isRecv: Boolean, strategy: BypassStrategy?) {

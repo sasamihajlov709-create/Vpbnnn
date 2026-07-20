@@ -85,7 +85,7 @@ class PinkVpnService : VpnService() {
                     context,
                     android.content.ComponentName(context, PinkProxyTileService::class.java)
                 )
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
     }
 
@@ -109,14 +109,14 @@ class PinkVpnService : VpnService() {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PinkProxy:VpnWakeLock")
             // Hold wake lock indefinitely while service is running (released in stopVpn)
             wakeLock?.acquire()
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
     private fun releaseWakeLock() {
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
             wakeLock = null
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -240,7 +240,7 @@ class PinkVpnService : VpnService() {
 
         try {
             sessionScope?.cancel()
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         val newSessionScope = CoroutineScope(serviceDispatcher + SupervisorJob())
         sessionScope = newSessionScope
         
@@ -345,11 +345,15 @@ class PinkVpnService : VpnService() {
 
             val builder = Builder()
                 .addAddress("10.0.0.2", 24)
-                .addAddress("fd00:1:2:3::2", 120)
-                .addRoute("::", 0) // Blackhole all IPv6 to prevent leaks bypassing the proxy
                 .addDnsServer("10.0.0.3")
-                .setSession("PinkProxy")
-                .setMtu(BypassConfig.currentMtu.value)
+            try {
+                builder.addAddress("fd00:1:2:3::2", 120)
+                builder.addRoute("::", 0) // Blackhole all IPv6 to prevent leaks bypassing the proxy
+            } catch (e: Exception) {
+                Log.w("PinkVpnService", "IPv6 not supported on this device, skipping IPv6 routes")
+            }
+            builder.setSession("PinkProxy")
+                   .setMtu(BypassConfig.currentMtu.value)
 
             // Route traffic through our local proxy
             builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", PROXY_PORT))
@@ -358,11 +362,11 @@ class PinkVpnService : VpnService() {
             if (isExcludeMode) {
                 builder.addDisallowedApplication(packageName)
                 selectedPackages.forEach { pkg ->
-                    try { builder.addDisallowedApplication(pkg) } catch (e: Exception) {}
+                    try { builder.addDisallowedApplication(pkg) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 }
             } else {
                 selectedPackages.filter { it != packageName }.forEach { pkg ->
-                    try { builder.addAllowedApplication(pkg) } catch (e: Exception) {}
+                    try { builder.addAllowedApplication(pkg) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 }
             }
             
@@ -380,13 +384,6 @@ class PinkVpnService : VpnService() {
             // Many apps ignore the HTTP proxy. If we don't route 0.0.0.0/0, they will just bypass the VPN.
             builder.addRoute("10.0.0.0", 8)
             builder.addRoute("fc00::", 7) // IPv6 Unique Local Address space dummy route 
-            
-            // Block IPv6 leaks by routing all Global Unicast IPv6 to the blackhole TUN
-            try {
-                builder.addRoute("2000::", 3)
-            } catch (e: Exception) {
-                Log.w("PinkVpnService", "Failed to add IPv6 route, device might not support IPv6 VPN: ${e.message}")
-            }
             
             // Note: We do NOT use addRoute("0.0.0.0", 0) because we don't have a TUN-to-TCP (tun2socks) layer.
             // Any app ignoring the proxy would otherwise lose internet.
@@ -532,7 +529,7 @@ class PinkVpnService : VpnService() {
                                                                 outputStream.write(replyPacket)
                                                                 outputStream.flush()
                                                             }
-                                                        } catch (e: Exception) {}
+                                                        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                                                     }
                                                     synchronized(udpRelays) { udpRelays[key] = s }
                                                     s.send(dnsPayload)
@@ -591,8 +588,8 @@ class PinkVpnService : VpnService() {
                     Log.e("PinkVpnService", "TUN reader error", e)
                 } finally {
                     cleanupJob.cancel()
-                    try { inputStream.close() } catch (e: Exception) {}
-                    try { outputStream.close() } catch (e: Exception) {}
+                    try { inputStream.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                    try { outputStream.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     synchronized(udpRelays) { udpRelays.values.forEach { it.close() } }
                 }
             }
@@ -645,7 +642,7 @@ class PinkVpnService : VpnService() {
                             if (caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
                                 ServiceChecker.triggerCheck()
                             }
-                        } catch (e: Exception) {}
+                        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     }
                 }
             }
@@ -829,14 +826,14 @@ class PinkVpnService : VpnService() {
         try {
             sessionScope?.cancel()
             sessionScope = null
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         try {
             serviceScope.coroutineContext.cancelChildren()
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         if (isNetworkCallbackRegistered) {
             try {
                 connectivityManager?.unregisterNetworkCallback(networkCallback)
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             isNetworkCallbackRegistered = false
         }
         ServiceChecker.stopChecking()
@@ -866,7 +863,7 @@ class PinkVpnService : VpnService() {
         serviceScope.cancel()
         BypassConfig.activeVpnService = null
         instance = null
-        try { serviceDispatcher.close() } catch (e: Exception) {}
+        try { serviceDispatcher.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
     private fun createNotificationChannel() {
@@ -951,7 +948,7 @@ class PinkVpnService : VpnService() {
                                     socket.send(DatagramPacket(fakePayload, fakePayload.size, addr, dstPort))
                                     
                                     android.system.Os.setsockoptInt(currentFd, proto, ttlOpt, 64)
-                                } catch (e: Exception) {}
+                                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                             }
                             
                             socket.send(DatagramPacket(data, data.size, addr, dstPort))
@@ -979,8 +976,8 @@ class PinkVpnService : VpnService() {
             if (!isClosed) {
                 isClosed = true
                 sendChannel.close()
-                try { socket.close() } catch(e: Exception) {}
-                try { pfd?.close() } catch(e: Exception) {}
+                try { socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                try { pfd?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
     }
@@ -1059,7 +1056,7 @@ class PinkVpnService : VpnService() {
             var checksum = (sum.inv() and 0xFFFF).toShort()
             if (checksum == 0.toShort()) checksum = 0xFFFF.toShort()
             buffer.putShort(udpChecksumPos, checksum)
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
         return buffer.array()
     }

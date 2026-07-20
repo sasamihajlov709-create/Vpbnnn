@@ -35,7 +35,7 @@ class PinkProxyTileService : TileService() {
         super.onDestroy()
         try {
             listenJob?.cancel()
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
     override fun onClick() {

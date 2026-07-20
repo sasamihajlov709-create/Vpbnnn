@@ -19,10 +19,10 @@ class BootReceiver : BroadcastReceiver() {
                     action = "START"
                 }
                 if (android.os.Build.VERSION.SDK_INT >= 31) {
-                    // Note: This might be subject to background start restrictions if not handled carefully,
-                    // but for VPN services there are usually exceptions or we can just hope it works.
                     try {
                         context.startForegroundService(serviceIntent)
+                    } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
+                        Log.e("BootReceiver", "Foreground service start not allowed (Android 12+ limitation). User must launch manually.", e)
                     } catch (e: Exception) {
                         Log.e("BootReceiver", "Failed to start foreground service on boot", e)
                     }

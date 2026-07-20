@@ -1341,7 +1341,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
                                 data = android.net.Uri.parse("package:${context.packageName}")
                             }
                             context.startActivity(intent)
-                        } catch (ex: Exception) {}
+                        } catch (ex: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${ex.message}") }
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
