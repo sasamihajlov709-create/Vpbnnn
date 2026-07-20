@@ -3,13 +3,17 @@ package com.aistudio.pinkproxy.fresh
 import java.nio.ByteBuffer
 
 object IcmpHelper {
-    private fun calculateChecksum(data: ByteArray, length: Int): Short {
+    private val bufferTL = object : ThreadLocal<ByteBuffer>() {
+        override fun initialValue(): ByteBuffer = ByteBuffer.allocate(65535)
+    }
+
+    private fun calculateChecksum(data: ByteArray, length: Int, offset: Int = 0): Short {
         var sum = 0
         for (i in 0 until length / 2) {
-            sum += ((data[i * 2].toInt() and 0xFF) shl 8) or (data[i * 2 + 1].toInt() and 0xFF)
+            sum += ((data[offset + i * 2].toInt() and 0xFF) shl 8) or (data[offset + i * 2 + 1].toInt() and 0xFF)
         }
         if (length % 2 != 0) {
-            sum += (data[length - 1].toInt() and 0xFF) shl 8
+            sum += (data[offset + length - 1].toInt() and 0xFF) shl 8
         }
         while (sum shr 16 != 0) {
             sum = (sum and 0xFFFF) + (sum shr 16)
@@ -18,7 +22,8 @@ object IcmpHelper {
     }
 
     fun createIcmpEchoReplyPacket(originalPacket: ByteArray, originalLength: Int, ipHeaderLength: Int): ByteArray {
-        val buffer = ByteBuffer.allocate(originalLength)
+        val buffer = bufferTL.get()!!
+        buffer.clear()
         buffer.put(originalPacket, 0, originalLength)
         
         // Swap src/dst in IPv4 header
@@ -30,22 +35,21 @@ object IcmpHelper {
         
         // Clear IP checksum and recalculate
         buffer.putShort(10, 0)
-        val ipHeader = buffer.array().copyOfRange(0, ipHeaderLength)
-        buffer.putShort(10, calculateChecksum(ipHeader, ipHeaderLength))
+        buffer.putShort(10, calculateChecksum(buffer.array(), ipHeaderLength))
         
         // Change ICMP Type from 8 (Echo Request) to 0 (Echo Reply)
         buffer.put(ipHeaderLength, 0.toByte())
         
         // Clear ICMP Checksum and recalculate
         buffer.putShort(ipHeaderLength + 2, 0)
-        val icmpData = buffer.array().copyOfRange(ipHeaderLength, originalLength)
-        buffer.putShort(ipHeaderLength + 2, calculateChecksum(icmpData, icmpData.size))
+        buffer.putShort(ipHeaderLength + 2, calculateChecksum(buffer.array(), originalLength - ipHeaderLength, ipHeaderLength))
         
-        return buffer.array()
+        return buffer.array().copyOfRange(0, originalLength)
     }
     
     fun createIcmpv6EchoReplyPacket(originalPacket: ByteArray, originalLength: Int): ByteArray {
-        val buffer = ByteBuffer.allocate(originalLength)
+        val buffer = bufferTL.get()!!
+        buffer.clear()
         buffer.put(originalPacket, 0, originalLength)
         
         // Swap src/dst in IPv6 header (bytes 8..23 and 24..39)
@@ -83,19 +87,19 @@ object IcmpHelper {
         icmpSum += 58
         
         // ICMPv6 Header & Payload
-        val icmpData = buffer.array().copyOfRange(40, originalLength)
-        for (i in 0 until icmpData.size / 2) {
-            icmpSum += ((icmpData[i * 2].toInt() and 0xFF) shl 8) or (icmpData[i * 2 + 1].toInt() and 0xFF)
+        val icmpDataOffset = 40
+        for (i in 0 until payloadLen / 2) {
+            icmpSum += ((buffer.get(icmpDataOffset + i * 2).toInt() and 0xFF) shl 8) or (buffer.get(icmpDataOffset + i * 2 + 1).toInt() and 0xFF)
         }
-        if (icmpData.size % 2 != 0) {
-            icmpSum += (icmpData.last().toInt() and 0xFF) shl 8
+        if (payloadLen % 2 != 0) {
+            icmpSum += (buffer.get(icmpDataOffset + payloadLen - 1).toInt() and 0xFF) shl 8
         }
         while (icmpSum shr 16 != 0) {
             icmpSum = (icmpSum and 0xFFFF) + (icmpSum shr 16)
         }
         buffer.putShort(42, (icmpSum.inv() and 0xFFFF).toShort())
         
-        return buffer.array()
+        return buffer.array().copyOfRange(0, originalLength)
     }
 
     fun createIcmpPortUnreachablePacket(originalPacket: ByteArray, originalLength: Int): ByteArray {
@@ -106,7 +110,8 @@ object IcmpHelper {
         val actualIcmpPayloadLen = minOf(icmpPayloadLen, originalLength)
         
         val totalLength = 20 + 8 + actualIcmpPayloadLen
-        val buffer = ByteBuffer.allocate(totalLength)
+        val buffer = bufferTL.get()!!
+        buffer.clear()
         
         // IPv4 Header
         buffer.put(0x45.toByte()) // Version 4, IHL 5
@@ -124,8 +129,7 @@ object IcmpHelper {
         for (i in 12..15) buffer.put(originalPacket[i]) // new dst = old src
         
         // Calculate IP Checksum
-        val ipHeader = buffer.array().copyOfRange(0, 20)
-        buffer.putShort(ipChecksumPos, calculateChecksum(ipHeader, 20))
+        buffer.putShort(ipChecksumPos, calculateChecksum(buffer.array(), 20))
         
         // ICMP Header
         buffer.put(3.toByte()) // Type 3: Destination Unreachable
@@ -138,21 +142,19 @@ object IcmpHelper {
         buffer.put(originalPacket, 0, actualIcmpPayloadLen)
         
         // Calculate ICMP Checksum
-        val icmpData = buffer.array().copyOfRange(20, totalLength)
-        buffer.putShort(icmpChecksumPos, calculateChecksum(icmpData, icmpData.size))
+        buffer.putShort(icmpChecksumPos, calculateChecksum(buffer.array(), 8 + actualIcmpPayloadLen, 20))
         
-        return buffer.array()
+        return buffer.array().copyOfRange(0, totalLength)
     }
 
     fun createIcmpv6PortUnreachablePacket(originalPacket: ByteArray, originalLength: Int): ByteArray {
-        // ICMPv6 payload requires as much of the invoking packet as possible without the ICMPv6 packet exceeding MTU (1280)
-        // We'll just include the 40-byte IPv6 header + 8 bytes of original payload to be safe
         val originalIpHeaderLength = 40
         val icmpPayloadLen = originalIpHeaderLength + 8
         val actualIcmpPayloadLen = minOf(icmpPayloadLen, originalLength)
         
         val totalLength = 40 + 8 + actualIcmpPayloadLen // IPv6 Header + ICMPv6 Header + Payload
-        val buffer = ByteBuffer.allocate(totalLength)
+        val buffer = bufferTL.get()!!
+        buffer.clear()
         
         // IPv6 Header
         buffer.putInt((6 shl 28)) // Version 6, Traffic Class 0, Flow Label 0
@@ -197,13 +199,14 @@ object IcmpHelper {
         icmpSum += 58 // ICMPv6 protocol number
         
         // ICMPv6 Header & Payload
-        val icmpData = buffer.array().copyOfRange(40, totalLength)
-        for (i in 0 until icmpData.size / 2) {
-            val word = ((icmpData[i * 2].toInt() and 0xFF) shl 8) or (icmpData[i * 2 + 1].toInt() and 0xFF)
+        val icmpDataOffset = 40
+        val icmpDataLen = totalLength - 40
+        for (i in 0 until icmpDataLen / 2) {
+            val word = ((buffer.get(icmpDataOffset + i * 2).toInt() and 0xFF) shl 8) or (buffer.get(icmpDataOffset + i * 2 + 1).toInt() and 0xFF)
             icmpSum += word
         }
-        if (icmpData.size % 2 != 0) {
-            val word = (icmpData.last().toInt() and 0xFF) shl 8
+        if (icmpDataLen % 2 != 0) {
+            val word = (buffer.get(icmpDataOffset + icmpDataLen - 1).toInt() and 0xFF) shl 8
             icmpSum += word
         }
         
@@ -212,6 +215,6 @@ object IcmpHelper {
         }
         buffer.putShort(icmpChecksumPos, (icmpSum.inv() and 0xFFFF).toShort())
         
-        return buffer.array()
+        return buffer.array().copyOfRange(0, totalLength)
     }
 }

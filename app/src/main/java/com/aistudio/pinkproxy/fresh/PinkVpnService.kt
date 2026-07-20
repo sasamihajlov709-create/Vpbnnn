@@ -47,9 +47,8 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class PinkVpnService : VpnService() {
     private fun formatBytes(bytes: Long) = ProxyStats.formatBytes(bytes)
-    private val udpBufferPool = java.util.concurrent.LinkedBlockingQueue<ByteArray>(64)
-    private fun getBuffer(): ByteArray = udpBufferPool.poll() ?: ByteArray(16384)
-    private fun releaseBuffer(buffer: ByteArray) { udpBufferPool.offer(buffer) }
+    private fun getBuffer(): ByteArray = BypassConfig.TrafficShaper.acquireBuffer(16384)
+    private fun releaseBuffer(buffer: ByteArray) = BypassConfig.TrafficShaper.releaseBuffer(buffer)
 
     companion object {
         @Volatile var instance: PinkVpnService? = null
@@ -95,6 +94,18 @@ class PinkVpnService : VpnService() {
     private val PROXY_PORT = 18080
     private val proxyMutex = kotlinx.coroutines.sync.Mutex()
     
+    private val batteryReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            val status = intent?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+            val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                             status == android.os.BatteryManager.BATTERY_STATUS_FULL
+            BypassConfig.updateChargingStatus(isCharging)
+            if (!isCharging) {
+                Log.d("PinkVpnService", "Device unplugged. Core Engine entering Battery-Safe Mode.")
+            }
+        }
+    }
+
     private val serviceDispatcher = java.util.concurrent.Executors.newCachedThreadPool().asCoroutineDispatcher()
     private val serviceScope = CoroutineScope(serviceDispatcher + SupervisorJob())
     fun getServiceScope() = serviceScope
@@ -167,6 +178,7 @@ class PinkVpnService : VpnService() {
         super.onCreate()
         instance = this
         loadFilterSettings(this)
+        registerReceiver(batteryReceiver, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -246,6 +258,8 @@ class PinkVpnService : VpnService() {
         
         RobustResolver.initialize(this)
         RobustResolver.startPrefetching(newSessionScope, this)
+        RobustResolver.startDnsOptimizer(newSessionScope, this)
+        RobustResolver.startSelfHealing(newSessionScope)
         BypassConfig.initialize(this)
         BypassConfig.testInitialStrategies(this)
 
@@ -329,18 +343,6 @@ class PinkVpnService : VpnService() {
                         BypassConfig.saveScores(this@PinkVpnService)
                     }
                 }
-                // Proactive interface watchdog
-                launch {
-                    while (isActive) {
-                        delay(15000)
-                        if (_isRunning.value && vpnInterface == null) {
-                            ProxyStats.logRecovery("WATCHDOG: Interface missing while running. Restoring...")
-                            this@PinkVpnService.serviceScope.launch(Dispatchers.Main) {
-                                startVpn()
-                            }
-                        }
-                    }
-                }
             }
 
             val builder = Builder()
@@ -384,11 +386,27 @@ class PinkVpnService : VpnService() {
             // Many apps ignore the HTTP proxy. If we don't route 0.0.0.0/0, they will just bypass the VPN.
             builder.addRoute("10.0.0.0", 8)
             builder.addRoute("fc00::", 7) // IPv6 Unique Local Address space dummy route 
+            builder.addRoute("8.8.8.8", 32)
+            builder.addRoute("8.8.4.4", 32)
+            builder.addRoute("1.1.1.1", 32)
+            builder.addRoute("1.0.0.1", 32)
+            builder.addRoute("9.9.9.9", 32)
+            builder.addRoute("149.112.112.112", 32)
+            builder.addRoute("208.67.222.222", 32)
+            builder.addRoute("208.67.220.220", 32)
+            builder.addRoute("94.140.14.14", 32)
+            builder.addRoute("94.140.15.15", 32)
+            builder.addRoute("2001:4860:4860::8888", 128)
+            builder.addRoute("2001:4860:4860::8844", 128)
+            builder.addRoute("2606:4700:4700::1111", 128)
+            builder.addRoute("2606:4700:4700::1001", 128)
             
             // Note: We do NOT use addRoute("0.0.0.0", 0) because we don't have a TUN-to-TCP (tun2socks) layer.
             // Any app ignoring the proxy would otherwise lose internet.
 
 
+            builder.setMtu(BypassConfig.currentMtu.value)
+            
             try {
                 vpnInterface = builder.establish()
                 if (vpnInterface == null) {
@@ -406,8 +424,8 @@ class PinkVpnService : VpnService() {
                 val inputStream = FileInputStream(fd)
                 val outputStream = FileOutputStream(fd)
                 // Use a LinkedHashMap with accessOrder=true for O(1) LRU eviction
-                val udpRelays = object : java.util.LinkedHashMap<String, UdpSession>(MAX_UDP_SESSIONS, 0.75f, true) {
-                    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, UdpSession>): Boolean {
+                val udpRelays = object : java.util.LinkedHashMap<Long, UdpSession>(MAX_UDP_SESSIONS, 0.75f, true) {
+                    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, UdpSession>): Boolean {
                         return if (size > MAX_UDP_SESSIONS) {
                             eldest.value.close()
                             true
@@ -463,10 +481,15 @@ class PinkVpnService : VpnService() {
                                             }
                                         }
                                     }
+                                } else if (protocol == 6) { // TCP
+                                    val rejectPacket = IcmpHelper.createIcmpPortUnreachablePacket(packet, read)
+                                    synchronized(outputStream) {
+                                        outputStream.write(rejectPacket)
+                                    }
                                 } else if (protocol == 17) { // UDP
                                     val ihl = (packet[0].toInt() and 0x0F) * 4
-                                    val srcIp = "${packet[12].toInt() and 0xFF}.${packet[13].toInt() and 0xFF}.${packet[14].toInt() and 0xFF}.${packet[15].toInt() and 0xFF}"
-                                    val dstIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
+                                    val srcIpInt = ((packet[12].toInt() and 0xFF) shl 24) or ((packet[13].toInt() and 0xFF) shl 16) or ((packet[14].toInt() and 0xFF) shl 8) or (packet[15].toInt() and 0xFF)
+                                    val dstIpInt = ((packet[16].toInt() and 0xFF) shl 24) or ((packet[17].toInt() and 0xFF) shl 16) or ((packet[18].toInt() and 0xFF) shl 8) or (packet[19].toInt() and 0xFF)
                                     val srcPort = ((packet[ihl].toInt() and 0xFF) shl 8) or (packet[ihl + 1].toInt() and 0xFF)
                                     val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or (packet[ihl + 3].toInt() and 0xFF)
                                     
@@ -481,9 +504,11 @@ class PinkVpnService : VpnService() {
                                             }
                                             continue@tunLoop
                                         }
-                                        val key = "$srcIp:$srcPort->$dstIp:$dstPort"
+                                        val key = (dstIpInt.toLong() and 0xFFFFFFFFL) or (srcPort.toLong() shl 32) or (dstPort.toLong() shl 48)
                                         var session = synchronized(udpRelays) { udpRelays[key] }
                                         if (session == null || session.isClosed) {
+                                            val formatIp = { ip: Int -> "${(ip shr 24) and 0xFF}.${(ip shr 16) and 0xFF}.${(ip shr 8) and 0xFF}.${ip and 0xFF}" }
+                                            
                                             // DNS Hijacking: if port 53, resolve via RobustResolver
                                             if (dstPort == 53) {
                                                 val dnsPayload = packet.copyOfRange(payloadOffset, read)
@@ -495,19 +520,20 @@ class PinkVpnService : VpnService() {
                                                             if (isIpv6) {
                                                                 // Fast fallback: return empty answer for IPv6 queries to force immediate IPv4 fallback.
                                                                 val dnsReply = buildDnsReply(dnsPayload, emptyList(), isIpv6 = true)
-                                                                val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, dnsReply)
+                                                                val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
                                                                 synchronized(outputStream) {
                                                                     outputStream.write(replyPacket)
                                                                     outputStream.flush()
                                                                 }
                                                                 return@launch
+                                                                
                                                             }
                                                             
                                                             val ips = RobustResolver.resolve(parsedQuery.qname, this@PinkVpnService)
                                                             val matchedList = ips.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
                                                             if (matchedList.isNotEmpty()) {
                                                                 val dnsReply = buildDnsReply(dnsPayload, matchedList, isIpv6 = false)
-                                                                val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, dnsReply)
+                                                                val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
                                                                 synchronized(outputStream) {
                                                                     outputStream.write(replyPacket)
                                                                     outputStream.flush()
@@ -517,14 +543,14 @@ class PinkVpnService : VpnService() {
                                                             }
                                                         }
                                                     } catch (e: Exception) {
-                                                        Log.e("PinkVpnService", "DNS Hijack failed for $dstIp", e)
+                                                        Log.e("PinkVpnService", "DNS Hijack failed for ${formatIp(dstIpInt)}", e)
                                                     }
                                                     
                                                     // Fallback to normal UDP relay if hijack failed
-                                                    val realDstIp = if (dstIp == "10.0.0.3") "8.8.8.8" else dstIp
+                                                    val realDstIp = if (dstIpInt == 0x0A000003 /* 10.0.0.3 */) "8.8.8.8" else formatIp(dstIpInt)
                                                     val s = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
                                                         try {
-                                                            val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
+                                                            val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, reply)
                                                             synchronized(outputStream) {
                                                                 outputStream.write(replyPacket)
                                                                 outputStream.flush()
@@ -538,10 +564,10 @@ class PinkVpnService : VpnService() {
                                                 continue@tunLoop
                                             }
 
-                                            val realDstIp = if (dstIp == "10.0.0.3") "8.8.8.8" else dstIp
+                                            val realDstIp = if (dstIpInt == 0x0A000003 /* 10.0.0.3 */) "8.8.8.8" else formatIp(dstIpInt)
                                             session = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
                                                 try {
-                                                    val replyPacket = createUdpIpPacket(dstIp, srcIp, dstPort, srcPort, reply)
+                                                    val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, reply)
                                                     synchronized(outputStream) {
                                                         outputStream.write(replyPacket)
                                                         outputStream.flush()
@@ -568,9 +594,14 @@ class PinkVpnService : VpnService() {
                                             }
                                         }
                                     }
-                                } else if (BypassConfig.blockQuic && nextHeader == 17) { // UDP
+                                } else if (nextHeader == 6) { // TCP
+                                    val rejectPacket = IcmpHelper.createIcmpv6PortUnreachablePacket(packet, read)
+                                    synchronized(outputStream) {
+                                        outputStream.write(rejectPacket)
+                                    }
+                                } else if (nextHeader == 17) { // UDP
                                     val dstPort = ((packet[42].toInt() and 0xFF) shl 8) or (packet[43].toInt() and 0xFF)
-                                    if (dstPort == 443) {
+                                    if (dstPort == 443 || dstPort == 53) {
                                         // Reject QUIC over IPv6 to force fast TCP fallback
                                         val rejectPacket = IcmpHelper.createIcmpv6PortUnreachablePacket(packet, read)
                                         synchronized(outputStream) {
@@ -859,6 +890,7 @@ class PinkVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try { unregisterReceiver(batteryReceiver) } catch (e: Exception) {}
         stopVpn()
         serviceScope.cancel()
         BypassConfig.activeVpnService = null
@@ -892,6 +924,7 @@ class PinkVpnService : VpnService() {
         private var cachedDstAddr: InetAddress? = null
         
         init {
+            BypassConfig.KernelOptimizer.tuneUdp(socket)
             vpn.protect(socket)
             socket.soTimeout = 1000
             try {
@@ -912,20 +945,24 @@ class PinkVpnService : VpnService() {
             
             // Receiver loop
             scope.launch {
-                val buffer = ByteArray(16384)
-                while (!isClosed) {
-                    try {
-                        val packet = DatagramPacket(buffer, buffer.size)
-                        socket.receive(packet)
-                        if (packet.length > 0) {
-                            lastActivity = System.currentTimeMillis()
-                            onReply(packet.data.copyOfRange(0, packet.length))
+                val buffer = BypassConfig.TrafficShaper.acquireBuffer(16384)
+                try {
+                    while (!isClosed) {
+                        try {
+                            val packet = DatagramPacket(buffer, buffer.size)
+                            socket.receive(packet)
+                            if (packet.length > 0) {
+                                lastActivity = System.currentTimeMillis()
+                                onReply(packet.data.copyOfRange(0, packet.length))
+                            }
+                        } catch (e: Exception) {
+                            if (System.currentTimeMillis() - lastActivity > 60000) break
                         }
-                    } catch (e: Exception) {
-                        if (System.currentTimeMillis() - lastActivity > 60000) break
                     }
+                } finally {
+                    BypassConfig.TrafficShaper.releaseBuffer(buffer)
+                    close()
                 }
-                close()
             }
             
             // Sender loop
@@ -937,23 +974,66 @@ class PinkVpnService : VpnService() {
                             val addr = cachedDstAddr ?: InetAddress.getByName(dstIp)
                             val currentFd = fd
                             
-                            if (data.size > 10 && BypassConfig.strategy.value == BypassStrategy.FAKE_PACKET && currentFd != null) {
+                            if (data.size > 10 && BypassConfig.strategy.value != BypassStrategy.DIRECT && currentFd != null) {
                                 try {
                                     val isIpv6 = addr is java.net.Inet6Address
-                                    val proto = if (isIpv6) android.system.OsConstants.IPPROTO_IPV6 else android.system.OsConstants.IPPROTO_IP
-                                    val ttlOpt = if (isIpv6) android.system.OsConstants.IPV6_UNICAST_HOPS else android.system.OsConstants.IP_TTL
+                                    val osProto = if (isIpv6) android.system.OsConstants.IPPROTO_IPV6 else android.system.OsConstants.IPPROTO_IP
+                                    val osTtlOpt = if (isIpv6) android.system.OsConstants.IPV6_UNICAST_HOPS else android.system.OsConstants.IP_TTL
+                                    val strategy = BypassConfig.getBestStrategyForHost(dstIp)
+
+                                    // UDP Padding for small packets (noise)
+                                    val finalData = if (data.size in 30..300 && java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.6) {
+                                        data + ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(4, 17)) { java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte() }
+                                    } else data
+
+                                    if (finalData.size > BypassConfig.udpMtu.value && (strategy == BypassStrategy.FRAGMENT_MULTI || strategy == BypassStrategy.SNI_SPLIT || (BypassConfig.isPanicMode && java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.4))) {
+                                        // Advanced fragmentation/splitting using TrafficShaper
+                                        val isPanic = BypassConfig.isPanicMode
+                                        val s1 = BypassConfig.TrafficShaper.getChunkSize(isPanic).coerceAtMost(finalData.size - 100)
+                                        
+                                        // Part 1 with low/fake TTL
+                                        android.system.Os.setsockoptInt(currentFd, osProto, osTtlOpt, (BypassConfig.fakeTtl + java.util.concurrent.ThreadLocalRandom.current().nextInt(-1, (1) + 1)).coerceIn(3, 10))
+                                        socket.send(DatagramPacket(finalData, 0, s1, addr, dstPort))
+                                        
+                                        // Pacing & Noise
+                                        BypassConfig.TrafficShaper.pace(isPanic, s1)
+                                        if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) {
+                                            val noise = if (dstPort == 443) FakePacketHelper.buildQuicInitial() else ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(8, 33)) { java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte() }
+                                            socket.send(DatagramPacket(noise, noise.size, addr, dstPort))
+                                            BypassConfig.TrafficShaper.pace(isPanic, noise.size)
+                                        }
+                                        
+                                        // Part 2 with normal TTL
+                                        android.system.Os.setsockoptInt(currentFd, osProto, osTtlOpt, 64)
+                                        socket.send(DatagramPacket(finalData, s1, finalData.size - s1, addr, dstPort))
+                                    } else if (finalData.size > 1200 && BypassConfig.isPanicMode) {
+                                        // Forced fragmentation in Panic Mode
+                                        val isPanic = true
+                                        val s1 = BypassConfig.TrafficShaper.getChunkSize(isPanic).coerceAtMost(finalData.size - 100)
+                                        socket.send(DatagramPacket(finalData, 0, s1, addr, dstPort))
+                                        BypassConfig.TrafficShaper.pace(isPanic, s1)
+                                        socket.send(DatagramPacket(finalData, s1, finalData.size - s1, addr, dstPort))
+                                    } else {
+                                        // FAKE_PACKET or standard bypass
+                                        if (strategy == BypassStrategy.FAKE_PACKET || strategy == BypassStrategy.TCP_OOB_DESYNC || (BypassConfig.isPanicMode && java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.8)) {
+                                            android.system.Os.setsockoptInt(currentFd, osProto, osTtlOpt, (BypassConfig.fakeTtl + java.util.concurrent.ThreadLocalRandom.current().nextInt(-1, (1) + 1)).coerceIn(2, 12))
+                                            val fakePayload = if (dstPort == 443 && java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) FakePacketHelper.buildQuicInitial() else ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(4, 33)) { java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte() }
+                                            socket.send(DatagramPacket(fakePayload, fakePayload.size, addr, dstPort))
+                                            delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(1, 3))
+                                        }
+                                        android.system.Os.setsockoptInt(currentFd, osProto, osTtlOpt, 64)
+                                        socket.send(DatagramPacket(finalData, finalData.size, addr, dstPort))
+                                    }
                                     
-                                    android.system.Os.setsockoptInt(currentFd, proto, ttlOpt, BypassConfig.fakeTtl)
-                                    val fakePayload = ByteArray(data.size) { (1..255).random().toByte() }
-                                    socket.send(DatagramPacket(fakePayload, fakePayload.size, addr, dstPort))
-                                    
-                                    android.system.Os.setsockoptInt(currentFd, proto, ttlOpt, 64)
-                                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                                    // Pacing for high-volume streams
+                                    if (finalData.size > 1000) {
+                                        delay(BypassConfig.isPanicMode.let { if (it) java.util.concurrent.ThreadLocalRandom.current().nextLong(1, 4) else java.util.concurrent.ThreadLocalRandom.current().nextLong(1, 6) })
+                                    }
+                                } catch (e: Exception) { android.util.Log.v("PinkProxy", "UDP Bypass Failed: ${e.message}") }
+                            } else {
+                                socket.send(DatagramPacket(data, data.size, addr, dstPort))
                             }
-                            
-                            socket.send(DatagramPacket(data, data.size, addr, dstPort))
                         } catch (e: Exception) {
-                            // If socket send fails, it might be closed
                             if (isClosed) break
                         }
                     }
@@ -982,9 +1062,18 @@ class PinkVpnService : VpnService() {
         }
     }
 
-    private fun createUdpIpPacket(srcIp: String, dstIp: String, srcPort: Int, dstPort: Int, payload: ByteArray): ByteArray {
+    private val packetBufferTL = object : ThreadLocal<ByteBuffer>() {
+        override fun initialValue(): ByteBuffer = ByteBuffer.allocate(65535)
+    }
+    
+    private val pseudoBufferTL = object : ThreadLocal<ByteBuffer>() {
+        override fun initialValue(): ByteBuffer = ByteBuffer.allocate(65535)
+    }
+
+    private fun createUdpIpPacket(srcIpInt: Int, dstIpInt: Int, srcPort: Int, dstPort: Int, payload: ByteArray): ByteArray {
         val ipLen = 20 + 8 + payload.size
-        val buffer = ByteBuffer.allocate(ipLen)
+        val buffer = packetBufferTL.get()!!
+        buffer.clear()
         
         // IPv4 Header
         buffer.put(0x45.toByte()) // Version 4, IHL 5
@@ -997,13 +1086,11 @@ class PinkVpnService : VpnService() {
         val checksumPos = buffer.position()
         buffer.putShort(0.toShort()) // Checksum placeholder
         
-        val srcParts = srcIp.split(".")
-        srcParts.forEach { buffer.put(it.toInt().toByte()) }
-        val dstParts = dstIp.split(".")
-        dstParts.forEach { buffer.put(it.toInt().toByte()) }
+        buffer.putInt(srcIpInt)
+        buffer.putInt(dstIpInt)
         
         // Calculate IP Checksum
-        val header = buffer.array().copyOfRange(0, 20)
+        val header = buffer.array()
         var sum = 0
         for (i in 0 until 10) {
             val word = ((header[i * 2].toInt() and 0xFF) shl 8) or (header[i * 2 + 1].toInt() and 0xFF)
@@ -1026,11 +1113,10 @@ class PinkVpnService : VpnService() {
         // Calculate UDP Checksum with Pseudo-header
         try {
             val udpLen = 8 + payload.size
-            val pseudoHeader = ByteBuffer.allocate(12 + udpLen)
-            val sParts = srcIp.split(".")
-            sParts.forEach { pseudoHeader.put(it.toInt().toByte()) }
-            val dParts = dstIp.split(".")
-            dParts.forEach { pseudoHeader.put(it.toInt().toByte()) }
+            val pseudoHeader = pseudoBufferTL.get()!!
+            pseudoHeader.clear()
+            pseudoHeader.putInt(srcIpInt)
+            pseudoHeader.putInt(dstIpInt)
             pseudoHeader.put(0.toByte())
             pseudoHeader.put(17.toByte()) // Protocol UDP
             pseudoHeader.putShort(udpLen.toShort())
@@ -1042,13 +1128,14 @@ class PinkVpnService : VpnService() {
             pseudoHeader.putShort(0.toShort())
             pseudoHeader.put(payload)
             
+            val udpDataLength = 12 + udpLen
             val udpData = pseudoHeader.array()
             var sum = 0
-            for (i in 0 until (udpData.size / 2)) {
+            for (i in 0 until (udpDataLength / 2)) {
                 sum += ((udpData[i * 2].toInt() and 0xFF) shl 8) or (udpData[i * 2 + 1].toInt() and 0xFF)
             }
-            if (udpData.size % 2 != 0) {
-                sum += (udpData.last().toInt() and 0xFF) shl 8
+            if (udpDataLength % 2 != 0) {
+                sum += (udpData[udpDataLength - 1].toInt() and 0xFF) shl 8
             }
             while (sum shr 16 != 0) {
                 sum = (sum and 0xFFFF) + (sum shr 16)
@@ -1058,7 +1145,7 @@ class PinkVpnService : VpnService() {
             buffer.putShort(udpChecksumPos, checksum)
         } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
-        return buffer.array()
+        return buffer.array().copyOfRange(0, ipLen)
     }
 
     data class ParsedDnsQuery(val qname: String, val qtype: Int)

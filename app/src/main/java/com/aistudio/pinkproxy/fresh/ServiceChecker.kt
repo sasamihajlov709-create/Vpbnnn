@@ -119,12 +119,6 @@ object ServiceChecker {
             }
         }
         _internetAvailable.value = internetUp
-        if (!internetUp) {
-            _statuses.value = servicesToCheck.map { ServiceStatus(it.first, it.second, false, 0) }
-            _connectivityScore.value = 0
-            _proxyHealth.value = proxyResponsive.get()
-            return
-        }
 
         // Deep Proxy Integrity Check
         val relayResponsive = try {
@@ -170,7 +164,7 @@ object ServiceChecker {
                             }
                             
                             // Throttling detection: if latency > 6s for critical services, consider it "down"
-                            val latencyThreshold = if (name.contains("Stream")) 4000 else 6000
+                            val latencyThreshold = if (name.contains("Stream")) 4500 else 7000
                             if (isUp && (name.contains("YouTube") || name.contains("Telegram")) && attemptDuration > latencyThreshold) {
                                 isUp = false 
                             }
@@ -214,7 +208,7 @@ object ServiceChecker {
         
         _connectivityScore.value = totalWeightedScore.toInt().coerceIn(0, 100)
         
-        // Track minimum latency of all working bypass channels to estimate current network RTT
+        // Track minimum latency
         val activeLatencies = results.filter { it.isUp && it.latencyMs > 0 }.map { it.latencyMs }
         if (activeLatencies.isNotEmpty()) {
             val minRtt = activeLatencies.minOrNull() ?: 50L
@@ -225,15 +219,20 @@ object ServiceChecker {
         _proxyHealth.value = proxyResponsive.get()
         _lastCheckTime.value = System.currentTimeMillis()
 
-        // Autopilot Active Prober: If key services are blocked but we have internet, probe for a working strategy
-        val youtubeDown = results.find { it.name == "YouTube" }?.isUp == false
-        val streamDown = results.find { it.name == "YT Video Stream" }?.isUp == false
-        if (internetUp && (youtubeDown || streamDown || totalWeightedScore < 40f) && BypassConfig.isAutoTuning && !isProbing.get()) {
+        // Autopilot Prober: If score is very low, force probe
+        if (internetUp && totalWeightedScore < 35f && BypassConfig.isAutoTuning && !isProbing.get()) {
             val now = System.currentTimeMillis()
-            if (now - lastProbeTime > 120000) { // 2 minute cooldown between probes
+            if (now - lastProbeTime > 60000) { // Reduced cooldown to 1m for critical situations
                 lastProbeTime = now
                 appContext?.let { runActiveProbing(it) }
             }
+        }
+        
+        // Anti-Block: If score is 0 and internet is UP, trigger Panic mode
+        if (internetUp && totalWeightedScore == 0f && results.isNotEmpty()) {
+            ProxyStats.logRecovery("CRITICAL: Total Block Detected (Score 0). Triggering Emergency Recovery.")
+            BypassConfig.panicOptimize()
+            RobustResolver.clearCache()
         }
     }
 
@@ -313,8 +312,41 @@ object ServiceChecker {
                 val streamDown = _statuses.value.find { it.name == "YT Video Stream" }?.isUp == false
                 val delayTime = if (youtubeDown || streamDown) 8000L else 30000L // 8s down, 30s up
                 // Add minor jitter to avoid synchronized wakeups
-                val jitter = (Math.random() * 2000).toLong()
+                val jitter = (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 2000).toLong()
                 delay(delayTime + jitter)
+            }
+        }
+    }
+
+    suspend fun probeHostWithStrategy(host: String, strategy: BypassStrategy): Boolean {
+        return withContext(Dispatchers.IO) {
+            var socket: java.net.Socket? = null
+            try {
+                val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
+                if (ips.isEmpty()) return@withContext false
+                
+                socket = java.net.Socket()
+                BypassConfig.activeVpnService?.protect(socket)
+                socket.soTimeout = 2000
+                withTimeout(4000) {
+                    socket.connect(java.net.InetSocketAddress(ips.first(), 443), 2000)
+                    val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(40, 91))
+                    BypassConfig.applyBypass(
+                        socket, 
+                        socket.getOutputStream(), 
+                        hello, 
+                        hello.size, 
+                        BypassConfig.getSessionConfig(host, strategy, 100L), 
+                        host
+                    )
+                    socket.getOutputStream().flush()
+                    val response = ByteArray(5)
+                    socket.getInputStream().read(response) >= 1
+                }
+            } catch (e: Exception) {
+                false
+            } finally {
+                try { socket?.close() } catch (e: Exception) {}
             }
         }
     }
@@ -353,7 +385,7 @@ object ServiceChecker {
                             socket.soTimeout = 1500
                             withTimeout(3500) {
                                 socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
-                                val hello = FakePacketHelper.buildFakeClientHello(testHost, (40..90).random())
+                                val hello = FakePacketHelper.buildFakeClientHello(testHost, java.util.concurrent.ThreadLocalRandom.current().nextInt(40, 91))
                                 BypassConfig.applyBypass(
                                     socket, 
                                     socket.getOutputStream(), 

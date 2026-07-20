@@ -194,6 +194,11 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
     val currentRttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
     val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
     val topHosts by ProxyStats.topHosts.collectAsStateWithLifecycle(initialValue = emptyList())
+    val pool8kSize by ProxyStats.pool8kSize.collectAsStateWithLifecycle(initialValue = 0)
+    val pool16kSize by ProxyStats.pool16kSize.collectAsStateWithLifecycle(initialValue = 0)
+    val congestionWindow by ProxyStats.congestionWindow.collectAsStateWithLifecycle(initialValue = 10)
+    val dnsSuccess by ProxyStats.dnsSuccessCount.collectAsStateWithLifecycle(initialValue = 0L)
+    val dnsFailure by ProxyStats.dnsFailureCount.collectAsStateWithLifecycle(initialValue = 0L)
     var showStrategyMenu by remember { mutableStateOf(false) }
     
     var sessionTime by remember { mutableStateOf(0L) }
@@ -396,6 +401,86 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                 // Moved to root of composable
 
                 Row(
+                    modifier = Modifier.padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Autopilot Badge
+                    Surface(
+                        color = Color(0xFFF48FB1).copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0xFFF48FB1).copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(Color(0xFFF48FB1), CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "AUTOPILOT CORE ACTIVE",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFF48FB1),
+                                letterSpacing = 1.sp
+                            )
+                        }
+                    }
+
+                    // DNS Shield Badge
+                    Surface(
+                        color = Color(0xFF64B5F6).copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0xFF64B5F6).copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF64B5F6),
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            val dnsText = if (BypassConfig.isPanicMode) "EMERGENCY DNS" else "DNS DUAL-SHIELD"
+                            Text(
+                                text = dnsText,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF64B5F6),
+                                letterSpacing = 1.sp
+                            )
+                        }
+                    }
+
+                    // Network MTU Badge
+                    val currentMtu by BypassConfig.currentMtu.collectAsState()
+                    Surface(
+                        color = Color(0xFF81C784).copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0xFF81C784).copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "MTU $currentMtu",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF81C784),
+                                letterSpacing = 1.sp
+                            )
+                        }
+                    }
+                }
+
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 24.dp),
@@ -548,7 +633,77 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                 Spacer(modifier = Modifier.height(86.dp))
             }
             
-            val buttonColor by animateColorAsState(
+                // Core Engine Diagnostics
+                if (isActive) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 24.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.Black.copy(alpha = 0.3f))
+                            .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = "CORE ENGINE DIAGNOSTICS",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFF48FB1).copy(alpha = 0.8f),
+                            letterSpacing = 1.sp,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("MEMORY POOL", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
+                                Text("8K: $pool8kSize/64 | 16K: $pool16kSize/32", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("SCHEDULER", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
+                                val schedulerLoad = (activeConnections * 5).coerceIn(0, 100)
+                                Text("$schedulerLoad% LOAD", fontSize = 11.sp, color = if (schedulerLoad > 80) Color(0xFFE57373) else Color(0xFF81C784), fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("TRAFFIC PACER", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
+                                val pacerStatus = if (currentRttMs > 300) "CONGESTED" else "OPTIMAL"
+                                Text(pacerStatus, fontSize = 11.sp, color = if (pacerStatus == "OPTIMAL") Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("CONGESTION WINDOW", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
+                                Text("$congestionWindow PACKETS", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("ROBUST RESOLVER", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
+                                Text("S: $dnsSuccess | F: $dnsFailure", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("DNS CACHE", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
+                                Text("${RobustResolver.dnsCacheSize} ENTRIES", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                val buttonColor by animateColorAsState(
                 targetValue = if (isActive) Color(0xFFB0124D) else Color(0xFFF8BBD0).copy(alpha = 0.05f),
                 animationSpec = tween(500), label = "btnColor"
             )

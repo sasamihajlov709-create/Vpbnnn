@@ -7,7 +7,7 @@ import android.util.Log
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (Intent.ACTION_BOOT_COMPLETED == intent.action) {
+        if (Intent.ACTION_BOOT_COMPLETED == intent.action || Intent.ACTION_MY_PACKAGE_REPLACED == intent.action || "android.intent.action.QUICKBOOT_POWERON" == intent.action) {
             Log.i("BootReceiver", "PinkProxy received BOOT_COMPLETED. Checking if VPN should restart...")
             val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
             val vpnWasActive = prefs.getBoolean("vpn_was_active", false)

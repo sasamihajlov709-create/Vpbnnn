@@ -32,10 +32,11 @@ android {
           keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
           keyPassword = System.getenv("KEY_PASSWORD")
       } else {
-          storeFile = file("${rootDir}/debug.keystore")
-          storePassword = "android"
-          keyAlias = "androiddebugkey"
-          keyPassword = "android"
+          val debugConfig = signingConfigs.getByName("debug")
+          storeFile = debugConfig.storeFile
+          storePassword = debugConfig.storePassword
+          keyAlias = debugConfig.keyAlias
+          keyPassword = debugConfig.keyPassword
       }
     }
   }
@@ -109,9 +110,8 @@ dependencies {
   // implementation(libs.firebase.appcheck.recaptcha)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  // Commented out unused dependencies to optimize APK size
-  // implementation(libs.logging.interceptor)
-  // implementation(libs.okhttp)
+  implementation(libs.logging.interceptor)
+  implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
