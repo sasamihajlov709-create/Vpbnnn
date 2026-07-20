@@ -65,7 +65,7 @@ object ServiceChecker {
     val isProbingState: StateFlow<Boolean> = _isProbingState.asStateFlow()
     private val isProbing = java.util.concurrent.atomic.AtomicBoolean(false)
     private var lastProbeTime = 0L
-    private var appContext: android.content.Context? = null
+    var appContext: android.content.Context? = null
     
     fun triggerCheck() {
         val scope = internalScope ?: return
@@ -222,7 +222,8 @@ object ServiceChecker {
         // Autopilot Prober: If score is very low, force probe
         if (internetUp && totalWeightedScore < 35f && BypassConfig.isAutoTuning && !isProbing.get()) {
             val now = System.currentTimeMillis()
-            if (now - lastProbeTime > 60000) { // Reduced cooldown to 1m for critical situations
+            val cooldown = if (BypassConfig.isCharging) 60000L else 180000L // 3m cooldown on battery
+            if (now - lastProbeTime > cooldown) { 
                 lastProbeTime = now
                 appContext?.let { runActiveProbing(it) }
             }

@@ -160,7 +160,6 @@ object ProxyStats {
                      lastDataSent.set(nowTime)
                      lastDataReceived.set(nowTime)
                 }
-                } else {
                     delay(5000)
                 }
             }
@@ -545,7 +544,11 @@ object BypassConfig {
     var fakeTtl = 3
     var blockQuic = true
     var isAutoTuning = true
-    var isPanicMode = false
+    private val _isPanicModeFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val isPanicModeFlow: kotlinx.coroutines.flow.StateFlow<Boolean> = _isPanicModeFlow.asStateFlow()
+    var isPanicMode: Boolean
+        get() = _isPanicModeFlow.value
+        set(value) { _isPanicModeFlow.value = value }
     var isCharging = true
 
     fun autoTuneFragmentation(intensity: Int) {
@@ -689,6 +692,7 @@ object BypassConfig {
         }
     }
 
+    @android.annotation.SuppressLint("SoonBlockedPrivateApi")
     object KernelOptimizer {
         fun optimize(socket: java.net.Socket, isPanic: Boolean) {
             try {
@@ -838,7 +842,16 @@ object BypassConfig {
     private val hostTtlMap = ConcurrentHashMap<String, Int>()
 
     fun getBestStrategyForHost(host: String): BypassStrategy {
+        
         val lHost = host.lowercase(java.util.Locale.ROOT)
+        // Auto-Direct (Split Tunneling): Bypass proxy engine completely for RU domains and known local services
+        if (lHost.endsWith(".ru") || lHost.endsWith(".su") || lHost.endsWith(".рф") || 
+            lHost.contains("yandex") || lHost.contains("vk.com") || lHost.contains("gosuslugi") ||
+            lHost.contains("sberbank") || lHost.contains("tinkoff") || lHost.contains("alfabank") ||
+            lHost.contains("mail.ru") || lHost.contains("ozon.ru") || lHost.contains("wildberries") ||
+            lHost == "localhost" || lHost.startsWith("192.168.") || lHost.startsWith("10.") || lHost.startsWith("127.")) {
+            return BypassStrategy.DIRECT
+        }
         
         // Chaos Mode: If censorship is extreme, randomize every connection to bypass temporal signatures
         if (ProxyStats.censorshipIntensity.value > 85) {
@@ -852,6 +865,18 @@ object BypassConfig {
             )
             return chaosPool.random()
         }
+        
+        val failed = hostFailedStrategies[lHost] ?: emptySet()
+        if (lHost.contains("youtube") || lHost.contains("googlevideo")) {
+             if (!failed.contains(BypassStrategy.QUIC_BOOST)) {
+                 return BypassStrategy.QUIC_BOOST
+             }
+        }
+        if (lHost.contains("discord") || lHost.contains("telegram")) {
+             if (!failed.contains(BypassStrategy.TCP_OOB_DESYNC)) {
+                 return BypassStrategy.TCP_OOB_DESYNC
+             }
+        }
 
         hostStrategyCache[lHost]?.let { return it }
         
@@ -859,7 +884,6 @@ object BypassConfig {
         if (currentGlobal == BypassStrategy.DIRECT) return BypassStrategy.DIRECT
         
         // If we have failed strategies for this host, avoid them
-        val failed = hostFailedStrategies[lHost] ?: emptySet()
         if (failed.contains(currentGlobal)) {
             // Try an alternative
             val alternatives = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.FRAGMENT_MULTI, BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC)
@@ -875,8 +899,8 @@ object BypassConfig {
     }
 
     fun reportFailure(host: String, strategyUsed: BypassStrategy) {
-        if (strategyUsed == BypassStrategy.DIRECT) return
         val lHost = host.lowercase(java.util.Locale.ROOT)
+        if (strategyUsed == BypassStrategy.DIRECT) return
         val failed = hostFailedStrategies.getOrPut(lHost) { ConcurrentHashMap.newKeySet() }
         failed.add(strategyUsed)
         hostStrategyCache.remove(lHost)
@@ -939,6 +963,13 @@ object BypassConfig {
             if (!isPanicMode) {
                 panicOptimize()
                 ProxyStats.logRecovery("AUTO-HEAL: High failure rate detected (${failures}/${lastResults.size}). Panic mode engaged.")
+                if (isAutoTuning) {
+                    val context = ServiceChecker.appContext
+                    if (context != null) {
+                        ProxyStats.logRecovery("AUTO-HEAL: Triggering autopilot probe to find a better strategy.")
+                        ServiceChecker.runActiveProbing(context)
+                    }
+                }
             }
         } else if (lastResults.size >= 10 && failures == 0 && isPanicMode) {
             // Auto-Recovery: if last 10 requests were perfect, exit panic mode
@@ -977,7 +1008,7 @@ object BypassConfig {
         delay1 = java.util.concurrent.ThreadLocalRandom.current().nextLong(120, 301)
         
         // Reset scores to favor high-success strategies
-        globalStrategyScores.forEach { (k, v) -> globalStrategyScores[k] = (v / 2).coerceAtLeast(50) }
+        globalStrategyScores.forEach { k, v -> globalStrategyScores[k] = (v / 2).coerceAtLeast(50) }
         globalStrategyScores[BypassStrategy.TCP_OOB_DESYNC] = 950
         globalStrategyScores[BypassStrategy.FAKE_PACKET] = 900
         globalStrategyScores[BypassStrategy.FRAGMENT_MULTI] = 850
@@ -1165,9 +1196,56 @@ object BypassConfig {
     fun resolveStrategyForHost(host: String): BypassStrategy = getBestStrategyForHost(host)
 
     fun reOptimize() {
-        // Placeholder for future global optimization triggers
-        ProxyStats.logRecovery("CORE: Global re-optimization triggered.")
+        if (!isAutoTuning) return
+        val successRate = ProxyStats.getSuccessRate()
+        val rtt = currentRttMs.value
+        val isPanic = isPanicMode
+        val intensity = ProxyStats.censorshipIntensity.value
+
+        ProxyStats.logRecovery("CORE: Closed-loop global parameter adaptation triggered. Current Success: $successRate%, RTT: $rtt ms, Panic: $isPanic, Intensity: $intensity")
+
+        if (successRate < 70) {
+            // Low success rate: increase fragmentation entropy (randomize lengths) and increase split-packet delays
+            // to bypass advanced DPI filters.
+            frag1 = (frag1 - 1).coerceAtLeast(1)
+            frag2 = (frag2 + 1).coerceIn(3, 8)
+            frag3 = (frag3 + 1).coerceIn(1, 4)
+            // Increase delay slightly to ensure packets don't get merged or reordered by intermediate route elements
+            delay1 = (delay1 + 5L).coerceIn(10L, 100L)
+            delay2 = (delay2 + 5L).coerceIn(10L, 80L)
+            // Shift Fake TTL slightly to bypass hop-count based DPI detectors
+            fakeTtl = if (fakeTtl <= 4) 6 else 3
+            
+            ProxyStats.logRecovery("CORE: Low success rate detected. Mutated params: Frag($frag1/$frag2/$frag3), Delay($delay1/$delay2 ms), FakeTTL: $fakeTtl")
+        } else if (successRate > 92 && rtt < 120) {
+            // High success and low latency: optimize for throughput and CPU performance
+            // Reduce unnecessary fragmentation, lower delays
+            if (frag1 < 3) frag1++
+            if (frag2 > 4) frag2--
+            if (frag3 > 2) frag3--
+            
+            delay1 = (delay1 - 5L).coerceAtLeast(10L)
+            delay2 = (delay2 - 5L).coerceAtLeast(5L)
+            
+            ProxyStats.logRecovery("CORE: Optimal performance detected. Reducing bypass overhead. Mutated params: Frag($frag1/$frag2/$frag3), Delay($delay1/$delay2 ms)")
+        } else {
+            // Neutral stable state: check if we should fine-tune delay based on latency (RTT)
+            if (rtt > 400) {
+                // High latency: lower delays to avoid compounding network latency
+                delay1 = (delay1 - 5L).coerceAtLeast(10L)
+                delay2 = (delay2 - 5L).coerceAtLeast(5L)
+            } else if (rtt < 80) {
+                // Extremely low latency: can afford slightly larger delays to improve desync probability
+                delay1 = (delay1 + 5L).coerceAtMost(40L)
+                delay2 = (delay2 + 5L).coerceAtMost(30L)
+            }
+        }
+        
+        // Run global optimization of strategies as part of the re-optimization cycle
+        runGlobalOptimization()
     }
+
+
 
     fun runGlobalOptimization() {
         if (!isAutoTuning) return
@@ -1239,7 +1317,10 @@ object BypassConfig {
                     out.write(data, splitPos, len - splitPos)
                 } else {
                     val split = config.frag1.coerceIn(1, len - 1)
-                    out.write(data, 0, split); out.flush(); delay(config.delay1); out.write(data, split, len - split)
+                    out.write(data, 0, split)
+                    out.flush()
+                    delay(config.delay1)
+                    out.write(data, split, len - split)
                 }
             }
             BypassStrategy.SNI_TRIPLE -> {
@@ -1255,8 +1336,12 @@ object BypassConfig {
                 } else {
                     val split1 = (len / 3).coerceAtLeast(1)
                     val split2 = (2 * len / 3).coerceAtLeast(split1 + 1).coerceAtMost(len - 1)
-                    out.write(data, 0, split1); out.flush(); delay(config.delay1)
-                    out.write(data, split1, split2 - split1); out.flush(); delay(config.delay2)
+                    out.write(data, 0, split1)
+                    out.flush()
+                    delay(config.delay1)
+                    out.write(data, split1, split2 - split1)
+                    out.flush()
+                    delay(config.delay2)
                     out.write(data, split2, len - split2)
                 }
             }
@@ -1299,7 +1384,7 @@ object BypassConfig {
             }
             BypassStrategy.HTTP_MANGLE -> {
                 val sData = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
-                if (sData.contains("Host: ", ignoreCase = true) || sData.contains("GET ", ignoreCase = true)) {
+                if (sData.contains("Host: ", ignoreCase = true) || sData.contains("GET ", ignoreCase = true) || sData.contains("POST ", ignoreCase = true)) {
                     val mangled = sData.replace("Host: ", "hOsT: ")
                                       .replace("host: ", "HoSt: ")
                                       .replace("GET /", "GET  /")
@@ -1324,7 +1409,6 @@ object BypassConfig {
                         if (match) {
                             if (i + hBytes.size < len && mData[i + hBytes.size] == 0.toByte()) {
                                 mData[i + hBytes.size] = '.'.code.toByte()
-                            } else {
                                 for (j in hBytes.indices) {
                                     if (j % 2 == 0) {
                                         val c = mData[i + j].toInt().toChar()
@@ -1341,8 +1425,15 @@ object BypassConfig {
             BypassStrategy.TLS_PAD -> {
                 val split = (len / 2).coerceAtLeast(1)
                 out.write(data, 0, split)
+                out.flush()
+                
+                TtlHelper.setTtl(socket, config.fakeTtl)
                 val padding = ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(32, 129)) { 0 }
-                out.write(padding); out.flush(); delay(15)
+                out.write(padding)
+                out.flush()
+                delay(config.delay1)
+                
+                TtlHelper.setTtl(socket, 64)
                 out.write(data, split, len - split)
             }
             BypassStrategy.TLS_GREASE -> {
@@ -1389,21 +1480,31 @@ object BypassConfig {
                     }
                     if (sniOffset + hostnameLen < len) {
                         val split = sniOffset + (hostnameLen / 2)
-                        out.write(data, 0, split); out.flush(); delay(config.delay1)
+                        out.write(data, 0, split)
+                        out.flush()
+                        delay(config.delay1)
                         out.write(data, split, len - split)
                     } else {
                         val split = (len / 2).coerceAtLeast(1)
-                        out.write(data, 0, split); out.flush(); delay(config.delay1)
+                        out.write(data, 0, split)
+                        out.flush()
+                        delay(config.delay1)
                         out.write(data, split, len - split)
                     }
                 } else if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
-                    val str = String(data, 0, len)
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
                     val mangled = str.replace("Host: ", "hOsT: ").replace("host: ", "HoSt: ")
-                    val mBytes = mangled.toByteArray()
-                    out.write(mBytes, 0, mBytes.size)
+                    val mBytes = mangled.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val split = (mBytes.size / 2).coerceAtLeast(1)
+                    out.write(mBytes, 0, split)
+                    out.flush()
+                    delay(config.delay1)
+                    out.write(mBytes, split, mBytes.size - split)
                 } else {
                     val split = (len / 2).coerceAtLeast(1)
-                    out.write(data, 0, split); out.flush(); delay(config.delay1)
+                    out.write(data, 0, split)
+                    out.flush()
+                    delay(config.delay1)
                     out.write(data, split, len - split)
                 }
             }
@@ -1475,9 +1576,7 @@ object BypassConfig {
                     val mBytes = mangled.toByteArray()
                     out.write(mBytes, 0, mBytes.size)
                 } else {
-                    val split = config.frag1.coerceIn(1, len - 1)
-                    out.write(data, 0, split); out.flush(); delay(config.delay1)
-                    out.write(data, split, len - split)
+                    out.write(data, 0, len)
                 }
             }
             BypassStrategy.HTTP_TAB -> {
@@ -1487,9 +1586,7 @@ object BypassConfig {
                     val mBytes = mangled.toByteArray()
                     out.write(mBytes, 0, mBytes.size)
                 } else {
-                    val split = config.frag1.coerceIn(1, len - 1)
-                    out.write(data, 0, split); out.flush(); delay(config.delay1)
-                    out.write(data, split, len - split)
+                    out.write(data, 0, len)
                 }
             }
             BypassStrategy.WINDOW_SIZE -> {
@@ -1559,11 +1656,11 @@ object BypassConfig {
             BypassStrategy.QUIC_BOOST -> {
                 var offset = 0
                 while (offset < len) {
-                    val chunk = java.util.concurrent.ThreadLocalRandom.current().nextInt(100, 300 + 1).coerceAtMost(len - offset)
+                    val chunk = java.util.concurrent.ThreadLocalRandom.current().nextInt(100, 400 + 1).coerceAtMost(len - offset)
                     out.write(data, offset, chunk)
                     out.flush()
                     offset += chunk
-                    if (offset < len) delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 16))
+                    if (offset < len) delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(3, 10))
                 }
             }
             BypassStrategy.CHAOS -> {
@@ -1658,15 +1755,23 @@ object BypassConfig {
     fun getHostConsecutiveFailures(host: String): Int = hostConsecutiveFailures[host] ?: 0
     fun recordHostConsecutiveFailure(host: String, count: Int) { 
         hostConsecutiveFailures[host] = count 
-        // Memory Optimization: prune maps if too large
+        pruneMemoryIfNeeded()
+    }
+    
+    fun pruneMemoryIfNeeded() {
         if (hostConsecutiveFailures.size > 500) {
-            val toRemove = hostConsecutiveFailures.keys.take(100)
-            toRemove.forEach { hostConsecutiveFailures.remove(it) }
+            hostConsecutiveFailures.keys.take(100).forEach { hostConsecutiveFailures.remove(it) }
         }
-        if (hostDnas.size > 1000) {
-            val toRemove = hostDnas.keys.take(200)
+        if (hostDnas.size > 500) {
+            val now = System.currentTimeMillis()
+            val toRemove = hostDnas.entries.filter { now - it.value.lastSuccess > 86400000 }.map { it.key }
             toRemove.forEach { hostDnas.remove(it) }
+            if (hostDnas.size > 500) hostDnas.keys.take(100).forEach { hostDnas.remove(it) }
         }
+        if (hostStrategyCache.size > 1000) hostStrategyCache.keys.take(200).forEach { hostStrategyCache.remove(it) }
+        if (hostSuccessStrategies.size > 500) hostSuccessStrategies.keys.take(100).forEach { hostSuccessStrategies.remove(it) }
+        if (hostSuccessCount.size > 500) hostSuccessCount.keys.take(100).forEach { hostSuccessCount.remove(it) }
+        if (hostTtlMap.size > 500) hostTtlMap.keys.take(100).forEach { hostTtlMap.remove(it) }
     }
 
     fun findSniPosition(data: ByteArray, len: Int, host: String?): Int {
@@ -1770,8 +1875,8 @@ object BypassConfig {
             .joinToString(";") { "${it.key}|${it.value}" }
         edit.putString("success_counts", countStr)
 
-        wifiStrategyScores.forEach { (strat, score) -> edit.putInt("wifi_${strat.name}", score) }
-        mobileStrategyScores.forEach { (strat, score) -> edit.putInt("mobile_${strat.name}", score) }
+        wifiStrategyScores.forEach { strat, score -> edit.putInt("wifi_${strat.name}", score) }
+        mobileStrategyScores.forEach { strat, score -> edit.putInt("mobile_${strat.name}", score) }
         
         edit.apply()
     }
@@ -1947,9 +2052,40 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
     }
     
     private val connectionPool = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.LinkedBlockingQueue<PooledConnection>>()
-    private val MAX_POOL_SIZE = 5
+    private val MAX_POOL_SIZE: Int get() = if (BypassConfig.isCharging) 5 else 1
+
+    private fun startPreWarmer() {
+        serverScope.launch {
+            while (isActive) {
+                delay(20000)
+                try {
+                    // Pre-warm connections for the top 3 hosts to achieve 0-RTT connection latency
+                    val top = ProxyStats.topHosts.value.take(3).map { it.first }
+                    for (host in top) {
+                        val port = 443
+                        val lHost = host.lowercase(java.util.Locale.ROOT)
+                        val pool = connectionPool.getOrPut(lHost + ":" + port) { java.util.concurrent.LinkedBlockingQueue(MAX_POOL_SIZE) }
+                        
+                        if (pool.size < 2) { // Keep at least 2 warm connections
+                            val ips = RobustResolver.resolve(host, vpnService)
+                            if (ips.isNotEmpty()) {
+                                val sock = java.net.Socket()
+                                vpnService?.protect(sock)
+                                sock.soTimeout = 10000
+                                kotlinx.coroutines.withTimeoutOrNull(5000) {
+                                    sock.connect(java.net.InetSocketAddress(ips.first(), port), 3000)
+                                    pool.offer(PooledConnection(sock))
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+            }
+        }
+    }
 
     init {
+        startPreWarmer()
         serverScope.launch {
             while (isActive) {
                 delay(15000) // Run more frequent checks
@@ -1961,7 +2097,6 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         if (!pc.isAlive()) {
                             try { pc.socket.close() } catch (e: Exception) {}
                             it.remove()
-                        } else {
                             // Optional: Send a minimal TCP Keep-Alive probe if needed
                             // But usually pc.isAlive() check above with TTL is enough
                         }
@@ -2101,11 +2236,98 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
     }
 
     private suspend fun handleUdpPacket(packet: java.net.DatagramPacket) {
-        // This UDP relay on the proxy port (PROXY_PORT + 1) is currently a placeholder.
-        // Direct UDP traffic from the TUN interface is handled by PinkVpnService directly.
-        // We log metrics here for future SOCKS5 UDP relay support if needed.
-        ProxyStats.recordDataReceived()
-        ProxyStats.recordDataSent()
+        val data = packet.data
+        val len = packet.length
+        if (len < 10) return
+        if (data[0].toInt() != 0 || data[1].toInt() != 0) return // RSV
+        val frag = data[2].toInt() // FRAG
+        val atyp = data[3].toInt() // ATYP
+        
+        var dstHost = ""
+        var dstPort = 0
+        var headerLen = 0
+        
+        when (atyp) {
+            1 -> { // IPv4
+                if (len < 10) return
+                dstHost = "${data[4].toUByte()}.${data[5].toUByte()}.${data[6].toUByte()}.${data[7].toUByte()}"
+                dstPort = ((data[8].toInt() and 0xFF) shl 8) or (data[9].toInt() and 0xFF)
+                headerLen = 10
+            }
+            3 -> { // Domain
+                val dlen = data[4].toInt() and 0xFF
+                if (len < 7 + dlen) return
+                dstHost = String(data, 5, dlen)
+                dstPort = ((data[5 + dlen].toInt() and 0xFF) shl 8) or (data[6 + dlen].toInt() and 0xFF)
+                headerLen = 7 + dlen
+            }
+            else -> return // IPv6 not supported yet
+        }
+        
+        val payload = data.copyOfRange(headerLen, len)
+        val clientKey = "${packet.address.hostAddress}:${packet.port}"
+        var session = udpSessions[clientKey]
+        
+        if (session == null || session.targetSocket.isClosed) {
+            val sock = java.net.DatagramSocket()
+            session = UdpSession(packet.address, packet.port, sock, System.currentTimeMillis())
+            udpSessions[clientKey] = session
+            
+            serverScope.launch(Dispatchers.IO) {
+                val buf = ByteArray(16384)
+                while (isActive && !sock.isClosed) {
+                    try {
+                        val rxPacket = java.net.DatagramPacket(buf, buf.size)
+                        sock.receive(rxPacket)
+                        
+                        val replyPort = rxPacket.port
+                        val header = byteArrayOf(0, 0, 0, 1, 0, 0, 0, 0, (replyPort shr 8).toByte(), replyPort.toByte())
+                        
+                        val finalPayload = ByteArray(10 + rxPacket.length)
+                        System.arraycopy(header, 0, finalPayload, 0, 10)
+                        System.arraycopy(rxPacket.data, 0, finalPayload, 10, rxPacket.length)
+                        
+                        val outPacket = java.net.DatagramPacket(finalPayload, finalPayload.size, packet.address, packet.port)
+                        udpSocket?.send(outPacket)
+                        ProxyStats.recordDataReceived()
+                    } catch(e: Exception) {
+                        break
+                    }
+                }
+            }
+        }
+        
+        session.lastActivity = System.currentTimeMillis()
+        try {
+            val targetAddr = if (dstHost.matches(Regex("^[0-9.]+$"))) java.net.InetAddress.getByName(dstHost) else RobustResolver.resolve(dstHost, vpnService).firstOrNull()
+            if (targetAddr != null) {
+                val isQuicOrStreaming = dstPort == 443 || HostClassifier.classify(dstHost) == HostCategory.STREAMING
+                val currentStrategy = BypassConfig.strategy.value
+                val isBypassActive = BypassConfig.isAutoTuning && (currentStrategy == BypassStrategy.QUIC_BOOST || currentStrategy == BypassStrategy.CHAOS || currentStrategy == BypassStrategy.FAKE_PACKET)
+
+                if (isBypassActive && isQuicOrStreaming && payload.size > 50) {
+                    try {
+                        TtlHelper.setUdpTtl(session.targetSocket, BypassConfig.fakeTtl)
+                        val decoySize = java.util.concurrent.ThreadLocalRandom.current().nextInt(64, 256)
+                        val decoyBytes = ByteArray(decoySize) { java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte() }
+                        if (decoyBytes.isNotEmpty()) {
+                            decoyBytes[0] = (0x40 or java.util.concurrent.ThreadLocalRandom.current().nextInt(16)).toByte()
+                        }
+                        val decoyPacket = java.net.DatagramPacket(decoyBytes, decoyBytes.size, targetAddr, dstPort)
+                        session.targetSocket.send(decoyPacket)
+                        kotlinx.coroutines.delay(2)
+                    } catch (e: Exception) {
+                        android.util.Log.v("PinkProxy", "UDP Decoy failed: ${e.message}")
+                    } finally {
+                        TtlHelper.setUdpTtl(session.targetSocket, 64)
+                    }
+                }
+
+                val outPacket = java.net.DatagramPacket(payload, payload.size, targetAddr, dstPort)
+                session.targetSocket.send(outPacket)
+                ProxyStats.recordDataSent()
+            }
+        } catch(e: Exception) {}
     }
 
     fun stop() { 
@@ -2135,6 +2357,12 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             try {
                 val read = input.read(headerBuffer)
                 if (read <= 0) { client.close(); return }
+                
+                if (headerBuffer[0] == 0x05.toByte()) {
+                    handleSocks5(client, headerBuffer, read, output, input)
+                    return
+                }
+                
                 val header = String(headerBuffer, 0, read, Charsets.UTF_8)
                 val firstLine = header.substringBefore("\r").substringBefore("\n").trim()
                 if (firstLine.startsWith("CONNECT", ignoreCase = true)) {
@@ -2145,7 +2373,6 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         val portStr = hostPort.substringAfter(":", "443")
                         val port = portStr.toIntOrNull() ?: 443
                         handleHttps(client, host, port, output, input)
-                    } else {
                         client.close()
                     }
                 } else { handleHttp(client, header, output, input) }
@@ -2161,139 +2388,417 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         }
     }
 
-    private suspend fun handleHttps(client: Socket, host: String, port: Int, clientOut: OutputStream, clientIn: InputStream) {
-        val strategy = BypassConfig.resolveStrategyForHost(host); val config = BypassConfig.getSessionConfig(host, strategy, 100L)
-        var connected = false
-        val lHost = host.lowercase(java.util.Locale.ROOT)
-        var target: Socket? = null
-        val poolQueue = connectionPool[lHost + ":" + port]
-        if (poolQueue != null) {
-            var pc = poolQueue.poll()
-            while (pc != null) {
-                if (pc.isAlive()) {
-                    target = pc.socket
-                    break
-                } else {
-                    try { pc.socket.close() } catch (e: Exception) {}
-                }
-                pc = poolQueue.poll()
+    private suspend fun handleSocks5(client: Socket, initialBuffer: ByteArray, initialRead: Int, clientOut: OutputStream, clientIn: InputStream) {
+        // Step 1: Initial greeting already read in initialBuffer
+        // Send NO AUTH (0x05, 0x00)
+        clientOut.write(byteArrayOf(0x05, 0x00))
+        clientOut.flush()
+        
+        // Step 2: Read request
+        val reqBuf = ByteArray(512)
+        val read = clientIn.read(reqBuf)
+        if (read < 4) return
+        
+        if (reqBuf[0] != 0x05.toByte() || (reqBuf[1] != 0x01.toByte() && reqBuf[1] != 0x03.toByte())) { 
+            clientOut.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0,0,0,0, 0,0))
+            return
+        }
+        
+        val isUdp = reqBuf[1] == 0x03.toByte()
+        
+        var host = ""
+        val atyp = reqBuf[3].toInt()
+        var pos = 4
+        
+        when (atyp) {
+            0x01 -> { // IPv4
+                host = "${reqBuf[4].toUByte()}.${reqBuf[5].toUByte()}.${reqBuf[6].toUByte()}.${reqBuf[7].toUByte()}"
+                pos = 8
+            }
+            0x03 -> { // Domain
+                val len = reqBuf[4].toInt() and 0xFF
+                host = String(reqBuf, 5, len, Charsets.UTF_8)
+                pos = 5 + len
+            }
+            0x04 -> { // IPv6
+                // Simplified IPv6 representation, assuming RobustResolver handles it if needed
+                host = ""
+                pos = 20
             }
         }
-        try {
-            if (target == null) {
-                val ips = RobustResolver.resolve(host, vpnService); if (ips.isEmpty()) throw Exception("DNS Failed")
-                
-                target = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    val deferredSocket = kotlinx.coroutines.CompletableDeferred<Socket>()
-                    val activeJobs = mutableListOf<kotlinx.coroutines.Job>()
-                    
-                    kotlinx.coroutines.supervisorScope {
-                        for (ip in ips) {
-                            val job = launch {
-                                val sock = Socket()
-                                try {
-                                    vpnService.protect(sock)
-                                    sock.connect(InetSocketAddress(ip, port), 2500)
-                                    sock.soTimeout = 30000
-                                    BypassConfig.KernelOptimizer.optimize(sock, BypassConfig.isPanicMode)
-                                    
-                                    val osTtl = if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) java.util.concurrent.ThreadLocalRandom.current().nextInt(60, 64 + 1) else java.util.concurrent.ThreadLocalRandom.current().nextInt(120, 128 + 1)
-                                    TtlHelper.setTtl(sock, osTtl)
-                                    
-                                    if (deferredSocket.complete(sock)) {
-                                        RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
-                                    } else {
-                                        try { sock.close() } catch (e: Exception) {}
-                                    }
-                                } catch (e: Exception) {
-                                    try { sock.close() } catch (ex: Exception) {}
-                                    RobustResolver.recordIpFailure(ip.hostAddress ?: "")
-                                }
-                            }
-                            activeJobs.add(job)
-                            // Staggered start: RFC 8305 suggests 250ms, we use 150ms for aggressive performance
-                            delay(150)
-                            if (deferredSocket.isCompleted) break
+        
+        if (!isUdp && (host.isEmpty() || pos + 1 >= read)) {
+            clientOut.write(byteArrayOf(0x05, 0x04, 0x00, 0x01, 0,0,0,0, 0,0))
+            return
+        }
+        
+        if (isUdp) {
+            val p = port + 1
+            clientOut.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, (p shr 8).toByte(), p.toByte()))
+            clientOut.flush()
+            
+            try {
+                val dummy = ByteArray(1024)
+                while (clientIn.read(dummy) >= 0) {
+                    kotlinx.coroutines.delay(2000)
+                }
+            } catch (e: Exception) {}
+            return
+        }
+        
+        val port = ((reqBuf[pos].toInt() and 0xFF) shl 8) or (reqBuf[pos+1].toInt() and 0xFF)
+        
+        var target: Socket? = null
+        var activeStrategy = BypassStrategy.FAKE_PACKET
+        var activeConfig = BypassConfig.getSessionConfig(host, activeStrategy, 100L)
+        var connectionEstablished = false
+        val lHost = host.lowercase(java.util.Locale.ROOT)
+        
+        val helloBuffer = BypassConfig.TrafficShaper.acquireBuffer(8192)
+        var helloRead = 0
+
+        val maxAttempts = 3
+        var attempt = 0
+        while (attempt < maxAttempts && !connectionEstablished) {
+            attempt++
+            activeStrategy = BypassConfig.resolveStrategyForHost(host)
+            activeConfig = BypassConfig.getSessionConfig(host, activeStrategy, 100L)
+            
+            // Try to reuse pool if it's the first attempt and strategy matches or is compatible
+            if (attempt == 1) {
+                val poolQueue = connectionPool[lHost + ":" + port]
+                if (poolQueue != null) {
+                    var pc = poolQueue.poll()
+                    while (pc != null) {
+                        if (pc.isAlive()) {
+                            target = pc.socket
+                            break
                         }
-                        
-                        try {
-                            val winner = deferredSocket.await()
-                            activeJobs.forEach { if (it.isActive) it.cancel() }
-                            winner
-                        } catch (e: Exception) {
-                            null
-                        }
+                        try { pc.socket.close() } catch (e: Exception) {}
+                        pc = poolQueue.poll()
                     }
                 }
-                if (target != null) connected = true
-            } else {
-                connected = true
-            }
-            if (!connected || target == null) throw Exception("All IPs failed")
-            
-            // Optimization: Set buffer sizes based on strategy to influence TCP window
-            if (strategy == BypassStrategy.WINDOW_SIZE || strategy == BypassStrategy.TCP_ZERO_WINDOW) {
-                target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
-                target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
-            } else if (strategy == BypassStrategy.TCP_WINDOW_CLAMP) {
-                target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
-                target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
             }
 
-            clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray()); clientOut.flush()
-            val targetOut = target.getOutputStream(); val targetIn = target.getInputStream()
-            
-            val helloBuffer = BypassConfig.TrafficShaper.acquireBuffer(8192)
             try {
-                val helloRead = clientIn.read(helloBuffer)
-                if (helloRead > 0) {
-                    try {
-                        BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, config, host)
-                        BypassConfig.reportSuccess(host, strategy)
-                        BypassConfig.recordStrategyResult(host, strategy, true)
-                    } catch (e: java.io.IOException) {
-                        if (e.message?.contains("reset", ignoreCase = true) == true) {
-                            BypassConfig.recordDpiFault(host)
+                if (target == null) {
+                    val ips = RobustResolver.resolve(host, vpnService)
+                    if (ips.isEmpty()) throw Exception("DNS Failed")
+                    
+                    target = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val deferredSocket = kotlinx.coroutines.CompletableDeferred<Socket>()
+                        val activeJobs = mutableListOf<kotlinx.coroutines.Job>()
+                        
+                        kotlinx.coroutines.supervisorScope {
+                            for (ip in ips) {
+                                val job = launch {
+                                    val sock = Socket()
+                                    try {
+                                        vpnService.protect(sock)
+                                        sock.connect(InetSocketAddress(ip, port), 2500)
+                                        sock.soTimeout = 30000
+                                        BypassConfig.KernelOptimizer.optimize(sock, BypassConfig.isPanicMode)
+                                        
+                                        val osTtl = if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) java.util.concurrent.ThreadLocalRandom.current().nextInt(60, 64 + 1) else java.util.concurrent.ThreadLocalRandom.current().nextInt(120, 128 + 1)
+                                        TtlHelper.setTtl(sock, osTtl)
+                                        
+                                        if (deferredSocket.complete(sock)) {
+                                            RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
+                                        } else {
+                                            try { sock.close() } catch (e: Exception) {}
+                                        }
+                                    } catch (e: Exception) {
+                                        try { sock.close() } catch (ex: Exception) {}
+                                        RobustResolver.recordIpFailure(ip.hostAddress ?: "")
+                                    }
+                                }
+                                activeJobs.add(job)
+                                delay(150)
+                                if (deferredSocket.isCompleted) break
+                            }
+                            
+                            try {
+                                val winner = deferredSocket.await()
+                                activeJobs.forEach { if (it.isActive) it.cancel() }
+                                winner
+                            } catch (e: Exception) {
+                                null
+                            }
                         }
-                        throw e
                     }
                 }
-            } finally {
-                BypassConfig.TrafficShaper.releaseBuffer(helloBuffer)
+
+                if (target == null) throw Exception("All destination IPs failed to connect")
+
+                // Set buffer sizes and optimizations
+                val category = HostClassifier.classify(host)
+                val netType = BypassConfig.currentNetworkType.value
+                if (activeStrategy == BypassStrategy.WINDOW_SIZE || activeStrategy == BypassStrategy.TCP_ZERO_WINDOW) {
+                    target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
+                    target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
+                } else if (activeStrategy == BypassStrategy.TCP_WINDOW_CLAMP) {
+                    target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
+                    target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
+                } else {
+                    val isHighSpeed = netType == NetworkType.WIFI
+                    val isStreamingOrGaming = category == HostCategory.STREAMING || category == HostCategory.GAMING
+                    target.receiveBufferSize = if (isHighSpeed) (if (isStreamingOrGaming) 256 * 1024 else 128 * 1024) else (if (isStreamingOrGaming) 128 * 1024 else 64 * 1024)
+                    target.sendBufferSize = if (isHighSpeed) (if (isStreamingOrGaming) 128 * 1024 else 64 * 1024) else (if (isStreamingOrGaming) 64 * 1024 else 32 * 1024)
+                }
+                
+                try {
+                    target.tcpNoDelay = true
+                    client.tcpNoDelay = true
+                    if (activeStrategy == BypassStrategy.TCP_KEEPALIVE) {
+                        target.keepAlive = true
+                        client.keepAlive = true
+                    }
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+
+                // Success reply to SOCKS5 client
+                val reply = byteArrayOf(0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0) // bind address dummy
+                clientOut.write(reply)
+                clientOut.flush()
+
+                // Apply bypass desynchronization logic on first payload
+                val targetOut = target.getOutputStream()
+                helloRead = clientIn.read(helloBuffer)
+                if (helloRead > 0) {
+                    BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, activeConfig, host)
+                }
+                
+                BypassConfig.reportSuccess(host, activeStrategy)
+                BypassConfig.recordStrategyResult(host, activeStrategy, true)
+                connectionEstablished = true
+            } catch (e: Exception) {
+                Log.w("PinkProxy", "SOCKS5 Attempt $attempt failed for $host with strategy $activeStrategy: ${e.message}")
+                if (e.message?.contains("reset", ignoreCase = true) == true || e is java.io.IOException) {
+                    BypassConfig.recordDpiFault(host)
+                }
+                BypassConfig.markHostAsCensored(host)
+                BypassConfig.reportFailure(host, activeStrategy)
+                BypassConfig.recordStrategyResult(host, activeStrategy, false)
+                BypassConfig.recordFailureForHost(host, activeStrategy, true, vpnService)
+                
+                try { target?.close() } catch (ex: Exception) {}
+                target = null
+                
+                if (attempt < maxAttempts) {
+                    delay(50L * attempt)
+                }
             }
-            
-            // Optimize timeouts for the active streaming phase
+        }
+        
+        BypassConfig.TrafficShaper.releaseBuffer(helloBuffer)
+
+        if (!connectionEstablished || target == null) {
+            Log.e("PinkProxy", "All SOCKS5 connection and bypass attempts failed for $host")
+            try { clientOut.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0,0,0,0, 0,0)) } catch (ex: Exception) {}
+            try { client.close() } catch (e: Exception) {}
+            return
+        }
+
+        try {
             client.soTimeout = 90000
             target.soTimeout = 90000
             
+            val targetOut = target.getOutputStream()
+            val targetIn = target.getInputStream()
+            
             coroutineScope {
-                val c2t = launch { proxyStream(clientIn, targetOut, { try { target?.close() } catch (e: Exception) {} }, host, false, strategy) }
-                val t2c = launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) {} }, host, true, strategy) }
+                val c2t = launch { proxyStream(clientIn, targetOut, { try { target?.close() } catch (e: Exception) {} }, host, false, activeStrategy) }
+                val t2c = launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) {} }, host, true, activeStrategy) }
+                
+                select<Unit> {
+                    c2t.onJoin {}
+                    t2c.onJoin {}
+                }
+                c2t.cancel(); t2c.cancel()
+            }
+        } catch (e: Exception) {
+            Log.v("PinkProxy", "SOCKS5 stream closed: ${e.message}")
+        } finally {
+            try { target?.close() } catch (e: Exception) {}
+        }
+    }
+
+    private suspend fun handleHttps(client: Socket, host: String, port: Int, clientOut: OutputStream, clientIn: InputStream) {
+        var target: Socket? = null
+        var activeStrategy = BypassStrategy.FAKE_PACKET
+        var activeConfig = BypassConfig.getSessionConfig(host, activeStrategy, 100L)
+        var connectionEstablished = false
+        val lHost = host.lowercase(java.util.Locale.ROOT)
+        
+        val helloBuffer = BypassConfig.TrafficShaper.acquireBuffer(8192)
+        var helloRead = 0
+        try {
+            helloRead = clientIn.read(helloBuffer)
+        } catch (e: Exception) {
+            BypassConfig.TrafficShaper.releaseBuffer(helloBuffer)
+            return
+        }
+
+        val maxAttempts = 3
+        var attempt = 0
+        while (attempt < maxAttempts && !connectionEstablished) {
+            attempt++
+            activeStrategy = BypassConfig.resolveStrategyForHost(host)
+            activeConfig = BypassConfig.getSessionConfig(host, activeStrategy, 100L)
+            
+            // Try to reuse pool if it's the first attempt and strategy matches or is compatible
+            if (attempt == 1) {
+                val poolQueue = connectionPool[lHost + ":" + port]
+                if (poolQueue != null) {
+                    var pc = poolQueue.poll()
+                    while (pc != null) {
+                        if (pc.isAlive()) {
+                            target = pc.socket
+                            break
+                        }
+                        try { pc.socket.close() } catch (e: Exception) {}
+                        pc = poolQueue.poll()
+                    }
+                }
+            }
+
+            try {
+                if (target == null) {
+                    val ips = RobustResolver.resolve(host, vpnService)
+                    if (ips.isEmpty()) throw Exception("DNS Failed")
+                    
+                    target = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val deferredSocket = kotlinx.coroutines.CompletableDeferred<Socket>()
+                        val activeJobs = mutableListOf<kotlinx.coroutines.Job>()
+                        
+                        kotlinx.coroutines.supervisorScope {
+                            for (ip in ips) {
+                                val job = launch {
+                                    val sock = Socket()
+                                    try {
+                                        vpnService.protect(sock)
+                                        sock.connect(InetSocketAddress(ip, port), 2500)
+                                        sock.soTimeout = 30000
+                                        BypassConfig.KernelOptimizer.optimize(sock, BypassConfig.isPanicMode)
+                                        
+                                        val osTtl = if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) java.util.concurrent.ThreadLocalRandom.current().nextInt(60, 64 + 1) else java.util.concurrent.ThreadLocalRandom.current().nextInt(120, 128 + 1)
+                                        TtlHelper.setTtl(sock, osTtl)
+                                        
+                                        if (deferredSocket.complete(sock)) {
+                                            RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
+                                        } else {
+                                            try { sock.close() } catch (e: Exception) {}
+                                        }
+                                    } catch (e: Exception) {
+                                        try { sock.close() } catch (ex: Exception) {}
+                                        RobustResolver.recordIpFailure(ip.hostAddress ?: "")
+                                    }
+                                }
+                                activeJobs.add(job)
+                                delay(150)
+                                if (deferredSocket.isCompleted) break
+                            }
+                            
+                            try {
+                                val winner = deferredSocket.await()
+                                activeJobs.forEach { if (it.isActive) it.cancel() }
+                                winner
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                    }
+                }
+
+                if (target == null) throw Exception("All destination IPs failed to connect")
+
+                // Set buffer sizes and optimizations
+                val category = HostClassifier.classify(host)
+                val netType = BypassConfig.currentNetworkType.value
+                if (activeStrategy == BypassStrategy.WINDOW_SIZE || activeStrategy == BypassStrategy.TCP_ZERO_WINDOW) {
+                    target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
+                    target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
+                } else if (activeStrategy == BypassStrategy.TCP_WINDOW_CLAMP) {
+                    target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
+                    target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
+                } else {
+                    val isHighSpeed = netType == NetworkType.WIFI
+                    val isStreamingOrGaming = category == HostCategory.STREAMING || category == HostCategory.GAMING
+                    target.receiveBufferSize = if (isHighSpeed) (if (isStreamingOrGaming) 256 * 1024 else 128 * 1024) else (if (isStreamingOrGaming) 128 * 1024 else 64 * 1024)
+                    target.sendBufferSize = if (isHighSpeed) (if (isStreamingOrGaming) 128 * 1024 else 64 * 1024) else (if (isStreamingOrGaming) 64 * 1024 else 32 * 1024)
+                }
+                
+                try {
+                    target.tcpNoDelay = true
+                    client.tcpNoDelay = true
+                    if (activeStrategy == BypassStrategy.TCP_KEEPALIVE) {
+                        target.keepAlive = true
+                        client.keepAlive = true
+                    }
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+
+                // Apply bypass desynchronization logic
+                val targetOut = target.getOutputStream()
+                if (helloRead > 0) {
+                    BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, activeConfig, host)
+                }
+                
+                // Confirm established connection to the local app client only after successful bypass application
+                clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+                clientOut.flush()
+                
+                BypassConfig.reportSuccess(host, activeStrategy)
+                BypassConfig.recordStrategyResult(host, activeStrategy, true)
+                connectionEstablished = true
+            } catch (e: Exception) {
+                Log.w("PinkProxy", "Attempt $attempt failed for $host with strategy $activeStrategy: ${e.message}")
+                if (e.message?.contains("reset", ignoreCase = true) == true || e is java.io.IOException) {
+                    BypassConfig.recordDpiFault(host)
+                }
+                BypassConfig.markHostAsCensored(host)
+                BypassConfig.reportFailure(host, activeStrategy)
+                BypassConfig.recordStrategyResult(host, activeStrategy, false)
+                BypassConfig.recordFailureForHost(host, activeStrategy, true, vpnService)
+                
+                try { target?.close() } catch (ex: Exception) {}
+                target = null
+                
+                if (attempt < maxAttempts) {
+                    // Stagger retries slightly to let the network settle down
+                    delay(50L * attempt)
+                }
+            }
+        }
+        
+        BypassConfig.TrafficShaper.releaseBuffer(helloBuffer)
+
+        if (!connectionEstablished || target == null) {
+            Log.e("PinkProxy", "All connection and bypass attempts failed for $host")
+            try { client.close() } catch (e: Exception) {}
+            return
+        }
+
+        try {
+            client.soTimeout = 120000
+            target.soTimeout = 120000
+            
+            val targetOut = target.getOutputStream()
+            val targetIn = target.getInputStream()
+            
+            coroutineScope {
+                val c2t = launch { proxyStream(clientIn, targetOut, { try { target?.close() } catch (e: Exception) {} }, host, false, activeStrategy) }
+                val t2c = launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) {} }, host, true, activeStrategy) }
                 
                 select<Unit> {
                     c2t.onJoin {}
                     t2c.onJoin {}
                 }
                 
-                if (!target.isClosed && target.isConnected) {
-                    val lHost = host.lowercase(java.util.Locale.ROOT)
-                    val pool = connectionPool.getOrPut(lHost + ":" + port) { java.util.concurrent.LinkedBlockingQueue(MAX_POOL_SIZE) }
-                    if (pool.size < MAX_POOL_SIZE) {
-                        pool.offer(PooledConnection(target))
-                        target = null // Prevent closing in finally
-                    } else {
-                        target.close()
-                    }
-                }
                 c2t.cancel(); t2c.cancel()
             }
-        } catch (e: Exception) { 
-            if (e.message?.contains("reset", ignoreCase = true) == true) {
-                BypassConfig.recordDpiFault(host)
-            }
-            BypassConfig.recordFailureForHost(host, strategy, true, vpnService) 
-        } finally { 
-            try { target?.close() } catch (e: Exception) {} 
+        } catch (e: Exception) {
+            Log.v("PinkProxy", "Stream closed: ${e.message}")
+        } finally {
+            try { target?.close() } catch (e: Exception) {}
         }
     }
 
@@ -2313,77 +2818,164 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         } else 80
 
         var target: Socket? = null
-        var connected = false
-        val strategy = BypassConfig.resolveStrategyForHost(host)
-        try {
-            val ips = RobustResolver.resolve(host, vpnService); if (ips.isEmpty()) throw Exception("DNS Failed")
-            for (ip in ips) {
-                val sock = Socket()
-                vpnService.protect(sock)
-                try {
-                    sock.connect(InetSocketAddress(ip, targetPort), 2500)
-                    sock.soTimeout = 30000
-                    
-                    // Fingerprint Obfuscation: jitter default TTL
-                    val osTtl = if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) java.util.concurrent.ThreadLocalRandom.current().nextInt(60, 64 + 1) else java.util.concurrent.ThreadLocalRandom.current().nextInt(120, 128 + 1)
-                    TtlHelper.setTtl(sock, osTtl)
-                    
-                    RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
-                    target = sock
-                    connected = true
-                    break
-                } catch (e: Exception) {
-                    try { sock.close() } catch (ex: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${ex.message}") }
-                    RobustResolver.recordIpFailure(ip.hostAddress ?: "")
+        var activeStrategy = BypassStrategy.FAKE_PACKET
+        var activeConfig = BypassConfig.getSessionConfig(host, activeStrategy, 100L)
+        var connectionEstablished = false
+        val lHost = host.lowercase(java.util.Locale.ROOT)
+
+        val maxAttempts = 3
+        var attempt = 0
+        while (attempt < maxAttempts && !connectionEstablished) {
+            attempt++
+            activeStrategy = BypassConfig.resolveStrategyForHost(host)
+            activeConfig = BypassConfig.getSessionConfig(host, activeStrategy, 100L)
+            
+            // Try to reuse pool if it's the first attempt and strategy matches or is compatible
+            if (attempt == 1) {
+                val poolQueue = connectionPool[lHost + ":" + targetPort]
+                if (poolQueue != null) {
+                    var pc = poolQueue.poll()
+                    while (pc != null) {
+                        if (pc.isAlive()) {
+                            target = pc.socket
+                            break
+                        }
+                        try { pc.socket.close() } catch (e: Exception) {}
+                        pc = poolQueue.poll()
+                    }
                 }
             }
-            if (!connected || target == null) throw Exception("All IPs failed")
-            
-            // Optimize timeouts for active HTTP streaming
+
+            try {
+                if (target == null) {
+                    val ips = RobustResolver.resolve(host, vpnService)
+                    if (ips.isEmpty()) throw Exception("DNS Failed")
+                    
+                    target = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val deferredSocket = kotlinx.coroutines.CompletableDeferred<Socket>()
+                        val activeJobs = mutableListOf<kotlinx.coroutines.Job>()
+                        
+                        kotlinx.coroutines.supervisorScope {
+                            for (ip in ips) {
+                                val job = launch {
+                                    val sock = Socket()
+                                    try {
+                                        vpnService.protect(sock)
+                                        sock.connect(InetSocketAddress(ip, targetPort), 2500)
+                                        sock.soTimeout = 30000
+                                        BypassConfig.KernelOptimizer.optimize(sock, BypassConfig.isPanicMode)
+                                        
+                                        val osTtl = if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) java.util.concurrent.ThreadLocalRandom.current().nextInt(60, 64 + 1) else java.util.concurrent.ThreadLocalRandom.current().nextInt(120, 128 + 1)
+                                        TtlHelper.setTtl(sock, osTtl)
+                                        
+                                        if (deferredSocket.complete(sock)) {
+                                            RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
+                                        } else {
+                                            try { sock.close() } catch (e: Exception) {}
+                                        }
+                                    } catch (e: Exception) {
+                                        try { sock.close() } catch (ex: Exception) {}
+                                        RobustResolver.recordIpFailure(ip.hostAddress ?: "")
+                                    }
+                                }
+                                activeJobs.add(job)
+                                delay(150)
+                                if (deferredSocket.isCompleted) break
+                            }
+                            
+                            try {
+                                val winner = deferredSocket.await()
+                                activeJobs.forEach { if (it.isActive) it.cancel() }
+                                winner
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                    }
+                }
+
+                if (target == null) throw Exception("All destination IPs failed to connect")
+
+                // Set buffer sizes and optimizations
+                val category = HostClassifier.classify(host)
+                val netType = BypassConfig.currentNetworkType.value
+                if (activeStrategy == BypassStrategy.WINDOW_SIZE || activeStrategy == BypassStrategy.TCP_ZERO_WINDOW) {
+                    target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
+                    target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024 + 1)
+                } else if (activeStrategy == BypassStrategy.TCP_WINDOW_CLAMP) {
+                    target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
+                    target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 256 + 1)
+                } else {
+                    val isHighSpeed = netType == NetworkType.WIFI
+                    val isStreamingOrGaming = category == HostCategory.STREAMING || category == HostCategory.GAMING
+                    target.receiveBufferSize = if (isHighSpeed) (if (isStreamingOrGaming) 256 * 1024 else 128 * 1024) else (if (isStreamingOrGaming) 128 * 1024 else 64 * 1024)
+                    target.sendBufferSize = if (isHighSpeed) (if (isStreamingOrGaming) 128 * 1024 else 64 * 1024) else (if (isStreamingOrGaming) 64 * 1024 else 32 * 1024)
+                }
+                
+                try {
+                    target.tcpNoDelay = true
+                    client.tcpNoDelay = true
+                    if (activeStrategy == BypassStrategy.TCP_KEEPALIVE) {
+                        target.keepAlive = true
+                        client.keepAlive = true
+                    }
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+
+                // Apply bypass desynchronization logic
+                val targetOut = target.getOutputStream()
+                val headerBytes = header.toByteArray()
+                BypassConfig.applyBypass(target, targetOut, headerBytes, headerBytes.size, activeConfig, host)
+                
+                BypassConfig.reportSuccess(host, activeStrategy)
+                BypassConfig.recordStrategyResult(host, activeStrategy, true)
+                connectionEstablished = true
+            } catch (e: Exception) {
+                Log.w("PinkProxy", "HTTP Attempt $attempt failed for $host with strategy $activeStrategy: ${e.message}")
+                if (e.message?.contains("reset", ignoreCase = true) == true || e is java.io.IOException) {
+                    BypassConfig.recordDpiFault(host)
+                }
+                BypassConfig.markHostAsCensored(host)
+                BypassConfig.reportFailure(host, activeStrategy)
+                BypassConfig.recordStrategyResult(host, activeStrategy, false)
+                BypassConfig.recordFailureForHost(host, activeStrategy, true, vpnService)
+                
+                try { target?.close() } catch (ex: Exception) {}
+                target = null
+                
+                if (attempt < maxAttempts) {
+                    delay(50L * attempt)
+                }
+            }
+        }
+
+        if (!connectionEstablished || target == null) {
+            Log.e("PinkProxy", "All HTTP connection and bypass attempts failed for $host")
+            try { client.close() } catch (e: Exception) {}
+            return
+        }
+
+        try {
             client.soTimeout = 60000
             target.soTimeout = 60000
             
-            val targetOut = target.getOutputStream()
-            val config = BypassConfig.getSessionConfig(host, strategy, 100L)
-            val headerBytes = header.toByteArray()
-            BypassConfig.applyBypass(target, targetOut, headerBytes, headerBytes.size, config, host)
             coroutineScope {
-                launch { proxyStream(clientIn, targetOut, { try { target.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, false, strategy) }
-                launch { proxyStream(target.getInputStream(), clientOut, { try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, true, strategy) }
+                launch { proxyStream(clientIn, target.getOutputStream(), { try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, false, activeStrategy) }
+                launch { proxyStream(target.getInputStream(), clientOut, { try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, true, activeStrategy) }
             }
         } catch (e: Exception) {
-            Log.e("PinkProxyServer", "Error handling HTTP request for $host", e)
-            BypassConfig.recordFailureForHost(host, strategy, true, vpnService)
-        } finally { try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }
+            Log.v("PinkProxy", "HTTP stream closed: ${e.message}")
+        } finally {
+            try { target?.close() } catch (e: Exception) {}
+        }
     }
 
     private suspend fun proxyStream(input: InputStream, output: OutputStream, onError: () -> Unit, host: String?, isRecv: Boolean, strategy: BypassStrategy?) {
         val buf = BypassConfig.TrafficShaper.acquireBuffer(16384)
         var successRecorded = false
         var lastActivity = System.currentTimeMillis()
+        var totalProcessedBytes = 0L
         
         coroutineScope {
-            // Background Keep-Alive Noise
-            val noiseJob = if (!isRecv && strategy != null && strategy != BypassStrategy.DIRECT) {
-                launch {
-                    try {
-                        val rnd = java.util.concurrent.ThreadLocalRandom.current()
-                        while (isActive) {
-                            delay(rnd.nextLong(30000, 60001))
-                            if (System.currentTimeMillis() - lastActivity > 25000) {
-                                val noise = ByteArray(rnd.nextInt(1, 5))
-                                rnd.nextBytes(noise)
-                                synchronized(output) {
-                                    output.write(noise)
-                                    output.flush()
-                                }
-                                ProxyStats.logRecovery("CORE: Keep-alive for ${host ?: "unknown"}")
-                            }
-                        }
-                    } catch (e: Exception) {}
-                }
-            } else null
-
             try {
                 val rnd = java.util.concurrent.ThreadLocalRandom.current()
                 while (true) {
@@ -2406,7 +2998,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         successRecorded = true
                     }
                     
-                    if (!isRecv && strategy != null && strategy != BypassStrategy.DIRECT) {
+                    if (!isRecv && strategy != null && strategy != BypassStrategy.DIRECT && totalProcessedBytes < 8192) {
                         var offset = 0
                         while (offset < r) {
                             val remaining = r - offset
@@ -2429,19 +3021,21 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                             delay(pace)
                             offset += chunkSize
                         }
+                        totalProcessedBytes += r
                     } else {
                         synchronized(output) {
                             output.write(buf, 0, r)
                             output.flush()
                         }
-                        if (isRecv) BypassConfig.TrafficShaper.pace(BypassConfig.isPanicMode, r)
+                        if (isRecv && r > 2048) {
+                            BypassConfig.TrafficShaper.pace(BypassConfig.isPanicMode, r)
+                        }
                     }
 
                 }
             } catch (e: Exception) {
                 onError()
             } finally {
-                noiseJob?.cancel()
                 BypassConfig.TrafficShaper.releaseBuffer(buf)
             }
         }

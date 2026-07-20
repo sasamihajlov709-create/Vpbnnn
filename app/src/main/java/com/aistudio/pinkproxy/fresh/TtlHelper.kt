@@ -7,6 +7,7 @@ import java.net.Inet6Address
 import java.net.Socket
 import android.util.Log
 
+@android.annotation.SuppressLint("SoonBlockedPrivateApi")
 object TtlHelper {
     private var fdField: java.lang.reflect.Field? = null
     private var getImplMethod: java.lang.reflect.Method? = null
@@ -54,6 +55,26 @@ object TtlHelper {
             }
         } catch (e: Exception) {
             Log.v("TtlHelper", "Failed to set TTL: ${e.message}")
+            false
+        }
+    }
+
+    fun setUdpTtl(socket: java.net.DatagramSocket, ttl: Int): Boolean {
+        return try {
+            val pfd = ParcelFileDescriptor.fromDatagramSocket(socket)
+            try {
+                val isIpv6 = socket.inetAddress is java.net.Inet6Address
+                if (isIpv6) {
+                    Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IPV6, OsConstants.IPV6_UNICAST_HOPS, ttl)
+                } else {
+                    Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IP, OsConstants.IP_TTL, ttl)
+                }
+                true
+            } finally {
+                try { pfd.close() } catch (e: Exception) {}
+            }
+        } catch (e: Exception) {
+            Log.v("TtlHelper", "Failed to set UDP TTL: ${e.message}")
             false
         }
     }

@@ -2,12 +2,13 @@ with open('app/src/main/java/com/aistudio/pinkproxy/fresh/FakePacketHelper.kt', 
     content = f.read()
 
 import re
-content = content.replace('private val random = java.util.Random()', '')
-content = content.replace('random.nextInt', 'java.util.concurrent.ThreadLocalRandom.current().nextInt')
-content = content.replace('random.nextLong', 'java.util.concurrent.ThreadLocalRandom.current().nextLong')
-content = content.replace('random.nextDouble', 'java.util.concurrent.ThreadLocalRandom.current().nextDouble')
-content = content.replace('random.nextBoolean', 'java.util.concurrent.ThreadLocalRandom.current().nextBoolean')
-content = content.replace('random.nextBytes', 'java.util.concurrent.ThreadLocalRandom.current().nextBytes')
+content = re.sub(
+    r'object FakePacketHelper \{',
+    r'object FakePacketHelper {\n    private val cachedQuicInitial = buildQuicInitial()\n    private var cacheTime = System.currentTimeMillis()\n    \n    fun getCachedQuicInitial(): ByteArray {\n        if (System.currentTimeMillis() - cacheTime > 30000) {\n            cachedQuicInitial = buildQuicInitial()\n            cacheTime = System.currentTimeMillis()\n        }\n        return cachedQuicInitial\n    }',
+    content
+)
+
+content = content.replace('FakePacketHelper.buildQuicInitial()', 'FakePacketHelper.getCachedQuicInitial()')
 
 with open('app/src/main/java/com/aistudio/pinkproxy/fresh/FakePacketHelper.kt', 'w') as f:
     f.write(content)

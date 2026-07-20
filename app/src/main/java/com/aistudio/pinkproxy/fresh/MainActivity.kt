@@ -57,6 +57,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.viewinterop.AndroidView
 import com.aistudio.pinkproxy.fresh.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -404,6 +405,31 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                     modifier = Modifier.padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // SOCKS5 Badge
+                    Surface(
+                        color = Color(0xFFCE93D8).copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0xFFCE93D8).copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFFCE93D8),
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "SOCKS5 127.0.0.1:18080",
+                                color = Color(0xFFCE93D8),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                     // Autopilot Badge
                     Surface(
                         color = Color(0xFFF48FB1).copy(alpha = 0.1f),
@@ -1096,6 +1122,32 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                                 Text("Auto-Tuning: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
                                 Text(if (BypassConfig.isAutoTuning) "ACTIVE (Tap to disable)" else "MANUAL (Tap to enable)", fontSize = 11.sp, color = if (BypassConfig.isAutoTuning) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
                             }
+                            
+                            val cwnd by ProxyStats.congestionWindow.collectAsStateWithLifecycle(initialValue = 10)
+                            val poolSize by ProxyStats.pool16kSize.collectAsStateWithLifecycle(initialValue = 0)
+                            
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                Text("Congestion Window: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                Text("${cwnd} pkts/burst", fontSize = 11.sp, color = Color(0xFFBA68C8), fontWeight = FontWeight.Bold)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Buffer Pool (16K): ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                Text("$poolSize chunks", fontSize = 11.sp, color = Color(0xFF4FC3F7), fontWeight = FontWeight.Bold)
+                            }
+                            
+                            val isPanic by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = BypassConfig.isPanicMode)
+                            val mtu by BypassConfig.currentMtu.collectAsStateWithLifecycle()
+                            
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                Text("Network MTU: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                Text("$mtu bytes", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
+                            }
+                            if (isPanic) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                    Text("Status: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
+                                    Text("PANIC MODE", fontSize = 11.sp, color = Color(0xFFE57373), fontWeight = FontWeight.ExtraBold)
+                                }
+                            }
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             val rttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
@@ -1619,6 +1671,49 @@ data class AppEntry(
 )
 
 @Composable
+fun AppIconImage(context: android.content.Context, appInfo: android.content.pm.ApplicationInfo, label: String) {
+    var iconDrawable by remember(appInfo.packageName) { mutableStateOf<android.graphics.drawable.Drawable?>(null) }
+    
+    LaunchedEffect(appInfo.packageName) {
+        val drawable = withContext(Dispatchers.IO) {
+            try {
+                context.packageManager.getApplicationIcon(appInfo)
+            } catch (e: Exception) {
+                null
+            }
+        }
+        iconDrawable = drawable
+    }
+    
+    if (iconDrawable != null) {
+        AndroidView(
+            factory = { ctx ->
+                android.widget.ImageView(ctx).apply {
+                    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                }
+            },
+            update = { imageView ->
+                imageView.setImageDrawable(iconDrawable)
+            },
+            modifier = Modifier.size(40.dp)
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(Color(0xFFF8BBD0).copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label.take(1).uppercase(),
+                color = Color(0xFFF8BBD0),
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
 fun AppSelectionDialog(
     context: android.content.Context,
     onDismiss: () -> Unit,
@@ -1725,19 +1820,8 @@ fun AppSelectionDialog(
                                     .padding(horizontal = 16.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Icon (Simple Placeholder for now to avoid lag)
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .background(Color(0xFFF8BBD0).copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = entry.label.take(1).uppercase(),
-                                        color = Color(0xFFF8BBD0),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                                // Dynamic high-performance asynchronous icon loading
+                                AppIconImage(context, entry.appInfo, entry.label)
                                 
                                 Spacer(modifier = Modifier.width(16.dp))
                                 

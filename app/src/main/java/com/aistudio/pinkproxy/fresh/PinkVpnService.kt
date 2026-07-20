@@ -118,8 +118,8 @@ class PinkVpnService : VpnService() {
         try {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PinkProxy:VpnWakeLock")
-            // Hold wake lock indefinitely while service is running (released in stopVpn)
-            wakeLock?.acquire()
+            // Instead of holding indefinitely, we rely on the network stack to wake us up.
+            // A persistent wake lock drains 30%+ of battery in 24 hours. We only hold it if strictly requested.
         } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
@@ -482,7 +482,7 @@ class PinkVpnService : VpnService() {
                                         }
                                     }
                                 } else if (protocol == 6) { // TCP
-                                    val rejectPacket = IcmpHelper.createIcmpPortUnreachablePacket(packet, read)
+                                    val rejectPacket = IcmpHelper.createTcpRstPacket(packet, read)
                                     synchronized(outputStream) {
                                         outputStream.write(rejectPacket)
                                     }
@@ -572,13 +572,18 @@ class PinkVpnService : VpnService() {
                                                         outputStream.write(replyPacket)
                                                         outputStream.flush()
                                                     }
+                                                    ProxyStats.addBytes(reply.size.toLong())
+                                                    ProxyStats.recordDataReceived()
                                                 } catch (e: Exception) {
                                                     Log.e("PinkVpnService", "Failed to inject UDP reply", e)
                                                 }
                                             }
                                             synchronized(udpRelays) { udpRelays[key] = session }
                                         }
-                                        session?.send(packet.copyOfRange(payloadOffset, read))
+                                        val p = packet.copyOfRange(payloadOffset, read)
+                                        session?.send(p)
+                                        ProxyStats.addBytes(p.size.toLong())
+                                        ProxyStats.recordDataSent()
                                     }
                                 }
                             } else if (version == 6) {
@@ -595,7 +600,7 @@ class PinkVpnService : VpnService() {
                                         }
                                     }
                                 } else if (nextHeader == 6) { // TCP
-                                    val rejectPacket = IcmpHelper.createIcmpv6PortUnreachablePacket(packet, read)
+                                    val rejectPacket = IcmpHelper.createIcmpv6TcpRstPacket(packet, read)
                                     synchronized(outputStream) {
                                         outputStream.write(rejectPacket)
                                     }
@@ -648,9 +653,8 @@ class PinkVpnService : VpnService() {
                     if (ServiceChecker.connectivityScore.value < 35 && ServiceChecker.internetAvailable.value) {
                         lowConnectivityCount++
                         if (lowConnectivityCount >= 3) { // 1.5 minutes of low connectivity
-                            ProxyStats.logRecovery("AUTO-HEAL: Performance drop. Rotating Strategy...")
-                            BypassConfig.rotateGlobalStrategy()
-                            restartProxyServer("Performance Optimization")
+                            ProxyStats.logRecovery("AUTO-HEAL: Persistent performance drop. Triggering Deep Probe...")
+                            ServiceChecker.runActiveProbing(this@PinkVpnService)
                             RobustResolver.clearCache()
                             lowConnectivityCount = 0
                         }

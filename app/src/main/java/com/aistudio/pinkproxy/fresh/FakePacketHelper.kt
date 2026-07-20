@@ -5,6 +5,16 @@ import java.io.DataOutputStream
 import java.util.Random
 
 object FakePacketHelper {
+    private var cachedQuicInitial = buildQuicInitial()
+    private var cacheTime = System.currentTimeMillis()
+    
+    fun getCachedQuicInitial(): ByteArray {
+        if (System.currentTimeMillis() - cacheTime > 30000) {
+            cachedQuicInitial = buildQuicInitial()
+            cacheTime = System.currentTimeMillis()
+        }
+        return cachedQuicInitial
+    }
     private val random = Random()
 
     private fun buildExtension(type: Int, data: ByteArray): ByteArray {

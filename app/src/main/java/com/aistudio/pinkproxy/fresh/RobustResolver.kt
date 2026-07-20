@@ -110,20 +110,31 @@ object RobustResolver {
     fun startDnsOptimizer(scope: kotlinx.coroutines.CoroutineScope, vpnService: VpnService?) {
         scope.launch {
             while (isActive) {
-                for (url in dohUrls) {
-                    val start = System.currentTimeMillis()
-                    try {
-                        withTimeout(4000) {
-                            queryDohRaw("google.com", url, vpnService)
-                            val latency = System.currentTimeMillis() - start
-                            dohLatenciesMap[url] = latency
+                kotlinx.coroutines.supervisorScope {
+                    val deferreds = dohUrls.map { url ->
+                        async(kotlinx.coroutines.Dispatchers.IO) {
+                            val start = System.currentTimeMillis()
+                            try {
+                                withTimeout(3000) {
+                                    val ips = queryDohRaw("dns.google", url, vpnService)
+                                    if (ips.isNotEmpty()) {
+                                        val latency = System.currentTimeMillis() - start
+                                        dohLatenciesMap[url] = latency
+                                    } else {
+                                        dohLatenciesMap[url] = 8000L
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                dohLatenciesMap[url] = 9999L
+                            }
                         }
-                    } catch (e: Exception) {
-                        dohLatenciesMap[url] = 9999L
                     }
+                    deferreds.forEach { it.join() }
                 }
-                bestDohUrl = dohLatenciesMap.entries.minByOrNull { it.value }?.key ?: dohUrls[0]
-                delay(300000)
+                val best = dohLatenciesMap.entries.minByOrNull { it.value }
+                bestDohUrl = best?.key ?: dohUrls[0]
+                Log.d("RobustResolver", "DNS Race Completed. Fastest DoH Server: $bestDohUrl (${best?.value ?: -1}ms)")
+                delay(120000) // Race every 2 minutes for precise network adaptation
             }
         }
     }
@@ -218,14 +229,15 @@ object RobustResolver {
             )
             while (isActive) {
                 try {
+                    val delayMs = if (com.aistudio.pinkproxy.fresh.BypassConfig.isCharging) 3000L else 10000L
                     val userTopHosts = ProxyStats.topHosts.value.map { it.first }
                     val allHostsToPrefetch = (topHostsToPrefetch + userTopHosts).distinct()
                     for (host in allHostsToPrefetch) {
                         resolve(host, vpnService, forceSecure = true)
-                        kotlinx.coroutines.delay(2000)
+                        kotlinx.coroutines.delay(delayMs)
                     }
                 } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-                kotlinx.coroutines.delay(5 * 60 * 1000L)
+                kotlinx.coroutines.delay(if (com.aistudio.pinkproxy.fresh.BypassConfig.isCharging) 5 * 60 * 1000L else 15 * 60 * 1000L)
             }
         }
         Log.i("RobustResolver", "DNS Background Prefetching started with dynamic top-hosts learning")
