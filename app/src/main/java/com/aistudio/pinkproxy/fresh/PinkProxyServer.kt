@@ -3730,7 +3730,15 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 while (isActive) {
                     val packet = java.net.DatagramPacket(buffer, buffer.size)
                     udpSocket?.receive(packet)
-                    handleUdpPacket(packet)
+                    val dataCopy = packet.data.copyOf(packet.length)
+                    val packetCopy = java.net.DatagramPacket(dataCopy, dataCopy.size, packet.address, packet.port)
+                    serverScope.launch(Dispatchers.IO) {
+                        try {
+                            handleUdpPacket(packetCopy)
+                        } catch (e: Exception) {
+                            Log.e("PinkProxyServer", "Failed to handle UDP packet async", e)
+                        }
+                    }
                 }
             } catch (e: java.net.SocketException) {
                 // Expected when stopping

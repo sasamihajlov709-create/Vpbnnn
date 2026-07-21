@@ -8,11 +8,13 @@ import android.service.quicksettings.TileService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class PinkProxyTileService : TileService() {
-    private val scope = CoroutineScope(Dispatchers.Main)
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var listenJob: Job? = null
 
     override fun onStartListening() {
@@ -35,6 +37,7 @@ class PinkProxyTileService : TileService() {
         super.onDestroy()
         try {
             listenJob?.cancel()
+            scope.cancel()
         } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
@@ -50,7 +53,11 @@ class PinkProxyTileService : TileService() {
             val vpnIntent = VpnService.prepare(this)
             if (vpnIntent == null) {
                 val intent = Intent(this, PinkVpnService::class.java)
-                startForegroundService(intent)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
             } else {
                 // Cannot start directly if permission is not granted
                 // Opening the app to handle permission

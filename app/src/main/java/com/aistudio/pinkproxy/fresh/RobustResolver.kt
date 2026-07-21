@@ -1130,14 +1130,16 @@ object RobustResolver {
     }
 
     private fun queryDot(host: String, dnsServer: String, vpnService: VpnService?): List<InetAddress> {
-        val socket = Socket()
+        var rawSocket: Socket? = null
+        var sslSocket: javax.net.ssl.SSLSocket? = null
         try {
-            vpnService?.protect(socket)
-            socket.connect(InetSocketAddress(dnsServer, 853), 4000)
-            socket.soTimeout = 4000
+            rawSocket = Socket()
+            vpnService?.protect(rawSocket)
+            rawSocket.connect(InetSocketAddress(dnsServer, 853), 4000)
+            rawSocket.soTimeout = 4000
             val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
             sslContext.init(null, null, null)
-            val sslSocket = sslContext.socketFactory.createSocket(socket, dnsServer, 853, true) as javax.net.ssl.SSLSocket
+            sslSocket = sslContext.socketFactory.createSocket(rawSocket, dnsServer, 853, true) as javax.net.ssl.SSLSocket
             sslSocket.startHandshake()
             val query = buildDnsQuery(host)
             val output = sslSocket.getOutputStream()
@@ -1161,7 +1163,10 @@ object RobustResolver {
         } catch (e: Exception) {
             return emptyList()
         } finally {
-            try { socket.close() } catch (e: Exception) { }
+            try { sslSocket?.close() } catch (e: Exception) { }
+            if (sslSocket == null) {
+                try { rawSocket?.close() } catch (e: Exception) { }
+            }
         }
     }
 

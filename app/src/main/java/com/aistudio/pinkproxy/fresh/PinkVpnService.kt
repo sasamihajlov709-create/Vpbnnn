@@ -496,126 +496,130 @@ class PinkVpnService : VpnService() {
                                     writeChannel.trySend(rejectPacket)
                                 } else if (protocol == 17) { // UDP
                                     val ihl = (packet[0].toInt() and 0x0F) * 4
-                                    val srcIpInt = ((packet[12].toInt() and 0xFF) shl 24) or ((packet[13].toInt() and 0xFF) shl 16) or ((packet[14].toInt() and 0xFF) shl 8) or (packet[15].toInt() and 0xFF)
-                                    val dstIpInt = ((packet[16].toInt() and 0xFF) shl 24) or ((packet[17].toInt() and 0xFF) shl 16) or ((packet[18].toInt() and 0xFF) shl 8) or (packet[19].toInt() and 0xFF)
-                                    val srcPort = ((packet[ihl].toInt() and 0xFF) shl 8) or (packet[ihl + 1].toInt() and 0xFF)
-                                    val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or (packet[ihl + 3].toInt() and 0xFF)
-                                    
-                                    val payloadOffset = ihl + 8
-                                    val payloadLen = read - payloadOffset
-                                    if (payloadLen > 0) {
-                                        if (BypassConfig.blockQuic && dstPort == 443) {
-                                            // Generate ICMP Port Unreachable to reject QUIC immediately
-                                            val rejectPacket = IcmpHelper.createIcmpPortUnreachablePacket(packet, read)
-                                            writeChannel.trySend(rejectPacket)
-                                            continue@tunLoop
-                                        }
-                                        val key = (dstIpInt.toLong() and 0xFFFFFFFFL) or (srcPort.toLong() shl 32) or (dstPort.toLong() shl 48)
-                                        var session = synchronized(udpRelays) { udpRelays[key] }
-                                        if (session == null || session.isClosed) {
-                                            val formatIp = { ip: Int -> "${(ip shr 24) and 0xFF}.${(ip shr 16) and 0xFF}.${(ip shr 8) and 0xFF}.${ip and 0xFF}" }
-                                            
-                                            // DNS Hijacking: if port 53, resolve via RobustResolver
-                                            if (dstPort == 53) {
-                                                val dnsPayload = packet.copyOfRange(payloadOffset, read)
-                                                val parsedQuery = parseDnsQName(dnsPayload)
-                                                if (parsedQuery != null && parsedQuery.qname.contains(".")) {
-                                                    val isIpv6 = parsedQuery.qtype == 28
-                                                    if (isIpv6) {
-                                                        // Fast path: immediate IPv6 empty reply on the same thread
-                                                        val dnsReply = buildDnsReply(dnsPayload, emptyList(), isIpv6 = true)
-                                                        val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
-                                                        writeChannel.trySend(replyPacket)
-                                                        continue@tunLoop
-                                                    }
-                                                    
-                                                    // Fast path: check DNS Cache synchronously before launching a coroutine
-                                                    val cachedIps = RobustResolver.getCached(parsedQuery.qname)
-                                                    if (cachedIps != null) {
-                                                        val matchedList = cachedIps.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
-                                                        if (matchedList.isNotEmpty()) {
-                                                            val dnsReply = buildDnsReply(dnsPayload, matchedList, isIpv6 = false)
+                                    if (read >= ihl + 8) {
+                                        val srcIpInt = ((packet[12].toInt() and 0xFF) shl 24) or ((packet[13].toInt() and 0xFF) shl 16) or ((packet[14].toInt() and 0xFF) shl 8) or (packet[15].toInt() and 0xFF)
+                                        val dstIpInt = ((packet[16].toInt() and 0xFF) shl 24) or ((packet[17].toInt() and 0xFF) shl 16) or ((packet[18].toInt() and 0xFF) shl 8) or (packet[19].toInt() and 0xFF)
+                                        val srcPort = ((packet[ihl].toInt() and 0xFF) shl 8) or (packet[ihl + 1].toInt() and 0xFF)
+                                        val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or (packet[ihl + 3].toInt() and 0xFF)
+                                        
+                                        val payloadOffset = ihl + 8
+                                        val payloadLen = read - payloadOffset
+                                        if (payloadLen > 0) {
+                                            if (BypassConfig.blockQuic && dstPort == 443) {
+                                                // Generate ICMP Port Unreachable to reject QUIC immediately
+                                                val rejectPacket = IcmpHelper.createIcmpPortUnreachablePacket(packet, read)
+                                                writeChannel.trySend(rejectPacket)
+                                                continue@tunLoop
+                                            }
+                                            val key = (dstIpInt.toLong() and 0xFFFFFFFFL) or (srcPort.toLong() shl 32) or (dstPort.toLong() shl 48)
+                                            var session = synchronized(udpRelays) { udpRelays[key] }
+                                            if (session == null || session.isClosed) {
+                                                val formatIp = { ip: Int -> "${(ip shr 24) and 0xFF}.${(ip shr 16) and 0xFF}.${(ip shr 8) and 0xFF}.${ip and 0xFF}" }
+                                                
+                                                // DNS Hijacking: if port 53, resolve via RobustResolver
+                                                if (dstPort == 53) {
+                                                    val dnsPayload = packet.copyOfRange(payloadOffset, read)
+                                                    val parsedQuery = parseDnsQName(dnsPayload)
+                                                    if (parsedQuery != null && parsedQuery.qname.contains(".")) {
+                                                        val isIpv6 = parsedQuery.qtype == 28
+                                                        if (isIpv6) {
+                                                            // Fast path: immediate IPv6 empty reply on the same thread
+                                                            val dnsReply = buildDnsReply(dnsPayload, emptyList(), isIpv6 = true)
                                                             val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
                                                             writeChannel.trySend(replyPacket)
-                                                            ProxyStats.logTraffic(parsedQuery.qname, "DNS_CACHE_FAST")
                                                             continue@tunLoop
                                                         }
-                                                    }
-                                                }
-
-                                                serviceScope.launch(serviceDispatcher) {
-                                                    try {
-                                                        if (parsedQuery != null && parsedQuery.qname.contains(".")) {
-                                                            val ips = RobustResolver.resolve(parsedQuery.qname, this@PinkVpnService)
-                                                            val matchedList = ips.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
+                                                        
+                                                        // Fast path: check DNS Cache synchronously before launching a coroutine
+                                                        val cachedIps = RobustResolver.getCached(parsedQuery.qname)
+                                                        if (cachedIps != null) {
+                                                            val matchedList = cachedIps.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
                                                             if (matchedList.isNotEmpty()) {
                                                                 val dnsReply = buildDnsReply(dnsPayload, matchedList, isIpv6 = false)
                                                                 val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
                                                                 writeChannel.trySend(replyPacket)
-                                                                ProxyStats.logTraffic(parsedQuery.qname, "DNS_HIJACK")
-                                                                return@launch
+                                                                ProxyStats.logTraffic(parsedQuery.qname, "DNS_CACHE_FAST")
+                                                                continue@tunLoop
                                                             }
                                                         }
-                                                    } catch (e: Exception) {
-                                                        Log.e("PinkVpnService", "DNS Hijack failed for ${formatIp(dstIpInt)}", e)
                                                     }
-                                                    
-                                                    // Fallback to normal UDP relay if hijack failed
-                                                    val realDstIp = if (dstIpInt == 0x0A000003 /* 10.0.0.3 */) "8.8.8.8" else formatIp(dstIpInt)
-                                                    val s = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
-                                                        try {
-                                                            val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, reply)
-                                                            writeChannel.trySend(replyPacket)
-                                                        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-                                                    }
-                                                    synchronized(udpRelays) { udpRelays[key] = s }
-                                                    s.send(dnsPayload)
-                                                }
-                                                // Continue loop, packet will be released in finally
-                                                continue@tunLoop
-                                            }
 
-                                            val realDstIp = if (dstIpInt == 0x0A000003 /* 10.0.0.3 */) "8.8.8.8" else formatIp(dstIpInt)
-                                            session = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
-                                                try {
-                                                    val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, reply)
-                                                    writeChannel.trySend(replyPacket)
-                                                    ProxyStats.addBytes(reply.size.toLong())
-                                                    ProxyStats.recordDataReceived()
-                                                } catch (e: Exception) {
-                                                    Log.e("PinkVpnService", "Failed to inject UDP reply", e)
+                                                    serviceScope.launch(serviceDispatcher) {
+                                                        try {
+                                                            if (parsedQuery != null && parsedQuery.qname.contains(".")) {
+                                                                val ips = RobustResolver.resolve(parsedQuery.qname, this@PinkVpnService)
+                                                                val matchedList = ips.mapNotNull { it.hostAddress }.filter { it.contains(".") && !it.contains(":") }
+                                                                if (matchedList.isNotEmpty()) {
+                                                                    val dnsReply = buildDnsReply(dnsPayload, matchedList, isIpv6 = false)
+                                                                    val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
+                                                                    writeChannel.trySend(replyPacket)
+                                                                    ProxyStats.logTraffic(parsedQuery.qname, "DNS_HIJACK")
+                                                                    return@launch
+                                                                }
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            Log.e("PinkVpnService", "DNS Hijack failed for ${formatIp(dstIpInt)}", e)
+                                                        }
+                                                        
+                                                        // Fallback to normal UDP relay if hijack failed
+                                                        val realDstIp = if (dstIpInt == 0x0A000003 /* 10.0.0.3 */) "8.8.8.8" else formatIp(dstIpInt)
+                                                        val s = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
+                                                            try {
+                                                                val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, reply)
+                                                                writeChannel.trySend(replyPacket)
+                                                            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                                                        }
+                                                        synchronized(udpRelays) { udpRelays[key] = s }
+                                                        s.send(dnsPayload)
+                                                    }
+                                                    // Continue loop, packet will be released in finally
+                                                    continue@tunLoop
                                                 }
+
+                                                val realDstIp = if (dstIpInt == 0x0A000003 /* 10.0.0.3 */) "8.8.8.8" else formatIp(dstIpInt)
+                                                session = UdpSession(realDstIp, dstPort, this@PinkVpnService, serviceScope) { reply ->
+                                                    try {
+                                                        val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, reply)
+                                                        writeChannel.trySend(replyPacket)
+                                                        ProxyStats.addBytes(reply.size.toLong())
+                                                        ProxyStats.recordDataReceived()
+                                                    } catch (e: Exception) {
+                                                        Log.e("PinkVpnService", "Failed to inject UDP reply", e)
+                                                    }
+                                                }
+                                                synchronized(udpRelays) { udpRelays[key] = session }
                                             }
-                                            synchronized(udpRelays) { udpRelays[key] = session }
+                                            val p = packet.copyOfRange(payloadOffset, read)
+                                            session?.send(p)
+                                            ProxyStats.addBytes(p.size.toLong())
+                                            ProxyStats.recordDataSent()
                                         }
-                                        val p = packet.copyOfRange(payloadOffset, read)
-                                        session?.send(p)
-                                        ProxyStats.addBytes(p.size.toLong())
-                                        ProxyStats.recordDataSent()
                                     }
                                 }
                             } else if (version == 6) {
-                                // Extract next header from IPv6
-                                val nextHeader = packet[6].toInt() and 0xFF
-                                if (nextHeader == 58) { // ICMPv6
-                                    if (read >= 48) {
-                                        val icmpType = packet[40].toInt() and 0xFF
-                                        if (icmpType == 128) { // Echo Request
-                                            val replyPacket = IcmpHelper.createIcmpv6EchoReplyPacket(packet, read)
-                                            synchronized(outputStream) {
-                                                outputStream.write(replyPacket)
+                                if (read >= 40) {
+                                    // Extract next header from IPv6
+                                    val nextHeader = packet[6].toInt() and 0xFF
+                                    if (nextHeader == 58) { // ICMPv6
+                                        if (read >= 48) {
+                                            val icmpType = packet[40].toInt() and 0xFF
+                                            if (icmpType == 128) { // Echo Request
+                                                val replyPacket = IcmpHelper.createIcmpv6EchoReplyPacket(packet, read)
+                                                writeChannel.trySend(replyPacket)
                                             }
                                         }
-                                    }
-                                } else if (nextHeader == 6) { // TCP
-                                    val rejectPacket = IcmpHelper.createIcmpv6TcpRstPacket(packet, read)
-                                    writeChannel.trySend(rejectPacket)
-                                } else if (nextHeader == 17) { // UDP
-                                    val dstPort = ((packet[42].toInt() and 0xFF) shl 8) or (packet[43].toInt() and 0xFF)
-                                    if (dstPort == 443 || dstPort == 53) {
-                                        // Reject QUIC over IPv6 to force fast TCP fallback
-                                        val rejectPacket = IcmpHelper.createIcmpv6PortUnreachablePacket(packet, read)
+                                    } else if (nextHeader == 6) { // TCP
+                                        val rejectPacket = IcmpHelper.createIcmpv6TcpRstPacket(packet, read)
                                         writeChannel.trySend(rejectPacket)
+                                    } else if (nextHeader == 17) { // UDP
+                                        if (read >= 44) {
+                                            val dstPort = ((packet[42].toInt() and 0xFF) shl 8) or (packet[43].toInt() and 0xFF)
+                                            if (dstPort == 443 || dstPort == 53) {
+                                                // Reject QUIC over IPv6 to force fast TCP fallback
+                                                val rejectPacket = IcmpHelper.createIcmpv6PortUnreachablePacket(packet, read)
+                                                writeChannel.trySend(rejectPacket)
+                                            }
+                                        }
                                     }
                                 }
                                 // Drop other IPv6 for now
