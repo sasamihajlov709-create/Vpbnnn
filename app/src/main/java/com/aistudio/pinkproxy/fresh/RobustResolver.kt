@@ -120,6 +120,13 @@ object RobustResolver {
         "https://dns.switch.ch/dns-query",
         "https://doh.cleanbrowsing.org/doh/family-filter/"
     )
+    private val userAgents = listOf(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1"
+    )
     @Volatile private var bestDohUrl = "https://dns.google/dns-query"
     private val dohLatenciesMap = ConcurrentHashMap<String, Long>()
 
@@ -622,21 +629,30 @@ object RobustResolver {
                                              val distinct = results.distinct()
                                              resultsMap[dns] = distinct
                                              
-                                             // Anti-Poisoning: If this is a sensitive host, wait for at least 2 consistent results
-                                             if (isCensored && resultsMap.size < 2 && endpoints.size > 1) {
-                                                 // Wait a tiny bit more for a second opinion
-                                                 delay(150)
-                                             }
-                                             
-                                             val consensus = if (resultsMap.size >= 2) {
-                                                 // Simple consensus: if we have multiple results, check for intersection or use the one from most reliable provider
-                                                 // For now, just pick the one that appeared most or from bestDohUrl
-                                                 resultsMap[bestDohUrl] ?: distinct
-                                             } else distinct
-
-                                             if (completableDeferred.complete(consensus)) {
-                                                 ProxyStats.recordDnsResult(true)
-                                                 bestDohUrl = dns
+                                             // Anti-Poisoning: Stricter Consensus
+                                             if (resultsMap.size >= 2) {
+                                                 // Find IPs that appear in at least 2 different results
+                                                 val allIps = resultsMap.values.flatten().groupBy { it.hostAddress }
+                                                 val consensusIps = allIps.filter { it.value.size >= 2 }.keys
+                                                 
+                                                 if (consensusIps.isNotEmpty()) {
+                                                     val consensusAddresses = consensusIps.map { InetAddress.getByName(it) }
+                                                     if (completableDeferred.complete(consensusAddresses)) {
+                                                         ProxyStats.recordDnsResult(true)
+                                                         bestDohUrl = dns
+                                                     }
+                                                 } else if (resultsMap.size >= 3) {
+                                                     // If we have 3 results and NO consensus, pick the one from bestDohUrl or first winner
+                                                     val finalChoice = resultsMap[bestDohUrl] ?: distinct
+                                                     if (completableDeferred.complete(finalChoice)) {
+                                                         ProxyStats.recordDnsResult(true)
+                                                     }
+                                                 }
+                                             } else if (endpoints.size == 1) {
+                                                 // Only one provider available, trust it
+                                                 if (completableDeferred.complete(distinct)) {
+                                                     ProxyStats.recordDnsResult(true)
+                                                 }
                                              }
                                          }
                                      } catch (e: Exception) {
@@ -1274,7 +1290,7 @@ object RobustResolver {
                 val request = okhttp3.Request.Builder()
                     .url("$dohUrl?name=$host&type=A&_v=$scramble")
                     .header("Accept", "application/dns-json")
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("User-Agent", userAgents.random())
                     .build()
 
                 client.newCall(request).execute().use { response ->
