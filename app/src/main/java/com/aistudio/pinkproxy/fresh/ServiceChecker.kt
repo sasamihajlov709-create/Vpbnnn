@@ -216,6 +216,14 @@ object ServiceChecker {
         }
 
         _statuses.value = results
+        
+        // Re-evaluate internet availability: if any service is reachable via proxy, the internet is up!
+        val anyServiceUp = results.any { it.isUp }
+        if (anyServiceUp) {
+            internetUp = true
+            _internetAvailable.value = true
+        }
+        
         _proxyHealth.value = proxyResponsive.get()
         _lastCheckTime.value = System.currentTimeMillis()
 
@@ -308,10 +316,14 @@ object ServiceChecker {
                 val currentServices = defaultServices + _customServices.value
                 checkServices(currentServices)
                 
-                // Adaptive delay: check faster if key services are down to allow fast healing
+                // Adaptive delay: check faster if key services are down, conserve battery if healthy
                 val youtubeDown = _statuses.value.find { it.name == "YouTube" }?.isUp == false
                 val streamDown = _statuses.value.find { it.name == "YT Video Stream" }?.isUp == false
-                val delayTime = if (youtubeDown || streamDown) 8000L else 30000L // 8s down, 30s up
+                val delayTime = if (youtubeDown || streamDown) {
+                    8000L // 8s fast recovery
+                } else {
+                    if (BypassConfig.isCharging) 30000L else 90000L // 30s charging, 90s on battery
+                }
                 // Add minor jitter to avoid synchronized wakeups
                 val jitter = (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 2000).toLong()
                 delay(delayTime + jitter)

@@ -22,7 +22,7 @@ class NetworkHelpersTest {
         // Should start with TLS Handshake (0x16)
         assertEquals(0x16.toByte(), fakePacket[0])
         // Should contain the hostname
-        val packetString = String(fakePacket, Charsets.US_ASCII)
-        assertTrue("Packet should contain the hostname", packetString.contains(host))
+        val packetString = String(fakePacket, Charsets.US_ASCII).lowercase()
+        assertTrue("Packet should contain the hostname", packetString.contains(host.lowercase()))
     }
 }

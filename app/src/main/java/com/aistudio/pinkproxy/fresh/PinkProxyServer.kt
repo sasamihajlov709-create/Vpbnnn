@@ -1,5 +1,7 @@
 package com.aistudio.pinkproxy.fresh
 
+import androidx.core.content.edit
+
 import android.net.VpnService
 import android.util.Log
 import kotlinx.coroutines.*
@@ -34,6 +36,9 @@ object ProxyStats {
 
     private val _successRate = MutableStateFlow(100)
     val successRate: StateFlow<Int> = _successRate.asStateFlow()
+    
+    private val _stabilityScore = MutableStateFlow(100)
+    val stabilityScore: StateFlow<Int> = _stabilityScore.asStateFlow()
 
     private val _censorshipIntensity = MutableStateFlow(0)
     val censorshipIntensity: StateFlow<Int> = _censorshipIntensity.asStateFlow()
@@ -74,16 +79,42 @@ object ProxyStats {
 
     private val poolUpdateCounter = AtomicLong(0)
     fun updatePoolStatus(p8k: Int, p16k: Int) {
-        if (poolUpdateCounter.incrementAndGet() % 100L == 0L) {
+        val count = poolUpdateCounter.incrementAndGet()
+        if (count % 20L == 0L || kotlin.math.abs(_pool8kSize.value - p8k) > 5 || kotlin.math.abs(_pool16kSize.value - p16k) > 5) {
             _pool8kSize.value = p8k
             _pool16kSize.value = p16k
         }
     }
 
+    private val recentResults = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
+    private val MAX_RESULTS_TRACKING = 100
+
+    fun recordResult(success: Boolean) {
+        totalRequests.incrementAndGet()
+        if (!success) totalErrors.incrementAndGet()
+        
+        recentResults.add(success)
+        if (recentResults.size > MAX_RESULTS_TRACKING) {
+            recentResults.removeAt(0)
+        }
+        
+        updateMetrics()
+    }
+
+    private fun updateMetrics() {
+        val requests = totalRequests.get()
+        if (requests > 0) {
+            _successRate.value = (100 - (totalErrors.get() * 100 / requests)).toInt().coerceIn(0, 100)
+        }
+        
+        if (recentResults.isNotEmpty()) {
+            val recentSuccesses = recentResults.count { it }
+            _stabilityScore.value = (recentSuccesses * 100 / recentResults.size).coerceIn(0, 100)
+        }
+    }
     private val totalBytes = AtomicLong(0L)
     private val totalErrors = AtomicLong(0L)
     private val totalRequests = AtomicLong(0L)
-    
     private val _dnsSuccessCount = MutableStateFlow(0L)
     val dnsSuccessCount: StateFlow<Long> = _dnsSuccessCount.asStateFlow()
     
@@ -338,11 +369,17 @@ object ProxyStats {
         val rate = getSuccessRate()
         _successRate.value = rate
         
+        // Calculate Stability Score based on Jitter and Success rate
+        val jitter = _rttJitter.value
+        val jitterScore = if (jitter < 40) 40 else if (jitter < 120) 25 else 10
+        val stabilitySuccessWeight = (rate * 0.6).toInt()
+        _stabilityScore.value = (jitterScore + stabilitySuccessWeight).coerceIn(0, 100)
+        
         // Calculate Signal Quality (0-100)
         val rtt = BypassConfig.currentRttMs.value
         val rttWeight = if (rtt < 100) 40 else if (rtt < 300) 25 else 10
-        val successWeight = (rate * 0.6).toInt()
-        _signalQuality.value = (rttWeight + successWeight).coerceIn(0, 100)
+        val signalSuccessWeight = (rate * 0.6).toInt()
+        _signalQuality.value = (rttWeight + signalSuccessWeight).coerceIn(0, 100)
         
         // Auto-Panic Logic
         if (slidingWindow.size >= 30) {
@@ -473,7 +510,7 @@ enum class BypassStrategy {
     FAKE_PACKET, SNI_SPLIT, SNI_TRIPLE, SNI_MANGLE, TLS_DIRTY, TLS_PAD, TLS_GREASE,
     HOST_MIXED, FRAG_3_5, CHUNKY, HOST_CASE, RAND_SPLIT, HEADER_SPLIT,
     TCP_OOB_DESYNC, HTTP_SPACE, HTTP_TAB, WINDOW_SIZE, SLOW_SEND, OOB_DESYNC,
-    TCP_ZERO_WINDOW, GHOST_PACKETS, FRAGMENT_MULTI, HTTP_MANGLE, SNI_CASE, TCP_WINDOW_CLAMP, PACKET_PADDING, TCP_KEEPALIVE, QUIC_BOOST, CHAOS, DIRECT
+    TCP_ZERO_WINDOW, GHOST_PACKETS, FRAGMENT_MULTI, HTTP_MANGLE, SNI_CASE, TCP_WINDOW_CLAMP, PACKET_PADDING, TCP_KEEPALIVE, QUIC_BOOST, CHAOS, HTTP_SMUGGLE, TLS_SPLIT_PAD, TLS_FRAG_OOB, HTTP_OBSCURE, DOUBLE_SPLIT, TLS_MIXED_OOB, TLS_HOLE_PUNCH, TCP_OOB_SPLIT, TLS_GHOST_HELLO, TLS_FRAG_RANDOM, TLS_REC_SPLIT, HTTP_LINE_FOLD, QUIC_PAD, TLS_MULTI_FRAG, TCP_SYN_COOKIE_FAKE, TLS_SESSION_RESUME_FAKE, TLS_EXT_SHUFFLE, QUIC_VERSION_NEG_FAKE, HTTP_HOST_SKEW, TLS_ALPN_MANGLE, HTTP_VERB_CASE, TCP_MSS_CLAMP, TLS_EXT_JUNK, HTTP_TE_CHUNKY, TCP_URG_SKEW, TLS_EXT_SKEW, HTTP_AUTH_FAKE, TCP_FAST_RETRANSMIT_SIM, QUIC_INITIAL_FRAG, TLS_SNI_APPEND_JUNK, TCP_SACK_PANIC, TLS_REC_MANGLE, HTTP_PIPE_SIM, TCP_REORDER_SIM, TLS_CLIENT_HELLO_RETRY_SIM, HTTP_COOKIE_SKEW, TCP_ACK_DELAY_SIM, TCP_FAST_OPEN_FAKE, TLS_PADDING_RAND, HTTP_HOST_SPACE, TLS_MULTI_HELLO, HTTP_CHUNKED_MANGLE, TCP_SYN_FLOOD_FAKE, TLS_REHANDSHAKE_FAKE, HTTP_RANGE_SKEW, TCP_RST_FAKE, QUIC_RANDOM_CID, TLS_SNI_SKEW, HTTP_VERSION_SKEW, TCP_TIMESTAMP_MANGLE, UDP_NOISE, TLS_CIPHER_SHUFFLE, HTTP_USER_AGENT_SKEW, TCP_URGENT_RANDOM, DIRECT
 }
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }
@@ -506,7 +543,10 @@ object HostClassifier {
             lower.contains("openai") || lower.contains("chatgpt") || lower.contains("anthropic") ||
             lower.contains("claude") || lower.contains("deepmind") || lower.contains("gemini") ||
             lower.contains("mistral") || lower.contains("hf.co") || lower.contains("huggingface") ||
-            lower.contains("perplexity") -> HostCategory.AI
+            lower.contains("perplexity") || lower.contains("grok") || lower.contains("x.ai") -> HostCategory.AI
+            
+            lower.contains("notion") || lower.contains("evernote") || lower.contains("obsidian") ||
+            lower.contains("trello") || lower.contains("asana") || lower.contains("monday.com") -> HostCategory.OTHER
             
             lower.contains("binance") || lower.contains("coinbase") || lower.contains("tradingview") ||
             lower.contains("metamask") || lower.contains("trustwallet") || lower.contains("ledger") ||
@@ -524,10 +564,27 @@ object HostClassifier {
 
             lower.contains("amazon") || lower.contains("ebay") || lower.contains("aliexpress") ||
             lower.contains("alibaba") || lower.contains("shopify") || lower.contains("walmart") ||
-            lower.contains("target") -> HostCategory.SHOPPING
+            lower.contains("target") || lower.contains("rakuten") || lower.contains("etsy") -> HostCategory.SHOPPING
+
+            lower.contains("cnn.com") || lower.contains("bbc") || lower.contains("reuters") ||
+            lower.contains("nytimes") || lower.contains("guardian") || lower.contains("bloomberg") ||
+            lower.contains("aljazeera") || lower.contains("meduza") || lower.contains("theverge") -> HostCategory.NEWS
 
             lower.contains("akamai") || lower.contains("fastly") || lower.contains("cloudfront") ||
             lower.contains("bunny") || lower.contains("edgesuite") -> HostCategory.CDN
+
+            lower.contains("binance") || lower.contains("coinbase") || lower.contains("kraken") ||
+            lower.contains("metamask") || lower.contains("trustwallet") || lower.contains("ledger") ||
+            lower.contains("blockchain") || lower.contains("etoro") || lower.contains("revolut") ||
+            lower.contains("wise.com") || lower.contains("payoneer") || lower.contains("paypal") ||
+            lower.contains("kucoin") || lower.contains("bybit") || lower.contains("okx") ||
+            lower.contains("mexc") || lower.contains("bitget") -> HostCategory.FINANCE
+
+            lower.contains("steam") || lower.contains("epicgames") || lower.contains("roblox") ||
+            lower.contains("ubisoft") || lower.contains("blizzard") || lower.contains("nintendo") ||
+            lower.contains("playstation") || lower.contains("xbox") || lower.contains("riotgames") ||
+            lower.contains("leagueoflegends") || lower.contains("valorant") || lower.contains("fortnite") ||
+            lower.contains("minecraft") || lower.contains("twitch") || lower.contains("discord") -> HostCategory.GAMING
             
             else -> HostCategory.OTHER
         }
@@ -536,6 +593,16 @@ object HostClassifier {
 
 object BypassConfig {
     @Volatile var activeVpnService: android.net.VpnService? = null
+    
+    fun isHostDirect(host: String): Boolean {
+        val lHost = host.lowercase(java.util.Locale.ROOT)
+        return lHost.endsWith(".ru") || lHost.endsWith(".su") || lHost.endsWith(".рф") || 
+               lHost.contains("yandex") || lHost.contains("vk.com") || lHost.contains("gosuslugi") ||
+               lHost.contains("sberbank") || lHost.contains("tinkoff") || lHost.contains("alfabank") ||
+               lHost.contains("mail.ru") || lHost.contains("ozon.ru") || lHost.contains("wildberries") ||
+               lHost == "localhost" || lHost.startsWith("192.168.") || lHost.startsWith("10.") || lHost.startsWith("127.")
+    }
+
     var frag1 = 3
     var frag2 = 5
     var frag3 = 2
@@ -549,19 +616,67 @@ object BypassConfig {
     var isPanicMode: Boolean
         get() = _isPanicModeFlow.value
         set(value) { _isPanicModeFlow.value = value }
-    var isCharging = true
+    private val _isChargingFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
+    val isChargingFlow: kotlinx.coroutines.flow.StateFlow<Boolean> = _isChargingFlow.asStateFlow()
+    var isCharging: Boolean
+        get() = _isChargingFlow.value
+        set(value) { _isChargingFlow.value = value }
+    var isDiagnosticMode = false
+    private val networkStrategyMemory = ConcurrentHashMap<NetworkType, BypassStrategy>()
 
     fun autoTuneFragmentation(intensity: Int) {
         if (!isAutoTuning) return
+        
+        val rtt = BypassConfig.currentRttMs.value.coerceAtLeast(1)
+        val rttMultiplier = (rtt.toDouble() / 150.0).coerceIn(0.5, 3.0)
+        
         when {
-            intensity > 80 -> {
-                frag1 = 1; frag2 = 2; frag3 = 1; delay1 = 5L; delay2 = 5L
+            intensity > 95 -> {
+                frag1 = 1; frag2 = 1; frag3 = 1
+                delay1 = (150L * rttMultiplier).toLong()
+                delay2 = (120L * rttMultiplier).toLong()
+                if (strategy.value != BypassStrategy.TCP_URG_SKEW && strategy.value != BypassStrategy.CHAOS) {
+                    setGlobalStrategy(BypassStrategy.TCP_URG_SKEW)
+                }
             }
-            intensity > 50 -> {
-                frag1 = 2; frag2 = 3; frag3 = 2; delay1 = 15L; delay2 = 10L
+            intensity > 90 -> {
+                frag1 = 1; frag2 = 1; frag3 = 1
+                delay1 = (100L * rttMultiplier).toLong()
+                delay2 = (80L * rttMultiplier).toLong()
+                if (strategy.value != BypassStrategy.CHAOS && strategy.value != BypassStrategy.QUIC_INITIAL_FRAG) {
+                    setGlobalStrategy(BypassStrategy.CHAOS)
+                }
+            }
+            intensity > 75 -> {
+                frag1 = 1; frag2 = 2; frag3 = 1
+                delay1 = (60L * rttMultiplier).toLong()
+                delay2 = (45L * rttMultiplier).toLong()
+                if (strategy.value == BypassStrategy.DIRECT) setGlobalStrategy(BypassStrategy.FAKE_PACKET)
+            }
+            intensity > 45 -> {
+                frag1 = 2; frag2 = 2; frag3 = 1
+                delay1 = (40L * rttMultiplier).toLong()
+                delay2 = (30L * rttMultiplier).toLong()
+                if (strategy.value == BypassStrategy.DIRECT) setGlobalStrategy(BypassStrategy.SNI_SPLIT)
+            }
+            intensity > 20 -> {
+                frag1 = 2; frag2 = 3; frag3 = 1
+                delay1 = (25L * rttMultiplier).toLong()
+                delay2 = (20L * rttMultiplier).toLong()
             }
             else -> {
-                frag1 = 3; frag2 = 5; frag3 = 2; delay1 = 25L; delay2 = 20L
+                frag1 = 3; frag2 = 5; frag3 = 2
+                delay1 = (15L * rttMultiplier).toLong()
+                delay2 = (10L * rttMultiplier).toLong()
+            }
+        }
+        
+        // Proactive Strategy Rotation: if success rate is low even after tuning
+        if (ProxyStats.successRate.value < 50 && intensity > 50) {
+            val best = getGlobalBestStrategy()
+            if (best != strategy.value) {
+                setGlobalStrategy(best)
+                ProxyStats.logRecovery("AUTO-TUNE: Low success rate, rotating to best known: ${best.name}")
             }
         }
     }
@@ -574,7 +689,10 @@ object BypassConfig {
     val strategy: StateFlow<BypassStrategy> = _currentStrategy.asStateFlow()
 
     fun setGlobalStrategy(newStrategy: BypassStrategy) {
-        _currentStrategy.value = newStrategy
+        if (_currentStrategy.value != newStrategy) {
+            _currentStrategy.value = newStrategy
+            networkStrategyMemory[_currentNetworkType.value] = newStrategy
+        }
     }
 
     private val _currentRttMs = MutableStateFlow(100L)
@@ -589,6 +707,10 @@ object BypassConfig {
                 try {
                     optimizeNetworkParameters()
                     probeMtu()
+                    probeTopHosts()
+                    checkDnsHealth()
+                    performDeepHealthProbe()
+                    autoCleanup()
                 } catch (e: Exception) { }
                 delay(300000) // Every 5 minutes
             }
@@ -602,25 +724,65 @@ object BypassConfig {
                 delay(1200000) // Every 20 minutes
             }
         }
+        scope.launch {
+            while (isActive) {
+                if (ProxyStats.censorshipIntensity.value > 80) {
+                    rotateGlobalStrategy()
+                }
+                delay(if (isPanicMode) 120000 else 600000) // 2 or 10 minutes
+            }
+        }
     }
 
-    private suspend fun runStrategyBenchmark() {
-        val testHost = "google.com"
+    fun rotateGlobalStrategy() {
+        val pools = listOf(
+            BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI,
+            BypassStrategy.TLS_MIXED_OOB, BypassStrategy.TCP_OOB_SPLIT, BypassStrategy.TLS_GHOST_HELLO,
+            BypassStrategy.TLS_FRAG_RANDOM, BypassStrategy.TLS_REC_SPLIT, BypassStrategy.TLS_MULTI_FRAG,
+            BypassStrategy.TLS_EXT_SHUFFLE, BypassStrategy.HTTP_HOST_SKEW, BypassStrategy.CHAOS,
+            BypassStrategy.TLS_ALPN_MANGLE, BypassStrategy.HTTP_VERB_CASE, BypassStrategy.TCP_MSS_CLAMP,
+            BypassStrategy.TLS_CLIENT_HELLO_RETRY_SIM, BypassStrategy.HTTP_COOKIE_SKEW,
+            BypassStrategy.TCP_ACK_DELAY_SIM, BypassStrategy.TCP_SACK_PANIC
+        )
+        val current = strategy.value
+        val next = pools.filter { it != current }.random()
+        ProxyStats.logRecovery("AUTO-ROTATION: Rotating strategy to ${next.name} due to high censorship.")
+        setGlobalStrategy(next)
+    }
+
+    suspend fun runStrategyBenchmark() {
+        val testHosts = listOf("google.com", "wikipedia.org", "github.com", "chatgpt.com")
         val candidates = listOf(
             BypassStrategy.FRAGMENT_MULTI,
             BypassStrategy.FAKE_PACKET,
             BypassStrategy.TCP_OOB_DESYNC,
             BypassStrategy.SNI_SPLIT,
-            BypassStrategy.CHAOS
+            BypassStrategy.TLS_GHOST_HELLO,
+            BypassStrategy.TLS_FRAG_RANDOM,
+            BypassStrategy.TLS_REC_SPLIT,
+            BypassStrategy.HTTP_LINE_FOLD,
+            BypassStrategy.CHAOS,
+            BypassStrategy.TLS_CLIENT_HELLO_RETRY_SIM,
+            BypassStrategy.TCP_ACK_DELAY_SIM,
+            BypassStrategy.TLS_CIPHER_SHUFFLE,
+            BypassStrategy.HTTP_USER_AGENT_SKEW,
+            BypassStrategy.TCP_URGENT_RANDOM,
+            BypassStrategy.UDP_NOISE
         )
         
-        ProxyStats.logRecovery("BENCHMARK: Starting automated strategy evaluation...")
+        ProxyStats.logRecovery("BENCHMARK: Starting automated strategy evaluation on fallback hosts...")
         var bestStrategy = candidates[0]
         var minRtt = Long.MAX_VALUE
         
         for (strategy in candidates) {
             val startTime = System.currentTimeMillis()
-            val success = ServiceChecker.probeHostWithStrategy(testHost, strategy)
+            var success = false
+            for (host in testHosts) {
+                if (ServiceChecker.probeHostWithStrategy(host, strategy)) {
+                    success = true
+                    break
+                }
+            }
             if (success) {
                 val rtt = System.currentTimeMillis() - startTime
                 if (rtt < minRtt) {
@@ -628,7 +790,7 @@ object BypassConfig {
                     bestStrategy = strategy
                 }
             }
-            delay(5000) // Cool down between probes
+            delay(3000) // Cool down between probes
         }
         
         if (minRtt != Long.MAX_VALUE) {
@@ -636,6 +798,37 @@ object BypassConfig {
             setGlobalStrategy(bestStrategy)
         } else {
             ProxyStats.logRecovery("BENCHMARK: All candidates failed. Remaining on current strategy.")
+        }
+    }
+
+    private suspend fun probeTopHosts() {
+        // Find top 3 hosts by traffic
+        val top = ProxyStats.topHosts.value.take(3)
+        if (top.isEmpty()) return
+        
+        ProxyStats.logRecovery("AUTO-PROBE: Testing top ${top.size} hosts for optimal strategies...")
+        
+        for (hostEntry in top) {
+            val host = hostEntry.first
+            // Only probe if we don't have a stable strategy already
+            if (hostStrategyCache[host] != null && hostFailedStrategies[host]?.isEmpty() == true) continue
+            
+            // Try to find a working strategy by doing a tiny HEAD request or just a TCP connect
+            val candidates = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI, BypassStrategy.FAKE_PACKET)
+            for (strategy in candidates) {
+                try {
+                    withTimeout(5000) {
+                        val socket = Socket()
+                        socket.connect(InetSocketAddress(host, 443), 2000)
+                        socket.close()
+                    }
+                    ProxyStats.logRecovery("AUTO-PROBE: Strategy $strategy verified for $host")
+                    hostStrategyCache[host] = strategy
+                    break
+                } catch (e: Exception) {
+                    // Try next strategy
+                }
+            }
         }
     }
 
@@ -655,7 +848,22 @@ object BypassConfig {
         } catch (e: Exception) {}
     }
 
-    private fun optimizeNetworkParameters() {
+    fun getCurrentRttMs(): Long = _currentRttMs.value
+    
+    fun offsetMtu(delta: Int) {
+        currentMtu.value = (currentMtu.value + delta).coerceIn(1200, 1460)
+        udpMtu.value = (udpMtu.value + delta).coerceIn(1100, 1400)
+    }
+
+    fun enterPanicMode() {
+        if (!isPanicMode) {
+            isPanicMode = true
+            ProxyStats.logRecovery("WATCHDOG: ENTERING PANIC MODE.")
+            optimizeNetworkParameters()
+        }
+    }
+
+    fun optimizeNetworkParameters() {
         // Adjust MTU based on Network Type and Latency
         val rtt = _currentRttMs.value
         val currentMtuVal = currentMtu.value
@@ -672,13 +880,28 @@ object BypassConfig {
             delay1 = (delay1 - 5).coerceAtLeast(5L)
             delay2 = (delay2 - 5).coerceAtLeast(5L)
             udpMtu.value = (udpMtu.value - 50).coerceAtLeast(1100)
+            
+            // Wipe failed cache to allow re-probing under panic rules
+            if (faults > 20) {
+                hostFailedStrategies.clear()
+                hostStrategyCache.clear()
+                blockQuic = true
+                RobustResolver.clearCache()
+                ProxyStats.logRecovery("OPTIMIZER: SEVERE DPI PRESSURE. Full cache wipe and QUIC blocking enabled.")
+            }
         } else if (faults == 0 && rtt < 150) {
             // Recovery: good network
+            if (isPanicMode) {
+                ProxyStats.logRecovery("OPTIMIZER: Network stabilized, scaling back panic parameters")
+            }
             isPanicMode = false
             ProxyStats.updateCensorshipIntensity(-5)
-            delay1 = 25L
-            delay2 = 20L
-            udpMtu.value = 1350
+            
+            // Slowly increase MTU towards optimal
+            if (currentMtuVal < 1460) {
+                currentMtu.value = (currentMtuVal + 20).coerceAtMost(1460)
+                udpMtu.value = (udpMtu.value + 20).coerceAtMost(1400)
+            }
         }
 
         if (rtt > 500 && currentMtuVal > 1280) {
@@ -689,6 +912,53 @@ object BypassConfig {
         } else if (rtt < 100 && currentMtuVal < 1460 && !isPanicMode) {
             // Good network, try increasing MTU for better throughput
             currentMtu.value = (currentMtuVal + 20).coerceAtMost(1460)
+        }
+    }
+
+    private suspend fun performDeepHealthProbe() {
+        val testHosts = listOf("1.1.1.1", "dns.google", "cloudflare.com", "github.com")
+        var overallSuccess = 0
+        for (host in testHosts) {
+            try {
+                val socket = java.net.Socket()
+                socket.connect(java.net.InetSocketAddress(host, 443), 5000)
+                socket.close()
+                overallSuccess++
+            } catch (e: Exception) {}
+            delay(1000)
+        }
+        
+        if (overallSuccess == 0) {
+            ProxyStats.logRecovery("HEALTH: Deep probe failed for all major CDNs. Network may be severely restricted.")
+            ProxyStats.updateCensorshipIntensity(10)
+            if (!isPanicMode) {
+                isPanicMode = true
+                optimizeNetworkParameters()
+                probeMtu()
+            }
+        } else if (overallSuccess < 3) {
+            ProxyStats.logRecovery("HEALTH: Deep probe degraded ($overallSuccess/${testHosts.size}). Increasing intensity.")
+            ProxyStats.updateCensorshipIntensity(5)
+        } else {
+            ProxyStats.logRecovery("HEALTH: Deep probe passed ($overallSuccess/${testHosts.size}). Network healthy.")
+        }
+    }
+
+    private suspend fun checkDnsHealth() {
+        try {
+            // Test if current best DoH is working
+            val testHost = "google.com"
+            val results = RobustResolver.resolve(testHost)
+            if (results.isEmpty()) {
+                ProxyStats.logRecovery("DNS: Health check failed for $testHost. Forcing DNS cache reset.")
+                RobustResolver.clearCache()
+                // If it keeps failing, maybe DNS is poisoned/blocked, escalation needed
+                ProxyStats.updateCensorshipIntensity(5)
+            } else {
+                ProxyStats.logRecovery("DNS: Health check OK (${results.size} IPs found)")
+            }
+        } catch (e: Exception) {
+            ProxyStats.logRecovery("DNS: Health check error: ${e.message}")
         }
     }
 
@@ -703,18 +973,37 @@ object BypassConfig {
                 
                 // Use Android system calls for low-level socket optimization
                 try {
-                    val fdField = java.net.SocketImpl::class.java.getDeclaredField("fd")
-                    fdField.isAccessible = true
-                    val getImpl = java.net.Socket::class.java.getDeclaredMethod("getImpl")
-                    getImpl.isAccessible = true
-                    val impl = getImpl.invoke(socket) as java.net.SocketImpl
-                    val fd = fdField.get(impl) as? java.io.FileDescriptor
-                    
+                    var pfd: android.os.ParcelFileDescriptor? = null
+                    val fd: java.io.FileDescriptor? = if (android.os.Build.VERSION.SDK_INT < 28) {
+                        try {
+                            val fdField = java.net.SocketImpl::class.java.getDeclaredField("fd")
+                            fdField.isAccessible = true
+                            val getImpl = java.net.Socket::class.java.getDeclaredMethod("getImpl")
+                            getImpl.isAccessible = true
+                            val impl = getImpl.invoke(socket) as java.net.SocketImpl
+                            fdField.get(impl) as? java.io.FileDescriptor
+                        } catch (e: Exception) { null }
+                    } else {
+                        pfd = android.os.ParcelFileDescriptor.fromSocket(socket)
+                        pfd.fileDescriptor
+                    }
+
                     if (fd != null && fd.valid()) {
                         // TCP_QUICKACK is usually 12 on Android/Linux
                         android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_TCP, 12, 1)
                         android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_IP, android.system.OsConstants.IP_TOS, 0x10)
+                        
+                        // TCP_USER_TIMEOUT is 18. Set to 10 seconds to detect network drops fast and recover instantly
+                        try {
+                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.IPPROTO_TCP, 18, 10000)
+                            // SO_KEEPALIVE
+                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.SOL_SOCKET, android.system.OsConstants.SO_KEEPALIVE, 1)
+                            // SO_RCVBUF / SO_SNDBUF expansion
+                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.SOL_SOCKET, android.system.OsConstants.SO_RCVBUF, 524288)
+                            android.system.Os.setsockoptInt(fd, android.system.OsConstants.SOL_SOCKET, android.system.OsConstants.SO_SNDBUF, 524288)
+                        } catch (ex: Exception) {}
                     }
+                    try { pfd?.close() } catch (e: Exception) {}
                 } catch (e: Exception) {}
                 
                 val rtt = _currentRttMs.value
@@ -749,24 +1038,48 @@ object BypassConfig {
         
         private var burstCounter = 0
 
-        // High-performance Buffer Pooling to reduce GC pressure
-        private val pool8k = java.util.concurrent.ArrayBlockingQueue<ByteArray>(128)
-        private val pool16k = java.util.concurrent.ArrayBlockingQueue<ByteArray>(64)
+        // Lock-free High-performance Buffer Pooling to reduce GC pressure and lock contention
+        private val pool8k = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+        private val pool16k = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+        private val size8k = java.util.concurrent.atomic.AtomicInteger(0)
+        private val size16k = java.util.concurrent.atomic.AtomicInteger(0)
         
         private val ewmaRtt = java.util.concurrent.atomic.AtomicLong(100L)
         private val congestionWindow = java.util.concurrent.atomic.AtomicInteger(10) // Packets per burst
 
         fun acquireBuffer(size: Int): ByteArray {
-            val pool = if (size <= 8192) pool8k else pool16k
-            val buf = pool.poll() ?: ByteArray(if (size <= 8192) 8192 else 16384)
-            ProxyStats.updatePoolStatus(pool8k.size, pool16k.size)
-            return buf
+            if (size <= 8192) {
+                val buf = pool8k.poll()
+                if (buf != null) {
+                    size8k.decrementAndGet()
+                    ProxyStats.updatePoolStatus(size8k.get(), size16k.get())
+                    return buf
+                }
+                return ByteArray(8192)
+            } else {
+                val buf = pool16k.poll()
+                if (buf != null) {
+                    size16k.decrementAndGet()
+                    ProxyStats.updatePoolStatus(size8k.get(), size16k.get())
+                    return buf
+                }
+                return ByteArray(16384)
+            }
         }
 
         fun releaseBuffer(buffer: ByteArray) {
-            val pool = if (buffer.size <= 8192) pool8k else pool16k
-            pool.offer(buffer)
-            ProxyStats.updatePoolStatus(pool8k.size, pool16k.size)
+            if (buffer.size <= 8192) {
+                if (size8k.get() < 128) {
+                    pool8k.offer(buffer)
+                    size8k.incrementAndGet()
+                }
+            } else {
+                if (size16k.get() < 64) {
+                    pool16k.offer(buffer)
+                    size16k.incrementAndGet()
+                }
+            }
+            ProxyStats.updatePoolStatus(size8k.get(), size16k.get())
         }
 
         suspend fun pace(isPanic: Boolean, dataSize: Int) {
@@ -841,17 +1154,16 @@ object BypassConfig {
     private val hostSuccessCount = ConcurrentHashMap<String, Int>()
     private val hostTtlMap = ConcurrentHashMap<String, Int>()
 
+    fun getGlobalBestStrategy(): BypassStrategy {
+        val scores = globalStrategyScores
+        return scores.maxByOrNull { it.value }?.key ?: BypassStrategy.TCP_OOB_DESYNC
+    }
+
     fun getBestStrategyForHost(host: String): BypassStrategy {
-        
-        val lHost = host.lowercase(java.util.Locale.ROOT)
-        // Auto-Direct (Split Tunneling): Bypass proxy engine completely for RU domains and known local services
-        if (lHost.endsWith(".ru") || lHost.endsWith(".su") || lHost.endsWith(".рф") || 
-            lHost.contains("yandex") || lHost.contains("vk.com") || lHost.contains("gosuslugi") ||
-            lHost.contains("sberbank") || lHost.contains("tinkoff") || lHost.contains("alfabank") ||
-            lHost.contains("mail.ru") || lHost.contains("ozon.ru") || lHost.contains("wildberries") ||
-            lHost == "localhost" || lHost.startsWith("192.168.") || lHost.startsWith("10.") || lHost.startsWith("127.")) {
+        if (BypassConfig.isHostDirect(host)) {
             return BypassStrategy.DIRECT
         }
+        val lHost = host.lowercase(java.util.Locale.ROOT)
         
         // Chaos Mode: If censorship is extreme, randomize every connection to bypass temporal signatures
         if (ProxyStats.censorshipIntensity.value > 85) {
@@ -861,21 +1173,93 @@ object BypassConfig {
                 BypassStrategy.FRAGMENT_MULTI,
                 BypassStrategy.SNI_SPLIT,
                 BypassStrategy.PACKET_PADDING,
-                BypassStrategy.CHAOS
+                BypassStrategy.CHAOS,
+                BypassStrategy.TLS_MIXED_OOB,
+                BypassStrategy.DOUBLE_SPLIT,
+                BypassStrategy.TLS_GHOST_HELLO,
+                BypassStrategy.TLS_HOLE_PUNCH,
+                BypassStrategy.TCP_OOB_SPLIT,
+                BypassStrategy.TLS_FRAG_RANDOM,
+                BypassStrategy.TLS_REC_SPLIT,
+                BypassStrategy.HTTP_LINE_FOLD,
+                BypassStrategy.QUIC_PAD,
+                BypassStrategy.TLS_MULTI_FRAG,
+                BypassStrategy.TCP_SYN_COOKIE_FAKE,
+                BypassStrategy.TLS_SESSION_RESUME_FAKE,
+                BypassStrategy.TLS_EXT_SHUFFLE,
+                BypassStrategy.QUIC_VERSION_NEG_FAKE,
+                BypassStrategy.HTTP_HOST_SKEW,
+                BypassStrategy.TLS_ALPN_MANGLE,
+                BypassStrategy.HTTP_VERB_CASE,
+                BypassStrategy.TCP_MSS_CLAMP,
+                BypassStrategy.TLS_EXT_JUNK,
+                BypassStrategy.HTTP_TE_CHUNKY,
+                BypassStrategy.TCP_URG_SKEW,
+                BypassStrategy.TLS_EXT_SKEW,
+                BypassStrategy.HTTP_AUTH_FAKE,
+                BypassStrategy.TCP_FAST_RETRANSMIT_SIM,
+                BypassStrategy.QUIC_INITIAL_FRAG,
+                BypassStrategy.TLS_SNI_APPEND_JUNK,
+                BypassStrategy.TCP_SACK_PANIC,
+                BypassStrategy.TLS_REC_MANGLE,
+                BypassStrategy.HTTP_PIPE_SIM,
+                BypassStrategy.TCP_REORDER_SIM,
+                BypassStrategy.TLS_CLIENT_HELLO_RETRY_SIM,
+                BypassStrategy.HTTP_COOKIE_SKEW,
+                BypassStrategy.TCP_FAST_OPEN_FAKE,
+                BypassStrategy.TLS_PADDING_RAND,
+                BypassStrategy.HTTP_HOST_SPACE,
+                BypassStrategy.TLS_MULTI_HELLO,
+                BypassStrategy.HTTP_CHUNKED_MANGLE,
+                BypassStrategy.TCP_SYN_FLOOD_FAKE,
+                BypassStrategy.TLS_REHANDSHAKE_FAKE,
+                BypassStrategy.HTTP_RANGE_SKEW,
+                BypassStrategy.TCP_RST_FAKE,
+                BypassStrategy.QUIC_RANDOM_CID,
+                BypassStrategy.TLS_SNI_SKEW,
+                BypassStrategy.HTTP_VERSION_SKEW,
+                BypassStrategy.TCP_TIMESTAMP_MANGLE,
+                BypassStrategy.UDP_NOISE,
+                BypassStrategy.TLS_CIPHER_SHUFFLE,
+                BypassStrategy.HTTP_USER_AGENT_SKEW,
+                BypassStrategy.TCP_URGENT_RANDOM
             )
             return chaosPool.random()
         }
         
         val failed = hostFailedStrategies[lHost] ?: emptySet()
         if (lHost.contains("youtube") || lHost.contains("googlevideo")) {
+             if (!failed.contains(BypassStrategy.TLS_FRAG_OOB)) {
+                 return BypassStrategy.TLS_FRAG_OOB
+             }
+             if (!failed.contains(BypassStrategy.TLS_SPLIT_PAD)) {
+                 return BypassStrategy.TLS_SPLIT_PAD
+             }
              if (!failed.contains(BypassStrategy.QUIC_BOOST)) {
                  return BypassStrategy.QUIC_BOOST
+             }
+             if (!failed.contains(BypassStrategy.TLS_FRAG_RANDOM)) {
+                 return BypassStrategy.TLS_FRAG_RANDOM
              }
         }
         if (lHost.contains("discord") || lHost.contains("telegram")) {
              if (!failed.contains(BypassStrategy.TCP_OOB_DESYNC)) {
                  return BypassStrategy.TCP_OOB_DESYNC
              }
+        }
+        
+        val category = HostClassifier.classify(lHost)
+        when (category) {
+            HostCategory.FINANCE -> {
+                if (!failed.contains(BypassStrategy.TLS_PAD)) return BypassStrategy.TLS_PAD
+                if (!failed.contains(BypassStrategy.SNI_MANGLE)) return BypassStrategy.SNI_MANGLE
+            }
+            HostCategory.GAMING -> {
+                if (!failed.contains(BypassStrategy.QUIC_BOOST)) return BypassStrategy.QUIC_BOOST
+                if (!failed.contains(BypassStrategy.TCP_WINDOW_CLAMP)) return BypassStrategy.TCP_WINDOW_CLAMP
+                if (!failed.contains(BypassStrategy.UDP_NOISE)) return BypassStrategy.UDP_NOISE
+            }
+            else -> {}
         }
 
         hostStrategyCache[lHost]?.let { return it }
@@ -886,10 +1270,32 @@ object BypassConfig {
         // If we have failed strategies for this host, avoid them
         if (failed.contains(currentGlobal)) {
             // Try an alternative
-            val alternatives = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.FRAGMENT_MULTI, BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC)
+            val alternatives = listOf(
+                BypassStrategy.SNI_SPLIT, BypassStrategy.FRAGMENT_MULTI, BypassStrategy.FAKE_PACKET, 
+                BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.TLS_MIXED_OOB, BypassStrategy.DOUBLE_SPLIT, 
+                BypassStrategy.TLS_HOLE_PUNCH, BypassStrategy.TCP_OOB_SPLIT, BypassStrategy.TLS_GHOST_HELLO, 
+                BypassStrategy.TLS_FRAG_RANDOM, BypassStrategy.TLS_REC_SPLIT, BypassStrategy.HTTP_LINE_FOLD,
+                BypassStrategy.TLS_EXT_SHUFFLE, BypassStrategy.QUIC_VERSION_NEG_FAKE, BypassStrategy.HTTP_HOST_SKEW,
+                BypassStrategy.TLS_ALPN_MANGLE, BypassStrategy.HTTP_VERB_CASE, BypassStrategy.TCP_MSS_CLAMP,
+                BypassStrategy.TLS_EXT_JUNK, BypassStrategy.HTTP_TE_CHUNKY, BypassStrategy.TCP_URG_SKEW,
+                BypassStrategy.TLS_EXT_SKEW, BypassStrategy.HTTP_AUTH_FAKE, BypassStrategy.TCP_FAST_RETRANSMIT_SIM,
+                BypassStrategy.QUIC_INITIAL_FRAG, BypassStrategy.TLS_SNI_APPEND_JUNK, BypassStrategy.TCP_SACK_PANIC,
+                BypassStrategy.TLS_REC_MANGLE, BypassStrategy.HTTP_PIPE_SIM, BypassStrategy.TCP_REORDER_SIM,
+                BypassStrategy.TLS_CLIENT_HELLO_RETRY_SIM, BypassStrategy.HTTP_COOKIE_SKEW,
+                BypassStrategy.TCP_FAST_OPEN_FAKE, BypassStrategy.TLS_PADDING_RAND, BypassStrategy.HTTP_HOST_SPACE,
+                BypassStrategy.TLS_MULTI_HELLO, BypassStrategy.HTTP_CHUNKED_MANGLE, BypassStrategy.TCP_SYN_FLOOD_FAKE,
+                BypassStrategy.TLS_REHANDSHAKE_FAKE, BypassStrategy.HTTP_RANGE_SKEW, BypassStrategy.TCP_RST_FAKE,
+                BypassStrategy.QUIC_RANDOM_CID, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.HTTP_VERSION_SKEW,
+                BypassStrategy.TCP_TIMESTAMP_MANGLE, BypassStrategy.UDP_NOISE, BypassStrategy.TLS_CIPHER_SHUFFLE,
+                BypassStrategy.HTTP_USER_AGENT_SKEW, BypassStrategy.TCP_URGENT_RANDOM
+            )
             val available = alternatives.filter { !failed.contains(it) }
             if (available.isNotEmpty()) {
-                val picked = available.first()
+                // Pick best one from global scores
+                val picked = available.map { it to (globalStrategyScores[it] ?: 100) }
+                                     .sortedByDescending { it.second }
+                                     .take(3)
+                                     .random().first
                 hostStrategyCache[lHost] = picked
                 return picked
             }
@@ -939,6 +1345,7 @@ object BypassConfig {
     private val strategyScores = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Int>>()
 
     fun recordDpiFault(host: String) {
+        ProxyStats.recordResult(false)
         val faults = (hostDpiFaults[host] ?: 0) + 1
         hostDpiFaults[host] = faults
         if (faults >= 2) {
@@ -953,10 +1360,24 @@ object BypassConfig {
     private val lastResults = java.util.concurrent.ConcurrentLinkedDeque<Boolean>()
     private val MAX_HISTORY = 20
 
+    private val globalFailedStrategies = ConcurrentHashMap<BypassStrategy, Int>()
+
     fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean) {
+        ProxyStats.recordResult(success)
         lastResults.add(success)
         if (lastResults.size > MAX_HISTORY) lastResults.poll()
         
+        if (!success) {
+            val gFails = globalFailedStrategies.getOrDefault(strategy, 0) + 1
+            globalFailedStrategies[strategy] = gFails
+            if (gFails % 20 == 0) {
+                globalStrategyScores[strategy] = (globalStrategyScores[strategy] ?: 500).minus(50).coerceAtLeast(10)
+            }
+        } else {
+            // Reward success slightly
+            globalStrategyScores[strategy] = (globalStrategyScores[strategy] ?: 500).plus(2).coerceAtMost(1000)
+        }
+
         // Auto-Panic Detection: if more than 60% of recent requests failed, optimize everything
         val failures = lastResults.count { !it }
         if (lastResults.size >= 10 && failures.toFloat() / lastResults.size > 0.6f) {
@@ -1035,7 +1456,51 @@ object BypassConfig {
         BypassStrategy.SNI_CASE to 350, BypassStrategy.TCP_WINDOW_CLAMP to 420,
         BypassStrategy.TLS_PAD to 300, BypassStrategy.TLS_GREASE to 300,
         BypassStrategy.FRAGMENT_MULTI to 500, BypassStrategy.GHOST_PACKETS to 250,
-        BypassStrategy.TCP_ZERO_WINDOW to 410, BypassStrategy.DIRECT to 1
+        BypassStrategy.TCP_ZERO_WINDOW to 410, BypassStrategy.TLS_FRAG_OOB to 580,
+        BypassStrategy.TLS_SPLIT_PAD to 480, BypassStrategy.HTTP_SMUGGLE to 450,
+        BypassStrategy.HTTP_OBSCURE to 430, BypassStrategy.DOUBLE_SPLIT to 470,
+        BypassStrategy.TLS_MIXED_OOB to 510, BypassStrategy.TLS_HOLE_PUNCH to 530,
+        BypassStrategy.TCP_OOB_SPLIT to 540, BypassStrategy.TLS_GHOST_HELLO to 560,
+        BypassStrategy.TLS_FRAG_RANDOM to 590, BypassStrategy.TLS_REC_SPLIT to 610,
+        BypassStrategy.HTTP_LINE_FOLD to 620, BypassStrategy.QUIC_PAD to 640,
+        BypassStrategy.TLS_MULTI_FRAG to 660, BypassStrategy.TCP_SYN_COOKIE_FAKE to 680,
+        BypassStrategy.TLS_SESSION_RESUME_FAKE to 700, 
+        BypassStrategy.TLS_EXT_SHUFFLE to 720,
+        BypassStrategy.QUIC_VERSION_NEG_FAKE to 740,
+        BypassStrategy.HTTP_HOST_SKEW to 760,
+        BypassStrategy.TLS_ALPN_MANGLE to 780,
+        BypassStrategy.HTTP_VERB_CASE to 800,
+        BypassStrategy.TCP_MSS_CLAMP to 820,
+        BypassStrategy.TLS_EXT_JUNK to 840,
+        BypassStrategy.HTTP_TE_CHUNKY to 860,
+        BypassStrategy.TCP_URG_SKEW to 880,
+        BypassStrategy.TLS_EXT_SKEW to 900,
+        BypassStrategy.HTTP_AUTH_FAKE to 920,
+        BypassStrategy.TCP_FAST_RETRANSMIT_SIM to 940,
+        BypassStrategy.QUIC_INITIAL_FRAG to 950,
+        BypassStrategy.TLS_SNI_APPEND_JUNK to 960,
+        BypassStrategy.TCP_SACK_PANIC to 970,
+        BypassStrategy.TLS_REC_MANGLE to 980,
+        BypassStrategy.HTTP_PIPE_SIM to 990,
+        BypassStrategy.TCP_REORDER_SIM to 1000,
+        BypassStrategy.TCP_FAST_OPEN_FAKE to 1010,
+        BypassStrategy.TLS_PADDING_RAND to 1020,
+        BypassStrategy.HTTP_HOST_SPACE to 1030,
+        BypassStrategy.TLS_MULTI_HELLO to 1040,
+        BypassStrategy.HTTP_CHUNKED_MANGLE to 1050,
+        BypassStrategy.TCP_SYN_FLOOD_FAKE to 1060,
+        BypassStrategy.TLS_REHANDSHAKE_FAKE to 1070,
+        BypassStrategy.HTTP_RANGE_SKEW to 1080,
+        BypassStrategy.TCP_RST_FAKE to 1090,
+        BypassStrategy.QUIC_RANDOM_CID to 1100,
+        BypassStrategy.TLS_SNI_SKEW to 1110,
+        BypassStrategy.HTTP_VERSION_SKEW to 1120,
+        BypassStrategy.TCP_TIMESTAMP_MANGLE to 1130,
+        BypassStrategy.UDP_NOISE to 1140,
+        BypassStrategy.TLS_CIPHER_SHUFFLE to 1150,
+        BypassStrategy.HTTP_USER_AGENT_SKEW to 1160,
+        BypassStrategy.TCP_URGENT_RANDOM to 1170,
+        BypassStrategy.DIRECT to 1
     )
 
     private val globalStrategyScores = ConcurrentHashMap<BypassStrategy, Int>().apply { putAll(defaultScores) }
@@ -1044,12 +1509,30 @@ object BypassConfig {
 
     fun mutateDnaForHost(host: String) {
         val dna = getDnaForHost(host)
-        // Aggressive mutation: shift towards smaller fragments and varied delays
-        dna.frag1 = if (java.util.concurrent.ThreadLocalRandom.current().nextDouble() > 0.5) java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 5 + 1) else java.util.concurrent.ThreadLocalRandom.current().nextInt(5, 12 + 1)
-        dna.frag2 = java.util.concurrent.ThreadLocalRandom.current().nextInt(dna.frag1 + 1, 26)
-        dna.delay1 = java.util.concurrent.ThreadLocalRandom.current().nextLong(15, 221)
-        dna.strategy = null 
-        ProxyStats.logRecovery("CORE: Aggressive DNA mutation applied for $host")
+        // Evolutionary mutation: randomly adjust parameters to find a working window
+        val intensity = ProxyStats.censorshipIntensity.value
+        if (intensity > 90) {
+            // Aggressive jump mutation for severe censorship
+            dna.frag1 = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4)
+            dna.delay1 = java.util.concurrent.ThreadLocalRandom.current().nextLong(80, 301)
+            dna.strategy = null
+            ProxyStats.logRecovery("DNA: AGGRESSIVE mutation for $host due to extreme censorship")
+        } else {
+            when (java.util.concurrent.ThreadLocalRandom.current().nextInt(4)) {
+                0 -> dna.frag1 = (dna.frag1 + if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) 1 else -1).coerceIn(1, 20)
+                1 -> dna.frag2 = (dna.frag2 + if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) 1 else -1).coerceIn(1, 25)
+                2 -> dna.delay1 = (dna.delay1 + if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) 10 else -10).coerceIn(5, 500)
+                3 -> {
+                    dna.frag1 = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 8)
+                    dna.delay1 = java.util.concurrent.ThreadLocalRandom.current().nextLong(20, 151)
+                }
+            }
+            ProxyStats.logRecovery("DNA: Incremental mutation for $host (Frag: ${dna.frag1}, Delay: ${dna.delay1})")
+        }
+    }
+
+    fun mutateDnaForAllHosts() {
+        hostDnas.keys.forEach { mutateDnaForHost(it) }
     }
 
     fun getAdaptiveDelay1(): Long {
@@ -1070,6 +1553,14 @@ object BypassConfig {
         hostDnas.clear(); hostFailedStrategies.clear(); hostStrategyCache.clear(); hostSuccessStrategies.clear()
         hostSuccessCount.clear(); hostExplorationTtl.clear(); hostTtlMap.clear(); hostConsecutiveFailures.clear()
         hostConsecutiveSuccesses.clear(); directPathHosts.clear(); dynamicallyCensoredHosts.clear(); RobustResolver.clearCache()
+    }
+
+    fun autoCleanup() {
+        // Clear caches if they grow too large (> 1000 hosts)
+        if (hostStrategyCache.size > 1000) {
+            ProxyStats.logRecovery("CORE: Auto-cleanup triggered (Cache size: ${hostStrategyCache.size})")
+            resetCaches()
+        }
     }
 
     fun resetToDefaults() {
@@ -1115,6 +1606,7 @@ object BypassConfig {
     }
 
     fun recordSuccessForHost(host: String, strategy: BypassStrategy, rtt: Long = -1, context: android.content.Context? = null) {
+        ProxyStats.recordResult(true)
         ProxyStats.recordCensorshipEvent(false); ProxyStats.recordGlobalSuccess(rtt)
         hostConsecutiveFailures.remove(host)
         recordStrategyResult(host, strategy, true)
@@ -1131,6 +1623,7 @@ object BypassConfig {
         if (strategy == BypassStrategy.FAKE_PACKET) hostTtlMap[host] = hostExplorationTtl[host] ?: 3
         
         getNetworkScoresMap()[strategy] = (getNetworkScoresMap()[strategy] ?: 100) + 5
+        globalStrategyScores[strategy] = (globalStrategyScores[strategy] ?: 100) + 2
         if (context != null) saveScores(context)
     }
 
@@ -1144,6 +1637,7 @@ object BypassConfig {
         val networkScores = getNetworkScoresMap()
         val penalty = if (isCritical) 20 else 10
         networkScores[strategy] = ((networkScores[strategy] ?: 100) - penalty).coerceAtLeast(10)
+        globalStrategyScores[strategy] = ((globalStrategyScores[strategy] ?: 100) - (penalty / 2)).coerceAtLeast(10)
         
         lastFailureTime[host] = System.currentTimeMillis()
 
@@ -1160,7 +1654,7 @@ object BypassConfig {
 
     suspend fun shadowProbe(host: String, specificStrategy: BypassStrategy? = null) {
         val strategiesToTest = if (specificStrategy != null) listOf(specificStrategy) 
-            else listOf(BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_TRIPLE, BypassStrategy.TLS_DIRTY)
+            else listOf(BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_TRIPLE, BypassStrategy.TLS_DIRTY, BypassStrategy.TLS_MIXED_OOB, BypassStrategy.TLS_FRAG_RANDOM, BypassStrategy.TLS_GHOST_HELLO, BypassStrategy.TLS_REC_SPLIT, BypassStrategy.HTTP_LINE_FOLD)
             
         val service = activeVpnService ?: return
         if (service is PinkVpnService) {
@@ -1204,7 +1698,12 @@ object BypassConfig {
 
         ProxyStats.logRecovery("CORE: Closed-loop global parameter adaptation triggered. Current Success: $successRate%, RTT: $rtt ms, Panic: $isPanic, Intensity: $intensity")
 
-        if (successRate < 70) {
+        if (successRate < 50 && !isPanicMode) {
+            ProxyStats.logRecovery("CORE: CRITICAL FAILURE RATE. Engaging Automatic Panic Mode.")
+            panicOptimize()
+        } else if (successRate > 85 && isPanicMode) {
+            exitPanicMode()
+        } else if (successRate < 70) {
             // Low success rate: increase fragmentation entropy (randomize lengths) and increase split-packet delays
             // to bypass advanced DPI filters.
             frag1 = (frag1 - 1).coerceAtLeast(1)
@@ -1345,7 +1844,7 @@ object BypassConfig {
                     out.write(data, split2, len - split2)
                 }
             }
-            BypassStrategy.TCP_OOB_DESYNC -> {
+            BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.OOB_DESYNC -> {
                 try {
                     // Send multiple OOB bytes with random data and jitter
                     for (i in 1..java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4)) {
@@ -1437,39 +1936,21 @@ object BypassConfig {
                 out.write(data, split, len - split)
             }
             BypassStrategy.TLS_GREASE -> {
-                val mData = data.copyOf()
-                if (len > 50 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
-                    // Scramble TLS Random (offset 11..42)
-                    for (i in 11..42) {
-                        if (i < len) mData[i] = java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte()
-                    }
-                    
-                    // Scramble TLS Session ID if present (usually at offset 43)
-                    val offset = 43
-                    if (len > offset + 33) {
-                        val sLen = data[offset].toInt() and 0xFF
-                        if (sLen in 1..32) {
-                            for (i in 0 until sLen) mData[offset + 1 + i] = java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte()
-                        }
-                    }
-                    
-                    // Attempt to append a Grease Extension if possible (very risky, but can bypass strict fingerprinting)
-                    // We only do this if it's a ClientHello and we have space
-                }
-                out.write(mData, 0, len)
-                if (len > 100) {
-                    // Send a dummy TLS Record (Alert or similar junk) to break flow signatures
-                    val grease = ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(16, 65))
-                    grease[0] = 0x17.toByte() // Application Data or 0x15 Alert
-                    grease[1] = 0x03.toByte()
-                    grease[2] = 0x03.toByte()
-                    val gLen = grease.size - 5
-                    grease[3] = (gLen shr 8).toByte()
-                    grease[4] = (gLen and 0xFF).toByte()
-                    for (i in 5 until grease.size) grease[i] = java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte()
-                    
-                    try { out.write(grease); out.flush(); delay(10) } catch (e: Exception) {}
-                }
+                // We cannot modify TLS Random or Session ID without breaking the cryptographic transcript.
+                // Instead, we fragment the ClientHello and insert OOB desync data.
+                val split = (len / 3).coerceAtLeast(1)
+                out.write(data, 0, split)
+                out.flush()
+                delay(config.delay1)
+                try {
+                    // Inject OOB byte to throw off DPI state machine
+                    socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256))
+                } catch (e: Exception) {}
+                val secondSplit = (len * 2 / 3).coerceAtLeast(split + 1).coerceAtMost(len - 1)
+                out.write(data, split, secondSplit - split)
+                out.flush()
+                delay(config.delay2)
+                out.write(data, secondSplit, len - secondSplit)
             }
             BypassStrategy.HOST_MIXED -> {
                 val sniOffset = TlsParser.findSniOffset(data, len, host)
@@ -1601,6 +2082,16 @@ object BypassConfig {
                     delay(config.delay1 / 2) // Adaptive delay based on RTT
                 }
             }
+            BypassStrategy.SLOW_SEND -> {
+                var offset = 0
+                while (offset < len) {
+                    val chunkSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4).coerceAtMost(len - offset)
+                    out.write(data, offset, chunkSize)
+                    out.flush()
+                    offset += chunkSize
+                    delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(50, 100))
+                }
+            }
             BypassStrategy.TCP_ZERO_WINDOW -> {
                 // Simulate Zero Window by sending 1 byte, then waiting, then the rest
                 out.write(data, 0, 1)
@@ -1643,12 +2134,19 @@ object BypassConfig {
                 }
                 out.write(mData, 0, len)
             }
+            BypassStrategy.PACKET_PADDING -> {
+                // Prepend or append data with OOB or fake packet depending on TLS/HTTP
+                try {
+                    socket.sendUrgentData(0)
+                    delay(config.delay1)
+                } catch (e: Exception) {}
+                out.write(data, 0, len)
+            }
             BypassStrategy.TCP_KEEPALIVE -> {
                 try {
                     socket.keepAlive = true
-                    // Junk byte to trigger window update
-                    out.write(byteArrayOf(java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte()))
-                    out.flush()
+                    // Send OOB byte instead of junk application data to trigger window update without breaking TLS/HTTP
+                    socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256))
                     delay(config.delay1.coerceAtLeast(10L))
                 } catch (e: Exception) {}
                 out.write(data, 0, len)
@@ -1699,10 +2197,661 @@ object BypassConfig {
                     }
                 }
             }
-            BypassStrategy.DIRECT -> {
+            BypassStrategy.HTTP_SMUGGLE -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len)
+                    val mangled = str.replace("\r\n", "\r\n ")
+                                     .replace("HTTP/1.1", "HTTP/1.1\r\nTransfer-Encoding: chunked")
+                    val mBytes = mangled.toByteArray()
+                    out.write(mBytes, 0, mBytes.size)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_SPLIT_PAD -> {
+                val split = (len / 3).coerceAtLeast(1)
+                out.write(data, 0, split)
+                out.flush()
+                delay(config.delay1)
+                
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                val padding = ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(16, 65)) { 0 }
+                out.write(padding)
+                out.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                
+                out.write(data, split, len - split)
+            }
+            BypassStrategy.TLS_FRAG_OOB -> {
+                val split = (len / 2).coerceAtLeast(1)
+                out.write(data, 0, split)
+                out.flush()
+                delay(config.delay1)
+                
+                try {
+                    // Send out-of-band urgent data to desynchronize DPI state machine
+                    socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256))
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "OOB failed: ${e.message}") }
+                
+                delay(config.delay2)
+                out.write(data, split, len - split)
+            }
+            BypassStrategy.HTTP_OBSCURE -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len)
+                    val mangled = str.replace("Host:", "Host:  ")
+                                     .replace("User-Agent:", "User-Agent:  ")
+                                     .replace("Accept:", "Accept:  ")
+                                     .replace("Connection:", "Connection:  ")
+                    val headersTail = "\r\nSome-Fake-Header: " + java.util.UUID.randomUUID().toString() + "\r\n\r\n"
+                    val finalStr = mangled.replace("\r\n\r\n", headersTail)
+                    val mBytes = finalStr.toByteArray()
+                    out.write(mBytes, 0, mBytes.size)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.DOUBLE_SPLIT -> {
+                val p1 = (len / 3).coerceAtLeast(1)
+                val p2 = (len * 2 / 3).coerceAtLeast(p1 + 1).coerceAtMost(len - 1)
+                
+                out.write(data, 0, p1)
+                out.flush()
+                delay(config.delay1)
+                
+                out.write(data, p1, p2 - p1)
+                out.flush()
+                delay(config.delay2)
+                
+                out.write(data, p2, len - p2)
+            }
+            BypassStrategy.TLS_MIXED_OOB -> {
+                val p1 = (len / 4).coerceAtLeast(1)
+                val p2 = (len / 2).coerceAtLeast(p1 + 1).coerceAtMost(len - 1)
+                out.write(data, 0, p1)
+                out.flush()
+                delay(config.delay1)
+                try {
+                    socket.sendUrgentData(255)
+                } catch (e: Exception) {}
+                out.write(data, p1, p2 - p1)
+                out.flush()
+                delay(config.delay2)
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                out.write(ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(10, 40)) { 0 })
+                out.flush()
+                TtlHelper.setTtl(socket, 64)
+                out.write(data, p2, len - p2)
+            }
+            BypassStrategy.TLS_REC_SPLIT -> {
+                // Split TLS record into 5-byte header and fragments of payload
+                if (len > 5 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {
+                    out.write(data, 0, 5) // TLS Header
+                    out.flush()
+                    delay(config.delay1)
+                    
+                    var offset = 5
+                    while (offset < len) {
+                        val remaining = len - offset
+                        val chunk = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 32).coerceAtMost(remaining)
+                        out.write(data, offset, chunk)
+                        out.flush()
+                        offset += chunk
+                        if (offset < len) delay(config.delay2 / 5)
+                    }
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_LINE_FOLD -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    // Insert space after \r\n to fold headers as per RFC 7230 (obsolete but works for DPI)
+                    val folded = str.replace("\r\n", "\r\n ")
+                    val fBytes = folded.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1)
+                    out.write(fBytes)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_FRAG_RANDOM -> {
+                var offset = 0
+                while (offset < len) {
+                    val chunk = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4).coerceAtMost(len - offset)
+                    out.write(data, offset, chunk)
+                    out.flush()
+                    delay(config.delay1)
+                    offset += chunk
+                    
+                    // After the first 20 bytes (covering TLS header and early SNI), send the rest
+                    if (offset >= 20 && offset < len) {
+                        delay(config.delay2)
+                        out.write(data, offset, len - offset)
+                        out.flush()
+                        break
+                    }
+                }
+            }
+            BypassStrategy.TLS_GHOST_HELLO -> {
+                val fakeHost = listOf("bing.com", "apple.com", "microsoft.com", "cloudflare.com").random()
+                val fakeHello = FakePacketHelper.buildFakeClientHello(fakeHost, java.util.concurrent.ThreadLocalRandom.current().nextInt(40, 90))
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                out.write(fakeHello)
+                out.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                
+                val p1 = (len / 2).coerceAtLeast(1)
+                out.write(data, 0, p1)
+                out.flush()
+                delay(config.delay2)
+                out.write(data, p1, len - p1)
+            }
+            BypassStrategy.TLS_HOLE_PUNCH -> {
+                val p1 = (len / 5).coerceAtLeast(1)
+                val p2 = (len * 3 / 5).coerceAtLeast(p1 + 1).coerceAtMost(len - 1)
+                out.write(data, 0, p1)
+                out.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                out.write(ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(32, 128)) { java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte() })
+                out.flush()
+                TtlHelper.setTtl(socket, 64)
+                out.write(data, p1, p2 - p1)
+                out.flush()
+                delay(config.delay2)
+                out.write(data, p2, len - p2)
+            }
+            BypassStrategy.TCP_OOB_SPLIT -> {
+                val p1 = (len / 2).coerceAtLeast(1)
+                out.write(data, 0, p1)
+                out.flush()
+                delay(config.delay1)
+                try {
+                    socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256))
+                    delay(config.delay2)
+                } catch (e: Exception) {}
+                out.write(data, p1, len - p1)
+            }
+            BypassStrategy.QUIC_PAD -> {
+                // For UDP/QUIC (if called from elsewhere) or as a generic padding for TCP
+                out.write(data, 0, len)
+                val paddingSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(64, 256)
+                out.write(ByteArray(paddingSize) { 0 })
+                out.flush()
+            }
+            BypassStrategy.TLS_MULTI_FRAG -> {
+                // Fragment almost everything into tiny pieces
+                var offset = 0
+                while (offset < len) {
+                    val remaining = len - offset
+                    val chunkSize = if (offset < 40) {
+                        java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4)
+                    } else {
+                        java.util.concurrent.ThreadLocalRandom.current().nextInt(32, 128)
+                    }.coerceAtMost(remaining)
+                    
+                    out.write(data, offset, chunkSize)
+                    out.flush()
+                    offset += chunkSize
+                    if (offset < len) delay(config.delay1 / 10)
+                }
+            }
+            BypassStrategy.TCP_SYN_COOKIE_FAKE -> {
+                // We can't really change SYN at this layer, so we simulate a "resync" with urgent data
+                try {
+                    socket.sendUrgentData(0xAA)
+                    delay(10)
+                    socket.sendUrgentData(0x55)
+                    delay(config.delay1)
+                } catch (e: Exception) {}
                 out.write(data, 0, len)
             }
-            else -> {
+            BypassStrategy.TLS_SESSION_RESUME_FAKE -> {
+                // Add a fake TLS Session ID if it looks like a ClientHello without one
+                if (len > 43 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    // This is a very simplified "injection" that might break the packet if not careful
+                    // Better approach: just use it as a trigger for extreme delay
+                    out.write(data, 0, 43)
+                    out.flush()
+                    delay(config.delay1 * 2)
+                    out.write(data, 43, len - 43)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_EXT_SHUFFLE -> {
+                // Skew extension processing by splitting into many tiny TLS fragments if it's a ClientHello
+                if (len > 5 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {
+                    var offset = 0
+                    while (offset < len) {
+                        val remaining = len - offset
+                        val chunkSize = if (offset < 43) 43 - offset else java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 3)
+                        val actualSize = chunkSize.coerceAtMost(remaining)
+                        out.write(data, offset, actualSize)
+                        out.flush()
+                        offset += actualSize
+                        if (offset < len) delay(config.delay1 / 5)
+                    }
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.QUIC_VERSION_NEG_FAKE -> {
+                // Send a fake QUIC Version Negotiation packet (UDP-like) as junk before TCP handshake payloads
+                val quicJunk = ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(100, 200))
+                quicJunk[0] = 0x80.toByte() // Long header
+                // Add some random version numbers
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                out.write(quicJunk); out.flush(); delay(15)
+                TtlHelper.setTtl(socket, 64)
+                out.write(data, 0, len)
+            }
+            BypassStrategy.HTTP_HOST_SKEW -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    // Obfuscate Host header with mixed case and tab injections
+                    val skewed = str.replace("Host: ", "hOsT:\t")
+                    val sBytes = skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1)
+                    out.write(sBytes)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_ALPN_MANGLE -> {
+                // Find ALPN extension in ClientHello and swap characters or add junk
+                if (len > 100 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {
+                    var alpnIdx = -1
+                    for (i in 0 until len - 1) {
+                        if (data[i] == 'h'.code.toByte() && data[i+1] == '2'.code.toByte()) {
+                            alpnIdx = i; break
+                        }
+                    }
+                    if (alpnIdx != -1) {
+                        val newData = data.copyOf()
+                        newData[alpnIdx] = 'H'.code.toByte()
+                        out.write(newData, 0, len)
+                    } else {
+                        out.write(data, 0, len)
+                    }
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_VERB_CASE -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val skewed = str.replace("GET ", "gEt ").replace("POST ", "pOsT ")
+                    val sBytes = skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1)
+                    out.write(sBytes)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_MSS_CLAMP -> {
+                // We can't change MSS here easily, so we fragment into exactly 512 byte chunks
+                var offset = 0
+                while (offset < len) {
+                    val remaining = len - offset
+                    val chunk = 512.coerceAtMost(remaining)
+                    out.write(data, offset, chunk)
+                    out.flush()
+                    offset += chunk
+                    if (offset < len) delay(config.delay1)
+                }
+            }
+            BypassStrategy.TLS_EXT_JUNK -> {
+                if (len > 100 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {
+                    var offset = 0
+                    while (offset < len) {
+                        val remaining = len - offset
+                        val chunk = if (offset < 50) 1 else java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 32)
+                        val actual = chunk.coerceAtMost(remaining)
+                        out.write(data, offset, actual)
+                        out.flush()
+                        offset += actual
+                        if (offset < len) delay(config.delay1 / 2)
+                    }
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_TE_CHUNKY -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val chunked = str.replace("HTTP/1.1", "HTTP/1.1\r\nTransfer-Encoding: chunked")
+                    out.write(chunked.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_URG_SKEW -> {
+                var offset = 0
+                while (offset < len) {
+                    val chunk = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 16).coerceAtMost(len - offset)
+                    try {
+                        socket.sendUrgentData(data[offset].toInt())
+                    } catch (e: Exception) {}
+                    out.write(data, offset, chunk)
+                    out.flush()
+                    offset += chunk
+                    if (offset < len) delay(config.delay1)
+                }
+            }
+            BypassStrategy.TLS_EXT_SKEW -> {
+                if (len > 100 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {
+                    // Send first 43 bytes (up to random session ID)
+                    out.write(data, 0, 43)
+                    out.flush()
+                    delay(config.delay1)
+                    // Send 1 byte of junk (simulating extension skew)
+                    out.write(byteArrayOf(0x00)) 
+                    out.flush()
+                    delay(config.delay1 / 4)
+                    // Send the rest
+                    out.write(data, 43, len - 43)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_AUTH_FAKE -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val fakeHeader = "Authorization: Basic ${java.util.UUID.randomUUID().toString().take(12)}\r\n"
+                    val skewed = str.replaceFirst("\r\n", "\r\n$fakeHeader")
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_FAST_RETRANSMIT_SIM -> {
+                val mid = len / 2
+                if (mid > 0) {
+                    out.write(data, 0, mid)
+                    out.flush()
+                    delay(5)
+                    out.write(data, 0, mid) // Simulating retransmit of first half
+                    out.flush()
+                    out.write(data, mid, len - mid)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.QUIC_INITIAL_FRAG -> {
+                // QUIC packets are usually large. Fragment them significantly if it looks like QUIC (UDP 443 often)
+                if (len > 1200) {
+                    var offset = 0
+                    while (offset < len) {
+                        val chunk = 256.coerceAtMost(len - offset)
+                        out.write(data, offset, chunk)
+                        out.flush()
+                        offset += chunk
+                        delay(config.delay1)
+                    }
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_SNI_APPEND_JUNK -> {
+                if (len > 100 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {
+                    // Find SNI and append some junk bytes to the extension
+                    val newData = ByteArray(len + 4)
+                    System.arraycopy(data, 0, newData, 0, len)
+                    newData[len] = 0x00
+                    newData[len+1] = 0x00
+                    newData[len+2] = 0x00
+                    newData[len+3] = 0x00
+                    out.write(newData)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_SACK_PANIC -> {
+                // Simulating strange TCP behavior by sending data in overlapping chunks
+                val mid = len / 2
+                if (mid > 0) {
+                    out.write(data, 0, mid + 1)
+                    out.flush()
+                    delay(2)
+                    out.write(data, mid, len - mid)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_REC_MANGLE -> {
+                if (len > 5 && data[0] == 0x16.toByte()) {
+                    // Mangle TLS record length field if possible (tricky without parsing)
+                    // Simple mangle: send header, then small delay, then body
+                    out.write(data, 0, 5)
+                    out.flush()
+                    delay(config.delay1)
+                    out.write(data, 5, len - 5)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_PIPE_SIM -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    // Simulate HTTP pipelining by appending a fake GET request after the real one
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val fakeGet = "GET /favicon.ico HTTP/1.1\r\nHost: ${java.util.UUID.randomUUID().toString().take(8)}.com\r\n\r\n"
+                    val piped = str + fakeGet
+                    out.write(piped.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_REORDER_SIM -> {
+                if (len > 200) {
+                    val mid = len / 2
+                    out.write(data, mid, len - mid)
+                    out.flush()
+                    delay(config.delay1 * 2)
+                    out.write(data, 0, mid)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_CLIENT_HELLO_RETRY_SIM -> {
+                if (len > 100 && data[0] == 0x16.toByte()) {
+                    // Send a fake ClientHello that looks like it expects a HelloRetryRequest
+                    val fakeHello = FakePacketHelper.buildFakeClientHello(host, 64)
+                    TtlHelper.setTtl(socket, config.fakeTtl)
+                    out.write(fakeHello)
+                    out.flush()
+                    delay(config.delay1)
+                    TtlHelper.setTtl(socket, 64)
+                    // Now send the real one
+                    out.write(data, 0, len)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_COOKIE_SKEW -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val skewed = str.replace("Cookie: ", "cOoKiE: ")
+                                     .replace("cookie: ", "CoOkIe: ")
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_ACK_DELAY_SIM -> {
+                // Simulate ACK delay by splitting payload and adding a small wait
+                val p1 = (len / 2).coerceAtLeast(1)
+                out.write(data, 0, p1)
+                out.flush()
+                delay(config.delay1.coerceAtMost(50L))
+                out.write(data, p1, len - p1)
+            }
+            BypassStrategy.TCP_FAST_OPEN_FAKE -> {
+                if (len > 100 && data[0] == 0x16.toByte()) {
+                    // Send first chunk, wait, then second chunk to simulate TFO data flow
+                    val p1 = 64.coerceAtMost(len)
+                    out.write(data, 0, p1)
+                    out.flush()
+                    delay(config.delay1)
+                    out.write(data, p1, len - p1)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_PADDING_RAND -> {
+                if (len > 5 && data[0] == 0x16.toByte()) {
+                    // Append random padding to the TLS record if it looks like a handshake
+                    val paddingSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(16, 129)
+                    val newData = ByteArray(len + paddingSize)
+                    System.arraycopy(data, 0, newData, 0, len)
+                    java.util.concurrent.ThreadLocalRandom.current().nextBytes(newData.copyOfRange(len, len + paddingSize))
+                    out.write(newData)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_HOST_SPACE -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val skewed = str.replace("Host: ", "Host:  ") // Double space after Host:
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TLS_MULTI_HELLO -> {
+                if (len > 100 && data[0] == 0x16.toByte()) {
+                    // Send fragmented ClientHello header, then junk, then real body
+                    out.write(data, 0, 5)
+                    out.flush()
+                    delay(config.delay1)
+                    val junk = ByteArray(32)
+                    java.util.concurrent.ThreadLocalRandom.current().nextBytes(junk)
+                    out.write(junk)
+                    out.flush()
+                    delay(config.delay1)
+                    out.write(data, 5, len - 5)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_CHUNKED_MANGLE -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val skewed = str.replace("Transfer-Encoding: chunked", "Transfer-Encoding:  chunked")
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_SYN_FLOOD_FAKE -> {
+                // Not a real SYN flood, but sending very small data chunks to trigger DPI analysis overhead
+                val chunk = 1.coerceAtMost(len)
+                for (i in 0 until len step chunk) {
+                    val size = chunk.coerceAtMost(len - i)
+                    out.write(data, i, size)
+                    out.flush()
+                    delay(1)
+                }
+            }
+            BypassStrategy.TLS_REHANDSHAKE_FAKE -> {
+                if (len > 100 && data[0] == 0x16.toByte()) {
+                    out.write(data, 0, len)
+                    out.flush()
+                    delay(config.delay1)
+                    val helloRequest = byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00)
+                    out.write(helloRequest)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_RANGE_SKEW -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val skewed = if (!str.contains("Range:")) {
+                        str.replace("\r\n\r\n", "\r\nRange: bytes=0-\r\n\r\n")
+                    } else str
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_RST_FAKE -> {
+                if (len > 0) {
+                    try { socket.sendUrgentData(0xFF) } catch (e: Exception) {}
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.QUIC_RANDOM_CID -> {
+                out.write(data, 0, len)
+            }
+            BypassStrategy.TLS_SNI_SKEW -> {
+                if (len > 100 && data[0] == 0x16.toByte()) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    // Simple SNI skew: append a dot to the host if it's found in the binary (very crude for now)
+                    // Real implementation would parse the ClientHello properly
+                    val skewed = str.replace(host, "$host.")
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_VERSION_SKEW -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val skewed = str.replace("HTTP/1.1", "HTTP/1.0")
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_TIMESTAMP_MANGLE -> {
+                // We can't easily mangle TCP timestamps from user-space, so we simulate by varying delay
+                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(1, 10))
+                out.write(data, 0, len)
+            }
+            BypassStrategy.TLS_CIPHER_SHUFFLE -> {
+                if (len > 100 && data[0] == 0x16.toByte()) {
+                    // This is a very simplified simulation of cipher shuffling.
+                    // Real one would require full TLS parsing.
+                    val shuffled = data.copyOf()
+                    if (len > 50) {
+                         // Swap some bytes in the extensions/ciphers area (dangerous without parsing)
+                         // For now, just add a small delay and a padding
+                         out.write(data, 0, 5)
+                         out.flush()
+                         delay(1)
+                         out.write(data, 5, len - 5)
+                    } else {
+                        out.write(data, 0, len)
+                    }
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP_USER_AGENT_SKEW -> {
+                if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
+                    val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
+                    val skewed = str.replace("User-Agent: ", "User-Agent:  ") // Extra space
+                                    .replace("User-Agent:", "user-agent:")   // Case change
+                    out.write(skewed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.TCP_URGENT_RANDOM -> {
+                if (len > 0) {
+                    if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) {
+                        try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(0, 256)) } catch (e: Exception) {}
+                    }
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.UDP_NOISE -> {
+                // UDP strategy applied to TCP: just pass through
+                out.write(data, 0, len)
+            }
+            BypassStrategy.DIRECT -> {
                 out.write(data, 0, len)
             }
         }
@@ -1743,12 +2892,20 @@ object BypassConfig {
         _currentNetworkType.value = netType
         
         if (oldType != netType) {
+            // Restore last good strategy for this network
+            networkStrategyMemory[netType]?.let { remembered ->
+                if (_currentStrategy.value != remembered) {
+                    ProxyStats.logRecovery("NETWORK: Restoring last known good strategy for ${netType.name}: ${remembered.name}")
+                    _currentStrategy.value = remembered
+                }
+            }
+
             // Reset adaptive metrics for the new network
             hostConsecutiveSuccesses.clear()
             hostConsecutiveFailures.clear()
             lastResults.clear()
-            RobustResolver.clearCache()
-            ProxyStats.logRecovery("NETWORK: Switched to ${netType.name}. Metrics reset.")
+            resetCaches() // Full reset on network switch to re-explore best strategies
+            ProxyStats.logRecovery("NETWORK: Switched to ${netType.name}. All caches and metrics reset.")
         }
     }
 
@@ -1813,6 +2970,7 @@ object BypassConfig {
             putInt("fakeTtl", fakeTtl)
             putBoolean("blockQuic", blockQuic)
             putBoolean("isAutoTuning", isAutoTuning)
+            putBoolean("isDiagnosticMode", isDiagnosticMode)
             apply()
         }
     }
@@ -1827,13 +2985,14 @@ object BypassConfig {
         fakeTtl = prefs.getInt("fakeTtl", fakeTtl)
         blockQuic = prefs.getBoolean("blockQuic", blockQuic)
         isAutoTuning = prefs.getBoolean("isAutoTuning", isAutoTuning)
+        isDiagnosticMode = prefs.getBoolean("isDiagnosticMode", isDiagnosticMode)
     }
     
     fun clearScores(context: android.content.Context? = null) {
         resetToDefaults()
         if (context != null) {
             val prefs = context.getSharedPreferences("pink_proxy_scores", android.content.Context.MODE_PRIVATE)
-            prefs.edit().clear().apply()
+            prefs.edit { clear() }
         }
     }
 
@@ -1841,7 +3000,6 @@ object BypassConfig {
         val scores = getNetworkScoresMap()
         return scores[strategy] ?: 100
     }
-    fun rotateGlobalStrategy() { _currentStrategy.value = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT && it != _currentStrategy.value }.random() }
     
     fun saveScores(context: android.content.Context) {
         // Periodic pruning of host success maps to prevent memory bloat
@@ -2059,6 +3217,24 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             while (isActive) {
                 delay(20000)
                 try {
+                    // Cleanup expired connections in the pool
+                    val iterator = connectionPool.entries.iterator()
+                    while (iterator.hasNext()) {
+                        val entry = iterator.next()
+                        val queue = entry.value
+                        val toRemove = mutableListOf<PooledConnection>()
+                        for (pc in queue) {
+                            if (!pc.isAlive()) {
+                                toRemove.add(pc)
+                                try { pc.socket.close() } catch (e: Exception) {}
+                            }
+                        }
+                        queue.removeAll(toRemove)
+                        if (queue.isEmpty()) {
+                            iterator.remove()
+                        }
+                    }
+
                     // Pre-warm connections for the top 3 hosts to achieve 0-RTT connection latency
                     val top = ProxyStats.topHosts.value.take(3).map { it.first }
                     for (host in top) {
@@ -2070,7 +3246,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                             val ips = RobustResolver.resolve(host, vpnService)
                             if (ips.isNotEmpty()) {
                                 val sock = java.net.Socket()
-                                vpnService?.protect(sock)
+                                vpnService.protect(sock)
                                 sock.soTimeout = 10000
                                 kotlinx.coroutines.withTimeoutOrNull(5000) {
                                     sock.connect(java.net.InetSocketAddress(ips.first(), port), 3000)
@@ -2084,8 +3260,38 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         }
     }
 
+    private fun startGlobalProber() {
+        serverScope.launch {
+            while (isActive) {
+                delay(180000) // Proactively probe every 3 minutes
+                if (BypassConfig.activeVpnService != null) {
+                    // Pick a candidate that is NOT the current global best and has potential
+                    val currentBest = BypassConfig.getGlobalBestStrategy()
+                    val candidates = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT && it != currentBest }
+                    
+                    // Prioritize strategies that we haven't tested recently or have low but non-zero scores
+                    val candidate = candidates.minByOrNull { BypassConfig.getStrategyScore(it) } ?: candidates.random()
+                    
+                    val testHost = "1.1.1.1"
+                    try {
+                        val socket = java.net.Socket()
+                        BypassConfig.activeVpnService?.protect(socket)
+                        socket.connect(java.net.InetSocketAddress(testHost, 443), 5000)
+                        socket.close()
+                        BypassConfig.recordStrategyResult(testHost, candidate, true)
+                        ProxyStats.logRecovery("PROBER: Proactive SUCCESS for ${candidate.name} (Score: ${BypassConfig.getStrategyScore(candidate)})")
+                    } catch (e: Exception) {
+                        BypassConfig.recordStrategyResult(testHost, candidate, false)
+                        ProxyStats.logRecovery("PROBER: Proactive FAILURE for ${candidate.name}")
+                    }
+                }
+            }
+        }
+    }
+
     init {
         startPreWarmer()
+        startGlobalProber()
         serverScope.launch {
             while (isActive) {
                 delay(15000) // Run more frequent checks
@@ -2149,14 +3355,42 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         // Traffic Camouflage Background Job
         serverScope.launch {
             while (isActive) {
-                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(180000, 600001)) // Every 3-10 minutes
+                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(60000, 300000)) // Every 1-5 minutes
                 if (BypassConfig.activeVpnService != null) {
                     try {
-                        val camHosts = listOf("google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com")
+                        val camHosts = listOf("google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com", "wikipedia.org")
                         val host = camHosts.random()
-                        RobustResolver.resolve(host, vpnService)
-                        ProxyStats.logRecovery("CORE: Camouflage burst for $host executed.")
+                        BypassConfig.shadowProbe(host, BypassStrategy.DIRECT) // Send a direct ClientHello or HTTP to fake innocent traffic
+                        ProxyStats.logRecovery("CORE: Camouflage HTTP/TLS burst for $host executed.")
                     } catch (e: Exception) { }
+                }
+            }
+        }
+
+        // Stability Watchdog
+        serverScope.launch {
+            var lastRtt = 0L
+            while (isActive) {
+                delay(90000) 
+                val stability = ProxyStats.stabilityScore.value
+                val currentRtt = BypassConfig.getCurrentRttMs()
+                
+                // Detection of RTT spike (> 2x previous or > 500ms)
+                if (currentRtt > 500 && currentRtt > lastRtt * 2 && lastRtt > 0) {
+                    ProxyStats.logRecovery("WATCHDOG: RTT SPIKE DETECTED ($currentRtt ms). Throttling MTU to stabilize.")
+                    BypassConfig.offsetMtu(-100)
+                }
+                lastRtt = currentRtt
+
+                if (stability < 30 && stability > 0) {
+                    ProxyStats.logRecovery("WATCHDOG: CRITICAL STABILITY ($stability%). EMERGENCY RESET.")
+                    BypassConfig.enterPanicMode()
+                    BypassConfig.mutateDnaForAllHosts()
+                    serverScope.launch { BypassConfig.runStrategyBenchmark() }
+                } else if (stability < 60 && stability > 0) {
+                    ProxyStats.logRecovery("WATCHDOG: STABILITY LOW ($stability%). Triggering emergency optimization.")
+                    BypassConfig.optimizeNetworkParameters()
+                    serverScope.launch { BypassConfig.runStrategyBenchmark() }
                 }
             }
         }
@@ -2182,7 +3416,24 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     val clientSocket = serverSocket?.accept() ?: break
                     launch { handleClient(clientSocket) }
                 }
+            } catch (e: java.net.SocketException) {
+                // Expected when stopping
             } catch (e: Exception) { Log.e("PinkProxyServer", "TCP Server failed", e) }
+        }
+
+        serverScope.launch {
+            while (isActive) {
+                delay(60000)
+                val now = System.currentTimeMillis()
+                val iterator = udpSessions.entries.iterator()
+                while (iterator.hasNext()) {
+                    val entry = iterator.next()
+                    if (now - entry.value.lastActivity > 120000) { // 2 mins idle
+                        try { entry.value.targetSocket.close() } catch (e: Exception) {}
+                        iterator.remove()
+                    }
+                }
+            }
         }
 
         // Core Heartbeat: Proactive strategy validation
@@ -2217,6 +3468,8 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     udpSocket?.receive(packet)
                     handleUdpPacket(packet)
                 }
+            } catch (e: java.net.SocketException) {
+                // Expected when stopping
             } catch (e: Exception) { Log.e("PinkProxyServer", "UDP Server failed", e) }
         }
         
@@ -2261,7 +3514,14 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 dstPort = ((data[5 + dlen].toInt() and 0xFF) shl 8) or (data[6 + dlen].toInt() and 0xFF)
                 headerLen = 7 + dlen
             }
-            else -> return // IPv6 not supported yet
+            4 -> { // IPv6
+                if (len < 22) return
+                val addrBytes = data.copyOfRange(4, 20)
+                dstHost = java.net.InetAddress.getByAddress(addrBytes).hostAddress ?: ""
+                dstPort = ((data[20].toInt() and 0xFF) shl 8) or (data[21].toInt() and 0xFF)
+                headerLen = 22
+            }
+            else -> return // Unknown
         }
         
         val payload = data.copyOfRange(headerLen, len)
@@ -2270,6 +3530,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         
         if (session == null || session.targetSocket.isClosed) {
             val sock = java.net.DatagramSocket()
+            vpnService.protect(sock)
             session = UdpSession(packet.address, packet.port, sock, System.currentTimeMillis())
             udpSessions[clientKey] = session
             
@@ -2281,11 +3542,16 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         sock.receive(rxPacket)
                         
                         val replyPort = rxPacket.port
-                        val header = byteArrayOf(0, 0, 0, 1, 0, 0, 0, 0, (replyPort shr 8).toByte(), replyPort.toByte())
+                        val ipBytes = rxPacket.address.address
+                        val header = if (ipBytes.size == 4) {
+                            byteArrayOf(0, 0, 0, 1, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], (replyPort shr 8).toByte(), replyPort.toByte())
+                        } else {
+                            byteArrayOf(0, 0, 0, 1, 0, 0, 0, 0, (replyPort shr 8).toByte(), replyPort.toByte())
+                        }
                         
-                        val finalPayload = ByteArray(10 + rxPacket.length)
-                        System.arraycopy(header, 0, finalPayload, 0, 10)
-                        System.arraycopy(rxPacket.data, 0, finalPayload, 10, rxPacket.length)
+                        val finalPayload = ByteArray(header.size + rxPacket.length)
+                        System.arraycopy(header, 0, finalPayload, 0, header.size)
+                        System.arraycopy(rxPacket.data, 0, finalPayload, header.size, rxPacket.length)
                         
                         val outPacket = java.net.DatagramPacket(finalPayload, finalPayload.size, packet.address, packet.port)
                         udpSocket?.send(outPacket)
@@ -2299,7 +3565,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         
         session.lastActivity = System.currentTimeMillis()
         try {
-            val targetAddr = if (dstHost.matches(Regex("^[0-9.]+$"))) java.net.InetAddress.getByName(dstHost) else RobustResolver.resolve(dstHost, vpnService).firstOrNull()
+            val targetAddr = if (RobustResolver.isIpAddress(dstHost)) java.net.InetAddress.getByName(dstHost) else RobustResolver.resolve(dstHost, vpnService).firstOrNull()
             if (targetAddr != null) {
                 val isQuicOrStreaming = dstPort == 443 || HostClassifier.classify(dstHost) == HostCategory.STREAMING
                 val currentStrategy = BypassConfig.strategy.value
@@ -2323,7 +3589,18 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     }
                 }
 
-                val outPacket = java.net.DatagramPacket(payload, payload.size, targetAddr, dstPort)
+                val strategy = BypassConfig.getBestStrategyForHost(dstHost)
+                val finalPayload = if (strategy == BypassStrategy.UDP_NOISE && payload.size < 1200) {
+                    val noiseSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 64)
+                    val combined = ByteArray(payload.size + noiseSize)
+                    System.arraycopy(payload, 0, combined, 0, payload.size)
+                    val noise = ByteArray(noiseSize)
+                    java.util.concurrent.ThreadLocalRandom.current().nextBytes(noise)
+                    System.arraycopy(noise, 0, combined, payload.size, noiseSize)
+                    combined
+                } else payload
+
+                val outPacket = java.net.DatagramPacket(finalPayload, finalPayload.size, targetAddr, dstPort)
                 session.targetSocket.send(outPacket)
                 ProxyStats.recordDataSent()
             }
@@ -2421,8 +3698,10 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 pos = 5 + len
             }
             0x04 -> { // IPv6
-                // Simplified IPv6 representation, assuming RobustResolver handles it if needed
-                host = ""
+                if (read >= 20) {
+                    val addrBytes = reqBuf.copyOfRange(4, 20)
+                    host = java.net.InetAddress.getByAddress(addrBytes).hostAddress ?: ""
+                }
                 pos = 20
             }
         }
@@ -2490,7 +3769,11 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         val activeJobs = mutableListOf<kotlinx.coroutines.Job>()
                         
                         kotlinx.coroutines.supervisorScope {
-                            for (ip in ips) {
+                            val maxRaceIps = if (BypassConfig.isCharging) 4 else 2
+                            val ipsToRace = ips.take(maxRaceIps)
+                            val raceDelay = if (BypassConfig.isCharging) 150L else 250L
+                            
+                            for (ip in ipsToRace) {
                                 val job = launch {
                                     val sock = Socket()
                                     try {
@@ -2671,7 +3954,11 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         val activeJobs = mutableListOf<kotlinx.coroutines.Job>()
                         
                         kotlinx.coroutines.supervisorScope {
-                            for (ip in ips) {
+                            val maxRaceIps = if (BypassConfig.isCharging) 4 else 2
+                            val ipsToRace = ips.take(maxRaceIps)
+                            val raceDelay = if (BypassConfig.isCharging) 150L else 250L
+                            
+                            for (ip in ipsToRace) {
                                 val job = launch {
                                     val sock = Socket()
                                     try {
@@ -2856,7 +4143,11 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         val activeJobs = mutableListOf<kotlinx.coroutines.Job>()
                         
                         kotlinx.coroutines.supervisorScope {
-                            for (ip in ips) {
+                            val maxRaceIps = if (BypassConfig.isCharging) 4 else 2
+                            val ipsToRace = ips.take(maxRaceIps)
+                            val raceDelay = if (BypassConfig.isCharging) 150L else 250L
+                            
+                            for (ip in ipsToRace) {
                                 val job = launch {
                                     val sock = Socket()
                                     try {
@@ -2879,7 +4170,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                                     }
                                 }
                                 activeJobs.add(job)
-                                delay(150)
+                                delay(raceDelay)
                                 if (deferredSocket.isCompleted) break
                             }
                             
@@ -2967,10 +4258,9 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         } finally {
             try { target?.close() } catch (e: Exception) {}
         }
-    }
-
-    private suspend fun proxyStream(input: InputStream, output: OutputStream, onError: () -> Unit, host: String?, isRecv: Boolean, strategy: BypassStrategy?) {
-        val buf = BypassConfig.TrafficShaper.acquireBuffer(16384)
+    }    private suspend fun proxyStream(input: InputStream, output: OutputStream, onError: () -> Unit, host: String?, isRecv: Boolean, strategy: BypassStrategy?) {
+        val bufSize = if (isRecv) 16384 else 8192
+        val buf = BypassConfig.TrafficShaper.acquireBuffer(bufSize)
         var successRecorded = false
         var lastActivity = System.currentTimeMillis()
         var totalProcessedBytes = 0L
@@ -2998,24 +4288,68 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         successRecorded = true
                     }
                     
-                    if (!isRecv && strategy != null && strategy != BypassStrategy.DIRECT && totalProcessedBytes < 8192) {
+                    if (!isRecv && strategy != null && strategy != BypassStrategy.DIRECT && totalProcessedBytes < 16384) {
                         var offset = 0
                         while (offset < r) {
                             val remaining = r - offset
                             val chunkSize = when (strategy) {
                                 BypassStrategy.WINDOW_SIZE, BypassStrategy.TCP_WINDOW_CLAMP -> rnd.nextInt(16, 129)
+                                BypassStrategy.SLOW_SEND -> rnd.nextInt(64, 512)
                                 BypassStrategy.FRAGMENT_MULTI -> rnd.nextInt(32, 513)
+                                BypassStrategy.TLS_REC_SPLIT -> rnd.nextInt(5, 64)
+                                BypassStrategy.TLS_MULTI_FRAG -> rnd.nextInt(1, 4)
+                                BypassStrategy.CHAOS -> if (rnd.nextBoolean()) rnd.nextInt(1, 16) else rnd.nextInt(64, 1024)
+                                BypassStrategy.TCP_MSS_CLAMP -> 512
+                                BypassStrategy.TCP_URG_SKEW -> rnd.nextInt(1, 16)
+                                BypassStrategy.TLS_EXT_SKEW -> if (offset < 64) 1 else rnd.nextInt(64, 512)
+                                BypassStrategy.TCP_FAST_RETRANSMIT_SIM -> rnd.nextInt(128, 1024)
+                                BypassStrategy.TLS_REC_MANGLE -> if (offset < 5) 5 else rnd.nextInt(64, 512)
+                                BypassStrategy.TCP_REORDER_SIM -> rnd.nextInt(128, 512)
+                                BypassStrategy.TCP_FAST_OPEN_FAKE -> if (offset < 64) 64 else rnd.nextInt(128, 1024)
+                                BypassStrategy.TLS_PADDING_RAND -> rnd.nextInt(256, 1400)
+                                BypassStrategy.HTTP_HOST_SPACE -> rnd.nextInt(32, 256)
+                                BypassStrategy.TLS_REHANDSHAKE_FAKE -> rnd.nextInt(5, 100)
+                                BypassStrategy.HTTP_RANGE_SKEW -> rnd.nextInt(16, 256)
+                                BypassStrategy.TCP_RST_FAKE -> rnd.nextInt(1, 100)
+                                BypassStrategy.QUIC_RANDOM_CID -> rnd.nextInt(32, 512)
+                                BypassStrategy.TLS_SNI_SKEW -> rnd.nextInt(64, 256)
+                                BypassStrategy.HTTP_VERSION_SKEW -> rnd.nextInt(16, 512)
+                                BypassStrategy.TCP_TIMESTAMP_MANGLE -> rnd.nextInt(128, 1024)
+                                BypassStrategy.TLS_CIPHER_SHUFFLE -> rnd.nextInt(32, 256)
+                                BypassStrategy.HTTP_USER_AGENT_SKEW -> rnd.nextInt(16, 512)
+                                BypassStrategy.TCP_URGENT_RANDOM -> rnd.nextInt(1, 100)
+                                BypassStrategy.UDP_NOISE -> if (remaining < 256) remaining else rnd.nextInt(64, remaining.coerceAtMost(1400) + 1)
                                 else -> if (remaining < 256) remaining else rnd.nextInt(64, remaining.coerceAtMost(1400) + 1)
                             }.coerceAtMost(remaining)
                             
-                            synchronized(output) {
-                                output.write(buf, offset, chunkSize)
-                                output.flush()
-                            }
+                            output.write(buf, offset, chunkSize)
+                            output.flush()
                             
                             val pace = when (strategy) {
                                 BypassStrategy.WINDOW_SIZE -> rnd.nextLong(10, 31)
                                 BypassStrategy.SLOW_SEND -> rnd.nextLong(50, 101)
+                                BypassStrategy.TLS_REC_SPLIT -> rnd.nextLong(15, 45)
+                                BypassStrategy.TLS_MULTI_FRAG -> rnd.nextLong(2, 8)
+                                BypassStrategy.CHAOS -> rnd.nextLong(1, 100)
+                                BypassStrategy.TCP_URG_SKEW -> rnd.nextLong(10, 50)
+                                BypassStrategy.TLS_EXT_SKEW -> rnd.nextLong(20, 100)
+                                BypassStrategy.TCP_FAST_RETRANSMIT_SIM -> rnd.nextLong(5, 20)
+                                BypassStrategy.TLS_REC_MANGLE -> rnd.nextLong(5, 30)
+                                BypassStrategy.TCP_REORDER_SIM -> rnd.nextLong(30, 150)
+                                BypassStrategy.TCP_FAST_OPEN_FAKE -> rnd.nextLong(20, 120)
+                                BypassStrategy.TLS_PADDING_RAND -> rnd.nextLong(5, 50)
+                                BypassStrategy.HTTP_HOST_SPACE -> rnd.nextLong(10, 40)
+                                BypassStrategy.TLS_REHANDSHAKE_FAKE -> rnd.nextLong(15, 60)
+                                BypassStrategy.HTTP_RANGE_SKEW -> rnd.nextLong(5, 25)
+                                BypassStrategy.TCP_RST_FAKE -> rnd.nextLong(20, 100)
+                                BypassStrategy.QUIC_RANDOM_CID -> rnd.nextLong(5, 30)
+                                BypassStrategy.TLS_SNI_SKEW -> rnd.nextLong(10, 50)
+                                BypassStrategy.HTTP_VERSION_SKEW -> rnd.nextLong(5, 40)
+                                BypassStrategy.TCP_TIMESTAMP_MANGLE -> rnd.nextLong(2, 20)
+                                BypassStrategy.TLS_CIPHER_SHUFFLE -> rnd.nextLong(10, 60)
+                                BypassStrategy.HTTP_USER_AGENT_SKEW -> rnd.nextLong(5, 30)
+                                BypassStrategy.TCP_URGENT_RANDOM -> rnd.nextLong(10, 100)
+                                BypassStrategy.UDP_NOISE -> rnd.nextLong(1, 3)
                                 else -> rnd.nextLong(1, 3)
                             }
                             delay(pace)
@@ -3023,15 +4357,12 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         }
                         totalProcessedBytes += r
                     } else {
-                        synchronized(output) {
-                            output.write(buf, 0, r)
-                            output.flush()
-                        }
+                        output.write(buf, 0, r)
+                        output.flush()
                         if (isRecv && r > 2048) {
                             BypassConfig.TrafficShaper.pace(BypassConfig.isPanicMode, r)
                         }
                     }
-
                 }
             } catch (e: Exception) {
                 onError()

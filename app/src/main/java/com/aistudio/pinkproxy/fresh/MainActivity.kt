@@ -59,6 +59,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.viewinterop.AndroidView
 import com.aistudio.pinkproxy.fresh.ui.theme.MyApplicationTheme
+import com.aistudio.pinkproxy.fresh.ui.theme.GentleLightPink
+import com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink
+import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
+import com.aistudio.pinkproxy.fresh.ui.theme.GentleDeepPink
+import com.aistudio.pinkproxy.fresh.ui.theme.PureBlack
+import com.aistudio.pinkproxy.fresh.ui.theme.DarkGreyBlack
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +73,11 @@ import android.provider.Settings
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.SettingsApplications
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
@@ -160,9 +171,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit) {
-    val bgColor1 = Color(0xFF1a0510) // Almost black with pink tint
-    val bgColor2 = Color(0xFF2a0a18) // Very dark pink/burgundy
-    val bgColor3 = Color(0xFF381220) // Dark muted pink
+    val bgColor1 = Color(0xFF000000) // Pure black
+    val bgColor2 = Color(0xFF070305) // Deep charcoal black with subtle dark hue
+    val bgColor3 = Color(0xFF000000) // Pure black
     
     val infiniteTransition = rememberInfiniteTransition(label = "bg_anim")
     val offsetX by infiniteTransition.animateFloat(
@@ -195,12 +206,20 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
     val currentRttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
     val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
     val topHosts by ProxyStats.topHosts.collectAsStateWithLifecycle(initialValue = emptyList())
+    val isCharging by BypassConfig.isChargingFlow.collectAsStateWithLifecycle(initialValue = true)
     val pool8kSize by ProxyStats.pool8kSize.collectAsStateWithLifecycle(initialValue = 0)
     val pool16kSize by ProxyStats.pool16kSize.collectAsStateWithLifecycle(initialValue = 0)
     val congestionWindow by ProxyStats.congestionWindow.collectAsStateWithLifecycle(initialValue = 10)
     val dnsSuccess by ProxyStats.dnsSuccessCount.collectAsStateWithLifecycle(initialValue = 0L)
     val dnsFailure by ProxyStats.dnsFailureCount.collectAsStateWithLifecycle(initialValue = 0L)
+    val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
+    val stabilityScore by ProxyStats.stabilityScore.collectAsStateWithLifecycle(initialValue = 100)
+    val currentMtu by BypassConfig.currentMtu.collectAsStateWithLifecycle(initialValue = 1400)
     var showStrategyMenu by remember { mutableStateOf(false) }
+    
+    var showDiagnostics by remember { mutableStateOf(false) }
+    var showStrategy by remember { mutableStateOf(false) }
+    var showLogs by remember { mutableStateOf(false) }
     
     var sessionTime by remember { mutableStateOf(0L) }
     LaunchedEffect(isActive) {
@@ -256,1194 +275,526 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                 drawRect(brush = brush)
             }
     ) {
-        
-        // Blurred Glass Background Layer
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp)
-                .clip(RoundedCornerShape(32.dp))
-                .background(Color.Black.copy(alpha = 0.2f))
-                .blur(radius = 48.dp)
-        )
-
-        // Content Layer - Scrollable to prevent clipping or overflow on compact devices
         val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
-                .fillMaxHeight()
+                .fillMaxSize()
                 .widthIn(max = 600.dp)
                 .align(Alignment.TopCenter)
                 .verticalScroll(scrollState)
                 .padding(WindowInsets.safeDrawing.asPaddingValues())
-                .padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Top
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
+            // Minimal Header
             Text(
                 text = stringResource(R.string.app_name),
-                fontSize = 42.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFFF8BBD0),
-                modifier = Modifier.padding(bottom = 8.dp)
+                fontSize = 28.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = GentleLightPink,
+                letterSpacing = (-1).sp
             )
             
-            Text(
-                text = stringResource(R.string.label_dpi_bypass),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color(0xFFF48FB1),
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            Spacer(modifier = Modifier.height(24.dp))
 
+            // Main Status Indicator
             if (isActive) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .padding(bottom = 24.dp)
-                        .background(
-                            color = (if (isProxyHealthy && isInternetUp) Color(0xFF81C784) else Color(0xFFE57373)).copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    val pulseTransition = rememberInfiniteTransition(label = "pulse")
-                    val pulseAlpha by pulseTransition.animateFloat(
-                        initialValue = 0.4f,
-                        targetValue = 1.0f,
-                        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
-                        label = "pulseAlpha"
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(
-                                color = (if (!isInternetUp) Color(0xFF9E9E9E) else if (isProxyHealthy) Color(0xFF81C784) else Color(0xFFE57373)).copy(alpha = if (isActive && isProxyHealthy) pulseAlpha else 1f),
-                                shape = CircleShape
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = when {
-                            !isInternetUp -> stringResource(R.string.status_no_internet)
-                            isProbing -> "AUTOPILOT PROBING STRATEGIES..."
-                            isStalled -> "TRAFFIC STALL DETECTED"
-                            !isProxyHealthy -> stringResource(R.string.status_recovery)
-                            else -> if (isActive && isProxyHealthy) stringResource(R.string.status_autopilot) + " & PREFETCH" else stringResource(R.string.status_autopilot)
-                        },
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = when {
-                            !isInternetUp -> Color(0xFF9E9E9E)
-                            isProbing -> Color(0xFF64B5F6) // Blue for active work
-                            isStalled -> Color(0xFFFFB74D) // Orange for warning
-                            isProxyHealthy -> Color(0xFF81C784)
-                            else -> Color(0xFFE57373)
-                        },
-                        letterSpacing = 1.sp
-                    )
-                }
+                StatusBadge(isProxyHealthy, isInternetUp, isProbing, isStalled)
             } else {
-                Spacer(modifier = Modifier.height(48.dp))
+                Text(
+                    text = "READY TO CONNECT",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GentleMediumPink.copy(alpha = 0.5f),
+                    letterSpacing = 2.sp
+                )
             }
 
-            // Stats row
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Power Button (The Heart)
+            PowerButton(isActive, onToggle, infiniteTransition)
+
+            Spacer(modifier = Modifier.height(32.dp))
+
             if (isActive) {
                 val connectivityScore by ServiceChecker.connectivityScore.collectAsStateWithLifecycle(initialValue = 0)
                 
-                var isIgnoringBattery by remember { mutableStateOf(true) }
-                val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-                
-                DisposableEffect(lifecycleOwner) {
-                    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                        if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                            val pm = context.getSystemService(android.os.PowerManager::class.java)
-                            isIgnoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) == true
-                        }
-                    }
-                    lifecycleOwner.lifecycle.addObserver(observer)
-                    onDispose {
-                        lifecycleOwner.lifecycle.removeObserver(observer)
-                    }
-                }
-                
-                if (!isIgnoringBattery) {
-                    Text(
-                        text = stringResource(R.string.msg_optimize_battery),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFFFB74D),
-                        modifier = Modifier
-                            .padding(bottom = 12.dp)
-                            .clickable {
-                                try {
-                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                        data = android.net.Uri.parse("package:${context.packageName}")
-                                    }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    try {
-                                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                            data = android.net.Uri.parse("package:${context.packageName}")
-                                        }
-                                        context.startActivity(intent)
-                                    } catch (ex: Exception) {
-                                        android.widget.Toast.makeText(context, "Battery settings are not accessible", android.widget.Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                            .background(Color(0xFFFFB74D).copy(alpha = 0.1f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
+                // Compact Metrics Card
+                MetricsCard(
+                    speedText = speedText,
+                    bytesTransferred = ProxyStats.formatBytes(bytesTransferred),
+                    sessionTime = formattedSessionTime,
+                    connectivityScore = connectivityScore,
+                    successRate = ProxyStats.successRate.collectAsStateWithLifecycle(100).value,
+                    stabilityScore = stabilityScore,
+                    mtu = currentMtu,
+                    isPanicMode = isPanicMode
+                )
 
-                // Check and request notification permission
-                // Moved to root of composable
+                Spacer(modifier = Modifier.height(16.dp))
 
+                // Action Bar
                 Row(
-                    modifier = Modifier.padding(bottom = 16.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // SOCKS5 Badge
-                    Surface(
-                        color = Color(0xFFCE93D8).copy(alpha = 0.1f),
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, Color(0xFFCE93D8).copy(alpha = 0.3f))
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = Color(0xFFCE93D8),
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "SOCKS5 127.0.0.1:18080",
-                                color = Color(0xFFCE93D8),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                    CompactActionButton("OPTIMIZE", Modifier.weight(1f)) { 
+                        val intent = Intent(context, PinkVpnService::class.java).apply { action = "RESTART" }
+                        context.startService(intent)
                     }
-                    // Autopilot Badge
-                    Surface(
-                        color = Color(0xFFF48FB1).copy(alpha = 0.1f),
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, Color(0xFFF48FB1).copy(alpha = 0.3f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .background(Color(0xFFF48FB1), CircleShape)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "AUTOPILOT CORE ACTIVE",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFF48FB1),
-                                letterSpacing = 1.sp
-                            )
-                        }
-                    }
-
-                    // DNS Shield Badge
-                    Surface(
-                        color = Color(0xFF64B5F6).copy(alpha = 0.1f),
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, Color(0xFF64B5F6).copy(alpha = 0.3f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = androidx.compose.material.icons.Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = Color(0xFF64B5F6),
-                                modifier = Modifier.size(10.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            val dnsText = if (BypassConfig.isPanicMode) "EMERGENCY DNS" else "DNS DUAL-SHIELD"
-                            Text(
-                                text = dnsText,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF64B5F6),
-                                letterSpacing = 1.sp
-                            )
-                        }
-                    }
-
-                    // Network MTU Badge
-                    val currentMtu by BypassConfig.currentMtu.collectAsState()
-                    Surface(
-                        color = Color(0xFF81C784).copy(alpha = 0.1f),
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, Color(0xFF81C784).copy(alpha = 0.3f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "MTU $currentMtu",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF81C784),
-                                letterSpacing = 1.sp
-                            )
-                        }
-                    }
+                    CompactActionButton("FLUSH DNS", Modifier.weight(1f)) { RobustResolver.clearCache() }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 24.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "$connectivityScore%",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                connectivityScore > 80 -> Color(0xFF81C784)
-                                connectivityScore > 40 -> Color(0xFFFFB74D)
-                                else -> Color(0xFFE57373)
-                            }
-                        )
-                        Text(
-                            text = stringResource(R.string.label_health),
-                            fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        val successRate by ProxyStats.successRate.collectAsStateWithLifecycle(initialValue = 100)
-                        Text(
-                            text = "$successRate%",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                successRate > 80 -> Color(0xFF81C784)
-                                successRate > 40 -> Color(0xFFFFB74D)
-                                else -> Color(0xFFE57373)
-                            }
-                        )
-                        Text(
-                            text = stringResource(R.string.label_bypass_quality),
-                            fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "${ProxyStats.formatBytes(speedBytes)}/s",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF8BBD0)
-                        )
-                        Text(
-                            text = ProxyStats.formatBytes(bytesTransferred),
-                            fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.8f),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "$activeConnections",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF8BBD0)
-                        )
-                        Text(
-                            text = "CONNS",
-                            fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = errorCount.toString(),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (errorCount > 0) Color(0xFFE57373) else Color(0xFFF8BBD0)
-                        )
-                        Text(
-                            text = stringResource(R.string.label_errors),
-                            fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "$censorshipIntensity%",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                censorshipIntensity > 60 -> Color(0xFFE57373)
-                                censorshipIntensity > 20 -> Color(0xFFFFB74D)
-                                else -> Color(0xFFF8BBD0)
-                            }
-                        )
-                        Text(
-                            text = "DPI BLOCK",
-                            fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-                
-                // Speed Graph
-                if (speedHistory.size > 1) {
-                    Canvas(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        val maxSpeed = speedHistory.maxOrNull()?.coerceAtLeast(1024L) ?: 1024L
-                        val path = Path()
-                        val widthPerPoint = size.width / (speedHistory.size - 1).coerceAtLeast(1)
-                        
-                        // Draw line with smooth cubic bezier curves
-                        val firstY = size.height - (speedHistory.firstOrNull() ?: 0L) / maxSpeed.toFloat() * size.height
-                        path.moveTo(0f, firstY)
-                        
-                        for (i in 0 until speedHistory.size - 1) {
-                            val x1 = i * widthPerPoint
-                            val y1 = size.height - (speedHistory[i] / maxSpeed.toFloat() * size.height)
-                            val x2 = (i + 1) * widthPerPoint
-                            val y2 = size.height - (speedHistory[i + 1] / maxSpeed.toFloat() * size.height)
-                            
-                            val cx = (x1 + x2) / 2f
-                            path.cubicTo(cx, y1, cx, y2, x2, y2)
-                        }
-                        
-                        drawPath(
-                            path = path,
-                            color = Color(0xFFF48FB1),
-                            style = Stroke(width = 2.dp.toPx())
-                        )
-                        
-                        // Draw fill gradient
-                        path.lineTo(size.width, size.height)
-                        path.lineTo(0f, size.height)
-                        path.close()
-                        drawPath(
-                            path = path,
-                            brush = Brush.verticalGradient(
-                                colors = listOf(Color(0xFFF48FB1).copy(alpha = 0.4f), Color.Transparent)
-                            )
-                        )
-                    }
-                }
-            } else {
-                Spacer(modifier = Modifier.height(86.dp))
+                Spacer(modifier = Modifier.height(24.dp))
             }
             
-                // Core Engine Diagnostics
-                if (isActive) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 24.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.Black.copy(alpha = 0.3f))
-                            .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.1f), RoundedCornerShape(16.dp))
-                            .padding(16.dp)
-                    ) {
-                        Text(
-                            text = "CORE ENGINE DIAGNOSTICS",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF48FB1).copy(alpha = 0.8f),
-                            letterSpacing = 1.sp,
-                            modifier = Modifier.padding(bottom = 12.dp)
-                        )
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("MEMORY POOL", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
-                                Text("8K: $pool8kSize/64 | 16K: $pool16kSize/32", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("SCHEDULER", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
-                                val schedulerLoad = (activeConnections * 5).coerceIn(0, 100)
-                                Text("$schedulerLoad% LOAD", fontSize = 11.sp, color = if (schedulerLoad > 80) Color(0xFFE57373) else Color(0xFF81C784), fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("TRAFFIC PACER", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
-                                val pacerStatus = if (currentRttMs > 300) "CONGESTED" else "OPTIMAL"
-                                Text(pacerStatus, fontSize = 11.sp, color = if (pacerStatus == "OPTIMAL") Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("CONGESTION WINDOW", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
-                                Text("$congestionWindow PACKETS", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("ROBUST RESOLVER", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
-                                Text("S: $dnsSuccess | F: $dnsFailure", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("DNS CACHE", fontSize = 9.sp, color = Color.White.copy(alpha = 0.5f))
-                                Text("${RobustResolver.dnsCacheSize} ENTRIES", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-
-                val buttonColor by animateColorAsState(
-                targetValue = if (isActive) Color(0xFFB0124D) else Color(0xFFF8BBD0).copy(alpha = 0.05f),
-                animationSpec = tween(500), label = "btnColor"
-            )
-            
-            val pulseScale by infiniteTransition.animateFloat(
-                initialValue = 1f,
-                targetValue = if (isActive) 1.15f else 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(1500, easing = LinearEasing),
-                    repeatMode = RepeatMode.Reverse
-                ), label = "pulse"
-            )
-            
-            val pulseAlpha by infiniteTransition.animateFloat(
-                initialValue = 0.5f,
-                targetValue = if (isActive) 0f else 0f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(1500, easing = LinearEasing),
-                    repeatMode = RepeatMode.Restart
-                ), label = "pulseAlpha"
-            )
-            
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(160.dp)
-            ) {
-                if (isActive) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .scale(pulseScale)
-                            .clip(CircleShape)
-                            .background(Color(0xFFB0124D).copy(alpha = pulseAlpha))
-                    )
-                }
-                
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(140.dp)
-                        .clip(CircleShape)
-                        .background(buttonColor)
-                        .clickable { onToggle() }
-                        .padding(8.dp)
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(CircleShape)
-                            .background(if (isActive) Color(0xFF7A0A38) else Color.Black)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PowerSettingsNew,
-                            contentDescription = "Power",
-                            tint = if (isActive) Color(0xFFF8BBD0) else Color(0xFF880E4F),
-                            modifier = Modifier.size(56.dp)
-                        )
-                    }
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Text(
-                text = if (isActive) stringResource(R.string.label_secure_tunnel_active) else stringResource(R.string.label_system_offline),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (isActive) Color(0xFFF8BBD0) else Color(0xFFAD1457)
-            )
-            
+            // Expandable Diagnostic Sections
             if (isActive) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(top = 4.dp)
+                ExpandableSection(
+                    title = "CORE DIAGNOSTICS",
+                    icon = Icons.Default.Build,
+                    isExpanded = showDiagnostics,
+                    onToggle = { showDiagnostics = !showDiagnostics }
                 ) {
-                    Text(
-                        text = "SESSION TIME: $formattedSessionTime",
-                        fontSize = 11.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFF48FB1).copy(alpha = 0.7f)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "|",
-                        fontSize = 11.sp,
-                        color = Color(0xFFF48FB1).copy(alpha = 0.3f)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "PROFILE: ${currentNetworkType.name}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFF81C784),
-                        modifier = Modifier
-                            .background(Color(0xFF81C784).copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "RTT: ${currentRttMs}ms (x${"%.1f".format((currentRttMs.toDouble() / 50.0).coerceIn(0.5, 3.0))})",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFFF8BBD0),
-                        modifier = Modifier
-                            .background(Color(0xFFF8BBD0).copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            if (isActive && recoveryLog.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(R.string.label_autopilot_actions),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFF8BBD0).copy(alpha = 0.4f),
-                        letterSpacing = 1.sp
-                    )
-                    val youtubeDown = serviceStatuses.any { it.name == "YouTube" && !it.isUp }
-                    val isOptimizing = !isProxyHealthy || youtubeDown
-                    
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "FLUSH DNS",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF8BBD0),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0xFFF8BBD0).copy(alpha = 0.1f))
-                                .clickable { 
-                                    RobustResolver.clearCache()
-                                    ProxyStats.logRecovery("DNS Cache Flushed Manually")
-                                }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (isOptimizing) stringResource(R.string.action_force_reoptimize) else stringResource(R.string.action_optimize),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isOptimizing) Color(0xFFF8BBD0) else Color(0xFFF48FB1),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (isOptimizing) Color(0xFFD81B60) else Color(0xFFF48FB1).copy(alpha = 0.1f))
-                                .clickable { 
-                                    val intent = Intent(context, PinkVpnService::class.java).apply {
-                                        action = "RESTART"
-                                    }
-                                    context.startService(intent)
-                                }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                    Column(modifier = Modifier.padding(top = 8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            MetricItem("BUFFER POOL", "8K: $pool8kSize/64 | 16K: $pool16kSize/32", GentleMediumPink)
+                            MetricItem("ACTIVE TCP", "$activeConnections CONNS", Color(0xFF4FC3F7))
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            MetricItem("CONGESTION", "${congestionWindow} pkts/burst", Color(0xFFBA68C8))
+                            MetricItem("DNS HEALTH", "OK: $dnsSuccess | ERR: $dnsFailure", if (dnsFailure > 10) Color(0xFFE57373) else Color(0xFF81C784))
+                        }
                     }
                 }
-                val youtubeStatus = serviceStatuses.find { it.name == "YouTube" }
-                val blockDetected = youtubeStatus != null && !youtubeStatus.isUp && serviceStatuses.any { it.name.contains("Control") && it.isUp }
-                
-                // Advanced Strategy Display
-                Box {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                            .background(Color(0xFF111111), RoundedCornerShape(12.dp))
-                            .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                            .clickable { showStrategyMenu = true }
-                            .padding(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = "ACTIVE DPI EVASION ▾",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFF48FB1),
-                                    letterSpacing = 1.sp
-                                )
-                                Text(
-                                    text = activeStrategy.name.replace("_", " "),
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFFF8BBD0)
-                                )
-                            }
-                            if (blockDetected) {
-                                Row(
-                                    modifier = Modifier
-                                        .background(Color(0xFFE57373).copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFE57373), modifier = Modifier.size(10.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "BLOCK DETECTED",
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFE57373)
-                                    )
-                                }
-                            } else {
-                                Row(
-                                    modifier = Modifier
-                                        .background(Color(0xFF81C784).copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF81C784), modifier = Modifier.size(10.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "BYPASS ACTIVE",
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF81C784)
-                                    )
-                                }
-                            }
+
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            if (isActive) {
+                ExpandableSection(
+                    title = "STRATEGY CONFIG",
+                    icon = Icons.Default.Settings,
+                    isExpanded = showStrategy,
+                    onToggle = { showStrategy = !showStrategy }
+                ) {
+                    Column(modifier = Modifier.padding(top = 8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            MetricItem("ACTIVE DPI EVASION", activeStrategy.name.replace("_", " "), GentleLightPink)
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "FRAG (Dyn/Base): $currentFragSize / ${BypassConfig.frag1} | DELAY: ${BypassConfig.delay1}ms | TTL: ${BypassConfig.fakeTtl}",
                             fontSize = 9.sp,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = Color(0xFF81C784),
-                            modifier = Modifier.padding(bottom = 8.dp)
+                            color = Color(0xFF81C784)
                         )
-                        Text(
-                            text = when (activeStrategy.name) {
-                                "TCP_OOB_DESYNC" -> "Injects Out-of-Band (Urgent) TCP data to desynchronize DPI state while the target server discards the garbage."
-                                "TCP_DESYNC_FAKE" -> "Sends a fake ClientHello with reduced IP TTL. The DPI analyzes the fake packet, but routers drop it before it reaches the server."
-                                "TLS_PAD" -> "Pads the TLS ClientHello with a large padding extension to exceed 1500 bytes, forcing TCP fragmentation and confusing DPI length analysis."
-                                "TLS_GREASE" -> "Injects randomized GREASE extensions and shuffles extensions order to scramble JA3/JA4 fingerprints."
-                                "SNI_FAKE" -> "Performs a double split by sending a complete fake TLS handshake header followed by the real one, confusing deep packet inspection."
-                                "HTTP_SPACE" -> "Injects horizontal tabs and spaces into HTTP methods to evade regex-based filters on transparent proxies."
-                                "SNI_TRIPLE" -> "Divides the TLS Server Name Indication (SNI) into three fragmented chunks, bypassing DPI substring matching."
-                                "TLS_DIRTY", "JUNK_PADDING" -> "Pads the TLS header with random byte garbage that gets ignored by the server but crashes DPI parsers."
-                                else -> "Applies advanced payload fragmentation and byte-level manipulation to evade Deep Packet Inspection systems."
-                            },
-                            fontSize = 11.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
-                            lineHeight = 14.sp
-                        )
-                    }
-                    
-                    DropdownMenu(
-                        expanded = showStrategyMenu,
-                        onDismissRequest = { showStrategyMenu = false },
-                        modifier = Modifier.background(Color(0xFF111111)).heightIn(max = 300.dp)
-                    ) {
-                        BypassStrategy.entries.forEach { strategy ->
-                            val score = BypassConfig.getStrategyScore(strategy)
-                            DropdownMenuItem(
-                                text = { 
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(strategy.name.replace("_", " "), color = Color(0xFFF8BBD0), fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.width(16.dp))
-                                        Text(
-                                            text = "$score pts", 
-                                            color = when {
-                                                score > 400 -> Color(0xFF81C784)
-                                                score > 200 -> Color(0xFFFFB74D)
-                                                else -> Color(0xFFE57373)
-                                            },
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    showStrategyMenu = false
-                                    BypassConfig.setStrategy(strategy)
-                                    val intent = Intent(context, PinkVpnService::class.java).apply {
-                                        action = "CHANGE_STRATEGY"
-                                    }
-                                    context.startService(intent)
-                                }
-                            )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            MetricItem("CENSORSHIP LVL", "$censorshipIntensity%", if (censorshipIntensity < 25) Color(0xFF81C784) else Color(0xFFE57373))
+                            MetricItem("STABILITY", "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else Color(0xFFFFB74D))
                         }
                     }
                 }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Network Status Intelligence Card
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8BBD0).copy(alpha = 0.05f)),
-                    shape = RoundedCornerShape(12.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF48FB1).copy(alpha = 0.1f))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("NETWORK INTELLIGENCE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1), letterSpacing = 1.sp)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("DNS: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                val dnsStatusText = when (RobustResolver.dnsMode) {
-                                    "Smart DoH" -> "PROTECTED (DoH)"
-                                    "Custom" -> "CUSTOM DNS"
-                                    else -> "STANDARD"
-                                }
-                                val dnsStatusColor = when (RobustResolver.dnsMode) {
-                                    "Smart DoH" -> Color(0xFF81C784)
-                                    "Custom" -> Color(0xFFF48FB1)
-                                    else -> Color(0xFFFFB74D)
-                                }
-                                Text(dnsStatusText, fontSize = 11.sp, color = dnsStatusColor, fontWeight = FontWeight.Bold)
-                            }
-                            if (RobustResolver.dnsMode == "Smart DoH") {
-                                val bestDns = RobustResolver.getBestProviderAndLatency()
-                                if (bestDns != null) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("  ↳ Active Server: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.5f))
-                                        Text("${bestDns.first} (${bestDns.second}ms)", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.SemiBold)
-                                    }
-                                }
-                            } else if (RobustResolver.dnsMode == "Custom") {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("  ↳ Target: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.5f))
-                                    Text(RobustResolver.customDnsIp, fontSize = 11.sp, color = Color(0xFFF48FB1), fontWeight = FontWeight.SemiBold)
-                                }
-                            }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.clickable {
-                                    BypassConfig.blockQuic = !BypassConfig.blockQuic
-                                    BypassConfig.saveTuningSettings(context)
-                                }.padding(vertical = 2.dp)
-                            ) {
-                                Text("QUIC (UDP 443): ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text(if (BypassConfig.blockQuic) "BLOCKED (Tap to allow)" else "ALLOWED (Tap to block)", fontSize = 11.sp, color = if (BypassConfig.blockQuic) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("TCP Kernel: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text("FAST_OPEN + NODELAY", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Bypass Efficiency: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                val successRate = ProxyStats.getSuccessRate()
-                                Text("$successRate%", fontSize = 11.sp, color = if (successRate > 80) Color(0xFF81C784) else if (successRate > 50) Color(0xFFFFB74D) else Color(0xFFE57373), fontWeight = FontWeight.Bold)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Censorship Level: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                val cLevelStr = when {
-                                    censorshipIntensity < 25 -> "LOW ($censorshipIntensity%)"
-                                    censorshipIntensity < 65 -> "MEDIUM ($censorshipIntensity%)"
-                                    else -> "HIGH ($censorshipIntensity%)"
-                                }
-                                val cLevelColor = when {
-                                    censorshipIntensity < 25 -> Color(0xFF81C784)
-                                    censorshipIntensity < 65 -> Color(0xFFFFB74D)
-                                    else -> Color(0xFFE57373)
-                                }
-                                Text(cLevelStr, fontSize = 11.sp, color = cLevelColor, fontWeight = FontWeight.Bold)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Signal Quality: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text("$signalQuality%", fontSize = 11.sp, color = if (signalQuality > 75) Color(0xFF81C784) else if (signalQuality > 40) Color(0xFFFFB74D) else Color(0xFFE57373), fontWeight = FontWeight.Bold)
-                            }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.clickable {
-                                    BypassConfig.isAutoTuning = !BypassConfig.isAutoTuning
-                                    BypassConfig.saveTuningSettings(context)
-                                }.padding(vertical = 2.dp)
-                            ) {
-                                Text("Auto-Tuning: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text(if (BypassConfig.isAutoTuning) "ACTIVE (Tap to disable)" else "MANUAL (Tap to enable)", fontSize = 11.sp, color = if (BypassConfig.isAutoTuning) Color(0xFF81C784) else Color(0xFFFFB74D), fontWeight = FontWeight.Bold)
-                            }
-                            
-                            val cwnd by ProxyStats.congestionWindow.collectAsStateWithLifecycle(initialValue = 10)
-                            val poolSize by ProxyStats.pool16kSize.collectAsStateWithLifecycle(initialValue = 0)
-                            
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                                Text("Congestion Window: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text("${cwnd} pkts/burst", fontSize = 11.sp, color = Color(0xFFBA68C8), fontWeight = FontWeight.Bold)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Buffer Pool (16K): ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text("$poolSize chunks", fontSize = 11.sp, color = Color(0xFF4FC3F7), fontWeight = FontWeight.Bold)
-                            }
-                            
-                            val isPanic by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = BypassConfig.isPanicMode)
-                            val mtu by BypassConfig.currentMtu.collectAsStateWithLifecycle()
-                            
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                                Text("Network MTU: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                Text("$mtu bytes", fontSize = 11.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
-                            }
-                            if (isPanic) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                                    Text("Status: ", fontSize = 11.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.6f))
-                                    Text("PANIC MODE", fontSize = 11.sp, color = Color(0xFFE57373), fontWeight = FontWeight.ExtraBold)
-                                }
-                            }
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            val rttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
-                            Text("RTT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0).copy(alpha = 0.4f), letterSpacing = 1.sp)
-                            Text("${rttMs}ms", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFF8BBD0))
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .background(
-                                        if (isProbing) Color(0xFFE57373).copy(alpha = 0.2f) else Color(0xFF81C784).copy(alpha = 0.2f),
-                                        shape = RoundedCornerShape(4.dp)
-                                    )
-                                    .clickable(enabled = !isProbing) {
-                                        ServiceChecker.runActiveProbing(context)
-                                    }
-                                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    text = if (isProbing) "PROBING..." else "RUN TOURNAMENT",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isProbing) Color(0xFFE57373) else Color(0xFF81C784)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                val logsScrollState = rememberScrollState()
-                val trafficScrollState = rememberScrollState()
-                
-                LaunchedEffect(recoveryLog.size) {
-                    if (recoveryLog.isNotEmpty()) {
-                        logsScrollState.animateScrollTo(logsScrollState.maxValue)
-                    }
-                }
-
-                LaunchedEffect(trafficLog.size) {
-                    if (trafficLog.isNotEmpty()) {
-                        trafficScrollState.animateScrollTo(trafficScrollState.maxValue)
-                    }
-                }
-
-                val logListState = androidx.compose.foundation.lazy.rememberLazyListState()
-                androidx.compose.foundation.lazy.LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 120.dp)
-                        .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                        .padding(8.dp),
-                    state = logListState
-                ) {
-                    items(recoveryLog) { log ->
-                        Text(
-                            text = log,
-                            color = if (log.contains("Healing") || log.contains("Optimizing")) Color(0xFFF06292) else Color(0xFFF48FB1).copy(alpha = 0.6f),
-                            fontSize = 9.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            modifier = Modifier.padding(vertical = 1.dp)
-                        )
-                    }
-                }
-                
-                // Auto-scroll effect for LazyColumn
-                LaunchedEffect(recoveryLog.size) {
-                    if (recoveryLog.isNotEmpty()) {
-                        logListState.animateScrollToItem(0) // Since we prepended new logs
-                    }
-                }
-                
                 Spacer(modifier = Modifier.height(12.dp))
-                
-                // Traffic Speed Graph
-                val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle()
-                if (speedHistory.isNotEmpty()) {
-                    androidx.compose.foundation.Canvas(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(40.dp)
-                            .padding(bottom = 8.dp)
-                    ) {
-                        val maxSpeed = speedHistory.maxOrNull()?.coerceAtLeast(1024L) ?: 1024L
-                        val stepX = size.width / (speedHistory.size.coerceAtLeast(2) - 1).coerceAtLeast(1)
-                        val path = androidx.compose.ui.graphics.Path()
-                        speedHistory.forEachIndexed { index, speed ->
-                            val x = index * stepX
-                            val y = size.height - (speed.toFloat() / maxSpeed * size.height).coerceIn(0f, size.height)
-                            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                        }
-                        drawPath(path, color = Color(0xFFF48FB1), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()))
-                    }
-                }
-
-                Text(
-                    text = "LIVE TRAFFIC",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF8BBD0).copy(alpha = 0.4f),
-                    letterSpacing = 1.sp,
-                    modifier = Modifier.align(Alignment.Start).padding(bottom = 8.dp)
-                )
-                
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 100.dp)
-                        .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                        .verticalScroll(trafficScrollState)
-                        .padding(8.dp)
+            }
+                        
+            if (isActive) {
+                ExpandableSection(
+                    title = "SYSTEM LOGS",
+                    icon = Icons.AutoMirrored.Filled.List,
+                    isExpanded = showLogs,
+                    onToggle = { showLogs = !showLogs }
                 ) {
-                    trafficLog.forEach { log ->
-                        Text(
-                            text = log,
-                            color = Color(0xFF81C784).copy(alpha = 0.8f),
-                            fontSize = 9.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            modifier = Modifier.padding(vertical = 1.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                if (topHosts.isNotEmpty()) {
-                    Text(
-                        "TOP DOMAINS",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFF48FB1),
-                        letterSpacing = 1.sp,
-                        modifier = Modifier.align(Alignment.Start).padding(bottom = 8.dp)
-                    )
-                    
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .heightIn(max = 120.dp)
                             .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
                             .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
                     ) {
-                        topHosts.forEach { (host, count) ->
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(text = host, color = Color(0xFFF8BBD0), fontSize = 10.sp, maxLines = 1, modifier = Modifier.weight(1f))
-                                val strategyName = BypassConfig.resolveSessionConfigForHost(host).strategy.name
-                                Text(text = "$count REQ • $strategyName", color = Color(0xFFF48FB1), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-            }
-
-            if (isActive && serviceStatuses.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(24.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(R.string.label_service_monitor),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFF8BBD0).copy(alpha = 0.4f),
-                        letterSpacing = 1.sp
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (lastCheckTime > 0) {
+                        recoveryLog.forEach { log ->
                             Text(
-                                text = stringResource(R.string.label_updated, SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastCheckTime))),
+                                text = log,
+                                color = if (log.contains("Healing") || log.contains("Optimizing")) GentleDarkPink else GentleMediumPink.copy(alpha = 0.6f),
                                 fontSize = 9.sp,
-                                color = Color(0xFFF8BBD0).copy(alpha = 0.3f),
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = { ServiceChecker.triggerCheck() },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Refresh",
-                                tint = Color(0xFFF8BBD0).copy(alpha = 0.5f),
-                                modifier = Modifier.size(16.dp)
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                modifier = Modifier.padding(vertical = 1.dp)
                             )
                         }
                     }
                 }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFFF8BBD0).copy(alpha = 0.03f), RoundedCornerShape(16.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    serviceStatuses.forEach { status ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFFF8BBD0).copy(alpha = 0.02f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column {
-                                Text(
-                                    text = status.name,
-                                    color = Color(0xFFF8BBD0),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = status.url.removePrefix("https://").removePrefix("www."),
-                                    color = Color(0xFFF8BBD0).copy(alpha = 0.3f),
-                                    fontSize = 10.sp
-                                )
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (status.isUp && status.latencyMs > 0) {
-                                    Text(
-                                        text = "${status.latencyMs} ms",
-                                        color = if (status.latencyMs < 300) Color(0xFF81C784) else Color(0xFFFFB74D),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(end = 8.dp)
-                                    )
-                                }
-                                Icon(
-                                    imageVector = if (status.isUp) Icons.Default.CheckCircle else Icons.Default.Cancel,
-                                    contentDescription = null,
-                                    tint = if (status.isUp) Color(0xFF81C784) else Color(0xFFE57373),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(24.dp))
-            } else {
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(12.dp))
             }
-
-            // New Automation Cards
-            AutoConnectCard(context = context)
-            
-            val pm = context.getSystemService(android.os.PowerManager::class.java)
-            val isIgnoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) == true
-            if (!isIgnoringBattery) {
-                BatteryOptimizationInfoCard(context = context)
-            }
-
-            AppFilterCard(context = context, onSettingsChanged = onRestart)
-
-            ExpertSettingsCard(context = context, isVpnActive = isActive)
-
-            // Connection Instructions Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp)
-                    .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF111111).copy(alpha = 0.8f)
-                )
+                        
+            // Minimalist Help/Guide (Always visible but collapsed by default)
+            var showGuide by remember { mutableStateOf(false) }
+            ExpandableSection(
+                title = "CONNECTION GUIDE",
+                icon = Icons.Default.Info,
+                isExpanded = showGuide,
+                onToggle = { showGuide = !showGuide }
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "💡 ИНСТРУКЦИЯ / CONNECTION GUIDE",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFFF48FB1),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
+                Column {
                     Text(
                         text = "• Системный обход:\n" +
-                               "  Приложение запускает VPN и настраивает системный HTTP прокси (127.0.0.1:18080) автоматически. " +
-                               "Браузеры (Chrome, Yandex, Kiwi) используют его по умолчанию — открывайте YouTube в браузере для 100% стабильного обхода.\n\n" +
-                               "• Поддержка Telegram & SOCKS5:\n" +
-                               "  Мы добавили встроенный SOCKS5 прокси на порту 18080. " +
-                               "В настройках Telegram перейдите в Данные и память -> Прокси и добавьте SOCKS5 прокси:\n" +
-                               "  - Хост: 127.0.0.1\n" +
-                               "  - Порт: 18080\n" +
-                               "  Это перенаправит Telegram напрямую через наши DPI-обходные стратегии!\n\n" +
+                               "  VPN настраивает HTTP прокси (127.0.0.1:18080). Браузеры (Chrome, Yandex, Kiwi) используют его по умолчанию — открывайте YouTube в браузере для 100% обхода.\n\n" +
+                               "• Поддержка Telegram (SOCKS5):\n" +
+                               "  Нажмите кнопку ниже, чтобы применить настройки прокси в Telegram.\n\n" +
                                "• Официальные приложения (YouTube, etc):\n" +
-                               "  Некоторые приложения полностью игнорируют системный прокси. Если видео в приложении YouTube не грузятся, используйте веб-версию в Chrome или Yandex Browser.",
+                               "  Некоторые приложения игнорируют системный прокси. Если видео в YouTube не грузится, используйте веб-версию в браузере.",
                         fontSize = 11.sp,
-                        color = Color(0xFFF8BBD0).copy(alpha = 0.8f),
-                        lineHeight = 16.sp
+                        color = GentleLightPink.copy(alpha = 0.6f),
+                        lineHeight = 16.sp,
+                        modifier = Modifier.padding(top = 8.dp)
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    CompactActionButton("Настроить Telegram Автоматически", Modifier.fillMaxWidth()) {
+                        try {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("tg://socks?server=127.0.0.1&port=18080&user=&pass="))
+                            intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Telegram не установлен", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            var showAdvanced by remember { mutableStateOf(false) }
+            ExpandableSection(
+                title = "ADVANCED SETTINGS",
+                icon = Icons.Default.SettingsApplications,
+                isExpanded = showAdvanced,
+                onToggle = { showAdvanced = !showAdvanced }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    AutoConnectCard(context = context)
+                    
+                    val pm = context.getSystemService(android.os.PowerManager::class.java)
+                    val isIgnoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) == true
+                    if (!isIgnoringBattery) {
+                        BatteryOptimizationInfoCard(context = context)
+                    }
+
+                    AppFilterCard(context = context, onSettingsChanged = onRestart)
+                    ExpertSettingsCard(context = context, isVpnActive = isActive)
+                }
+            }
+
+                if (isActive && serviceStatuses.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    var showServices by remember { mutableStateOf(false) }
+                    ExpandableSection(
+                        title = "SERVICE MONITOR",
+                        icon = Icons.Default.Info,
+                        isExpanded = showServices,
+                        onToggle = { showServices = !showServices }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                                .background(GentleLightPink.copy(alpha = 0.03f), RoundedCornerShape(16.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (lastCheckTime > 0) "UPDATED: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastCheckTime))}" else "WAITING...",
+                                    fontSize = 9.sp,
+                                    color = GentleLightPink.copy(alpha = 0.4f),
+                                    fontWeight = FontWeight.Bold
+                                )
+                                IconButton(
+                                    onClick = { ServiceChecker.triggerCheck() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, null, tint = GentleLightPink.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            serviceStatuses.forEach { status ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(GentleLightPink.copy(alpha = 0.02f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column {
+                                        Text(status.name, color = GentleLightPink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        Text(status.url.removePrefix("https://").removePrefix("www."), color = GentleLightPink.copy(alpha = 0.3f), fontSize = 10.sp)
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (status.isUp && status.latencyMs > 0) {
+                                            Text("${status.latencyMs} ms", color = if (status.latencyMs < 300) Color(0xFF81C784) else Color(0xFFFFB74D), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp))
+                                        }
+                                        Icon(if (status.isUp) Icons.Default.CheckCircle else Icons.Default.Cancel, null, tint = if (status.isUp) Color(0xFF81C784) else Color(0xFFE57373), modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+@Composable
+fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean, isStalled: Boolean) {
+    val color = when {
+        !isInternet -> Color(0xFF9E9E9E)
+        isProbing -> GentleMediumPink
+        isStalled -> Color(0xFFFFB74D)
+        isHealthy -> Color(0xFF81C784)
+        else -> Color(0xFFE57373)
+    }
+    
+    val text = when {
+        !isInternet -> "NO INTERNET"
+        isProbing -> "PROBING..."
+        isStalled -> "STALLED"
+        !isHealthy -> "RECOVERING"
+        else -> "PROTECTED"
+    }
+
+    Surface(
+        color = color.copy(alpha = 0.15f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.size(6.dp).background(color, CircleShape))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(text = text, fontSize = 10.sp, fontWeight = FontWeight.Black, color = color, letterSpacing = 1.sp)
+        }
+    }
+}
+
+@Composable
+fun PowerButton(isActive: Boolean, onToggle: () -> Unit, transition: InfiniteTransition) {
+    val pulseScale by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isActive) 1.1f else 1f,
+        animationSpec = infiniteRepeatable(tween(1500), RepeatMode.Reverse), label = ""
+    )
+    
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(180.dp)) {
+        if (isActive) {
+            Box(
+                modifier = Modifier
+                    .size(160.dp)
+                    .scale(pulseScale)
+                    .clip(CircleShape)
+                    .background(GentleDarkPink.copy(alpha = 0.1f))
+                    .border(2.dp, GentleDarkPink.copy(alpha = 0.2f), CircleShape)
+            )
+        }
+        
+        Surface(
+            onClick = onToggle,
+            shape = CircleShape,
+            color = if (isActive) GentleDarkPink else Color.Black,
+            tonalElevation = 8.dp,
+            modifier = Modifier.size(120.dp),
+            border = BorderStroke(1.dp, GentleLightPink.copy(alpha = 0.1f))
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Default.PowerSettingsNew,
+                    contentDescription = null,
+                    tint = if (isActive) Color.White else GentleDarkPink,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String, connectivityScore: Int, successRate: Int, stabilityScore: Int, mtu: Int, isPanicMode: Boolean) {
+    Surface(
+        color = PureBlack,
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, if (isPanicMode) Color(0xFFE57373).copy(alpha = 0.3f) else GentleMediumPink.copy(alpha = 0.1f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MetricItem("SPEED", speedText, GentleLightPink)
+                MetricItem("DATA", bytesTransferred, GentleMediumPink)
+                MetricItem("MTU", mtu.toString(), GentleMediumPink)
+                MetricItem("TIME", sessionTime, GentleMediumPink)
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.1f))
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MetricItem("HEALTH", "$connectivityScore%", if (connectivityScore > 70) Color(0xFF81C784) else Color(0xFFFFB74D))
+                MetricItem("STABILITY", "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else if (stabilityScore > 50) Color(0xFFFFB74D) else Color(0xFFE57373))
+                MetricItem("QUALITY", "$successRate%", if (successRate > 70) Color(0xFF81C784) else Color(0xFFE57373))
+                MetricItem("MODE", if (isPanicMode) "EMERGENCY" else "AUTOPILOT", if (isPanicMode) Color(0xFFE57373) else GentleMediumPink)
+            }
+        }
+    }
+}
+
+@Composable
+fun MetricItem(label: String, value: String, color: Color) {
+    Column {
+        Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink.copy(alpha = 0.4f))
+        Text(value, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = color)
+    }
+}
+
+@Composable
+fun ExpandableSection(
+    title: String,
+    subtitle: String = "",
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable () -> Unit = {}
+) {
+    Column {
+        Surface(
+            onClick = onToggle,
+            color = Color.Transparent,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (icon != null) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = GentleMediumPink,
+                            modifier = Modifier.size(18.dp).padding(end = 8.dp)
+                        )
+                    }
+                    Column {
+                        Text(title, fontSize = 11.sp, fontWeight = FontWeight.Black, color = GentleLightPink, letterSpacing = 1.sp)
+                        if (subtitle.isNotEmpty()) {
+                            Text(subtitle, fontSize = 10.sp, color = GentleMediumPink.copy(alpha = 0.6f))
+                        }
+                    }
+                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = GentleMediumPink.copy(alpha = 0.4f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+        if (isExpanded) {
+            content()
+        }
+    }
+}
+
+@Composable
+fun CompactActionButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        color = GentleMediumPink.copy(alpha = 0.1f),
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 12.dp)) {
+            Text(text, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
+        }
+    }
+}
+
+@Composable
+fun DiagnosticsContent(p8: Int, p16: Int, conns: Int, rtt: Long, win: Int, ds: Long, df: Long) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(GentleMediumPink.copy(alpha = 0.05f))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        DiagRow("MEMORY POOL", "8K: $p8 | 16K: $p16")
+        DiagRow("CONNECTIONS", "$conns ACTIVE")
+        DiagRow("LATENCY (RTT)", "${rtt}ms")
+        DiagRow("WINDOW", "$win PACKETS")
+        DiagRow("DNS STATUS", "OK: $ds | ERR: $df")
+    }
+}
+
+@Composable
+fun DiagRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontSize = 10.sp, color = GentleMediumPink.copy(alpha = 0.5f))
+        Text(value, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+    }
+}
+
+@Composable
+fun StrategyConfigContent(strategy: BypassStrategy, onMenu: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(PureBlack)
+            .border(1.dp, GentleMediumPink.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+            .clickable { onMenu() }
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("CURRENT METHOD", fontSize = 9.sp, color = GentleMediumPink.copy(alpha = 0.5f))
+                Text(strategy.name.replace("_", " "), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+            Icon(Icons.Default.Settings, null, tint = GentleMediumPink, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+fun LogsContent(recovery: List<String>, traffic: List<String>) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .heightIn(max = 200.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(PureBlack)
+            .border(1.dp, GentleMediumPink.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+            .padding(12.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        (recovery + traffic).takeLast(20).reversed().forEach { log ->
+            Text(
+                text = log,
+                fontSize = 9.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = if (log.contains("Healing")) GentleLightPink else Color.White.copy(alpha = 0.4f),
+                modifier = Modifier.padding(vertical = 2.dp)
+            )
         }
     }
 }
@@ -1452,49 +803,88 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
 fun AutoConnectCard(context: android.content.Context) {
     val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
     var autoConnect by remember { mutableStateOf(prefs.getBoolean("auto_connect_on_launch", true)) }
+    var autoBoot by remember { mutableStateOf(prefs.getBoolean("auto_start_on_boot", true)) }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
+            .border(1.dp, GentleMediumPink.copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color.Black.copy(alpha = 0.5f)
         )
     ) {
-        Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.label_auto_connect),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF8BBD0)
-                )
-                Text(
-                    text = stringResource(R.string.desc_auto_connect),
-                    fontSize = 11.sp,
-                    color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
-                    lineHeight = 14.sp
+        Column {
+            Row(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.label_auto_connect),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = GentleLightPink
+                    )
+                    Text(
+                        text = stringResource(R.string.desc_auto_connect),
+                        fontSize = 11.sp,
+                        color = GentleLightPink.copy(alpha = 0.6f),
+                        lineHeight = 14.sp
+                    )
+                }
+                Switch(
+                    checked = autoConnect,
+                    onCheckedChange = {
+                        autoConnect = it
+                        prefs.edit().putBoolean("auto_connect_on_launch", it).apply()
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = GentleMediumPink,
+                        checkedTrackColor = GentleDarkPink
+                    )
                 )
             }
-            Switch(
-                checked = autoConnect,
-                onCheckedChange = {
-                    autoConnect = it
-                    prefs.edit().putBoolean("auto_connect_on_launch", it).apply()
-                },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color(0xFFF48FB1),
-                    checkedTrackColor = Color(0xFFD81B60)
+            
+            HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.1f))
+            
+            Row(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Автозапуск после перезагрузки",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = GentleLightPink
+                    )
+                    Text(
+                        text = "Включать VPN автоматически при включении устройства",
+                        fontSize = 11.sp,
+                        color = GentleLightPink.copy(alpha = 0.6f),
+                        lineHeight = 14.sp
+                    )
+                }
+                Switch(
+                    checked = autoBoot,
+                    onCheckedChange = {
+                        autoBoot = it
+                        prefs.edit().putBoolean("auto_start_on_boot", it).apply()
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = GentleMediumPink,
+                        checkedTrackColor = GentleDarkPink
+                    )
                 )
-            )
+            }
         }
     }
 }
@@ -1531,7 +921,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
             Text(
                 text = stringResource(R.string.desc_battery_optimization),
                 fontSize = 11.sp,
-                color = Color(0xFFF8BBD0).copy(alpha = 0.8f),
+                color = GentleLightPink.copy(alpha = 0.8f),
                 lineHeight = 15.sp
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -1556,7 +946,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
                 modifier = Modifier.fillMaxWidth().height(36.dp),
                 contentPadding = PaddingValues(0.dp)
             ) {
-                Text(stringResource(R.string.action_disable), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
+                Text(stringResource(R.string.action_disable), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
             }
         }
     }
@@ -1571,7 +961,7 @@ fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Uni
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .border(1.dp, Color(0xFFF8BBD0).copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
+            .border(1.dp, GentleLightPink.copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color.Black.copy(alpha = 0.5f)
@@ -1588,19 +978,19 @@ fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Uni
                         text = stringResource(R.string.label_app_filter),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFF8BBD0)
+                        color = GentleLightPink
                     )
                     Text(
                         text = stringResource(R.string.desc_app_filter),
                         fontSize = 11.sp,
-                        color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
+                        color = GentleLightPink.copy(alpha = 0.6f),
                         lineHeight = 14.sp
                     )
                 }
                 Icon(
                     imageVector = Icons.Default.FilterList,
                     contentDescription = null,
-                    tint = Color(0xFFF8BBD0),
+                    tint = GentleLightPink,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -1615,7 +1005,7 @@ fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Uni
                 Text(
                     text = if (isExcludeMode) stringResource(R.string.label_exclude_mode) else stringResource(R.string.label_include_mode),
                     fontSize = 12.sp,
-                    color = Color(0xFFF8BBD0),
+                    color = GentleLightPink,
                     fontWeight = FontWeight.Medium
                 )
                 Switch(
@@ -1627,8 +1017,8 @@ fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Uni
                         onSettingsChanged()
                     },
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color(0xFFF8BBD0),
-                        checkedTrackColor = Color(0xFFD81B60)
+                        checkedThumbColor = GentleLightPink,
+                        checkedTrackColor = GentleDarkPink
                     )
                 )
             }
@@ -1637,7 +1027,7 @@ fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Uni
             
             Button(
                 onClick = { showDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD81B60)),
+                colors = ButtonDefaults.buttonColors(containerColor = GentleDarkPink),
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth().height(40.dp)
             ) {
@@ -1645,7 +1035,7 @@ fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Uni
                     text = "${stringResource(R.string.action_select_apps)} ($selectedCount)",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF8BBD0)
+                    color = GentleLightPink
                 )
             }
         }
@@ -1701,12 +1091,12 @@ fun AppIconImage(context: android.content.Context, appInfo: android.content.pm.A
         Box(
             modifier = Modifier
                 .size(40.dp)
-                .background(Color(0xFFF8BBD0).copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
+                .background(GentleLightPink.copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = label.take(1).uppercase(),
-                color = Color(0xFFF8BBD0),
+                color = GentleLightPink,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -1726,17 +1116,17 @@ fun AppSelectionDialog(
     val selectedSet = remember { androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(PinkVpnService.selectedPackages) } }
 
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            val installedApps = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
+        val installedApps = withContext(Dispatchers.IO) {
+            pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
                 .filter { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName == "com.google.android.youtube" || it.packageName == "org.telegram.messenger" }
                 .map { app ->
                     val label = app.loadLabel(pm).toString()
                     AppEntry(app, label, app.packageName)
                 }
                 .sortedBy { it.label }
-            apps = installedApps
-            isLoading = false
         }
+        apps = installedApps
+        isLoading = false
     }
 
     Dialog(
@@ -1756,13 +1146,13 @@ fun AppSelectionDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color(0xFFF8BBD0))
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = GentleLightPink)
                     }
                     Text(
                         stringResource(R.string.action_select_apps),
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFF8BBD0)
+                        color = GentleLightPink
                     )
                 }
 
@@ -1773,22 +1163,22 @@ fun AppSelectionDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
-                    placeholder = { Text("Search apps...", color = Color(0xFFF8BBD0).copy(alpha = 0.5f)) },
+                    placeholder = { Text("Search apps...", color = GentleLightPink.copy(alpha = 0.5f)) },
                     colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color(0xFFF8BBD0).copy(alpha = 0.05f),
-                        unfocusedContainerColor = Color(0xFFF8BBD0).copy(alpha = 0.05f),
-                        focusedIndicatorColor = Color(0xFFF48FB1),
+                        focusedContainerColor = GentleLightPink.copy(alpha = 0.05f),
+                        unfocusedContainerColor = GentleLightPink.copy(alpha = 0.05f),
+                        focusedIndicatorColor = GentleMediumPink,
                         unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = Color(0xFFF48FB1),
-                        focusedTextColor = Color(0xFFF8BBD0),
-                        unfocusedTextColor = Color(0xFFF8BBD0)
+                        cursorColor = GentleMediumPink,
+                        focusedTextColor = GentleLightPink,
+                        unfocusedTextColor = GentleLightPink
                     ),
                     shape = RoundedCornerShape(12.dp)
                 )
 
                 if (isLoading) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color(0xFFF48FB1))
+                        CircularProgressIndicator(color = GentleMediumPink)
                     }
                 } else {
                     val filteredApps = if (searchQuery.isEmpty()) apps else {
@@ -1828,13 +1218,13 @@ fun AppSelectionDialog(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = entry.label,
-                                        color = Color(0xFFF8BBD0),
+                                        color = GentleLightPink,
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
                                         text = pkg,
-                                        color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
+                                        color = GentleLightPink.copy(alpha = 0.5f),
                                         fontSize = 12.sp
                                     )
                                 }
@@ -1843,8 +1233,8 @@ fun AppSelectionDialog(
                                     checked = isSelected,
                                     onCheckedChange = null, // Handled by row click
                                     colors = CheckboxDefaults.colors(
-                                        checkedColor = Color(0xFFF48FB1),
-                                        uncheckedColor = Color(0xFFF8BBD0).copy(alpha = 0.3f)
+                                        checkedColor = GentleMediumPink,
+                                        uncheckedColor = GentleLightPink.copy(alpha = 0.3f)
                                     )
                                 )
                             }
@@ -1875,6 +1265,7 @@ fun ExpertSettingsCard(
     var dnsMode by remember { mutableStateOf(RobustResolver.dnsMode) }
     var customDnsIp by remember { mutableStateOf(RobustResolver.customDnsIp) }
     var autoConnect by remember { mutableStateOf(context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).getBoolean("auto_connect_on_launch", true)) }
+    var isDiagnosticModeState by remember { mutableStateOf(BypassConfig.isDiagnosticMode) }
 
     val customServices by ServiceChecker.customServices.collectAsStateWithLifecycle(initialValue = emptyList())
     var newServiceName by remember { mutableStateOf("") }
@@ -1892,6 +1283,7 @@ fun ExpertSettingsCard(
             fakeTtl = BypassConfig.fakeTtl.toFloat()
             dnsMode = RobustResolver.dnsMode
             customDnsIp = RobustResolver.customDnsIp
+            isDiagnosticModeState = BypassConfig.isDiagnosticMode
             ServiceChecker.loadCustomServices(context)
         }
     }
@@ -1900,10 +1292,10 @@ fun ExpertSettingsCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .border(1.dp, Color(0xFFF48FB1).copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
+            .border(1.dp, GentleMediumPink.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF111111).copy(alpha = 0.8f)
+            containerColor = PureBlack.copy(alpha = 0.8f)
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -1920,7 +1312,7 @@ fun ExpertSettingsCard(
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = null,
-                        tint = Color(0xFFF48FB1),
+                        tint = GentleMediumPink,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -1928,19 +1320,19 @@ fun ExpertSettingsCard(
                         text = "🛠️ ИНЖЕНЕРНАЯ ПАНЕЛЬ / EXPERT TUNING",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFFF48FB1)
+                        color = GentleMediumPink
                     )
                 }
                 Icon(
                     imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
-                    tint = Color(0xFFF48FB1).copy(alpha = 0.7f)
+                    tint = GentleMediumPink.copy(alpha = 0.7f)
                 )
             }
 
             if (expanded) {
                 HorizontalDivider(
-                    color = Color(0xFFF48FB1).copy(alpha = 0.2f),
+                    color = GentleMediumPink.copy(alpha = 0.2f),
                     thickness = 1.dp,
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
@@ -1956,12 +1348,12 @@ fun ExpertSettingsCard(
                             text = "AUTO-CONNECT ON LAUNCH",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF8BBD0)
+                            color = GentleLightPink
                         )
                         Text(
                             text = "Автоматический запуск при открытии приложения",
                             fontSize = 9.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
+                            color = GentleLightPink.copy(alpha = 0.4f)
                         )
                     }
                     Switch(
@@ -1972,8 +1364,8 @@ fun ExpertSettingsCard(
                                 .edit().putBoolean("auto_connect_on_launch", it).apply()
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFFF48FB1),
-                            checkedTrackColor = Color(0xFFF48FB1).copy(alpha = 0.5f)
+                            checkedThumbColor = GentleMediumPink,
+                            checkedTrackColor = GentleMediumPink.copy(alpha = 0.5f)
                         )
                     )
                 }
@@ -1989,12 +1381,12 @@ fun ExpertSettingsCard(
                             text = "DPI AUTO-TUNING",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF8BBD0)
+                            color = GentleLightPink
                         )
                         Text(
                             text = "Автоматическая подстройка DPI",
                             fontSize = 9.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.4f)
+                            color = GentleLightPink.copy(alpha = 0.4f)
                         )
                     }
                     Switch(
@@ -2005,8 +1397,8 @@ fun ExpertSettingsCard(
                             BypassConfig.saveTuningSettings(context)
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFFF48FB1),
-                            checkedTrackColor = Color(0xFFF48FB1).copy(alpha = 0.5f)
+                            checkedThumbColor = GentleMediumPink,
+                            checkedTrackColor = GentleMediumPink.copy(alpha = 0.5f)
                         )
                     )
                 }
@@ -2023,12 +1415,12 @@ fun ExpertSettingsCard(
                             text = "BLOCK QUIC (UDP 443)",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFFF8BBD0)
+                            color = GentleLightPink
                         )
                         Text(
                             text = "Блокировка QUIC (IPv6). Для IPv4 рекомендуется отключить QUIC в браузере (chrome://flags)",
                             fontSize = 9.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.5f)
+                            color = GentleLightPink.copy(alpha = 0.5f)
                         )
                     }
                     Switch(
@@ -2039,8 +1431,41 @@ fun ExpertSettingsCard(
                             BypassConfig.saveTuningSettings(context)
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFFF48FB1),
-                            checkedTrackColor = Color(0xFFF48FB1).copy(alpha = 0.5f)
+                            checkedThumbColor = GentleMediumPink,
+                            checkedTrackColor = GentleMediumPink.copy(alpha = 0.5f)
+                        )
+                    )
+                }
+
+                // Verbose Diagnostic Logs Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "VERBOSE DIAGNOSTIC LOGS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = GentleLightPink
+                        )
+                        Text(
+                            text = "Детальный вывод ошибок обхода DNS/DPI в лог-анализатор",
+                            fontSize = 9.sp,
+                            color = GentleLightPink.copy(alpha = 0.5f)
+                        )
+                    }
+                    Switch(
+                        checked = isDiagnosticModeState,
+                        onCheckedChange = { 
+                            isDiagnosticModeState = it
+                            BypassConfig.isDiagnosticMode = it
+                            BypassConfig.saveTuningSettings(context)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = GentleMediumPink,
+                            checkedTrackColor = GentleMediumPink.copy(alpha = 0.5f)
                         )
                     )
                 }
@@ -2068,7 +1493,7 @@ fun ExpertSettingsCard(
                 }
 
                 HorizontalDivider(
-                    color = Color(0xFFF48FB1).copy(alpha = 0.15f),
+                    color = GentleMediumPink.copy(alpha = 0.15f),
                     thickness = 1.dp,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
@@ -2078,7 +1503,7 @@ fun ExpertSettingsCard(
                     text = "1. НАСТРОЙКИ SECURE DNS (DoH)",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF8BBD0).copy(alpha = 0.9f),
+                    color = GentleLightPink.copy(alpha = 0.9f),
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
 
@@ -2086,8 +1511,8 @@ fun ExpertSettingsCard(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val smartBg = if (dnsMode == "Smart DoH") Color(0xFFD81B60) else Color(0xFFF48FB1).copy(alpha = 0.1f)
-                    val customBg = if (dnsMode == "Custom") Color(0xFFD81B60) else Color(0xFFF48FB1).copy(alpha = 0.1f)
+                    val smartBg = if (dnsMode == "Smart DoH") GentleDarkPink else GentleMediumPink.copy(alpha = 0.1f)
+                    val customBg = if (dnsMode == "Custom") GentleDarkPink else GentleMediumPink.copy(alpha = 0.1f)
 
                     Button(
                         onClick = {
@@ -2099,7 +1524,7 @@ fun ExpertSettingsCard(
                         modifier = Modifier.weight(1f).height(36.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text("Smart DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
+                        Text("Smart DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
                     }
 
                     Button(
@@ -2112,7 +1537,7 @@ fun ExpertSettingsCard(
                         modifier = Modifier.weight(1f).height(36.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text("Custom DNS/DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
+                        Text("Custom DNS/DoH", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
                     }
                 }
 
@@ -2123,12 +1548,12 @@ fun ExpertSettingsCard(
                             customDnsIp = it
                             RobustResolver.saveDnsSettings(context, "Custom", it)
                         },
-                        label = { Text("DNS IP (e.g. 9.9.9.9) or DoH URL", color = Color(0xFFF48FB1).copy(alpha = 0.5f), fontSize = 11.sp) },
-                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF8BBD0), fontSize = 12.sp),
+                        label = { Text("DNS IP (e.g. 9.9.9.9) or DoH URL", color = GentleMediumPink.copy(alpha = 0.5f), fontSize = 11.sp) },
+                        textStyle = androidx.compose.ui.text.TextStyle(color = GentleLightPink, fontSize = 12.sp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFF48FB1),
-                            unfocusedBorderColor = Color(0xFFF48FB1).copy(alpha = 0.4f),
-                            cursorColor = Color(0xFFF48FB1)
+                            focusedBorderColor = GentleMediumPink,
+                            unfocusedBorderColor = GentleMediumPink.copy(alpha = 0.4f),
+                            cursorColor = GentleMediumPink
                         ),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         singleLine = true
@@ -2136,7 +1561,7 @@ fun ExpertSettingsCard(
                 }
 
                 HorizontalDivider(
-                    color = Color(0xFFF48FB1).copy(alpha = 0.1f),
+                    color = GentleMediumPink.copy(alpha = 0.1f),
                     thickness = 1.dp,
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
@@ -2151,13 +1576,13 @@ fun ExpertSettingsCard(
                         text = "2. ПАРАМЕТРЫ ОБХОДА DPI",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFF8BBD0).copy(alpha = 0.9f)
+                        color = GentleLightPink.copy(alpha = 0.9f)
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Auto-Tuning",
                             fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.6f),
+                            color = GentleLightPink.copy(alpha = 0.6f),
                             modifier = Modifier.padding(end = 6.dp)
                         )
                         Switch(
@@ -2175,8 +1600,8 @@ fun ExpertSettingsCard(
                                 }
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFFF48FB1),
-                                checkedTrackColor = Color(0xFFD81B60),
+                                checkedThumbColor = GentleMediumPink,
+                                checkedTrackColor = GentleDarkPink,
                                 uncheckedThumbColor = Color.Gray,
                                 uncheckedTrackColor = Color.DarkGray
                             ),
@@ -2189,7 +1614,7 @@ fun ExpertSettingsCard(
                     Text(
                         text = "Ручной режим активен. Ползунки управляют фрагментацией и задержкой пакетов ClientHello в реальном времени.",
                         fontSize = 10.sp,
-                        color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
+                        color = GentleLightPink.copy(alpha = 0.5f),
                         lineHeight = 14.sp,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
@@ -2198,8 +1623,8 @@ fun ExpertSettingsCard(
                     // 1. frag1
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Размер 1-го фрагмента (frag1):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
-                            Text("${frag1.toInt()} байт", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
+                            Text("Размер 1-го фрагмента (frag1):", fontSize = 10.sp, color = GentleLightPink.copy(alpha = 0.8f))
+                            Text("${frag1.toInt()} байт", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
                         }
                         Slider(
                             value = frag1,
@@ -2210,8 +1635,8 @@ fun ExpertSettingsCard(
                             },
                             valueRange = 1f..100f,
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFF48FB1),
-                                activeTrackColor = Color(0xFFD81B60)
+                                thumbColor = GentleMediumPink,
+                                activeTrackColor = GentleDarkPink
                             )
                         )
                     }
@@ -2219,8 +1644,8 @@ fun ExpertSettingsCard(
                     // 2. frag2
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Размер 2-го фрагмента (frag2):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
-                            Text("${frag2.toInt()} байт", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
+                            Text("Размер 2-го фрагмента (frag2):", fontSize = 10.sp, color = GentleLightPink.copy(alpha = 0.8f))
+                            Text("${frag2.toInt()} байт", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
                         }
                         Slider(
                             value = frag2,
@@ -2231,8 +1656,8 @@ fun ExpertSettingsCard(
                             },
                             valueRange = 1f..100f,
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFF48FB1),
-                                activeTrackColor = Color(0xFFD81B60)
+                                thumbColor = GentleMediumPink,
+                                activeTrackColor = GentleDarkPink
                             )
                         )
                     }
@@ -2240,8 +1665,8 @@ fun ExpertSettingsCard(
                     // 3. delay1
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Задержка 1-го фрагмента (delay1):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
-                            Text("${delay1.toInt()} мс", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
+                            Text("Задержка 1-го фрагмента (delay1):", fontSize = 10.sp, color = GentleLightPink.copy(alpha = 0.8f))
+                            Text("${delay1.toInt()} мс", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
                         }
                         Slider(
                             value = delay1,
@@ -2252,8 +1677,8 @@ fun ExpertSettingsCard(
                             },
                             valueRange = 0f..200f,
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFF48FB1),
-                                activeTrackColor = Color(0xFFD81B60)
+                                thumbColor = GentleMediumPink,
+                                activeTrackColor = GentleDarkPink
                             )
                         )
                     }
@@ -2261,8 +1686,8 @@ fun ExpertSettingsCard(
                     // 4. delay2
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Задержка 2-го фрагмента (delay2):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
-                            Text("${delay2.toInt()} мс", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
+                            Text("Задержка 2-го фрагмента (delay2):", fontSize = 10.sp, color = GentleLightPink.copy(alpha = 0.8f))
+                            Text("${delay2.toInt()} мс", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
                         }
                         Slider(
                             value = delay2,
@@ -2273,8 +1698,8 @@ fun ExpertSettingsCard(
                             },
                             valueRange = 0f..200f,
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFF48FB1),
-                                activeTrackColor = Color(0xFFD81B60)
+                                thumbColor = GentleMediumPink,
+                                activeTrackColor = GentleDarkPink
                             )
                         )
                     }
@@ -2282,8 +1707,8 @@ fun ExpertSettingsCard(
                     // 5. fakeTtl
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("IP TTL для фейк-пакетов (fakeTtl):", fontSize = 10.sp, color = Color(0xFFF8BBD0).copy(alpha = 0.8f))
-                            Text("${fakeTtl.toInt()}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF48FB1))
+                            Text("IP TTL для фейк-пакетов (fakeTtl):", fontSize = 10.sp, color = GentleLightPink.copy(alpha = 0.8f))
+                            Text("${fakeTtl.toInt()}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
                         }
                         Slider(
                             value = fakeTtl,
@@ -2294,8 +1719,8 @@ fun ExpertSettingsCard(
                             },
                             valueRange = 1f..30f,
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFF48FB1),
-                                activeTrackColor = Color(0xFFD81B60)
+                                thumbColor = GentleMediumPink,
+                                activeTrackColor = GentleDarkPink
                             )
                         )
                     }
@@ -2303,37 +1728,91 @@ fun ExpertSettingsCard(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFFF8BBD0).copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                            .background(GentleLightPink.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
                             .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "ℹ️ Автоматический тюнинг параметров активен. Система динамически подбирает задержки (delay: ${delay1.toInt()}/${delay2.toInt()}ms) и размеры фрагментов (frag: ${frag1.toInt()}/${frag2.toInt()}) для текущей стратегии обхода DPI.",
                             fontSize = 10.sp,
-                            color = Color(0xFFF8BBD0).copy(alpha = 0.7f),
+                            color = GentleLightPink.copy(alpha = 0.7f),
                             lineHeight = 14.sp
                         )
                     }
                 }
 
                 HorizontalDivider(
-                    color = Color(0xFFF48FB1).copy(alpha = 0.1f),
+                    color = GentleMediumPink.copy(alpha = 0.1f),
                     thickness = 1.dp,
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
 
-                // 3. Custom Websites Monitor
+                // DPI Strategy Selection
                 Text(
-                    text = "3. МОНИТОРИНГ СОБСТВЕННЫХ САЙТОВ",
+                    text = "3. ВЫБОР СТРАТЕГИИ ОБХОДА",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF8BBD0).copy(alpha = 0.9f),
+                    color = GentleLightPink.copy(alpha = 0.9f),
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                
+                var showStrategyMenuLocal by remember { mutableStateOf(false) }
+                val currentStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
+                
+                Box {
+                    Button(
+                        onClick = { showStrategyMenuLocal = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.1f)),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().height(40.dp),
+                        border = BorderStroke(1.dp, GentleMediumPink.copy(alpha = 0.2f))
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(currentStrategy.name.replace("_", " "), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
+                            Spacer(Modifier.width(8.dp))
+                            Icon(Icons.Default.ArrowDropDown, null, tint = GentleMediumPink, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    
+                    DropdownMenu(
+                        expanded = showStrategyMenuLocal,
+                        onDismissRequest = { showStrategyMenuLocal = false },
+                        modifier = Modifier.background(PureBlack).border(1.dp, GentleMediumPink.copy(alpha = 0.2f))
+                    ) {
+                        BypassStrategy.entries.forEach { strategy ->
+                            DropdownMenuItem(
+                                text = { Text(strategy.name.replace("_", " "), color = GentleLightPink, fontSize = 11.sp) },
+                                onClick = {
+                                    showStrategyMenuLocal = false
+                                    BypassConfig.setGlobalStrategy(strategy)
+                                    BypassConfig.saveTuningSettings(context)
+                                    // Trigger immediate change if VPN is running
+                                    if (isVpnActive) {
+                                        val intent = Intent(context, PinkVpnService::class.java).apply {
+                                            action = "CHANGE_STRATEGY"
+                                        }
+                                        context.startService(intent)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 4. Custom Websites Monitor
+                Text(
+                    text = "4. МОНИТОРИНГ СОБСТВЕННЫХ САЙТОВ",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GentleLightPink.copy(alpha = 0.9f),
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Text(
                     text = "Добавьте сайт, который хотите разблокировать, чтобы авто-пилот отслеживал его доступность и подбирал лучшие стратегии.",
                     fontSize = 10.sp,
-                    color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
+                    color = GentleLightPink.copy(alpha = 0.5f),
                     lineHeight = 14.sp,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
@@ -2346,12 +1825,12 @@ fun ExpertSettingsCard(
                     OutlinedTextField(
                         value = newServiceName,
                         onValueChange = { newServiceName = it },
-                        label = { Text("Название (e.g. Meduza)", color = Color(0xFFF48FB1).copy(alpha = 0.5f), fontSize = 10.sp) },
-                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF8BBD0), fontSize = 11.sp),
+                        label = { Text("Название (e.g. Meduza)", color = GentleMediumPink.copy(alpha = 0.5f), fontSize = 10.sp) },
+                        textStyle = androidx.compose.ui.text.TextStyle(color = GentleLightPink, fontSize = 11.sp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFF48FB1),
-                            unfocusedBorderColor = Color(0xFFF48FB1).copy(alpha = 0.4f),
-                            cursorColor = Color(0xFFF48FB1)
+                            focusedBorderColor = GentleMediumPink,
+                            unfocusedBorderColor = GentleMediumPink.copy(alpha = 0.4f),
+                            cursorColor = GentleMediumPink
                         ),
                         modifier = Modifier.weight(1f),
                         singleLine = true
@@ -2360,12 +1839,12 @@ fun ExpertSettingsCard(
                     OutlinedTextField(
                         value = newServiceUrl,
                         onValueChange = { newServiceUrl = it },
-                        label = { Text("https://...", color = Color(0xFFF48FB1).copy(alpha = 0.5f), fontSize = 10.sp) },
-                        textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFFF8BBD0), fontSize = 11.sp),
+                        label = { Text("https://...", color = GentleMediumPink.copy(alpha = 0.5f), fontSize = 10.sp) },
+                        textStyle = androidx.compose.ui.text.TextStyle(color = GentleLightPink, fontSize = 11.sp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFF48FB1),
-                            unfocusedBorderColor = Color(0xFFF48FB1).copy(alpha = 0.4f),
-                            cursorColor = Color(0xFFF48FB1)
+                            focusedBorderColor = GentleMediumPink,
+                            unfocusedBorderColor = GentleMediumPink.copy(alpha = 0.4f),
+                            cursorColor = GentleMediumPink
                         ),
                         modifier = Modifier.weight(1.5f),
                         singleLine = true
@@ -2386,12 +1865,12 @@ fun ExpertSettingsCard(
                         },
                         modifier = Modifier
                             .size(40.dp)
-                            .background(Color(0xFFD81B60), RoundedCornerShape(8.dp))
+                            .background(GentleDarkPink, RoundedCornerShape(8.dp))
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Add",
-                            tint = Color(0xFFF8BBD0),
+                            tint = GentleLightPink,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -2401,7 +1880,7 @@ fun ExpertSettingsCard(
                     Text(
                         text = "Добавленные сайты (нажмите корзину для удаления):",
                         fontSize = 10.sp,
-                        color = Color(0xFFF8BBD0).copy(alpha = 0.7f),
+                        color = GentleLightPink.copy(alpha = 0.7f),
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
 
@@ -2413,14 +1892,14 @@ fun ExpertSettingsCard(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color(0xFFF8BBD0).copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+                                    .background(GentleLightPink.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
                                     .padding(horizontal = 10.dp, vertical = 6.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(service.first, color = Color(0xFFF8BBD0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    Text(service.second, color = Color(0xFFF8BBD0).copy(alpha = 0.4f), fontSize = 9.sp)
+                                    Text(service.first, color = GentleLightPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(service.second, color = GentleLightPink.copy(alpha = 0.4f), fontSize = 9.sp)
                                 }
                                 IconButton(
                                     onClick = { ServiceChecker.removeCustomService(context, service.first) },
@@ -2439,23 +1918,23 @@ fun ExpertSettingsCard(
                 }
 
                 HorizontalDivider(
-                    color = Color(0xFFF48FB1).copy(alpha = 0.1f),
+                    color = GentleMediumPink.copy(alpha = 0.1f),
                     thickness = 1.dp,
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
 
-                // 4. Force Reset / Clear Scores
+                // 5. Force Reset / Clear Scores
                 Text(
-                    text = "4. СБРОС И ПЕРЕЗАГРУЗКА",
+                    text = "5. СБРОС И ПЕРЕЗАГРУЗКА",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFF8BBD0).copy(alpha = 0.9f),
+                    color = GentleLightPink.copy(alpha = 0.9f),
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Text(
                     text = stringResource(R.string.desc_clear_scores),
                     fontSize = 10.sp,
-                    color = Color(0xFFF8BBD0).copy(alpha = 0.5f),
+                    color = GentleLightPink.copy(alpha = 0.5f),
                     lineHeight = 14.sp,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
@@ -2467,12 +1946,12 @@ fun ExpertSettingsCard(
                         }
                         context.startService(intent)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC2185B)),
+                    colors = ButtonDefaults.buttonColors(containerColor = GentleDarkPink),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth().height(36.dp),
                     contentPadding = PaddingValues(0.dp)
                 ) {
-                    Text(stringResource(R.string.action_clear_scores), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF8BBD0))
+                    Text(stringResource(R.string.action_clear_scores), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
                 }
             }
         }

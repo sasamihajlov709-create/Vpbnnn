@@ -13,12 +13,14 @@ object TtlHelper {
     private var getImplMethod: java.lang.reflect.Method? = null
 
     init {
-        try {
-            fdField = java.net.SocketImpl::class.java.getDeclaredField("fd")
-            fdField?.isAccessible = true
-            getImplMethod = java.net.Socket::class.java.getDeclaredMethod("getImpl")
-            getImplMethod?.isAccessible = true
-        } catch (e: Exception) {}
+        if (android.os.Build.VERSION.SDK_INT < 28) {
+            try {
+                fdField = java.net.SocketImpl::class.java.getDeclaredField("fd")
+                fdField?.isAccessible = true
+                getImplMethod = java.net.Socket::class.java.getDeclaredMethod("getImpl")
+                getImplMethod?.isAccessible = true
+            } catch (e: Exception) {}
+        }
     }
 
     fun setTtl(socket: Socket, ttl: Int): Boolean {
