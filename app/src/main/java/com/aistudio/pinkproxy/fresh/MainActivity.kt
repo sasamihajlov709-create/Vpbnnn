@@ -51,6 +51,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
@@ -165,7 +166,7 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, PinkVpnService::class.java).apply {
             action = "STOP"
         }
-        startService(intent)
+        androidx.core.content.ContextCompat.startForegroundService(this, intent)
     }
 }
 
@@ -341,7 +342,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                 ) {
                     CompactActionButton("OPTIMIZE", Modifier.weight(1f)) { 
                         val intent = Intent(context, PinkVpnService::class.java).apply { action = "RESTART" }
-                        context.startService(intent)
+                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
                     }
                     CompactActionButton("FLUSH DNS", Modifier.weight(1f)) { RobustResolver.clearCache() }
                 }
@@ -609,7 +610,7 @@ fun PowerButton(isActive: Boolean, onToggle: () -> Unit, transition: InfiniteTra
             shape = CircleShape,
             color = if (isActive) GentleDarkPink else Color.Black,
             tonalElevation = 8.dp,
-            modifier = Modifier.size(120.dp),
+            modifier = Modifier.size(120.dp).testTag("connect_button"),
             border = BorderStroke(1.dp, GentleLightPink.copy(alpha = 0.1f))
         ) {
             Box(contentAlignment = Alignment.Center) {
@@ -1596,7 +1597,7 @@ fun ExpertSettingsCard(
                                     val intent = Intent(context, PinkVpnService::class.java).apply {
                                         action = "CHANGE_STRATEGY"
                                     }
-                                    context.startService(intent)
+                                    androidx.core.content.ContextCompat.startForegroundService(context, intent)
                                 }
                             },
                             colors = SwitchDefaults.colors(
@@ -1791,7 +1792,7 @@ fun ExpertSettingsCard(
                                         val intent = Intent(context, PinkVpnService::class.java).apply {
                                             action = "CHANGE_STRATEGY"
                                         }
-                                        context.startService(intent)
+                                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
                                     }
                                 }
                             )
@@ -1944,7 +1945,7 @@ fun ExpertSettingsCard(
                         val intent = Intent(context, PinkVpnService::class.java).apply {
                             action = "RESTART"
                         }
-                        context.startService(intent)
+                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = GentleDarkPink),
                     shape = RoundedCornerShape(8.dp),

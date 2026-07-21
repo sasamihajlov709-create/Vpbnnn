@@ -100,9 +100,11 @@ object ProxyStats {
         totalRequests.incrementAndGet()
         if (!success) totalErrors.incrementAndGet()
         
-        recentResults.add(success)
-        if (recentResults.size > MAX_RESULTS_TRACKING) {
-            recentResults.removeAt(0)
+        synchronized(recentResults) {
+            recentResults.add(success)
+            if (recentResults.size > MAX_RESULTS_TRACKING) {
+                recentResults.removeAt(0)
+            }
         }
         
         updateMetrics()
@@ -114,9 +116,11 @@ object ProxyStats {
             _successRate.value = (100 - (totalErrors.get() * 100 / requests)).toInt().coerceIn(0, 100)
         }
         
-        if (recentResults.isNotEmpty()) {
-            val recentSuccesses = recentResults.count { it }
-            _stabilityScore.value = (recentSuccesses * 100 / recentResults.size).coerceIn(0, 100)
+        synchronized(recentResults) {
+            if (recentResults.isNotEmpty()) {
+                val recentSuccesses = recentResults.count { it }
+                _stabilityScore.value = (recentSuccesses * 100 / recentResults.size).coerceIn(0, 100)
+            }
         }
     }
     private val totalBytes = AtomicLong(0L)
@@ -3980,19 +3984,33 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         
         when (atyp) {
             0x01 -> { // IPv4
+                if (read < 10) {
+                    clientOut.write(byteArrayOf(0x05, 0x04, 0x00, 0x01, 0,0,0,0, 0,0))
+                    return
+                }
                 host = "${reqBuf[4].toUByte()}.${reqBuf[5].toUByte()}.${reqBuf[6].toUByte()}.${reqBuf[7].toUByte()}"
                 pos = 8
             }
             0x03 -> { // Domain
+                if (read < 5) {
+                    clientOut.write(byteArrayOf(0x05, 0x04, 0x00, 0x01, 0,0,0,0, 0,0))
+                    return
+                }
                 val len = reqBuf[4].toInt() and 0xFF
+                if (read < 7 + len) {
+                    clientOut.write(byteArrayOf(0x05, 0x04, 0x00, 0x01, 0,0,0,0, 0,0))
+                    return
+                }
                 host = String(reqBuf, 5, len, Charsets.UTF_8)
                 pos = 5 + len
             }
             0x04 -> { // IPv6
-                if (read >= 20) {
-                    val addrBytes = reqBuf.copyOfRange(4, 20)
-                    host = java.net.InetAddress.getByAddress(addrBytes).hostAddress ?: ""
+                if (read < 22) {
+                    clientOut.write(byteArrayOf(0x05, 0x04, 0x00, 0x01, 0,0,0,0, 0,0))
+                    return
                 }
+                val addrBytes = reqBuf.copyOfRange(4, 20)
+                host = java.net.InetAddress.getByAddress(addrBytes).hostAddress ?: ""
                 pos = 20
             }
         }
@@ -4130,13 +4148,15 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
                 // Success reply to SOCKS5 client
-                val reply = byteArrayOf(0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0) // bind address dummy
-                clientOut.write(reply)
-                clientOut.flush()
+                if (helloRead == 0) {
+                    val reply = byteArrayOf(0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0) // bind address dummy
+                    clientOut.write(reply)
+                    clientOut.flush()
+                    helloRead = clientIn.read(helloBuffer)
+                }
 
                 // Apply bypass desynchronization logic on first payload
                 val targetOut = target.getOutputStream()
-                helloRead = clientIn.read(helloBuffer)
                 if (helloRead > 0) {
                     BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, activeConfig, host)
                 }

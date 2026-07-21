@@ -48,16 +48,12 @@ class PinkProxyTileService : TileService() {
             val intent = Intent(this, PinkVpnService::class.java).apply {
                 action = "STOP"
             }
-            startService(intent)
+            androidx.core.content.ContextCompat.startForegroundService(this, intent)
         } else {
             val vpnIntent = VpnService.prepare(this)
             if (vpnIntent == null) {
                 val intent = Intent(this, PinkVpnService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(intent)
-                } else {
-                    startService(intent)
-                }
+                androidx.core.content.ContextCompat.startForegroundService(this, intent)
             } else {
                 // Cannot start directly if permission is not granted
                 // Opening the app to handle permission

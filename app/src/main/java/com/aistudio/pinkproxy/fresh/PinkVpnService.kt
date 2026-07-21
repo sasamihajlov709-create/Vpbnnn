@@ -180,7 +180,11 @@ class PinkVpnService : VpnService() {
         super.onCreate()
         instance = this
         loadFilterSettings(this)
-        registerReceiver(batteryReceiver, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(batteryReceiver, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED), android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(batteryReceiver, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -554,6 +558,12 @@ class PinkVpnService : VpnService() {
                                                                     val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
                                                                     writeChannel.trySend(replyPacket)
                                                                     ProxyStats.logTraffic(parsedQuery.qname, "DNS_HIJACK")
+                                                                    return@launch
+                                                                } else if (ips.isNotEmpty()) {
+                                                                    val dnsReply = buildDnsReply(dnsPayload, emptyList(), isIpv6 = false)
+                                                                    val replyPacket = createUdpIpPacket(dstIpInt, srcIpInt, dstPort, srcPort, dnsReply)
+                                                                    writeChannel.trySend(replyPacket)
+                                                                    ProxyStats.logTraffic(parsedQuery.qname, "DNS_HIJACK_EMPTY")
                                                                     return@launch
                                                                 }
                                                             }

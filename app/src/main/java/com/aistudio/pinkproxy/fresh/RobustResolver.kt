@@ -629,30 +629,10 @@ object RobustResolver {
                                              val distinct = results.distinct()
                                              resultsMap[dns] = distinct
                                              
-                                             // Anti-Poisoning: Stricter Consensus
-                                             if (resultsMap.size >= 2) {
-                                                 // Find IPs that appear in at least 2 different results
-                                                 val allIps = resultsMap.values.flatten().groupBy { it.hostAddress }
-                                                 val consensusIps = allIps.filter { it.value.size >= 2 }.keys
-                                                 
-                                                 if (consensusIps.isNotEmpty()) {
-                                                     val consensusAddresses = consensusIps.map { InetAddress.getByName(it) }
-                                                     if (completableDeferred.complete(consensusAddresses)) {
-                                                         ProxyStats.recordDnsResult(true)
-                                                         bestDohUrl = dns
-                                                     }
-                                                 } else if (resultsMap.size >= 3) {
-                                                     // If we have 3 results and NO consensus, pick the one from bestDohUrl or first winner
-                                                     val finalChoice = resultsMap[bestDohUrl] ?: distinct
-                                                     if (completableDeferred.complete(finalChoice)) {
-                                                         ProxyStats.recordDnsResult(true)
-                                                     }
-                                                 }
-                                             } else if (endpoints.size == 1) {
-                                                 // Only one provider available, trust it
-                                                 if (completableDeferred.complete(distinct)) {
-                                                     ProxyStats.recordDnsResult(true)
-                                                 }
+                                             // Since DoH is encrypted and authenticated via TLS, we can immediately trust the fastest response
+                                             if (completableDeferred.complete(distinct)) {
+                                                 ProxyStats.recordDnsResult(true)
+                                                 bestDohUrl = dns
                                              }
                                          }
                                      } catch (e: Exception) {
