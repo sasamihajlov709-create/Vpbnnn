@@ -212,7 +212,7 @@ object ServiceChecker {
         val activeLatencies = results.filter { it.isUp && it.latencyMs > 0 }.map { it.latencyMs }
         if (activeLatencies.isNotEmpty()) {
             val minRtt = activeLatencies.minOrNull() ?: 50L
-            BypassConfig.updateRtt(minRtt)
+            BypassConfig.TrafficShaper.updateRtt(minRtt)
         }
 
         _statuses.value = results
