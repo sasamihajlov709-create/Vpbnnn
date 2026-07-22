@@ -143,6 +143,8 @@ class PinkVpnService : VpnService() {
                 return
             }
 
+            proxyServer?.start() // Ensure proxy is running
+            
             // Start tun2socks
             startTun2Socks(vpnInterface!!, PROXY_PORT)
             
@@ -225,6 +227,7 @@ class PinkVpnService : VpnService() {
     private fun stopVpn() {
         _isRunning.value = false
         stopTun2Socks()
+        proxyServer?.stop()
         
         try {
             vpnInterface?.close()

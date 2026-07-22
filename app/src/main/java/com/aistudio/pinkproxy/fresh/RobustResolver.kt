@@ -1268,10 +1268,32 @@ object RobustResolver {
                         vpnService?.protect(s)
                         return s
                     }
-                    override fun createSocket(h: String?, p: Int): Socket = throw UnsupportedOperationException()
-                    override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket = throw UnsupportedOperationException()
-                    override fun createSocket(a: InetAddress?, p: Int): Socket = throw UnsupportedOperationException()
-                    override fun createSocket(a: InetAddress?, p: Int, la: InetAddress?, lp: Int): Socket = throw UnsupportedOperationException()
+                    override fun createSocket(h: String?, p: Int): Socket {
+                        val s = Socket()
+                        vpnService?.protect(s)
+                        s.connect(InetSocketAddress(h, p))
+                        return s
+                    }
+                    override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket {
+                        val s = Socket()
+                        s.bind(InetSocketAddress(lh, lp ?: 0))
+                        vpnService?.protect(s)
+                        s.connect(InetSocketAddress(h, p))
+                        return s
+                    }
+                    override fun createSocket(a: InetAddress?, p: Int): Socket {
+                        val s = Socket()
+                        vpnService?.protect(s)
+                        s.connect(InetSocketAddress(a, p))
+                        return s
+                    }
+                    override fun createSocket(a: InetAddress?, p: Int, la: InetAddress?, lp: Int): Socket {
+                        val s = Socket()
+                        s.bind(InetSocketAddress(la, lp ?: 0))
+                        vpnService?.protect(s)
+                        s.connect(InetSocketAddress(a, p))
+                        return s
+                    }
                 })
                 .connectionPool(okhttp3.ConnectionPool(5, 5, java.util.concurrent.TimeUnit.MINUTES))
                 .build()
