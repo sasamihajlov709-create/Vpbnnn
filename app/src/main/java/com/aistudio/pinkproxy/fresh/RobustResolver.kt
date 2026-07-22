@@ -157,7 +157,7 @@ object RobustResolver {
                 val best = dohLatenciesMap.entries.minByOrNull { it.value }
                 bestDohUrl = best?.key ?: dohUrls[0]
                 Log.d("RobustResolver", "DNS Race Completed. Fastest DoH Server: $bestDohUrl (${best?.value ?: -1}ms)")
-                delay(120000) // Race every 2 minutes for precise network adaptation
+                delay(600000) // Race every 10 minutes to reduce background noise
             }
         }
     }
@@ -391,7 +391,7 @@ object RobustResolver {
                 } catch (e: Exception) {
                     Log.e("RobustResolver", "Background DoH prober cycle failed: ${e.message}")
                 }
-                delay(120000) // Every 2 minutes
+                delay(600000) // Every 10 minutes
             }
         }
     }

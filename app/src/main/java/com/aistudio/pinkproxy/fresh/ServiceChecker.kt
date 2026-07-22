@@ -320,9 +320,9 @@ object ServiceChecker {
                 val youtubeDown = _statuses.value.find { it.name == "YouTube" }?.isUp == false
                 val streamDown = _statuses.value.find { it.name == "YT Video Stream" }?.isUp == false
                 val delayTime = if (youtubeDown || streamDown) {
-                    8000L // 8s fast recovery
+                    30000L // 30s recovery (less aggressive)
                 } else {
-                    if (BypassConfig.isCharging) 30000L else 90000L // 30s charging, 90s on battery
+                    if (BypassConfig.isCharging) 120000L else 300000L // 2 min charging, 5 min on battery
                 }
                 // Add minor jitter to avoid synchronized wakeups
                 val jitter = (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 2000).toLong()
