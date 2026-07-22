@@ -359,7 +359,7 @@ object ServiceChecker {
             } catch (e: Exception) {
                 false
             } finally {
-                try { socket?.close() } catch (e: Exception) {}
+                try { socket?.close() } catch (e: Exception) { android.util.Log.v("ServiceChecker", "Ignored: ${e.message}") }
             }
         }
     }

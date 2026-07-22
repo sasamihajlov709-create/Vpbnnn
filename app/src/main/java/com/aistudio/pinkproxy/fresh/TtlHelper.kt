@@ -19,7 +19,7 @@ object TtlHelper {
                 fdField?.isAccessible = true
                 getImplMethod = java.net.Socket::class.java.getDeclaredMethod("getImpl")
                 getImplMethod?.isAccessible = true
-            } catch (e: Exception) {}
+            } catch (e: Exception) { Log.v("TtlHelper", "Reflection not available") }
         }
     }
 
@@ -52,7 +52,7 @@ object TtlHelper {
                     }
                     true
                 } finally {
-                    try { pfd.close() } catch (e: Exception) {}
+                    try { pfd.close() } catch (e: Exception) { Log.v("TtlHelper", "Ignored: ${e.message}") }
                 }
             }
         } catch (e: Exception) {
@@ -73,7 +73,7 @@ object TtlHelper {
                 }
                 true
             } finally {
-                try { pfd.close() } catch (e: Exception) {}
+                try { pfd.close() } catch (e: Exception) { Log.v("TtlHelper", "Ignored: ${e.message}") }
             }
         } catch (e: Exception) {
             Log.v("TtlHelper", "Failed to set UDP TTL: ${e.message}")

@@ -36,6 +36,7 @@ object ProxyStats {
 
     fun setVpnActive(active: Boolean) {
         _isVpnActive.value = active
+        isMonitoring = active
     }
 
     private val _errors = MutableStateFlow(0L)
@@ -521,9 +522,23 @@ enum class BypassStrategy {
     FAKE_PACKET, SNI_SPLIT, SNI_TRIPLE, SNI_MANGLE, TLS_DIRTY, TLS_PAD, TLS_GREASE,
     HOST_MIXED, FRAG_3_5, CHUNKY, HOST_CASE, RAND_SPLIT, HEADER_SPLIT,
     TCP_OOB_DESYNC, HTTP_SPACE, HTTP_TAB, WINDOW_SIZE, SLOW_SEND, OOB_DESYNC,
-    TCP_ZERO_WINDOW, GHOST_PACKETS, FRAGMENT_MULTI, HTTP_MANGLE, SNI_CASE, TCP_WINDOW_CLAMP, PACKET_PADDING, TCP_KEEPALIVE, QUIC_BOOST, CHAOS, HTTP_SMUGGLE, TLS_SPLIT_PAD, TLS_FRAG_OOB, HTTP_OBSCURE, DOUBLE_SPLIT, TLS_MIXED_OOB, TLS_HOLE_PUNCH, TCP_OOB_SPLIT, TLS_GHOST_HELLO, TLS_FRAG_RANDOM, TLS_REC_SPLIT, HTTP_LINE_FOLD, QUIC_PAD, TLS_MULTI_FRAG, TCP_SYN_COOKIE_FAKE, TLS_SESSION_RESUME_FAKE, TLS_EXT_SHUFFLE, QUIC_VERSION_NEG_FAKE, HTTP_HOST_SKEW, TLS_ALPN_MANGLE, HTTP_VERB_CASE, TCP_MSS_CLAMP, TLS_EXT_JUNK, HTTP_TE_CHUNKY, TCP_URG_SKEW, TLS_EXT_SKEW, HTTP_AUTH_FAKE, TCP_FAST_RETRANSMIT_SIM, QUIC_INITIAL_FRAG, TLS_SNI_APPEND_JUNK, TCP_SACK_PANIC, TLS_REC_MANGLE, HTTP_PIPE_SIM, TCP_REORDER_SIM, TLS_CLIENT_HELLO_RETRY_SIM, HTTP_COOKIE_SKEW, TCP_ACK_DELAY_SIM, TCP_FAST_OPEN_FAKE, TLS_PADDING_RAND, HTTP_HOST_SPACE, TLS_MULTI_HELLO, HTTP_CHUNKED_MANGLE, TCP_SYN_FLOOD_FAKE, TLS_REHANDSHAKE_FAKE, HTTP_RANGE_SKEW, TCP_RST_FAKE, QUIC_RANDOM_CID, TLS_SNI_SKEW, HTTP_VERSION_SKEW, TCP_TIMESTAMP_MANGLE, UDP_NOISE, TLS_CIPHER_SHUFFLE, HTTP_USER_AGENT_SKEW, TCP_URGENT_RANDOM, TLS_ALPN_SKEW, HTTP_AUTH_RANDOM, TCP_WINDOW_SIZE_CHAOS, TLS_EXTENSION_GREASE, HTTP_HEADER_FUZZING, TCP_REORDER_CHAOS,
-    UDP_XOR_OBFUSCATE, TLS_HELLO_JUNK, HTTP_METHOD_FAKE, DNS_OVER_QUIC_SIM,
-    UDP_DREC_JUNK, SNI_REVERSE, DIRECT
+    TCP_ZERO_WINDOW, GHOST_PACKETS, FRAGMENT_MULTI, HTTP_MANGLE, SNI_CASE, TCP_WINDOW_CLAMP,
+    PACKET_PADDING, TCP_KEEPALIVE, QUIC_BOOST, CHAOS, HTTP_SMUGGLE, TLS_SPLIT_PAD,
+    TLS_FRAG_OOB, HTTP_OBSCURE, DOUBLE_SPLIT, TLS_MIXED_OOB, TLS_HOLE_PUNCH, TCP_OOB_SPLIT,
+    TLS_GHOST_HELLO, TLS_FRAG_RANDOM, TLS_REC_SPLIT, HTTP_LINE_FOLD, QUIC_PAD, TLS_MULTI_FRAG,
+    TCP_SYN_COOKIE_FAKE, TLS_SESSION_RESUME_FAKE, TLS_EXT_SHUFFLE, QUIC_VERSION_NEG_FAKE,
+    HTTP_HOST_SKEW, TLS_ALPN_MANGLE, HTTP_VERB_CASE, TCP_MSS_CLAMP, TLS_EXT_JUNK, HTTP_TE_CHUNKY,
+    TCP_URG_SKEW, TLS_EXT_SKEW, HTTP_AUTH_FAKE, TCP_FAST_RETRANSMIT_SIM, QUIC_INITIAL_FRAG,
+    TLS_SNI_APPEND_JUNK, TCP_SACK_PANIC, TLS_REC_MANGLE, HTTP_PIPE_SIM, TCP_REORDER_SIM,
+    TLS_CLIENT_HELLO_RETRY_SIM, HTTP_COOKIE_SKEW, TCP_ACK_DELAY_SIM, TCP_FAST_OPEN_FAKE,
+    TLS_PADDING_RAND, HTTP_HOST_SPACE, TLS_MULTI_HELLO, HTTP_CHUNKED_MANGLE, TCP_SYN_FLOOD_FAKE,
+    TLS_REHANDSHAKE_FAKE, HTTP_RANGE_SKEW, TCP_RST_FAKE, QUIC_RANDOM_CID, TLS_SNI_SKEW,
+    HTTP_VERSION_SKEW, TCP_TIMESTAMP_MANGLE, UDP_NOISE, TLS_CIPHER_SHUFFLE, HTTP_USER_AGENT_SKEW,
+    TCP_URGENT_RANDOM, TLS_ALPN_SKEW, HTTP_AUTH_RANDOM, TCP_WINDOW_SIZE_CHAOS, TLS_EXTENSION_GREASE,
+    HTTP_HEADER_FUZZING, TCP_REORDER_CHAOS, UDP_XOR_OBFUSCATE, TLS_HELLO_JUNK, HTTP_METHOD_FAKE,
+    DNS_OVER_QUIC_SIM, UDP_DREC_JUNK, SNI_REVERSE,
+    TLS_SNI_OVERLAP, HTTP2_PREAMBLE_DESYNC, TLS_RECORD_PAD_DYNAMIC, TCP_SYN_ACK_RTT_SPOOF,
+    DIRECT
 }
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }
@@ -759,7 +774,7 @@ object BypassConfig {
                              if (score < 300) globalStrategyScores.compute(s) { _, v -> (v ?: 100) + 50 }
                         }
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 delay(3600000) // Every hour
             }
         }
@@ -820,23 +835,34 @@ object BypassConfig {
         var bestStrategy = candidates[0]
         var minRtt = Long.MAX_VALUE
         
-        for (strategy in candidates) {
-            val startTime = System.currentTimeMillis()
-            var success = false
-            for (host in testHosts) {
-                if (ServiceChecker.probeHostWithStrategy(host, strategy)) {
-                    success = true
-                    break
+        val results = java.util.concurrent.ConcurrentHashMap<BypassStrategy, Long>()
+        kotlinx.coroutines.coroutineScope {
+            val jobs = candidates.map { strategy ->
+                launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val startTime = System.currentTimeMillis()
+                    var success = false
+                    // Quick race condition, try all hosts concurrently
+                    kotlinx.coroutines.coroutineScope {
+                        for (host in testHosts) {
+                            launch {
+                                if (ServiceChecker.probeHostWithStrategy(host, strategy)) {
+                                    success = true
+                                }
+                            }
+                        }
+                    }
+                    if (success) {
+                        results[strategy] = System.currentTimeMillis() - startTime
+                    }
                 }
             }
-            if (success) {
-                val rtt = System.currentTimeMillis() - startTime
-                if (rtt < minRtt) {
-                    minRtt = rtt
-                    bestStrategy = strategy
-                }
-            }
-            delay(3000) // Cool down between probes
+            jobs.forEach { it.join() }
+        }
+        
+        val best = results.entries.minByOrNull { it.value }
+        if (best != null) {
+            minRtt = best.value
+            bestStrategy = best.key
         }
         
         if (minRtt != Long.MAX_VALUE) {
@@ -891,7 +917,7 @@ object BypassConfig {
                 currentMtu.value = (startMtu + 20).coerceAtMost(1460)
                 udpMtu.value = (udpMtu.value + 20).coerceAtMost(1400)
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
     fun getCurrentRttMs(): Long = _currentRttMs.value
@@ -970,7 +996,7 @@ object BypassConfig {
                 socket.connect(java.net.InetSocketAddress(host, 443), 5000)
                 socket.close()
                 overallSuccess++
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             delay(1000)
         }
         
@@ -1026,7 +1052,7 @@ object BypassConfig {
                                 val packet = java.net.DatagramPacket(dummyPayload, dummyPayload.size, java.net.InetAddress.getByName(target), 53)
                                 socket.send(packet)
                                 socket.close()
-                            } catch (e: Exception) {}
+                            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                         1 -> { // TCP HTTP blend
                             try {
@@ -1037,7 +1063,7 @@ object BypassConfig {
                                 out.write("GET / HTTP/1.1\r\nHost: $target\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray())
                                 out.flush()
                                 socket.close()
-                            } catch (e: Exception) {}
+                            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                         2 -> { // TLS handshake blend
                              try {
@@ -1046,7 +1072,7 @@ object BypassConfig {
                                 socket.soTimeout = 3000
                                 (socket as javax.net.ssl.SSLSocket).startHandshake()
                                 socket.close()
-                             } catch (e: Exception) {}
+                             } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                     }
                 }
@@ -1120,10 +1146,10 @@ object BypassConfig {
                             // SO_RCVBUF / SO_SNDBUF expansion
                             android.system.Os.setsockoptInt(fd, android.system.OsConstants.SOL_SOCKET, android.system.OsConstants.SO_RCVBUF, 524288)
                             android.system.Os.setsockoptInt(fd, android.system.OsConstants.SOL_SOCKET, android.system.OsConstants.SO_SNDBUF, 524288)
-                        } catch (e: Exception) {}
+                        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     }
-                    try { pfd?.close() } catch (e: Exception) {}
-                } catch (e: Exception) {}
+                    try { pfd?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 
                 val rtt = _currentRttMs.value
                 val scale = if (isPanic || rtt > 200) 2 else 1
@@ -1137,8 +1163,8 @@ object BypassConfig {
                         channel.setOption(java.net.StandardSocketOptions.TCP_NODELAY, true)
                         channel.setOption(java.net.StandardSocketOptions.IP_TOS, 0x10) // IPTOS_LOWDELAY
                     }
-                } catch (e: Exception) {}
-            } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
 
         fun tuneUdp(socket: java.net.DatagramSocket) {
@@ -1146,7 +1172,7 @@ object BypassConfig {
                 socket.receiveBufferSize = 128 * 1024
                 socket.sendBufferSize = 128 * 1024
                 socket.reuseAddress = true
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
     }
 
@@ -1642,6 +1668,10 @@ object BypassConfig {
         BypassStrategy.DNS_OVER_QUIC_SIM to 1270,
         BypassStrategy.UDP_DREC_JUNK to 1280,
         BypassStrategy.SNI_REVERSE to 1290,
+        BypassStrategy.TLS_SNI_OVERLAP to 1300,
+        BypassStrategy.HTTP2_PREAMBLE_DESYNC to 1310,
+        BypassStrategy.TLS_RECORD_PAD_DYNAMIC to 1320,
+        BypassStrategy.TCP_SYN_ACK_RTT_SPOOF to 1330,
         BypassStrategy.DIRECT to 1
     )
 
@@ -2093,7 +2123,7 @@ object BypassConfig {
                 try {
                     // Inject OOB byte to throw off DPI state machine
                     socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256))
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 val secondSplit = (len * 2 / 3).coerceAtLeast(split + 1).coerceAtMost(len - 1)
                 out.write(data, split, secondSplit - split)
                 out.flush()
@@ -2287,7 +2317,7 @@ object BypassConfig {
                 try {
                     socket.sendUrgentData(0)
                     delay(config.delay1)
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 out.write(data, 0, len)
             }
             BypassStrategy.TCP_KEEPALIVE -> {
@@ -2296,7 +2326,7 @@ object BypassConfig {
                     // Send OOB byte instead of junk application data to trigger window update without breaking TLS/HTTP
                     socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256))
                     delay(config.delay1.coerceAtLeast(10L))
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 out.write(data, 0, len)
             }
             BypassStrategy.QUIC_BOOST -> {
@@ -2422,7 +2452,7 @@ object BypassConfig {
                 delay(config.delay1)
                 try {
                     socket.sendUrgentData(255)
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 out.write(data, p1, p2 - p1)
                 out.flush()
                 delay(config.delay2)
@@ -2519,7 +2549,7 @@ object BypassConfig {
                 try {
                     socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256))
                     delay(config.delay2)
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 out.write(data, p1, len - p1)
             }
             BypassStrategy.QUIC_PAD -> {
@@ -2553,7 +2583,7 @@ object BypassConfig {
                     delay(10)
                     socket.sendUrgentData(0x55)
                     delay(config.delay1)
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 out.write(data, 0, len)
             }
             BypassStrategy.TLS_SESSION_RESUME_FAKE -> {
@@ -2680,7 +2710,7 @@ object BypassConfig {
                     val chunk = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 16).coerceAtMost(len - offset)
                     try {
                         socket.sendUrgentData(data[offset].toInt())
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     out.write(data, offset, chunk)
                     out.flush()
                     offset += chunk
@@ -2926,7 +2956,7 @@ object BypassConfig {
             }
             BypassStrategy.TCP_RST_FAKE -> {
                 if (len > 0) {
-                    try { socket.sendUrgentData(0xFF) } catch (e: Exception) {}
+                    try { socket.sendUrgentData(0xFF) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     out.write(data, 0, len)
                 }
             }
@@ -2990,7 +3020,7 @@ object BypassConfig {
             BypassStrategy.TCP_URGENT_RANDOM -> {
                 if (len > 0) {
                     if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) {
-                        try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(0, 256)) } catch (e: Exception) {}
+                        try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(0, 256)) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                     }
                     out.write(data, 0, len)
                 }
@@ -3053,37 +3083,21 @@ object BypassConfig {
                     out.write(data, 0, len)
                 }
             }
-            BypassStrategy.UDP_XOR_OBFUSCATE -> {
-                val obf = ByteArray(len)
-                for (i in 0 until len) {
-                    obf[i] = (data[i].toInt() xor 0x7A).toByte()
-                }
-                out.write(obf, 0, len)
-            }
             BypassStrategy.TLS_HELLO_JUNK -> {
-                if (len > 100 && data[0] == 0x16.toByte()) {
-                    // Prepend small junk record
-                    val junk = byteArrayOf(0x17.toByte(), 0x03.toByte(), 0x03.toByte(), 0x00.toByte(), 0x05.toByte(), 1, 2, 3, 4, 5)
-                    out.write(junk)
-                    out.flush()
-                    delay(5)
-                    out.write(data, 0, len)
-                } else {
-                    out.write(data, 0, len)
-                }
+                val junk = FakePacketHelper.buildTlsNoise(64)
+                out.write(junk); out.flush(); delay(config.delay1)
+                out.write(data, 0, len)
             }
             BypassStrategy.HTTP_METHOD_FAKE -> {
                 if (len > 10 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
                     val str = String(data, 0, len, java.nio.charset.StandardCharsets.ISO_8859_1)
-                    val fuzzed = str.replace("GET ", "POST ")
-                                    .replace("POST ", "PUT ") // Rotating methods to confuse DPI
+                    val fuzzed = str.replace("GET ", "POST ").replace("POST ", "PUT ")
                     out.write(fuzzed.toByteArray(java.nio.charset.StandardCharsets.ISO_8859_1))
                 } else {
                     out.write(data, 0, len)
                 }
             }
             BypassStrategy.DNS_OVER_QUIC_SIM -> {
-                // High delay and small chunks to simulate DoQ overhead
                 val chunkSize = 64
                 var pos = 0
                 while (pos < len) {
@@ -3095,9 +3109,8 @@ object BypassConfig {
                 }
             }
             BypassStrategy.SNI_REVERSE -> {
-                val sniPos = findSniPosition(data, len, host)
+                val sniPos = BypassConfig.findSniPosition(data, len, host)
                 if (sniPos > 0 && len > sniPos + 10) {
-                    // Split exactly at SNI and reverse parts or send with fake SNI preamble
                     out.write(data, 0, sniPos)
                     out.flush()
                     delay(2)
@@ -3106,15 +3119,71 @@ object BypassConfig {
                     out.write(data, 0, len)
                 }
             }
-            BypassStrategy.UDP_DREC_JUNK -> {
-                // Applied to TCP: just passthrough
+            BypassStrategy.TLS_SNI_OVERLAP -> {
+                val sniPos = BypassConfig.findSniPosition(data, len, host)
+                if (sniPos > 0) {
+                    out.write(data, 0, sniPos)
+                    out.flush()
+                    delay(config.delay1)
+                    TtlHelper.setTtl(socket, config.fakeTtl)
+                    val overlapJunk = ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(16, 64)) { java.util.concurrent.ThreadLocalRandom.current().nextInt(256).toByte() }
+                    out.write(overlapJunk)
+                    out.flush()
+                    TtlHelper.setTtl(socket, 64)
+                    delay(config.delay2)
+                    out.write(data, sniPos, len - sniPos)
+                } else {
+                    out.write(data, 0, len)
+                }
+            }
+            BypassStrategy.HTTP2_PREAMBLE_DESYNC -> {
+                val h2Preface = byteArrayOf(0x50, 0x52, 0x49, 0x20, 0x2a, 0x20, 0x48, 0x54, 0x54, 0x50, 0x2f, 0x32, 0x2e, 0x30, 0x0d, 0x0a, 0x0d, 0x0a, 0x53, 0x4d, 0x0d, 0x0a, 0x0d, 0x0a)
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                out.write(h2Preface)
+                out.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                val split = config.frag1.coerceIn(1, len - 1)
+                out.write(data, 0, split)
+                out.flush()
+                delay(config.delay2)
+                out.write(data, split, len - split)
+            }
+            BypassStrategy.TLS_RECORD_PAD_DYNAMIC -> {
+                var pos = 0
+                while (pos < len) {
+                    val chunk = java.util.concurrent.ThreadLocalRandom.current().nextInt(8, 64).coerceAtMost(len - pos)
+                    val padLen = java.util.concurrent.ThreadLocalRandom.current().nextInt(10, 50)
+                    val totalLen = chunk + padLen
+                    out.write(byteArrayOf(0x17.toByte(), 0x03, 0x03, (totalLen shr 8).toByte(), totalLen.toByte()))
+                    out.write(data, pos, chunk)
+                    val padding = ByteArray(padLen)
+                    out.write(padding)
+                    out.flush()
+                    pos += chunk
+                    delay(config.delay1)
+                }
+            }
+            BypassStrategy.TCP_SYN_ACK_RTT_SPOOF -> {
+                try {
+                    TtlHelper.setTtl(socket, config.fakeTtl)
+                    socket.sendUrgentData(0xFF)
+                    val fake = FakePacketHelper.buildFakeClientHello(host, 80)
+                    out.write(fake)
+                    out.flush()
+                    delay(config.delay1)
+                    TtlHelper.setTtl(socket, 64)
+                } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                val p1 = (len / 3).coerceAtLeast(1)
+                out.write(data, 0, p1)
+                out.flush()
+                delay(config.delay2)
+                out.write(data, p1, len - p1)
+            }
+            BypassStrategy.UDP_DREC_JUNK, BypassStrategy.UDP_NOISE, BypassStrategy.UDP_XOR_OBFUSCATE, BypassStrategy.DIRECT -> {
                 out.write(data, 0, len)
             }
-            BypassStrategy.UDP_NOISE -> {
-                // UDP strategy applied to TCP: just pass through
-                out.write(data, 0, len)
-            }
-            BypassStrategy.DIRECT -> {
+            else -> {
                 out.write(data, 0, len)
             }
         }
@@ -3490,7 +3559,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         for (pc in queue) {
                             if (!pc.isAlive()) {
                                 toRemove.add(pc)
-                                try { pc.socket.close() } catch (e: Exception) {}
+                                try { pc.socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                             }
                         }
                         queue.removeAll(toRemove)
@@ -3565,7 +3634,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     while (it.hasNext()) {
                         val pc = it.next()
                         if (!pc.isAlive()) {
-                            try { pc.socket.close() } catch (e: Exception) {}
+                            try { pc.socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                             it.remove()
                             // Optional: Send a minimal TCP Keep-Alive probe if needed
                             // But usually pc.isAlive() check above with TTL is enough
@@ -3697,7 +3766,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 while (iterator.hasNext()) {
                     val entry = iterator.next()
                     if (now - entry.value.lastActivity > 120000) { // 2 mins idle
-                        try { entry.value.targetSocket.close() } catch (e: Exception) {}
+                        try { entry.value.targetSocket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         iterator.remove()
                     }
                 }
@@ -3814,9 +3883,15 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         
                         val ipBytes = try { java.net.InetAddress.getByName(dstHost).address } catch(e: Exception) { byteArrayOf(8,8,8,8) }
                         val headerBytes = if (ipBytes.size == 4) {
-                             byteArrayOf(0, 0, 0, 1, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], 0, 53)
+                            byteArrayOf(0, 0, 0, 1, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], 0, 53)
+                        } else if (ipBytes.size == 16) {
+                            val buf = ByteArray(22)
+                            buf[0] = 0; buf[1] = 0; buf[2] = 0; buf[3] = 4
+                            System.arraycopy(ipBytes, 0, buf, 4, 16)
+                            buf[20] = 0; buf[21] = 53
+                            buf
                         } else {
-                             byteArrayOf(0, 0, 0, 1, 8, 8, 8, 8, 0, 53)
+                            byteArrayOf(0, 0, 0, 1, 8, 8, 8, 8, 0, 53)
                         }
                         
                         val finalPayload = ByteArray(headerBytes.size + reply.size)
@@ -3949,7 +4024,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         
         connectionPool.values.forEach { queue ->
             queue.forEach { pc ->
-                try { pc.socket.close() } catch (e: Exception) {}
+                try { pc.socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
         connectionPool.clear()
@@ -4074,7 +4149,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 while (clientIn.read(dummy) >= 0) {
                     kotlinx.coroutines.delay(2000)
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             return
         }
         
@@ -4106,7 +4181,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                             target = pc.socket
                             break
                         }
-                        try { pc.socket.close() } catch (e: Exception) {}
+                        try { pc.socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         pc = poolQueue.poll()
                     }
                 }
@@ -4141,7 +4216,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                                         if (deferredSocket.complete(sock)) {
                                             RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
                                         } else {
-                                            try { sock.close() } catch (e: Exception) {}
+                                            try { sock.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                                         }
                                     } catch (e: Exception) {
                                         try { sock.close() } catch (ex: Exception) {}
@@ -4233,7 +4308,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         if (!connectionEstablished || target == null) {
             Log.e("PinkProxy", "All SOCKS5 connection and bypass attempts failed for $host")
             try { clientOut.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0,0,0,0, 0,0)) } catch (ex: Exception) {}
-            try { client.close() } catch (e: Exception) {}
+            try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             return
         }
 
@@ -4245,8 +4320,8 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             val targetIn = target.getInputStream()
             
             coroutineScope {
-                val c2t = launch { proxyStream(clientIn, targetOut, { try { target?.close() } catch (e: Exception) {} }, host, false, activeStrategy) }
-                val t2c = launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) {} }, host, true, activeStrategy) }
+                val c2t = launch { proxyStream(clientIn, targetOut, { try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, false, activeStrategy) }
+                val t2c = launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, true, activeStrategy) }
                 
                 select<Unit> {
                     c2t.onJoin {}
@@ -4257,7 +4332,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         } catch (e: Exception) {
             Log.v("PinkProxy", "SOCKS5 stream closed: ${e.message}")
         } finally {
-            try { target?.close() } catch (e: Exception) {}
+            try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
     }
 
@@ -4288,7 +4363,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                             target = pc.socket
                             break
                         }
-                        try { pc.socket.close() } catch (e: Exception) {}
+                        try { pc.socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         pc = poolQueue.poll()
                     }
                 }
@@ -4323,7 +4398,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                                         if (deferredSocket.complete(sock)) {
                                             RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
                                         } else {
-                                            try { sock.close() } catch (e: Exception) {}
+                                            try { sock.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                                         }
                                     } catch (e: Exception) {
                                         try { sock.close() } catch (ex: Exception) {}
@@ -4379,7 +4454,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     clientOut.flush()
                     try {
                         helloRead = clientIn.read(helloBuffer)
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 }
                 val targetOut = target.getOutputStream()
                 if (helloRead > 0) {
@@ -4391,7 +4466,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     try {
                         target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(4096, 16384)
                         target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(4096, 16384)
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 }
 
                 BypassConfig.reportSuccess(host, activeStrategy)
@@ -4421,7 +4496,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
 
         if (!connectionEstablished || target == null) {
             Log.e("PinkProxy", "All connection and bypass attempts failed for $host")
-            try { client.close() } catch (e: Exception) {}
+            try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             return
         }
 
@@ -4433,8 +4508,8 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
             val targetIn = target.getInputStream()
             
             coroutineScope {
-                val c2t = launch { proxyStream(clientIn, targetOut, { try { target?.close() } catch (e: Exception) {} }, host, false, activeStrategy) }
-                val t2c = launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) {} }, host, true, activeStrategy) }
+                val c2t = launch { proxyStream(clientIn, targetOut, { try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, false, activeStrategy) }
+                val t2c = launch { proxyStream(targetIn, clientOut, { try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } }, host, true, activeStrategy) }
                 
                 select<Unit> {
                     c2t.onJoin {}
@@ -4446,7 +4521,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         } catch (e: Exception) {
             Log.v("PinkProxy", "Stream closed: ${e.message}")
         } finally {
-            try { target?.close() } catch (e: Exception) {}
+            try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
     }
 
@@ -4488,7 +4563,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                             target = pc.socket
                             break
                         }
-                        try { pc.socket.close() } catch (e: Exception) {}
+                        try { pc.socket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         pc = poolQueue.poll()
                     }
                 }
@@ -4523,7 +4598,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                                         if (deferredSocket.complete(sock)) {
                                             RobustResolver.recordIpSuccess(ip.hostAddress ?: "")
                                         } else {
-                                            try { sock.close() } catch (e: Exception) {}
+                                            try { sock.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                                         }
                                     } catch (e: Exception) {
                                         try { sock.close() } catch (ex: Exception) {}
@@ -4582,7 +4657,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     try {
                         target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(4096, 16384)
                         target.sendBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(4096, 16384)
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 }
 
                 BypassConfig.reportSuccess(host, activeStrategy)
@@ -4609,7 +4684,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
 
         if (!connectionEstablished || target == null) {
             Log.e("PinkProxy", "All HTTP connection and bypass attempts failed for $host")
-            try { client.close() } catch (e: Exception) {}
+            try { client.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             return
         }
 
@@ -4624,7 +4699,7 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         } catch (e: Exception) {
             Log.v("PinkProxy", "HTTP stream closed: ${e.message}")
         } finally {
-            try { target?.close() } catch (e: Exception) {}
+            try { target?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
     }    private suspend fun proxyStream(input: InputStream, output: OutputStream, onError: () -> Unit, host: String?, isRecv: Boolean, strategy: BypassStrategy?) {
         val bufSize = if (isRecv) 16384 else 8192

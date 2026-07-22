@@ -272,7 +272,9 @@ object RobustResolver {
         val criticalDomains = listOf(
             "www.youtube.com", "youtube.com", "redirector.googlevideo.com", "googlevideo.com",
             "t.me", "telegram.org", "www.google.com", "google.com", "chatgpt.com",
-            "discord.com", "github.com", "instagram.com", "www.instagram.com"
+            "discord.com", "github.com", "instagram.com", "www.instagram.com",
+            "twitter.com", "x.com", "facebook.com", "vk.com", "whatsapp.net",
+            "tiktok.com", "netflix.com", "api.openai.com", "cdn.discordapp.com"
         )
         Log.i("RobustResolver", "Starting DNS cache preheating for ${criticalDomains.size} critical domains...")
 
@@ -362,7 +364,7 @@ object RobustResolver {
                                 if (toRemoveCount > 0) {
                                     sorted.take(toRemoveCount).forEach { dnsCache.remove(it.key) }
                                 }
-                            } catch (e: Exception) {}
+                            } catch (e: Exception) { android.util.Log.v("RobustResolver", "Ignored: ${e.message}") }
                         }
                     }
                     count++
@@ -457,7 +459,19 @@ object RobustResolver {
         "dns.quad9.net" to listOf("9.9.9.9", "149.112.112.112"),
         "doh.opendns.com" to listOf("208.67.222.222", "208.67.220.220"),
         "bing.com" to listOf("13.107.21.200", "204.79.197.200"),
-        "perplexity.ai" to listOf("104.18.2.133", "104.18.3.133")
+         "perplexity.ai" to listOf("104.18.2.133", "104.18.3.133"),
+        "vk.com" to listOf("87.240.137.158", "87.240.139.158", "87.240.190.56"),
+        "whatsapp.com" to listOf("157.240.1.53", "157.240.22.53"),
+        "whatsapp.net" to listOf("157.240.1.53", "157.240.22.53"),
+        "tiktok.com" to listOf("162.159.137.85", "162.159.138.85"),
+        "cdninstagram.com" to listOf("157.240.1.174", "157.240.22.174"),
+        "fbcdn.net" to listOf("157.240.1.35", "157.240.22.35"),
+        "discordapp.com" to listOf("162.159.138.232", "162.159.135.232"),
+        "discord.gg" to listOf("162.159.137.232", "162.159.138.232"),
+        "notion.so" to listOf("104.18.22.226", "104.18.23.226"),
+        "rutracker.org" to listOf("104.21.32.39", "172.67.182.199"),
+        "proton.me" to listOf("185.70.42.1", "185.70.42.33"),
+        "medium.com" to listOf("162.159.152.4", "162.159.153.4")
     )
 
     private val ipHeatmap = ConcurrentHashMap<String, Int>()
@@ -797,7 +811,7 @@ object RobustResolver {
                     if (ips.isEmpty()) {
                         dnsMode = "Smart DoH"
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) { android.util.Log.v("RobustResolver", "Ignored: ${e.message}") }
             }
         }
     }
@@ -1290,7 +1304,7 @@ object RobustResolver {
                         for (match in dataMatches) {
                             val ip = match.groupValues[1]
                             if (isIpAddress(ip)) {
-                                try { addresses.add(InetAddress.getByName(ip)) } catch (e: Exception) {}
+                                try { addresses.add(InetAddress.getByName(ip)) } catch (e: Exception) { android.util.Log.v("RobustResolver", "Ignored: ${e.message}") }
                             }
                         }
                     }

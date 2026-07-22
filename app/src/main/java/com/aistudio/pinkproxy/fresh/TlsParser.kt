@@ -47,7 +47,6 @@ object TlsParser {
                 if (extType == 0x0000) { // Server Name extension
                     // Check SNI list length
                     if (pos + 1 < extEnd) {
-                        val sniListLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
                         var sniPos = pos + 2
                         
                         // Look for HostName (Type 0)

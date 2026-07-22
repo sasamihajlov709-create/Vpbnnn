@@ -106,6 +106,7 @@ class PinkVpnService : VpnService() {
                 .setSession("PinkProxy")
                 .setMtu(BypassConfig.currentMtu.value)
                 .addAddress("10.0.0.2", 24)
+                .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
 
@@ -115,16 +116,21 @@ class PinkVpnService : VpnService() {
 
             // Route all traffic
             builder.addRoute("0.0.0.0", 0)
+            try {
+                builder.addRoute("::", 0)
+            } catch (e: Exception) {
+                Log.w("PinkVpnService", "Failed to add IPv6 route", e)
+            }
 
             // Exclude or include packages
             if (isExcludeMode) {
                 builder.addDisallowedApplication(packageName)
                 selectedPackages.forEach { pkg ->
-                    try { builder.addDisallowedApplication(pkg) } catch (e: Exception) {}
+                    try { builder.addDisallowedApplication(pkg) } catch (e: Exception) { android.util.Log.v("PinkVpn", "Ignored app config: ${e.message}") }
                 }
             } else {
                 selectedPackages.filter { it != packageName }.forEach { pkg ->
-                    try { builder.addAllowedApplication(pkg) } catch (e: Exception) {}
+                    try { builder.addAllowedApplication(pkg) } catch (e: Exception) { android.util.Log.v("PinkVpn", "Ignored app config: ${e.message}") }
                 }
             }
 
@@ -154,7 +160,14 @@ class PinkVpnService : VpnService() {
             key.setDevice("fd://${vpnInterface.fd}")
             key.setLogLevel("info")
             engine.Engine.insert(key)
-            engine.Engine.start()
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                try {
+                    engine.Engine.start()
+                    Log.i("PinkVpnService", "tun2socks stopped naturally")
+                } catch (e: Exception) {
+                    Log.e("PinkVpnService", "tun2socks error", e)
+                }
+            }
             Log.i("PinkVpnService", "tun2socks started on fd ${vpnInterface.fd}")
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Failed to start tun2socks", e)
