@@ -1,5 +1,8 @@
 package com.aistudio.pinkproxy.fresh
 
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.content.Context
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -79,7 +82,14 @@ object ServiceChecker {
         val proxyResponsive = java.util.concurrent.atomic.AtomicBoolean(true)
         var internetUp = false
 
-        // Baseline check: multiple reliable domains (without proxy)
+        // Baseline check 1: System ConnectivityManager
+        val cm = appContext?.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val activeNetwork = cm?.activeNetwork
+        val capabilities = cm?.getNetworkCapabilities(activeNetwork)
+        val systemInternet = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                            capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        
+        // Baseline check 2: Manual Probing (trust this more for bypass scenarios)
         val baselineDomains = listOf("https://ya.ru", "https://www.google.com/generate_204", "https://www.apple.com/library/test/success.html")
         for (domain in baselineDomains) {
             var conn: HttpURLConnection? = null
@@ -97,28 +107,16 @@ object ServiceChecker {
                 conn.requestMethod = "GET"
                 if (conn.responseCode in 200..499) {
                     internetUp = true
-                    
-                    // Hijack Detection: If google.com resolves to something suspicious
-                    if (domain.contains("google.com")) {
-                        try {
-                            val addr = java.net.InetAddress.getByName("google.com")
-                            val hostName = addr.canonicalHostName.lowercase()
-                            if (hostName.contains(".ru") || hostName.contains("rostelecom") || hostName.contains("mts.ru")) {
-                                ProxyStats.logRecovery("ALERT: DNS Hijacking Detected. Forcing Robust DNS Mode.")
-                                RobustResolver.dnsMode = "Smart DoH" // Force DoH
-                            }
-                        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-                    }
-                    
                     break
                 }
-            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } finally {
-                try { conn?.inputStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-                try { conn?.errorStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-                try { conn?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Baseline ignored: ${e.message}") } finally {
+                try { conn?.disconnect() } catch (e: Exception) {}
             }
         }
-        _internetAvailable.value = internetUp
+        
+        // Final Internet status: either system says yes, or our prober says yes
+        val finalInternet = internetUp || systemInternet
+        _internetAvailable.value = finalInternet
 
         // Deep Proxy Integrity Check
         val relayResponsive = try {

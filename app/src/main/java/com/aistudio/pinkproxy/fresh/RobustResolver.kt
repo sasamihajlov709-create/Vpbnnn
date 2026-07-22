@@ -17,10 +17,11 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -1253,6 +1254,15 @@ object RobustResolver {
         }
     }
 
+    private val dohBootstrapIps = mapOf(
+        "dns.google" to listOf("8.8.8.8", "8.8.4.4"),
+        "cloudflare-dns.com" to listOf("1.1.1.1", "1.0.0.1"),
+        "dns.quad9.net" to listOf("9.9.9.9", "149.112.112.112"),
+        "doh.opendns.com" to listOf("208.67.222.222", "208.67.220.220"),
+        "dns.adguard-dns.com" to listOf("94.140.14.14", "94.140.15.15"),
+        "doh.mullvad.net" to listOf("194.242.2.2")
+    )
+
     @Volatile private var okHttpClient: okhttp3.OkHttpClient? = null
 
     private fun getOkHttpClient(vpnService: VpnService?): okhttp3.OkHttpClient {
@@ -1260,8 +1270,19 @@ object RobustResolver {
         synchronized(this) {
             okHttpClient?.let { return it }
             val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .connectTimeout(7, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(7, java.util.concurrent.TimeUnit.SECONDS)
+                .dns(object : okhttp3.Dns {
+                    override fun lookup(hostname: String): List<InetAddress> {
+                        // Use bootstrap IPs for common DoH providers to avoid recursive lookup loops through the VPN
+                        dohBootstrapIps[hostname]?.let { ips ->
+                            return try {
+                                ips.map { InetAddress.getByName(it) }
+                            } catch (e: Exception) { emptyList() }.ifEmpty { okhttp3.Dns.SYSTEM.lookup(hostname) }
+                        }
+                        return okhttp3.Dns.SYSTEM.lookup(hostname)
+                    }
+                })
                 .socketFactory(object : javax.net.SocketFactory() {
                     override fun createSocket(): Socket {
                         val s = Socket()
@@ -1304,38 +1325,52 @@ object RobustResolver {
 
     private suspend fun queryDohRaw(host: String, dohUrl: String, vpnService: VpnService?): List<InetAddress> {
         return kotlinx.coroutines.withContext(Dispatchers.IO) {
-            try {
-                val client = getOkHttpClient(vpnService)
-                val scramble = java.util.concurrent.ThreadLocalRandom.current().nextInt(1000, 100000)
+            val addresses = java.util.concurrent.ConcurrentHashMap.newKeySet<InetAddress>()
+            
+            // Query A and AAAA in parallel
+            val queryTypes = listOf("A", "AAAA")
+            
+            supervisorScope {
+                queryTypes.forEach { type ->
+                    launch {
+                        try {
+                            val client = getOkHttpClient(vpnService)
+                            val scramble = java.util.concurrent.ThreadLocalRandom.current().nextInt(1000, 100000)
 
-                val request = okhttp3.Request.Builder()
-                    .url("$dohUrl?name=$host&type=A&_v=$scramble")
-                    .header("Accept", "application/dns-json")
-                    .header("User-Agent", userAgents.random())
-                    .build()
+                            val request = okhttp3.Request.Builder()
+                                .url("$dohUrl?name=$host&type=$type&_v=$scramble")
+                                .header("Accept", "application/dns-json")
+                                .header("User-Agent", userAgents.random())
+                                .build()
 
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@withContext emptyList<InetAddress>()
-                    val body = response.body?.string() ?: return@withContext emptyList<InetAddress>()
-                    
-                    val addresses = mutableListOf<InetAddress>()
-                    // Minimal JSON parser for DNS-over-HTTPS (JSON format)
-                    if (body.contains("\"Answer\"")) {
-                        val answerPart = body.substringAfter("\"Answer\"").substringBefore("]")
-                        val dataMatches = "\"data\":\"([^\"]+)\"".toRegex().findAll(answerPart)
-                        for (match in dataMatches) {
-                            val ip = match.groupValues[1]
-                            if (isIpAddress(ip)) {
-                                try { addresses.add(InetAddress.getByName(ip)) } catch (e: Exception) { android.util.Log.v("RobustResolver", "Ignored: ${e.message}") }
+                            client.newCall(request).execute().use { response ->
+                                if (response.isSuccessful) {
+                                    val body = response.body?.string() ?: return@launch
+                                    
+                                    // Robust JSON parsing for DNS-over-HTTPS (JSON format)
+                                    if (body.contains("\"Answer\"")) {
+                                        val answerPart = body.substringAfter("\"Answer\"").substringBefore("]")
+                                        val dataMatches = "\"data\"\\s*:\\s*\"([^\"]+)\"".toRegex().findAll(answerPart)
+                                        for (match in dataMatches) {
+                                            val ip = match.groupValues[1]
+                                            if (isIpAddress(ip)) {
+                                                try { 
+                                                    addresses.add(InetAddress.getByName(ip)) 
+                                                } catch (e: Exception) { 
+                                                    android.util.Log.v("RobustResolver", "Invalid IP in DoH response: $ip") 
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                        } catch (e: Exception) {
+                            android.util.Log.v("RobustResolver", "DoH query failed ($type) for $host via $dohUrl: ${e.message}")
                         }
                     }
-                    addresses
                 }
-            } catch (e: Exception) {
-                Log.e("RobustResolver", "DoH Query Failed for $host via $dohUrl: ${e.message}")
-                emptyList<InetAddress>()
             }
+            addresses.toList()
         }
     }
 }

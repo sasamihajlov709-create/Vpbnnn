@@ -417,8 +417,30 @@ object BypassConfig {
 
     @Volatile var activeVpnService: VpnService? = null
 
-    fun isHostCensored(host: String): Boolean = false
-    fun isHostDirect(host: String): Boolean = false
+    fun isHostCensored(host: String): Boolean {
+        val h = host.lowercase(java.util.Locale.ROOT)
+        return h.contains("youtube") || h.contains("googlevideo") || h.contains("ytimg") ||
+               h.contains("facebook") || h.contains("instagram") || h.contains("twitter") ||
+               h.contains("telegram") || h.contains("t.me") || h.contains("discord") ||
+               h.contains("netflix") || h.contains("openai") || h.contains("chatgpt") ||
+               h.contains("anthropic") || h.contains("medium.com") || h.contains("quora.com")
+    }
+
+    fun isHostDirect(host: String): Boolean {
+        if (host.isEmpty()) return false
+        val h = host.lowercase(java.util.Locale.ROOT)
+        
+        // Local addresses
+        if (h == "localhost" || h == "127.0.0.1" || h == "::1") return true
+        if (h.startsWith("10.") || h.startsWith("192.168.")) return true
+        if (h.startsWith("172.") && h.length >= 7) {
+            val secondOctet = h.substring(4, h.indexOf('.', 4)).toIntOrNull() ?: 0
+            if (secondOctet in 16..31) return true
+        }
+
+        // Region specific or unblocked
+        return h.endsWith(".ru") || h.endsWith(".by") || h.contains("yandex") || h.contains("vk.com") || h.contains("ok.ru")
+    }
     
     fun panicOptimize() {
         rotateGlobalStrategy()
@@ -465,14 +487,14 @@ object BypassConfig {
                 output.flush()
             }
             BypassStrategy.SNI_TRIPLE -> {
-                val split1 = 1
-                val split2 = config.frag1.coerceIn(2, length - 1)
+                val split1 = config.frag1.coerceIn(1, (length - 2).coerceAtLeast(1))
+                val split2 = (split1 + config.frag2).coerceIn(split1 + 1, (length - 1).coerceAtLeast(split1 + 1))
                 output.write(data, 0, split1)
                 output.flush()
                 delay(config.delay1)
                 output.write(data, split1, split2 - split1)
                 output.flush()
-                delay(config.delay1)
+                delay(config.delay2)
                 output.write(data, split2, length - split2)
                 output.flush()
             }
@@ -538,15 +560,41 @@ object BypassConfig {
                 }
             }
             BypassStrategy.SNI_MANGLE -> {
-                // Mix case of the hostname in SNI if possible
-                // This is complex as it requires parsing/rebuilding ClientHello
-                // For now, let's do a simple split with delay which is often what mangle implies in simpler tools
-                val split = config.frag1.coerceIn(1, length - 1)
-                output.write(data, 0, split)
-                output.flush()
-                delay(config.delay1)
-                output.write(data, split, length - split)
-                output.flush()
+                val offset = TlsParser.findSniOffset(data, length, host)
+                if (offset != -1 && offset < length) {
+                    val mangled = data.copyOf()
+                    // Mangle by flipping case of a few characters in the SNI hostname
+                    val hostLen = host?.length ?: (length - offset).coerceAtMost(32)
+                    for (i in 0 until hostLen) {
+                        if (offset + i >= length) break
+                        if (rnd.nextBoolean()) {
+                            val char = mangled[offset + i].toInt().toChar()
+                            if (char in 'a'..'z') {
+                                mangled[offset + i] = (char - 32).toInt().toByte()
+                            } else if (char in 'A'..'Z') {
+                                mangled[offset + i] = (char + 32).toInt().toByte()
+                            }
+                        }
+                    }
+                    
+                    // Split inside the mangled SNI
+                    val split = offset + rnd.nextInt(1, hostLen.coerceAtLeast(2))
+                    val safeSplit = split.coerceIn(1, length - 1)
+                    
+                    output.write(mangled, 0, safeSplit)
+                    output.flush()
+                    delay(config.delay1)
+                    output.write(mangled, safeSplit, length - safeSplit)
+                    output.flush()
+                } else {
+                    // Fallback to simple split
+                    val split = config.frag1.coerceIn(1, (length - 1).coerceAtLeast(1))
+                    output.write(data, 0, split)
+                    output.flush()
+                    delay(config.delay1)
+                    output.write(data, split, length - split)
+                    output.flush()
+                }
             }
             BypassStrategy.TLS_MULTI_FRAG -> {
                 var pos = 0
@@ -690,6 +738,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
 
     private suspend fun handleClient(client: Socket) {
         ProxyStats.updateConnections(1)
+        var targetSocket: Socket? = null
         try {
             client.soTimeout = 15000
             val input = client.getInputStream()
@@ -750,17 +799,17 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             ProxyStats.addTraffic(host)
 
             // Connect to target
-            val targetSocket = Socket()
-            targetSocket.tcpNoDelay = true
-            vpnService.protect(targetSocket)
+            val socket = Socket()
+            targetSocket = socket
+            socket.tcpNoDelay = true
+            vpnService.protect(socket)
             try {
                 withTimeout(7000) {
-                    targetSocket.connect(InetSocketAddress(host, targetPort), 7000)
+                    socket.connect(InetSocketAddress(host, targetPort), 7000)
                 }
             } catch (e: Exception) {
                 output.write(byteArrayOf(5, 1, 0, 1, 0, 0, 0, 0, 0, 0))
                 output.flush()
-                client.close()
                 return
             }
 
@@ -769,89 +818,90 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             output.flush()
 
             // Tunneling with bypass
-            val targetInput = targetSocket.getInputStream()
-            val targetOutput = targetSocket.getOutputStream()
+            val targetInput = socket.getInputStream()
+            val targetOutput = socket.getOutputStream()
 
             val strategy = BypassConfig.getBestStrategyForHost(host)
             val config = BypassConfig.getSessionConfig(host, strategy, BypassConfig.currentRttMs.value)
 
-            coroutineScope {
-                val clientToTarget = launch {
-                    val buffer = ProxyStats.obtain16k()
-                    var firstPacket = true
-                    try {
-                        var len = 0
-                        while (isActive) {
-                            len = input.read(buffer)
-                            if (len == -1) break
-                            
-                            if (firstPacket) {
-                                try {
-                                    BypassConfig.applyBypass(targetSocket, targetOutput, buffer, len, config, host)
-                                } catch (e: Exception) {
-                                    BypassConfig.recordFailure(strategy, host)
-                                    throw e
+            try {
+                coroutineScope {
+                    launch {
+                        val buffer = ProxyStats.obtain16k()
+                        var firstPacket = true
+                        try {
+                            var len = 0
+                            while (isActive) {
+                                len = input.read(buffer)
+                                if (len == -1) break
+                                
+                                if (firstPacket) {
+                                    try {
+                                        BypassConfig.applyBypass(targetSocket, targetOutput, buffer, len, config, host)
+                                    } catch (e: Exception) {
+                                        BypassConfig.recordFailure(strategy, host)
+                                        throw e
+                                    }
+                                    firstPacket = false
+                                } else {
+                                    targetOutput.write(buffer, 0, len)
+                                    targetOutput.flush()
                                 }
-                                firstPacket = false
-                            } else {
-                                targetOutput.write(buffer, 0, len)
-                                targetOutput.flush()
+                                ProxyStats.updateBytes(len.toLong())
                             }
-                            ProxyStats.updateBytes(len.toLong())
+                        } catch (e: Exception) {
+                            // Expected on socket close
+                        } finally {
+                            ProxyStats.release16k(buffer)
+                            try { targetSocket.shutdownOutput() } catch (e: Exception) {}
+                            try { client.shutdownInput() } catch (e: Exception) {}
                         }
-                    } catch (e: Exception) {}
-                    finally { 
-                        ProxyStats.release16k(buffer)
-                        try { targetSocket.shutdownOutput() } catch (e: Exception) {}
-                        try { client.shutdownInput() } catch (e: Exception) {}
-                        if (!firstPacket) { // If we already got response, targetToClient will close
-                             delay(1000)
-                             targetSocket.close()
-                             client.close()
+                    }
+
+                    launch {
+                        val buffer = ProxyStats.obtain16k()
+                        var firstResponse = true
+                        val startTime = System.currentTimeMillis()
+                        try {
+                            var len = 0
+                            while (isActive) {
+                                len = targetInput.read(buffer)
+                                if (len == -1) break
+                                
+                                if (firstResponse) {
+                                    BypassConfig.recordSuccess(strategy, System.currentTimeMillis() - startTime, host)
+                                    firstResponse = false
+                                }
+                                
+                                // Adaptive chunking based on congestion window
+                                val cwnd = ProxyStats.congestionWindow.value * 1024
+                                var sent = 0
+                                while (sent < len) {
+                                    val toSend = (len - sent).coerceAtMost(cwnd)
+                                    output.write(buffer, sent, toSend)
+                                    output.flush()
+                                    sent += toSend
+                                    if (sent < len) delay(1) 
+                                }
+                                
+                                ProxyStats.updateBytes(len.toLong())
+                            }
+                        } catch (e: Exception) {
+                            // Expected on socket close
+                        } finally {
+                            ProxyStats.release16k(buffer)
+                            try { client.shutdownOutput() } catch (e: Exception) {}
+                            try { targetSocket.shutdownInput() } catch (e: Exception) {}
                         }
                     }
                 }
-                val targetToClient = launch {
-                    val buffer = ProxyStats.obtain16k()
-                    var firstResponse = true
-                    val startTime = System.currentTimeMillis()
-                    try {
-                        var len = 0
-                        while (isActive) {
-                            len = targetInput.read(buffer)
-                            if (len == -1) break
-                            
-                            if (firstResponse) {
-                                BypassConfig.recordSuccess(strategy, System.currentTimeMillis() - startTime, host)
-                                firstResponse = false
-                            }
-                            
-                            // Adaptive chunking based on congestion window
-                            val cwnd = ProxyStats.congestionWindow.value * 1024
-                            var sent = 0
-                            while (sent < len) {
-                                val toSend = (len - sent).coerceAtMost(cwnd)
-                                output.write(buffer, sent, toSend)
-                                output.flush()
-                                sent += toSend
-                                if (sent < len) delay(1) 
-                            }
-                            
-                            ProxyStats.updateBytes(len.toLong())
-                        }
-                    } catch (e: Exception) {}
-                    finally { 
-                        ProxyStats.release16k(buffer)
-                        try { client.shutdownOutput() } catch (e: Exception) {}
-                        try { targetSocket.shutdownInput() } catch (e: Exception) {}
-                        client.close()
-                        targetSocket.close() 
-                    }
-                }
+            } catch (e: Exception) {
+                Log.v("PinkProxy", "Relay terminated for $host: ${e.message}")
             }
         } catch (e: Exception) {
             Log.v("PinkProxy", "Client handling error: ${e.message}")
         } finally {
+            try { targetSocket?.close() } catch (e: Exception) {}
             try { client.close() } catch (e: Exception) {}
             ProxyStats.updateConnections(-1)
         }

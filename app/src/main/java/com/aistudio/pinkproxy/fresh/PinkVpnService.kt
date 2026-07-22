@@ -58,6 +58,8 @@ class PinkVpnService : VpnService() {
     fun getServiceScope(): CoroutineScope = serviceScope
     private var sessionScope: CoroutineScope? = null
     private val PROXY_PORT = 18080
+    private var connectivityManager: android.net.ConnectivityManager? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -72,6 +74,35 @@ class PinkVpnService : VpnService() {
         RobustResolver.startBackgroundProber(serviceScope, this)
         ServiceChecker.startChecking(serviceScope, this)
         BypassConfig.startAutonomousOptimizer(serviceScope)
+
+        registerNetworkMonitor()
+    }
+
+    private fun registerNetworkMonitor() {
+        try {
+            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    Log.i("PinkVpnService", "Network available: $network")
+                    RobustResolver.clearCache()
+                    BypassConfig.panicOptimize()
+                }
+
+                override fun onLost(network: android.net.Network) {
+                    Log.i("PinkVpnService", "Network lost: $network")
+                    RobustResolver.clearCache()
+                }
+
+                override fun onCapabilitiesChanged(network: android.net.Network, capabilities: android.net.NetworkCapabilities) {
+                    if (capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        Log.i("PinkVpnService", "Network validated: $network")
+                    }
+                }
+            }
+            connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
+        } catch (e: Exception) {
+            Log.e("PinkVpnService", "Failed to register network monitor", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -256,8 +287,11 @@ class PinkVpnService : VpnService() {
     override fun onDestroy() {
         super.onDestroy()
         stopVpn()
-        proxyServer?.stop()
+        try {
+            networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
+        } catch (e: Exception) {}
         serviceScope.cancel()
         instance = null
+        BypassConfig.activeVpnService = null
     }
 }

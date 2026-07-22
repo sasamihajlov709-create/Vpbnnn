@@ -1,20 +1,29 @@
 # PinkProxy
 
-A modern, fast, and robust local DPI-bypass tool for Android. PinkProxy uses advanced packet fragmentation, SNI mangling, and other heuristics to bypass Deep Packet Inspection systems locally on the device, without relying on external proxy servers for the connection itself.
+A modern, fast, and robust local DPI-bypass tool for Android. PinkProxy uses advanced packet fragmentation, SNI mangling, and other heuristics to bypass Deep Packet Inspection systems locally on the device.
 
 ## Architecture
 
-PinkProxy uses Android's `VpnService` to capture traffic. Rather than a full `tun2socks` implementation, it uses the `setHttpProxy` feature of `VpnService` to direct HTTP/HTTPS traffic to a local proxy server running on the device.
-- **Core bypass logic:** Implemented in `PinkProxyServer.kt`, which mangles traffic according to dynamic strategies.
-- **Local DNS over HTTPS (DoH):** Provided by `RobustResolver.kt`, which ensures DNS queries cannot be hijacked.
-- **Service Checking:** `ServiceChecker.kt` proactively monitors the health of the connection.
+PinkProxy implements a full transparent proxying architecture using Android's `VpnService` and a high-performance `tun2socks` engine.
+- **Traffic Capture:** `VpnService` captures all device traffic (IPv4 and IPv6) and routes it through a TUN interface.
+- **Tun2Socks Engine:** The `engine.Engine` library (Go-based) converts TUN packets into SOCKS5 requests.
+- **Local Bypass Server:** A custom SOCKS5-to-Target bridge (`PinkProxyServer.kt`) performs the actual DPI-bypass maneuvers (fragmentation, SNI splitting, etc.) on the outgoing TCP streams.
+- **Robust DNS:** `RobustResolver.kt` provides multiple DNS-over-HTTPS (DoH) backends with automatic failover and warmup, preventing DNS hijacking and poisoning.
+- **Autonomous Optimization:** `BypassConfig` monitors connection success rates and RTT to dynamically adjust bypass strategies (e.g., switching from SNI split to fake packets if censorship intensifies).
 
-## Current Limitations
+## Key Features
 
-- **Proxy-Based Approach**: Since the bypass relies on `setHttpProxy`, only apps and protocols that respect system proxies (mostly HTTP/HTTPS) are supported. Native apps ignoring the proxy, QUIC, and non-HTTP UDP traffic will either fall back to normal routing or drop depending on the network stack configuration.
-- **Boot Startup Restrictions**: On Android 12+, attempting to autostart the VPN service on boot may fail if the system restricts foreground service starts from the background. The user may need to manually launch the app.
-- **Permissions**: The app uses `QUERY_ALL_PACKAGES` to allow users to select which apps should bypass the VPN. If publishing to Google Play, this permission requires proper declaration and policy compliance.
+- **Transparent Proxying:** Works for all apps, not just those respecting system proxy settings.
+- **Per-App Routing:** Allow or exclude specific applications from the VPN tunnel.
+- **Dynamic Strategies:** Real-time adaptation to network conditions and censorship level.
+- **Diagnostic Mode:** Detailed logging and recovery mechanisms for self-healing connections.
+- **Edge-to-Edge Design:** Modern Material 3 interface with dark mode support.
+
+## Permissions & Policy
+
+- **QUERY_ALL_PACKAGES**: Required for the per-app routing feature to allow users to select applications for inclusion/exclusion. This is a standard requirement for VPN-class applications.
+- **FOREGROUND_SERVICE_SPECIAL_USE**: Used to maintain the VPN connection reliably in the background, categorized under the "specialUse" type as per Android 14 requirements.
 
 ## Compilation
 
-Standard `./gradlew assembleDebug` is supported if Gradle wrapper is present, otherwise use your preferred IDE or CI to build the project.
+Standard Gradle build. Ensure you have the `tun2socks` native library dependency in your `libs.versions.toml`.

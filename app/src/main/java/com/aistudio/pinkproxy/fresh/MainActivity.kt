@@ -1039,6 +1039,16 @@ fun AppFilterCard(context: android.content.Context, onSettingsChanged: () -> Uni
                     color = GentleLightPink
                 )
             }
+
+            if (!isExcludeMode && selectedCount == 0) {
+                Text(
+                    text = "WARNING: No apps selected in Include mode. VPN will not route any traffic.",
+                    color = Color(0xFFE57373),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
         }
     }
 
@@ -1206,6 +1216,7 @@ fun AppSelectionDialog(
                                             selectedSet.add(pkg)
                                             PinkVpnService.selectedPackages.add(pkg)
                                         }
+                                        PinkVpnService.saveFilterSettings(context)
                                         onAppsSelected(PinkVpnService.selectedPackages.size)
                                     }
                                     .padding(horizontal = 16.dp, vertical = 8.dp),
