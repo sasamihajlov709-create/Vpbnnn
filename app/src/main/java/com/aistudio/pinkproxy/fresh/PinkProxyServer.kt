@@ -3852,7 +3852,12 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                         val header = if (ipBytes.size == 4) {
                             byteArrayOf(0, 0, 0, 1, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], (replyPort shr 8).toByte(), replyPort.toByte())
                         } else {
-                            byteArrayOf(0, 0, 0, 1, 0, 0, 0, 0, (replyPort shr 8).toByte(), replyPort.toByte())
+                            val h = ByteArray(22)
+                            h[0] = 0; h[1] = 0; h[2] = 0; h[3] = 4
+                            System.arraycopy(ipBytes, 0, h, 4, 16)
+                            h[20] = (replyPort shr 8).toByte()
+                            h[21] = replyPort.toByte()
+                            h
                         }
                         
                         val finalPayload = ByteArray(header.size + rxPacket.length)
@@ -3968,7 +3973,9 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 if (read <= 0) { client.close(); return }
                 
                 if (headerBuffer[0] == 0x05.toByte()) {
-                    handleSocks5(client, headerBuffer, read, output, input)
+                    val copyBuffer = headerBuffer.copyOf()
+                    BypassConfig.TrafficShaper.releaseBuffer(headerBuffer)
+                    handleSocks5(client, copyBuffer, read, output, input)
                     return
                 }
                 

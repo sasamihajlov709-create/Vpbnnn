@@ -1,5 +1,10 @@
-# Keep attributes necessary for debugging, generics, and signatures
--keepattributes SourceFile,LineNumberTable,Signature,InnerClasses,EnclosingMethod
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+-keep class org.conscrypt.** { *; }
+-dontwarn org.conscrypt.**
+-keep class org.openjsse.** { *; }
+-dontwarn org.openjsse.**
 
-# Keep all classes in our main fresh package to ensure proxy logic, VPN service, and telemetry are intact
--keep class com.aistudio.pinkproxy.fresh.** { *; }
+# Keep SOCKS5 library
+-keep class com.ooimi.library.** { *; }
+-dontwarn com.ooimi.library.**
