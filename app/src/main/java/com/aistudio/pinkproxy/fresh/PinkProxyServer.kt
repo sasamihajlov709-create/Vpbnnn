@@ -4188,12 +4188,6 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
 
                 // Apply bypass desynchronization logic on first payload
                 val targetOut = target.getOutputStream()
-
-
-                clientOut.flush()
-                try {
-                    helloRead = clientIn.read(helloBuffer)
-                } catch (e: Exception) {}
                 if (helloRead > 0) {
                     BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, activeConfig, host)
                 }
@@ -4365,10 +4359,9 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                     }
                 } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
-                // Apply bypass desynchronization logic
+                                // Apply bypass desynchronization logic
                 val targetOut = target.getOutputStream()
-
-
+                clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
                 clientOut.flush()
                 try {
                     helloRead = clientIn.read(helloBuffer)
@@ -4378,10 +4371,6 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 }
                 
                 // Confirm established connection to the local app client only after successful bypass application
-                clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
-
-
-                clientOut.flush()
                 if (activeStrategy == BypassStrategy.TCP_WINDOW_SIZE_CHAOS) {
                     try {
                         target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(4096, 16384)
