@@ -3934,13 +3934,20 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
     fun stop() { 
         ProxyStats.setVpnActive(false)
         try { serverScope.cancel() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-        try { proxyDispatcher.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+
         try { serverSocket?.close(); serverSocket = null } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") } 
         try { udpSocket?.close(); udpSocket = null } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         udpSessions.values.forEach { sess ->
             try { sess.targetSocket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
         udpSessions.clear()
+        
+        connectionPool.values.forEach { queue ->
+            queue.forEach { pc ->
+                try { pc.socket.close() } catch (e: Exception) {}
+            }
+        }
+        connectionPool.clear()
     }
 
     private val MAX_CONCURRENT_CONNECTIONS = 150
@@ -4360,12 +4367,14 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
                                 // Apply bypass desynchronization logic
+                if (helloRead == 0) {
+                    clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+                    clientOut.flush()
+                    try {
+                        helloRead = clientIn.read(helloBuffer)
+                    } catch (e: Exception) {}
+                }
                 val targetOut = target.getOutputStream()
-                clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
-                clientOut.flush()
-                try {
-                    helloRead = clientIn.read(helloBuffer)
-                } catch (e: Exception) {}
                 if (helloRead > 0) {
                     BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, activeConfig, host)
                 }

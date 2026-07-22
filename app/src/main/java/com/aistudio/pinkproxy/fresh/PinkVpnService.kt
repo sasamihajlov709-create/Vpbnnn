@@ -78,11 +78,16 @@ class PinkVpnService : VpnService() {
             saveVpnState(this, false)
             stopVpn()
             _isRunning.value = false
+            stopSelf()
             return START_NOT_STICKY
         }
         if (action == "RESTART" || action == "CHANGE_STRATEGY") {
             serviceScope.launch {
                 ProxyStats.logRecovery("Core System Re-Started")
+            }
+            if (action == "RESTART") {
+                stopVpn()
+                startVpn()
             }
             return START_STICKY
         }
