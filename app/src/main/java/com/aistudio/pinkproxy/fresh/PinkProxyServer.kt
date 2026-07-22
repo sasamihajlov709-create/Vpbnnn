@@ -3801,6 +3801,36 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         }
         
         val payload = data.copyOfRange(headerLen, len)
+        if (dstPort == 443 && BypassConfig.blockQuic) return // Block QUIC to force TCP fallback
+
+        if (dstPort == 53) {
+            val parsedDns = DnsUtils.parseDnsQName(payload)
+            if (parsedDns != null) {
+                serverScope.launch(Dispatchers.IO) {
+                    val ips = RobustResolver.resolve(parsedDns.qname, null)
+                    if (ips.isNotEmpty()) {
+                        val isIpv6 = parsedDns.qtype == 28
+                        val reply = DnsUtils.buildDnsReply(payload, ips.mapNotNull { it.hostAddress }, isIpv6)
+                        
+                        val ipBytes = try { java.net.InetAddress.getByName(dstHost).address } catch(e: Exception) { byteArrayOf(8,8,8,8) }
+                        val headerBytes = if (ipBytes.size == 4) {
+                             byteArrayOf(0, 0, 0, 1, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], 0, 53)
+                        } else {
+                             byteArrayOf(0, 0, 0, 1, 8, 8, 8, 8, 0, 53)
+                        }
+                        
+                        val finalPayload = ByteArray(headerBytes.size + reply.size)
+                        System.arraycopy(headerBytes, 0, finalPayload, 0, headerBytes.size)
+                        System.arraycopy(reply, 0, finalPayload, headerBytes.size, reply.size)
+                        
+                        val outPacket = java.net.DatagramPacket(finalPayload, finalPayload.size, packet.address, packet.port)
+                        udpSocket?.send(outPacket)
+                    }
+                }
+            }
+            return
+        }
+
         val clientKey = "${packet.address.hostAddress}:${packet.port}"
         var session = udpSessions[clientKey]
         
@@ -4151,12 +4181,19 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
                 if (helloRead == 0) {
                     val reply = byteArrayOf(0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0) // bind address dummy
                     clientOut.write(reply)
-                    clientOut.flush()
+    
+                clientOut.flush()
                     helloRead = clientIn.read(helloBuffer)
                 }
 
                 // Apply bypass desynchronization logic on first payload
                 val targetOut = target.getOutputStream()
+
+
+                clientOut.flush()
+                try {
+                    helloRead = clientIn.read(helloBuffer)
+                } catch (e: Exception) {}
                 if (helloRead > 0) {
                     BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, activeConfig, host)
                 }
@@ -4225,12 +4262,6 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
         
         val helloBuffer = BypassConfig.TrafficShaper.acquireBuffer(8192)
         var helloRead = 0
-        try {
-            helloRead = clientIn.read(helloBuffer)
-        } catch (e: Exception) {
-            BypassConfig.TrafficShaper.releaseBuffer(helloBuffer)
-            return
-        }
 
         val maxAttempts = 3
         var attempt = 0
@@ -4336,14 +4367,21 @@ class PinkProxyServer(private val vpnService: android.net.VpnService, private va
 
                 // Apply bypass desynchronization logic
                 val targetOut = target.getOutputStream()
+
+
+                clientOut.flush()
+                try {
+                    helloRead = clientIn.read(helloBuffer)
+                } catch (e: Exception) {}
                 if (helloRead > 0) {
                     BypassConfig.applyBypass(target, targetOut, helloBuffer, helloRead, activeConfig, host)
                 }
                 
                 // Confirm established connection to the local app client only after successful bypass application
                 clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+
+
                 clientOut.flush()
-                
                 if (activeStrategy == BypassStrategy.TCP_WINDOW_SIZE_CHAOS) {
                     try {
                         target.receiveBufferSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(4096, 16384)
