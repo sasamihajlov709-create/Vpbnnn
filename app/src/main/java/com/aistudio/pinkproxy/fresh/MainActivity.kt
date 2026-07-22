@@ -70,6 +70,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import android.net.Uri
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -106,6 +107,8 @@ class MainActivity : ComponentActivity() {
         
         val prefs = getSharedPreferences("pink_proxy_settings", MODE_PRIVATE)
         val autoConnect = prefs.getBoolean("auto_connect_on_launch", true)
+        
+        requestIgnoreBatteryOptimizations()
         
         setContent {
             val isVpnActive by PinkVpnService.isRunning.collectAsStateWithLifecycle(initialValue = false)
@@ -154,6 +157,21 @@ class MainActivity : ComponentActivity() {
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    private fun requestIgnoreBatteryOptimizations() {
+        try {
+            val packageName = packageName
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to request battery optimization exemption", e)
         }
     }
 
@@ -1168,24 +1186,54 @@ fun AppSelectionDialog(
                 }
 
                 // Search
-                TextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
-                    placeholder = { Text("Search apps...", color = GentleLightPink.copy(alpha = 0.5f)) },
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = GentleLightPink.copy(alpha = 0.05f),
-                        unfocusedContainerColor = GentleLightPink.copy(alpha = 0.05f),
-                        focusedIndicatorColor = GentleMediumPink,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = GentleMediumPink,
-                        focusedTextColor = GentleLightPink,
-                        unfocusedTextColor = GentleLightPink
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                )
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Search apps...", color = GentleLightPink.copy(alpha = 0.5f)) },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = GentleLightPink.copy(alpha = 0.05f),
+                            unfocusedContainerColor = GentleLightPink.copy(alpha = 0.05f),
+                            focusedIndicatorColor = GentleMediumPink,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            cursorColor = GentleMediumPink,
+                            focusedTextColor = GentleLightPink,
+                            unfocusedTextColor = GentleLightPink
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
+                    TextButton(onClick = {
+                        if (selectedSet.isEmpty()) {
+                            apps.forEach { 
+                                if (!selectedSet.contains(it.packageName)) {
+                                    selectedSet.add(it.packageName)
+                                    PinkVpnService.selectedPackages.add(it.packageName)
+                                }
+                            }
+                        } else {
+                            selectedSet.clear()
+                            PinkVpnService.selectedPackages.clear()
+                        }
+                        PinkVpnService.saveFilterSettings(context)
+                        onAppsSelected(PinkVpnService.selectedPackages.size)
+                    }) {
+                        Text(
+                            if (selectedSet.isEmpty()) "SELECT ALL" else "CLEAR",
+                            color = GentleMediumPink,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
 
                 if (isLoading) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

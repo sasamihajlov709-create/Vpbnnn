@@ -479,23 +479,35 @@ object BypassConfig {
         // Implementation of advanced bypass strategies
         when (strategy) {
             BypassStrategy.SNI_SPLIT -> {
-                val split = config.frag1.coerceIn(1, length - 1)
-                output.write(data, 0, split)
+                val offset = TlsParser.findSniOffset(data, length, host)
+                val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, length - 1)
+                val safeSplit = split.coerceIn(1, length - 1)
+                output.write(data, 0, safeSplit)
                 output.flush()
                 delay(config.delay1)
-                output.write(data, split, length - split)
+                output.write(data, safeSplit, length - safeSplit)
                 output.flush()
             }
             BypassStrategy.SNI_TRIPLE -> {
-                val split1 = config.frag1.coerceIn(1, (length - 2).coerceAtLeast(1))
-                val split2 = (split1 + config.frag2).coerceIn(split1 + 1, (length - 1).coerceAtLeast(split1 + 1))
-                output.write(data, 0, split1)
+                val offset = TlsParser.findSniOffset(data, length, host)
+                val (s1, s2) = if (offset != -1) {
+                    val part = (host.length / 3).coerceAtLeast(1)
+                    (offset + part) to (offset + 2 * part)
+                } else {
+                    val split1 = config.frag1.coerceIn(1, (length - 2).coerceAtLeast(1))
+                    val split2 = (split1 + config.frag2).coerceIn(split1 + 1, (length - 1).coerceAtLeast(split1 + 1))
+                    split1 to split2
+                }
+                val safeS1 = s1.coerceIn(1, (length - 2).coerceAtLeast(1))
+                val safeS2 = s2.coerceIn(safeS1 + 1, (length - 1).coerceAtLeast(safeS1 + 1))
+                
+                output.write(data, 0, safeS1)
                 output.flush()
                 delay(config.delay1)
-                output.write(data, split1, split2 - split1)
+                output.write(data, safeS1, safeS2 - safeS1)
                 output.flush()
                 delay(config.delay2)
-                output.write(data, split2, length - split2)
+                output.write(data, safeS2, length - safeS2)
                 output.flush()
             }
             BypassStrategy.FAKE_PACKET -> {
