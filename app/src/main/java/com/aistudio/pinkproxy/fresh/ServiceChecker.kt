@@ -129,7 +129,7 @@ object ServiceChecker {
         }
         _proxyHealth.value = relayResponsive
         
-        if (!relayResponsive && internetUp) {
+        if (!relayResponsive && finalInternet) {
             ProxyStats.forceRecovery("Local proxy port $proxyPort unresponsive during check")
         }
 
@@ -154,7 +154,7 @@ object ServiceChecker {
                             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                             
                             val code = connection.responseCode
-                            isUp = (code in 200..499)
+                            isUp = (code in 200..399) // Strictly require successful connection and response, ignoring 4xx which could be block pages
                             
                             val attemptDuration = System.currentTimeMillis() - attemptStart
                             if (isUp) {
@@ -226,7 +226,7 @@ object ServiceChecker {
         _lastCheckTime.value = System.currentTimeMillis()
 
         // Autopilot Prober: If score is very low, force probe
-        if (internetUp && totalWeightedScore < 35f && BypassConfig.isAutoTuning && !isProbing.get()) {
+        if (finalInternet && totalWeightedScore < 35f && BypassConfig.isAutoTuning && !isProbing.get()) {
             val now = System.currentTimeMillis()
             val cooldown = if (BypassConfig.isCharging) 60000L else 180000L // 3m cooldown on battery
             if (now - lastProbeTime > cooldown) { 
@@ -236,7 +236,7 @@ object ServiceChecker {
         }
         
         // Anti-Block: If score is 0 and internet is UP, trigger Panic mode
-        if (internetUp && totalWeightedScore == 0f && results.isNotEmpty()) {
+        if (finalInternet && totalWeightedScore == 0f && results.isNotEmpty()) {
             ProxyStats.logRecovery("CRITICAL: Total Block Detected (Score 0). Triggering Emergency Recovery.")
             BypassConfig.panicOptimize()
             RobustResolver.clearCache()
