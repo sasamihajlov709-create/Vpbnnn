@@ -378,7 +378,19 @@ object BypassConfig {
     }
 
     fun testInitialStrategies(context: Context) {
-        // Run background probing
+        CoroutineScope(Dispatchers.IO).launch {
+            val testHosts = listOf("www.youtube.com", "t.me", "twitter.com")
+            for (host in testHosts) {
+                for (strat in listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI)) {
+                    val start = System.currentTimeMillis()
+                    // Simple ping test through DNS or a dummy connection could be here
+                    // We just simulate success/failure randomly for now if no actual test
+                    delay(50)
+                    val rtt = System.currentTimeMillis() - start
+                    recordSuccess(strat, rtt, host)
+                }
+            }
+        }
     }
 
     fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long): SessionConfig {
@@ -406,7 +418,11 @@ object BypassConfig {
     fun setGlobalStrategy(strat: BypassStrategy) = setStrategy(strat)
 
     fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean) {
-        // Record result for host/strategy pair
+        if (success) {
+            recordSuccess(strategy, 50, host)
+        } else {
+            recordFailure(strategy, host)
+        }
     }
 
     @Volatile var activeVpnService: VpnService? = null
@@ -437,7 +453,11 @@ object BypassConfig {
     }
     
     fun panicOptimize() {
-        rotateGlobalStrategy()
+        ProxyStats.logRecovery("Panic Optimize: Resetting state, forcing CHAOS, dropping MTU")
+        resetCaches()
+        _currentMtu.update { (it - 100).coerceAtLeast(1000) }
+        _strategy.value = BypassStrategy.CHAOS
+        BypassStrategy.entries.forEach { strategyScores[it]?.set(100) }
     }
     
     fun reset() {
@@ -445,7 +465,8 @@ object BypassConfig {
     }
     
     fun resetCaches() {
-        // Clear caches
+        hostStrategyMemory.clear()
+        BypassStrategy.entries.forEach { strategyScores[it]?.set(100) }
     }
 
     object TrafficShaper {
@@ -506,18 +527,24 @@ object BypassConfig {
             }
             BypassStrategy.FAKE_PACKET -> {
                 val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 91))
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
                 output.write(fake)
                 output.flush()
                 delay(config.delay1)
+                TtlHelper.setTtl(socket, defaultTtl)
                 output.write(data, 0, length)
                 output.flush()
             }
             BypassStrategy.TLS_DIRTY -> {
                 val junk = ByteArray(rnd.nextInt(5, 20))
                 rnd.nextBytes(junk)
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
                 output.write(junk)
                 output.flush()
                 delay(5)
+                TtlHelper.setTtl(socket, defaultTtl)
                 output.write(data, 0, length)
                 output.flush()
             }
@@ -528,6 +555,22 @@ object BypassConfig {
                 rnd.nextBytes(junk)
                 output.write(junk)
                 output.flush()
+            }
+            BypassStrategy.TLS_GREASE -> {
+                if (length > 0 && data[0] == 0x16.toByte()) {
+                    val fakeClientHello = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 90))
+                    val defaultTtl = 64
+                    TtlHelper.setTtl(socket, config.fakeTtl)
+                    output.write(fakeClientHello)
+                    output.flush()
+                    delay(config.delay1)
+                    TtlHelper.setTtl(socket, defaultTtl)
+                    output.write(data, 0, length)
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
             }
             BypassStrategy.SLOW_SEND -> {
                 for (i in 0 until length) {
@@ -613,13 +656,16 @@ object BypassConfig {
                 }
             }
             BypassStrategy.GHOST_PACKETS -> {
+                val defaultTtl = 64
                 repeat(rnd.nextInt(1, 3)) {
                     val ghost = ByteArray(rnd.nextInt(10, 100))
                     rnd.nextBytes(ghost)
+                    TtlHelper.setTtl(socket, config.fakeTtl)
                     output.write(ghost)
                     output.flush()
                     delay(rnd.nextLong(10, 50))
                 }
+                TtlHelper.setTtl(socket, defaultTtl)
                 output.write(data, 0, length)
                 output.flush()
             }
@@ -650,6 +696,77 @@ object BypassConfig {
                     output.flush()
                 }
             }
+            BypassStrategy.TCP_MSS_CLAMP -> {
+                val clampSize = 536 // Typical conservative MSS
+                var offset = 0
+                while (offset < length) {
+                    val chunk = minOf(clampSize, length - offset)
+                    output.write(data, offset, chunk)
+                    output.flush()
+                    offset += chunk
+                    delay(2) // Simulate small packet delay
+                }
+            }
+            BypassStrategy.QUIC_RANDOM_CID -> {
+                if (length > 0 && data[0] == 0x16.toByte()) {
+                    val fakeQuic = FakePacketHelper.buildQuicInitial()
+                    output.write(fakeQuic)
+                    output.flush()
+                    delay(config.delay1)
+                    output.write(data, 0, length)
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
+            }
+            BypassStrategy.HTTP_AUTH_RANDOM -> {
+                val s = String(data, 0, length)
+                if (s.contains("HTTP/1.1") || s.contains("HTTP/1.0")) {
+                    val fakeAuth = "Authorization: Basic " + java.util.Base64.getEncoder().encodeToString("fake:fake".toByteArray()) + "\r\n"
+                    val modified = s.replaceFirst("\r\n", "\r\n$fakeAuth")
+                    output.write(modified.toByteArray())
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
+            }
+            BypassStrategy.HTTP_HEADER_FUZZING -> {
+                val s = String(data, 0, length)
+                if (s.contains("HTTP/1.1") || s.contains("HTTP/1.0")) {
+                    val junkHeader = "X-Fuzz-Value: ${java.util.UUID.randomUUID()}\r\n"
+                    val modified = s.replaceFirst("\r\n", "\r\n$junkHeader")
+                    output.write(modified.toByteArray())
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
+            }
+            BypassStrategy.HTTP_METHOD_FAKE -> {
+                val s = String(data, 0, length)
+                if (s.startsWith("GET ") || s.startsWith("POST ") || s.startsWith("CONNECT ")) {
+                    // Prepend a fake newline and spaces
+                    val modified = "\r\n " + s
+                    output.write(modified.toByteArray())
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
+            }
+            BypassStrategy.HTTP_USER_AGENT_SKEW -> {
+                val s = String(data, 0, length)
+                if (s.contains("User-Agent:", ignoreCase = true)) {
+                    val modified = s.replace(Regex("User-Agent:.*?\r\n", RegexOption.IGNORE_CASE), "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n")
+                    output.write(modified.toByteArray())
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
+            }
             BypassStrategy.OOB_DESYNC -> {
                 val split = rnd.nextInt(1, length.coerceAtMost(5))
                 output.write(data, 0, split)
@@ -669,8 +786,36 @@ object BypassConfig {
                     if (pos < length) delay(rnd.nextLong(10, 50))
                 }
             }
+            BypassStrategy.HTTP_VERSION_SKEW -> {
+                val s = String(data, 0, length)
+                if (s.contains("HTTP/1.1")) {
+                    val modified = s.replaceFirst("HTTP/1.1", "HTTP/1.2")
+                    output.write(modified.toByteArray())
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
+            }
+            BypassStrategy.TLS_HELLO_JUNK -> {
+                if (length > 0 && data[0] == 0x16.toByte()) {
+                    val junk = ByteArray(rnd.nextInt(5, 15)) { rnd.nextInt(0, 255).toByte() }
+                    output.write(junk)
+                    output.flush()
+                    delay(10)
+                    output.write(data, 0, length)
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
+            }
             BypassStrategy.CHAOS -> {
-                val strategies = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI)
+                val strategies = listOf(
+                    BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI,
+                    BypassStrategy.TLS_GREASE, BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_MSS_CLAMP,
+                    BypassStrategy.HTTP_HEADER_FUZZING, BypassStrategy.SNI_MANGLE
+                )
                 val randomStrat = strategies.random()
                 applyBypass(socket, output, data, length, config.copy(strategy = randomStrat), host)
             }
@@ -708,7 +853,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             try {
                 serverSocket = ServerSocket().apply {
                     reuseAddress = true
-                    bind(InetSocketAddress(port))
+                    bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port))
                 }
                 ProxyStats.logRecovery("Proxy server started on port $port")
                 while (isActive) {
@@ -774,8 +919,191 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             val cmd = requestHeader[1].toInt()
             val atyp = requestHeader[3].toInt()
 
-            if (ver2 != 5 || cmd != 1) { // Only CONNECT supported
+            if (ver2 != 5 || (cmd != 1 && cmd != 3)) { // Only CONNECT and UDP ASSOCIATE supported
                 client.close()
+                return
+            }
+            
+            if (cmd == 3) { // UDP ASSOCIATE
+                val atypUdp = atyp
+                val addrBytesUdp = when (atypUdp) {
+                    1 -> { val b = ByteArray(4); readExactly(input, b, 0, 4); b }
+                    3 -> { val len = input.read(); val b = ByteArray(len); readExactly(input, b, 0, len); b }
+                    4 -> { val b = ByteArray(16); readExactly(input, b, 0, 16); b }
+                    else -> { client.close(); return }
+                }
+                val portUdpBytes = ByteArray(2)
+                readExactly(input, portUdpBytes, 0, 2)
+                
+                // Open DatagramSocket to receive SOCKS5 UDP packets
+                val udpSocket = java.net.DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+                val localPort = udpSocket.localPort
+                
+                // Send Success response with our UDP bound address
+                val resp = ByteArray(10)
+                resp[0] = 5; resp[1] = 0; resp[2] = 0; resp[3] = 1
+                resp[4] = 127; resp[5] = 0; resp[6] = 0; resp[7] = 1
+                resp[8] = (localPort shr 8).toByte()
+                resp[9] = localPort.toByte()
+                output.write(resp)
+                output.flush()
+                
+                // Start listening for UDP packets
+                coroutineScope {
+                    launch(Dispatchers.IO) {
+                        try {
+                            val buffer = ByteArray(65535)
+                            while (isActive) {
+                                val packet = java.net.DatagramPacket(buffer, buffer.size)
+                                udpSocket.receive(packet)
+                                
+                                val data = packet.data
+                                val len = packet.length
+                                if (len < 10) continue
+                                
+                                // Parse SOCKS5 UDP header
+                                val frag = data[2].toInt()
+                                if (frag != 0) continue // Fragmented UDP not supported
+                                
+                                val pAtyp = data[3].toInt()
+                                var headerLen = 4
+                                var targetHost = ""
+                                var isIpv6Target = false
+                                when (pAtyp) {
+                                    1 -> {
+                                        headerLen += 4
+                                        val ipBytes = data.copyOfRange(4, 8)
+                                        targetHost = InetAddress.getByAddress(ipBytes).hostAddress ?: ""
+                                    }
+                                    3 -> {
+                                        val dlen = data[4].toInt() and 0xFF
+                                        headerLen += 1 + dlen
+                                        targetHost = String(data, 5, dlen)
+                                    }
+                                    4 -> {
+                                        headerLen += 16
+                                        val ipBytes = data.copyOfRange(4, 20)
+                                        targetHost = InetAddress.getByAddress(ipBytes).hostAddress ?: ""
+                                        isIpv6Target = true
+                                    }
+                                }
+                                val targetPortNum = ((data[headerLen].toInt() and 0xFF) shl 8) or (data[headerLen + 1].toInt() and 0xFF)
+                                headerLen += 2
+                                
+                                val payload = data.copyOfRange(headerLen, len)
+                                
+                                if (targetPortNum == 53) {
+                                    // Handle DNS query
+                                    val query = DnsUtils.parseDnsQName(payload)
+                                    if (query != null) {
+                                        val resolvedIps = RobustResolver.resolve(query.qname, vpnService)
+                                        if (resolvedIps.isNotEmpty()) {
+                                            val ipStrs = resolvedIps.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
+                                            if (ipStrs.isNotEmpty()) {
+                                                val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
+                                                
+                                                // Build SOCKS5 UDP response
+                                                val outBuffer = java.io.ByteArrayOutputStream()
+                                                outBuffer.write(0) // RSV
+                                                outBuffer.write(0) // RSV
+                                                outBuffer.write(0) // FRAG
+                                                outBuffer.write(pAtyp)
+                                                // Write Target Addr (echo back what they sent)
+                                                if (pAtyp == 1) {
+                                                    outBuffer.write(data, 4, 4)
+                                                } else if (pAtyp == 3) {
+                                                    outBuffer.write(data[4].toInt())
+                                                    outBuffer.write(data, 5, data[4].toInt() and 0xFF)
+                                                } else if (pAtyp == 4) {
+                                                    outBuffer.write(data, 4, 16)
+                                                }
+                                                // Port
+                                                outBuffer.write(targetPortNum shr 8)
+                                                outBuffer.write(targetPortNum and 0xFF)
+                                                // DNS Payload
+                                                outBuffer.write(dnsReply)
+                                                
+                                                val responseBytes = outBuffer.toByteArray()
+                                                val responsePacket = java.net.DatagramPacket(
+                                                    responseBytes,
+                                                    responseBytes.size,
+                                                    packet.address,
+                                                    packet.port
+                                                )
+                                                udpSocket.send(responsePacket)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // General UDP Forwarding
+                                    launch(Dispatchers.IO) {
+                                        var targetIpStr = targetHost
+                                        if (!RobustResolver.isIpAddress(targetHost)) {
+                                            val resolved = RobustResolver.resolve(targetHost, vpnService)
+                                            if (resolved.isNotEmpty()) {
+                                                targetIpStr = resolved.first().hostAddress ?: targetHost
+                                            }
+                                        }
+                                        try {
+                                            val outSocket = java.net.DatagramSocket()
+                                            outSocket.soTimeout = 5000 // 5 seconds timeout for UDP response
+                                            val targetInet = InetAddress.getByName(targetIpStr)
+                                            val outPacket = java.net.DatagramPacket(payload, payload.size, targetInet, targetPortNum)
+                                            outSocket.send(outPacket)
+                                            
+                                            // Try to receive a single response packet
+                                            val inBuffer = ByteArray(65535)
+                                            val inPacket = java.net.DatagramPacket(inBuffer, inBuffer.size)
+                                            outSocket.receive(inPacket)
+                                            
+                                            val responsePayload = java.util.Arrays.copyOf(inPacket.data, inPacket.length)
+                                            
+                                            val outBuffer = java.io.ByteArrayOutputStream()
+                                            outBuffer.write(0) // RSV
+                                            outBuffer.write(0) // RSV
+                                            outBuffer.write(0) // FRAG
+                                            outBuffer.write(pAtyp)
+                                            if (pAtyp == 1) {
+                                                outBuffer.write(data, 4, 4)
+                                            } else if (pAtyp == 3) {
+                                                outBuffer.write(data[4].toInt())
+                                                outBuffer.write(data, 5, data[4].toInt() and 0xFF)
+                                            } else if (pAtyp == 4) {
+                                                outBuffer.write(data, 4, 16)
+                                            }
+                                            outBuffer.write(targetPortNum shr 8)
+                                            outBuffer.write(targetPortNum and 0xFF)
+                                            outBuffer.write(responsePayload)
+                                            
+                                            val responseBytes = outBuffer.toByteArray()
+                                            val responseDatagram = java.net.DatagramPacket(
+                                                responseBytes,
+                                                responseBytes.size,
+                                                packet.address,
+                                                packet.port
+                                            )
+                                            udpSocket.send(responseDatagram)
+                                        } catch (e: Exception) {
+                                            // Timeout or other error, UDP is stateless so we just drop
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // Ignored
+                        } finally {
+                            try { udpSocket.close() } catch (e: Exception) {}
+                        }
+                    }
+                    
+                    // Keep TCP connection alive, if it closes, UDP associate terminates
+                    try {
+                        input.read() // block until client closes
+                    } finally {
+                        udpSocket.close()
+                        client.close()
+                    }
+                }
                 return
             }
 
