@@ -929,15 +929,205 @@ object BypassConfig {
                     output.flush()
                 }
             }
-            BypassStrategy.CHAOS, BypassStrategy.TLS_EXT_SKEW, BypassStrategy.TCP_FAST_RETRANSMIT_SIM, BypassStrategy.TLS_REC_MANGLE, BypassStrategy.TCP_REORDER_SIM, BypassStrategy.TCP_FAST_OPEN_FAKE, BypassStrategy.TLS_PADDING_RAND, BypassStrategy.TCP_RST_FAKE, BypassStrategy.TCP_TIMESTAMP_MANGLE, BypassStrategy.TLS_CIPHER_SHUFFLE, BypassStrategy.TLS_ALPN_SKEW, BypassStrategy.TLS_EXTENSION_GREASE, BypassStrategy.TCP_REORDER_CHAOS -> {
-                val strategies = listOf(
-                    BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI,
-                    BypassStrategy.TLS_GREASE, BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_MSS_CLAMP,
-                    BypassStrategy.HTTP_HEADER_FUZZING, BypassStrategy.SNI_MANGLE, BypassStrategy.TLS_HELLO_JUNK,
-                    BypassStrategy.OOB_DESYNC, BypassStrategy.TLS_PAD
-                )
-                val randomStrat = strategies.random()
-                applyBypass(socket, output, data, length, config.copy(strategy = randomStrat), host)
+            BypassStrategy.TLS_EXT_SKEW -> {
+                val offset = TlsParser.findSniOffset(data, length, host)
+                val split = if (offset != -1) offset + 2 else (length / 2).coerceAtLeast(1)
+                val safeSplit = split.coerceIn(1, (length - 1).coerceAtLeast(1))
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(data, 0, safeSplit)
+                output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TCP_FAST_RETRANSMIT_SIM -> {
+                val defaultTtl = 64
+                val firstChunk = rnd.nextInt(1, 5).coerceAtMost(length - 1)
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(data, 0, firstChunk)
+                output.flush()
+                delay(2)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TLS_REC_MANGLE -> {
+                if (length > 10 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {
+                    val halfPayload = (length - 5) / 2
+                    if (halfPayload > 0) {
+                        // Record 1
+                        output.write(data[0].toInt())
+                        output.write(data[1].toInt())
+                        output.write(data[2].toInt())
+                        output.write((halfPayload shr 8) and 0xFF)
+                        output.write(halfPayload and 0xFF)
+                        output.write(data, 5, halfPayload)
+                        output.flush()
+                        delay(config.delay1)
+                        // Record 2
+                        val remLen = length - 5 - halfPayload
+                        output.write(data[0].toInt())
+                        output.write(data[1].toInt())
+                        output.write(data[2].toInt())
+                        output.write((remLen shr 8) and 0xFF)
+                        output.write(remLen and 0xFF)
+                        output.write(data, 5 + halfPayload, remLen)
+                        output.flush()
+                    } else {
+                        output.write(data, 0, length)
+                        output.flush()
+                    }
+                } else {
+                    val split = (length / 2).coerceIn(1, length - 1)
+                    output.write(data, 0, split)
+                    output.flush()
+                    delay(config.delay1)
+                    output.write(data, split, length - split)
+                    output.flush()
+                }
+            }
+            BypassStrategy.TCP_REORDER_SIM -> {
+                val split = (length / 2).coerceIn(1, length - 1)
+                val defaultTtl = 64
+                // Send part 2 with fake TTL first
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(data, split, length - split)
+                output.flush()
+                delay(2)
+                // Send part 1 with normal TTL
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, split)
+                output.flush()
+                delay(2)
+                // Send part 2 with normal TTL
+                output.write(data, split, length - split)
+                output.flush()
+            }
+            BypassStrategy.TCP_FAST_OPEN_FAKE -> {
+                val defaultTtl = 64
+                val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(20, 50))
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake, 0, fake.size.coerceAtMost(30))
+                output.flush()
+                delay(3)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TLS_PADDING_RAND -> {
+                output.write(data, 0, length)
+                output.flush()
+                val padSize = rnd.nextInt(16, 128)
+                val pad = ByteArray(padSize) { rnd.nextInt(0, 255).toByte() }
+                output.write(pad)
+                output.flush()
+            }
+            BypassStrategy.TCP_RST_FAKE -> {
+                val defaultTtl = 64
+                val rstPayload = byteArrayOf(0x52, 0x53, 0x54, 0x00, 0x00, 0x00)
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(rstPayload)
+                output.flush()
+                delay(2)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TCP_TIMESTAMP_MANGLE -> {
+                try {
+                    socket.sendUrgentData(rnd.nextInt(1, 255))
+                } catch (e: Exception) {}
+                val split = (length / 3).coerceIn(1, length - 1)
+                output.write(data, 0, split)
+                output.flush()
+                delay(config.delay1)
+                output.write(data, split, length - split)
+                output.flush()
+            }
+            BypassStrategy.TLS_CIPHER_SHUFFLE -> {
+                val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 80))
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake)
+                output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TLS_ALPN_SKEW -> {
+                val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(30, 70))
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake)
+                output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TLS_EXTENSION_GREASE -> {
+                val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(50, 100))
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake)
+                output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TCP_REORDER_CHAOS -> {
+                val p1 = length / 3
+                val p2 = (2 * length) / 3
+                val safeP1 = p1.coerceIn(1, (length - 2).coerceAtLeast(1))
+                val safeP2 = p2.coerceIn(safeP1 + 1, (length - 1).coerceAtLeast(safeP1 + 1))
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(data, safeP2, length - safeP2)
+                output.flush()
+                delay(2)
+                TtlHelper.setTtl(socket, defaultTtl)
+                output.write(data, 0, safeP1)
+                output.flush()
+                delay(config.delay1)
+                output.write(data, safeP1, safeP2 - safeP1)
+                output.flush()
+                delay(config.delay2)
+                output.write(data, safeP2, length - safeP2)
+                output.flush()
+            }
+            BypassStrategy.CHAOS -> {
+                val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 90))
+                val defaultTtl = 64
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake)
+                output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, defaultTtl)
+
+                val offset = TlsParser.findSniOffset(data, length, host)
+                val (s1, s2) = if (offset != -1) {
+                    val part = (host.length / 3).coerceAtLeast(1)
+                    (offset + part) to (offset + 2 * part)
+                } else {
+                    val split1 = config.frag1.coerceIn(1, (length - 2).coerceAtLeast(1))
+                    val split2 = (split1 + config.frag2).coerceIn(split1 + 1, (length - 1).coerceAtLeast(split1 + 1))
+                    split1 to split2
+                }
+                val safeS1 = s1.coerceIn(1, (length - 2).coerceAtLeast(1))
+                val safeS2 = s2.coerceIn(safeS1 + 1, (length - 1).coerceAtLeast(safeS1 + 1))
+
+                output.write(data, 0, safeS1)
+                output.flush()
+                delay(config.delay1)
+                output.write(data, safeS1, safeS2 - safeS1)
+                output.flush()
+                delay(config.delay2)
+                output.write(data, safeS2, length - safeS2)
+                output.flush()
             }
             else -> {
                 // Default fallback: simple split
