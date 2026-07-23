@@ -231,6 +231,8 @@ object HostClassifier {
 
 data class SessionConfig(val strategy: BypassStrategy, val frag1: Int, val frag2: Int, val frag3: Int, val delay1: Long, val delay2: Long, val fakeTtl: Int)
 
+data class StrategyMetric(val strategy: BypassStrategy, val score: Int, val successes: Long, val failures: Long, val avgRtt: Long)
+
 object BypassConfig {
     private val _strategy = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
@@ -240,6 +242,8 @@ object BypassConfig {
 
     private val strategyScores = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     private val hostStrategyMemory = ConcurrentHashMap<String, BypassStrategy>()
+    private val hostBlacklist = ConcurrentHashMap<String, MutableMap<BypassStrategy, Long>>()
+    private val strategyStats = ConcurrentHashMap<BypassStrategy, Triple<Long, Long, Long>>() // Successes, Failures, Total RTT
 
     private val _currentRttMs = MutableStateFlow(50L)
     val currentRttMs: StateFlow<Long> = _currentRttMs.asStateFlow()
@@ -269,7 +273,10 @@ object BypassConfig {
     var isCharging = true
 
     init {
-        BypassStrategy.entries.forEach { strategyScores[it] = AtomicInteger(100) }
+        BypassStrategy.entries.forEach { 
+            strategyScores[it] = AtomicInteger(100)
+            strategyStats[it] = Triple(0L, 0L, 0L)
+        }
     }
 
     fun loadTuningSettings(context: Context) {
@@ -316,24 +323,38 @@ object BypassConfig {
     fun getBestStrategyForHost(host: String): BypassStrategy {
         if (!isAutoTuning) return _strategy.value
         
+        val now = System.currentTimeMillis()
+        val blacklisted = hostBlacklist[host]
+        
         hostStrategyMemory[host]?.let { remembered ->
-            if ((strategyScores[remembered]?.get() ?: 0) > 50) return remembered
+            if (blacklisted?.get(remembered)?.let { now < it } == true) {
+                hostStrategyMemory.remove(host)
+            } else if ((strategyScores[remembered]?.get() ?: 0) > 50) {
+                return remembered
+            }
         }
 
         val entries = strategyScores.entries.toList()
-        val totalScore = entries.sumOf { it.value.get().coerceAtLeast(1) }
-        if (totalScore == 0) return BypassStrategy.SNI_SPLIT
+        val validEntries = entries.filter { entry ->
+            val blacklistedUntil = blacklisted?.get(entry.key) ?: 0L
+            now >= blacklistedUntil
+        }
         
+        if (validEntries.isEmpty()) return BypassStrategy.SNI_SPLIT
+
+        val totalScore = validEntries.sumOf { it.value.get().coerceAtLeast(1) }
         var random = ThreadLocalRandom.current().nextInt(totalScore)
-        for (entry in entries) {
+        for (entry in validEntries) {
             random -= entry.value.get().coerceAtLeast(1)
             if (random <= 0) return entry.key
         }
-        return BypassStrategy.SNI_SPLIT
+        return validEntries.firstOrNull()?.key ?: BypassStrategy.SNI_SPLIT
     }
 
     fun rotateGlobalStrategy() {
-        val best = strategyScores.entries.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
+        val best = strategyScores.entries
+            .filter { it.key != BypassStrategy.DIRECT }
+            .maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
         _strategy.value = best
         ProxyStats.logRecovery("Strategy rotated to best: ${best.name}")
     }
@@ -341,8 +362,13 @@ object BypassConfig {
     fun startAutonomousOptimizer(scope: CoroutineScope) {
         scope.launch {
             while (isActive) {
-                delay(30000)
+                delay(45000)
                 performSelfHealing()
+                // Periodic cache cleanup
+                if (ThreadLocalRandom.current().nextInt(100) < 10) {
+                    hostStrategyMemory.clear()
+                    if (hostBlacklist.size > 1000) hostBlacklist.clear()
+                }
             }
         }
     }
@@ -353,22 +379,38 @@ object BypassConfig {
             TrafficShaper.updateRtt(rtt)
         }
         
-        strategyScores[strat]?.addAndGet(5)?.let { 
-            if (it > 500) strategyScores[strat]?.set(500)
+        strategyScores[strat]?.addAndGet(if (rtt < 300) 10 else 5)?.let { 
+            if (it > 1000) strategyScores[strat]?.set(1000)
         }
 
-        host?.let { hostStrategyMemory[it] = strat }
+        host?.let { 
+            hostStrategyMemory[it] = strat 
+            hostBlacklist[it]?.remove(strat)
+        }
+        
+        strategyStats[strat]?.let { (s, f, t) ->
+            strategyStats[strat] = Triple(s + 1, f, t + rtt)
+        }
     }
 
     fun recordSuccess(strat: BypassStrategy, rtt: Long, context: Context?) = recordSuccess(strat, rtt, null as String?)
 
     fun recordFailure(strat: BypassStrategy, host: String?) {
         ProxyStats.recordCensorshipEvent(true)
-        strategyScores[strat]?.addAndGet(-15)?.let {
+        strategyScores[strat]?.addAndGet(-25)?.let {
             if (it < 1) strategyScores[strat]?.set(1)
         }
         
-        host?.let { if (hostStrategyMemory[it] == strat) hostStrategyMemory.remove(it) }
+        host?.let { 
+            if (hostStrategyMemory[it] == strat) hostStrategyMemory.remove(it)
+            
+            val blacklist = hostBlacklist.getOrPut(it) { ConcurrentHashMap() }
+            blacklist[strat] = System.currentTimeMillis() + 600000 // 10 min
+        }
+        
+        strategyStats[strat]?.let { (s, f, t) ->
+            strategyStats[strat] = Triple(s, f + 1, t)
+        }
     }
 
     fun recordFailure(strat: BypassStrategy, isCritical: Boolean, context: Context?) = recordFailure(strat, null as String?)
@@ -500,11 +542,17 @@ object BypassConfig {
     }
     
     fun panicOptimize() {
-        ProxyStats.logRecovery("Panic Optimize: Resetting state, forcing CHAOS, dropping MTU")
+        val oldMtu = _currentMtu.value
+        val newMtu = if (oldMtu > 1300) 1280 else if (oldMtu > 1200) 1100 else 1000
+        
+        ProxyStats.logRecovery("Panic Optimize: MTU $oldMtu -> $newMtu, Resetting Scores, Forcing Tournament")
+        
+        _currentMtu.value = newMtu
         resetCaches()
-        _currentMtu.update { (it - 100).coerceAtLeast(1000) }
-        _strategy.value = BypassStrategy.CHAOS
+        
+        // Force a tournament to find what works in this environment
         BypassStrategy.entries.forEach { strategyScores[it]?.set(100) }
+        ServiceChecker.runActiveProbing(null)
     }
     
     fun reset() {
@@ -514,6 +562,15 @@ object BypassConfig {
     fun resetCaches() {
         hostStrategyMemory.clear()
         BypassStrategy.entries.forEach { strategyScores[it]?.set(100) }
+    }
+
+    fun getStrategyMetrics(): List<StrategyMetric> {
+        return BypassStrategy.entries.map { strat ->
+            val score = strategyScores[strat]?.get() ?: 0
+            val (s, f, t) = strategyStats[strat] ?: Triple(0L, 0L, 0L)
+            val avgRtt = if (s > 0) t / s else 0L
+            StrategyMetric(strat, score, s, f, avgRtt)
+        }.sortedByDescending { it.score }
     }
 
     object TrafficShaper {
@@ -592,15 +649,12 @@ object BypassConfig {
                 output.flush()
             }
             BypassStrategy.TLS_DIRTY -> {
-                val junk = ByteArray(rnd.nextInt(5, 20))
-                rnd.nextBytes(junk)
-                val defaultTtl = 64
-                TtlHelper.setTtl(socket, config.fakeTtl)
-                output.write(junk)
+                output.write(data, 0, length)
                 output.flush()
                 delay(5)
-                TtlHelper.setTtl(socket, defaultTtl)
-                output.write(data, 0, length)
+                // Append some "dirty" bytes (Application Data type but randomized)
+                val junk = ByteArray(rnd.nextInt(16, 64)) { 0x17.toByte() } 
+                output.write(junk)
                 output.flush()
             }
             BypassStrategy.TLS_PAD -> {
@@ -628,10 +682,13 @@ object BypassConfig {
                 }
             }
             BypassStrategy.SLOW_SEND -> {
-                for (i in 0 until length) {
-                    output.write(data[i].toInt())
+                var pos = 0
+                while (pos < length) {
+                    val size = rnd.nextInt(1, 3).coerceAtMost(length - pos)
+                    output.write(data, pos, size)
                     output.flush()
-                    delay(rnd.nextLong(5, 20))
+                    pos += size
+                    delay(rnd.nextLong(10, 100))
                 }
             }
             BypassStrategy.TCP_OOB_DESYNC -> {
@@ -1097,6 +1154,39 @@ object BypassConfig {
                 output.flush()
                 delay(config.delay2)
                 output.write(data, safeP2, length - safeP2)
+                output.flush()
+            }
+            BypassStrategy.TCP_ZERO_WINDOW -> {
+                var pos = 0
+                while (pos < length) {
+                    val size = rnd.nextInt(1, 15).coerceAtMost(length - pos)
+                    output.write(data, pos, size)
+                    output.flush()
+                    pos += size
+                    if (pos < length) delay(rnd.nextLong(10, 80))
+                }
+            }
+            BypassStrategy.TLS_REHANDSHAKE_FAKE -> {
+                output.write(data, 0, length)
+                output.flush()
+                delay(config.delay1)
+                val helloReq = byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00)
+                output.write(helloReq)
+                output.flush()
+            }
+            BypassStrategy.HTTP_METHOD_FAKE -> {
+                if (length > 5 && (data[0] == 'G'.toByte() || data[0] == 'P'.toByte())) {
+                    val raw = String(data, 0, length)
+                    val mod = when {
+                        raw.startsWith("GET ") -> "gEt " + raw.substring(4)
+                        raw.startsWith("POST ") -> "pOsT " + raw.substring(5)
+                        raw.startsWith("HEAD ") -> "hEaD " + raw.substring(5)
+                        else -> raw
+                    }
+                    output.write(mod.toByteArray())
+                } else {
+                    output.write(data, 0, length)
+                }
                 output.flush()
             }
             BypassStrategy.CHAOS -> {

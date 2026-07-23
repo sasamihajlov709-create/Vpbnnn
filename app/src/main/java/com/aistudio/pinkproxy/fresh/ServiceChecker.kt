@@ -226,20 +226,25 @@ object ServiceChecker {
         _lastCheckTime.value = System.currentTimeMillis()
 
         // Autopilot Prober: If score is very low, force probe
-        if (finalInternet && totalWeightedScore < 35f && BypassConfig.isAutoTuning && !isProbing.get()) {
+        if (finalInternet && totalWeightedScore < 45f && BypassConfig.isAutoTuning && !isProbing.get()) {
             val now = System.currentTimeMillis()
-            val cooldown = if (BypassConfig.isCharging) 60000L else 180000L // 3m cooldown on battery
+            val cooldown = if (BypassConfig.isCharging) 45000L else 120000L // Faster on charging
             if (now - lastProbeTime > cooldown) { 
                 lastProbeTime = now
+                ProxyStats.logRecovery("Autopilot: Connectivity score dropping ($totalWeightedScore), launching tournament...")
                 appContext?.let { runActiveProbing(it) }
             }
         }
         
-        // Anti-Block: If score is 0 and internet is UP, trigger Panic mode
-        if (finalInternet && totalWeightedScore == 0f && results.isNotEmpty()) {
-            ProxyStats.logRecovery("CRITICAL: Total Block Detected (Score 0). Triggering Emergency Recovery.")
-            BypassConfig.panicOptimize()
-            RobustResolver.clearCache()
+        // Anti-Block: If score is critically low and internet is UP
+        if (finalInternet && totalWeightedScore < 15f && results.isNotEmpty()) {
+            val now = System.currentTimeMillis()
+            if (now - lastProbeTime > 60000) { // Throttle panic
+                ProxyStats.logRecovery("CRITICAL: Severe degradation (Score $totalWeightedScore). Triggering Emergency Recovery.")
+                BypassConfig.panicOptimize()
+                RobustResolver.clearCache()
+                lastProbeTime = now
+            }
         }
     }
 
@@ -370,83 +375,90 @@ object ServiceChecker {
         _statuses.value = emptyList()
     }
 
-    fun runActiveProbing(context: android.content.Context) {
+    fun runActiveProbing(context: android.content.Context?) {
+        val actualContext = context ?: appContext ?: return
         if (!isProbing.compareAndSet(false, true)) return
         _isProbingState.value = true
         val scope = internalScope ?: CoroutineScope(Dispatchers.IO + SupervisorJob())
         
-        ProxyStats.logRecovery("Autopilot: Launching Parallel Strategy Tournament (Fast Race)...")
+        ProxyStats.logRecovery("Autopilot: Launching Parallel Strategy Tournament (Advanced Race)...")
         
-        val testHost = "googlevideo.com"
+        val testHosts = listOf("googlevideo.com", "api.telegram.org", "discord.com")
         
         scope.launch(Dispatchers.IO) {
             val originalStrategy = BypassConfig.strategy.value
             val strategiesToTest = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT }
             
-            val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Pair<BypassStrategy, Long>>()
-            val jobs = strategiesToTest.map { strategy ->
+            val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
+            
+            val strategyJobs = strategiesToTest.map { strategy ->
                 launch {
-                    var socket: java.net.Socket? = null
-                    try {
-                        val start = System.currentTimeMillis()
-                        val ips = RobustResolver.resolve(testHost, BypassConfig.activeVpnService)
-                        if (ips.isNotEmpty()) {
-                            socket = java.net.Socket()
-                            BypassConfig.activeVpnService?.protect(socket)
-                            socket.soTimeout = 1500
-                            withTimeout(3500) {
-                                socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
-                                val hello = FakePacketHelper.buildFakeClientHello(testHost, java.util.concurrent.ThreadLocalRandom.current().nextInt(40, 91))
-                                BypassConfig.applyBypass(
-                                    socket, 
-                                    socket.getOutputStream(), 
-                                    hello, 
-                                    hello.size, 
-                                    BypassConfig.getSessionConfig(testHost, strategy, 100L), 
-                                    testHost
-                                )
-                                socket.getOutputStream().flush()
-                                val response = ByteArray(5)
-                                val readCount = socket.getInputStream().read(response)
-                                if (readCount >= 1) {
-                                    // Verify it's a valid TLS ServerHello or at least Handshake (0x16)
-                                    // to prevent fake DPI block pages from being counted as success
-                                    val isTlsResponse = (response[0] == 0x16.toByte())
-                                    if (isTlsResponse) {
-                                        val duration = System.currentTimeMillis() - start
-                                        resultsChannel.add(strategy to duration)
-                                        BypassConfig.recordStrategyResult(testHost, strategy, true)
-                                        BypassConfig.recordSuccess(strategy, duration, context)
-                                        ProxyStats.logRecovery("Tournament: ${strategy.name} completed in ${duration}ms")
-                                    } else {
-                                        BypassConfig.recordStrategyResult(testHost, strategy, false)
-                                        BypassConfig.recordFailure(strategy, false, context)
-                                        ProxyStats.logRecovery("Tournament: ${strategy.name} failed (Invalid response, possible DPI injection)")
+                    var successCount = 0
+                    var totalDuration = 0L
+                    
+                    for (host in testHosts) {
+                        var socket: java.net.Socket? = null
+                        try {
+                            val start = System.currentTimeMillis()
+                            val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
+                            if (ips.isNotEmpty()) {
+                                socket = java.net.Socket()
+                                BypassConfig.activeVpnService?.protect(socket)
+                                socket.soTimeout = 1500
+                                withTimeout(2500) {
+                                    socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
+                                    val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
+                                    BypassConfig.applyBypass(
+                                        socket, 
+                                        socket.getOutputStream(), 
+                                        hello, 
+                                        hello.size, 
+                                        BypassConfig.getSessionConfig(host, strategy, 150L), 
+                                        host
+                                    )
+                                    socket.getOutputStream().flush()
+                                    val response = ByteArray(5)
+                                    val readCount = socket.getInputStream().read(response)
+                                    if (readCount >= 1 && response[0] == 0x16.toByte()) {
+                                        successCount++
+                                        totalDuration += (System.currentTimeMillis() - start)
                                     }
                                 }
                             }
+                        } catch (e: Exception) {
+                            // Ignored failure for this host
+                        } finally {
+                            try { socket?.close() } catch (e: Exception) {}
                         }
-                    } catch (e: Exception) {
-                        BypassConfig.recordStrategyResult(testHost, strategy, false)
-                        BypassConfig.recordFailure(strategy, false, context)
-                    } finally {
-                        try { socket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                        if (successCount == 0 && host == testHosts.first()) break // Fast fail if first host fails
+                    }
+                    
+                    if (successCount > 0) {
+                        val avgDuration = totalDuration / successCount
+                        resultsChannel.add(Triple(strategy, avgDuration, successCount))
+                        BypassConfig.recordStrategyResult(testHosts.first(), strategy, true)
+                        ProxyStats.logRecovery("Tournament: ${strategy.name} scored $successCount/${testHosts.size} (avg ${avgDuration}ms)")
+                    } else {
+                        BypassConfig.recordStrategyResult(testHosts.first(), strategy, false)
                     }
                 }
             }
             
-            // Wait for tournament to complete (up to 4.5 seconds maximum)
-            withTimeoutOrNull(4500) {
-                jobs.forEach { it.join() }
+            // Wait for tournament to complete
+            withTimeoutOrNull(6000) {
+                strategyJobs.forEach { it.join() }
             }
             
-            val best = resultsChannel.sortedBy { it.second }.firstOrNull()
+            val best = resultsChannel
+                .sortedWith(compareByDescending<Triple<BypassStrategy, Long, Int>> { it.third }.thenBy { it.second })
+                .firstOrNull()
+                
             if (best != null) {
                 BypassConfig.setStrategy(best.first)
-                ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} in ${best.second}ms!")
+                ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} (${best.third}/${testHosts.size} hosts ok)!")
             } else {
                 BypassConfig.setStrategy(originalStrategy)
-                ProxyStats.logRecovery("Autopilot: No strategy bypassed DPI. Restored ${originalStrategy.name}")
+                ProxyStats.logRecovery("Autopilot: No strategy surpassed original. Restored ${originalStrategy.name}")
             }
             
             isProbing.set(false)

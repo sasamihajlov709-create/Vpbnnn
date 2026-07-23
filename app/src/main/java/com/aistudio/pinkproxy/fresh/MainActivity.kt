@@ -249,7 +249,8 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
     var showStrategyMenu by remember { mutableStateOf(false) }
     
     var showDiagnostics by remember { mutableStateOf(false) }
-    var showStrategy by remember { mutableStateOf(false) }
+    var showStrategyStats by remember { mutableStateOf(false) }
+    var showStrategyConfig by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     
     var sessionTime by remember { mutableStateOf(0L) }
@@ -395,7 +396,8 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                         val intent = Intent(context, PinkVpnService::class.java).apply { action = "RESTART" }
                         androidx.core.content.ContextCompat.startForegroundService(context, intent)
                     }
-                    CompactActionButton("FLUSH DNS", Modifier.weight(1f)) { RobustResolver.clearCache() }
+                    CompactActionButton("STATS", Modifier.weight(1f)) { showStrategyStats = true }
+                    CompactActionButton("LOGS", Modifier.weight(1f)) { showLogs = true }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -428,8 +430,8 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                 ExpandableSection(
                     title = "STRATEGY CONFIG",
                     icon = Icons.Default.Settings,
-                    isExpanded = showStrategy,
-                    onToggle = { showStrategy = !showStrategy }
+                    isExpanded = showStrategyConfig,
+                    onToggle = { showStrategyConfig = !showStrategyConfig }
                 ) {
                     Column(modifier = Modifier.padding(top = 8.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -596,6 +598,9 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                         }
                     }
                 }
+            }
+            if (showStrategyStats) {
+                StrategyStatsDialog { showStrategyStats = false }
             }
         }
     }
@@ -2083,5 +2088,159 @@ fun ExpertSettingsCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun StrategyStatsDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var metrics by remember { mutableStateOf(BypassConfig.getStrategyMetrics()) }
+    
+    // Refresh periodically
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(2000)
+            metrics = BypassConfig.getStrategyMetrics()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.85f)
+                .clip(RoundedCornerShape(24.dp))
+                .border(1.dp, GentleMediumPink.copy(alpha = 0.2f), RoundedCornerShape(24.dp)),
+            color = PureBlack
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "STRATEGY TOURNAMENT BOARD",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = GentleLightPink
+                        )
+                        Text(
+                            text = "Аналитика обхода DPI в реальном времени",
+                            fontSize = 11.sp,
+                            color = GentleLightPink.copy(alpha = 0.5f)
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Cancel, null, tint = GentleMediumPink)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(metrics) { metric ->
+                        StrategyMetricItem(metric)
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Button(
+                    onClick = { ServiceChecker.runActiveProbing(context) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.2f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("RUN FAST TOURNAMENT RACE", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StrategyMetricItem(metric: StrategyMetric) {
+    val scoreColor = when {
+        metric.score > 150 -> Color(0xFF81C784)
+        metric.score > 80 -> Color(0xFFFFF176)
+        else -> Color(0xFFE57373)
+    }
+    
+    Surface(
+        color = GentleLightPink.copy(alpha = 0.05f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = metric.strategy.name.replace("_", " "),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GentleLightPink
+                )
+                Surface(
+                    color = scoreColor.copy(alpha = 0.2f),
+                    shape = CircleShape,
+                    modifier = Modifier.size(width = 48.dp, height = 20.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "${metric.score}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = scoreColor
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                MetricSmallDetail("SUCCESS", "${metric.successes}", Color(0xFF81C784))
+                MetricSmallDetail("FAIL", "${metric.failures}", Color(0xFFE57373))
+                MetricSmallDetail("AVG RTT", "${metric.avgRtt}ms", GentleLightPink.copy(alpha = 0.7f))
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Success rate bar
+            val total = (metric.successes + metric.failures).coerceAtLeast(1)
+            val rate = (metric.successes.toFloat() / total.toFloat())
+            LinearProgressIndicator(
+                progress = { rate },
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
+                color = scoreColor,
+                trackColor = GentleLightPink.copy(alpha = 0.1f)
+            )
+        }
+    }
+}
+
+@Composable
+fun MetricSmallDetail(label: String, value: String, color: Color) {
+    Column {
+        Text(label, fontSize = 8.sp, fontWeight = FontWeight.Bold, color = GentleLightPink.copy(alpha = 0.4f))
+        Text(value, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = color)
     }
 }
