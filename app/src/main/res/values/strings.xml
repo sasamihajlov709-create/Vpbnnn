@@ -11,7 +11,7 @@
     <string name="stat_throughput">Throughput</string>
     <string name="unit_ms">ms</string>
     <string name="msg_optimize_battery">OPTIMIZE BATTERY USAGE FOR STABILITY</string>
-    <string name="vpn_service_description">Fast and secure HTTP proxy tunnel.</string>
+    <string name="vpn_service_description">Fast and secure DPI bypass VPN tunnel.</string>
     <string name="label_dpi_bypass">DPI Bypass Active Protection</string>
     <string name="status_recovery">RECOVERY IN PROGRESS...</string>
     <string name="status_dns_prefetch">DNS PRE-FETCHING ACTIVE</string>
@@ -29,7 +29,7 @@
     <string name="label_auto_connect">Auto-connect on App Start</string>
     <string name="desc_auto_connect">Automatically start the secure tunnel when you open the app.</string>
     <string name="label_battery_optimization">Battery Optimization</string>
-    <string name="desc_battery_optimization">Disable to prevent the system from killing the proxy in background.</string>
+    <string name="desc_battery_optimization">Disable to prevent the system from killing the VPN in background.</string>
     <string name="action_disable">DISABLE</string>
     <string name="action_enabled">ENABLED</string>
     <string name="action_clear_scores">CLEAR BYPASS SCORES</string>

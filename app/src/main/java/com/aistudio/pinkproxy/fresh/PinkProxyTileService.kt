@@ -48,12 +48,32 @@ class PinkProxyTileService : TileService() {
             val intent = Intent(this, PinkVpnService::class.java).apply {
                 action = "STOP"
             }
-            androidx.core.content.ContextCompat.startForegroundService(this, intent)
+            try {
+                androidx.core.content.ContextCompat.startForegroundService(this, intent)
+            } catch (e: Exception) {
+                android.util.Log.e("PinkProxyTileService", "Failed to start service: ${e.message}")
+            }
         } else {
             val vpnIntent = VpnService.prepare(this)
             if (vpnIntent == null) {
                 val intent = Intent(this, PinkVpnService::class.java)
-                androidx.core.content.ContextCompat.startForegroundService(this, intent)
+                try {
+                    androidx.core.content.ContextCompat.startForegroundService(this, intent)
+                } catch (e: Exception) {
+                    android.util.Log.e("PinkProxyTileService", "Failed to start service: ${e.message}")
+                    // Fallback to opening the app if we can't start the service in background
+                    val appIntent = Intent(this, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        val pendingIntent = android.app.PendingIntent.getActivity(this, 0, appIntent, android.app.PendingIntent.FLAG_IMMUTABLE)
+                        startActivityAndCollapse(pendingIntent)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
+                        startActivityAndCollapse(appIntent)
+                    }
+                }
             } else {
                 // Cannot start directly if permission is not granted
                 // Opening the app to handle permission

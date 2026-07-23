@@ -26,7 +26,12 @@ class BootReceiver : BroadcastReceiver() {
                         prefs.edit().putBoolean("vpn_was_active", false).apply()
                     }
                 } catch (e: Exception) {
-                    Log.e("BootReceiver", "Failed to auto-start VPN on boot: ${e.message}")
+                    if (e.javaClass.simpleName == "ForegroundServiceStartNotAllowedException") {
+                        Log.e("BootReceiver", "Foreground service start not allowed on this Android version: ${e.message}")
+                        prefs.edit().putBoolean("vpn_was_active", false).apply()
+                    } else {
+                        Log.e("BootReceiver", "Failed to auto-start VPN on boot: ${e.message}")
+                    }
                 }
             }
         }
