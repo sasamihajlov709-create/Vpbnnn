@@ -407,12 +407,22 @@ object ServiceChecker {
                                 )
                                 socket.getOutputStream().flush()
                                 val response = ByteArray(5)
-                                if (socket.getInputStream().read(response) >= 1) {
-                                    val duration = System.currentTimeMillis() - start
-                                    resultsChannel.add(strategy to duration)
-                                    BypassConfig.recordStrategyResult(testHost, strategy, true)
-                                    BypassConfig.recordSuccess(strategy, duration, context)
-                                    ProxyStats.logRecovery("Tournament: ${strategy.name} completed in ${duration}ms")
+                                val readCount = socket.getInputStream().read(response)
+                                if (readCount >= 1) {
+                                    // Verify it's a valid TLS ServerHello or at least Handshake (0x16)
+                                    // to prevent fake DPI block pages from being counted as success
+                                    val isTlsResponse = (response[0] == 0x16.toByte())
+                                    if (isTlsResponse) {
+                                        val duration = System.currentTimeMillis() - start
+                                        resultsChannel.add(strategy to duration)
+                                        BypassConfig.recordStrategyResult(testHost, strategy, true)
+                                        BypassConfig.recordSuccess(strategy, duration, context)
+                                        ProxyStats.logRecovery("Tournament: ${strategy.name} completed in ${duration}ms")
+                                    } else {
+                                        BypassConfig.recordStrategyResult(testHost, strategy, false)
+                                        BypassConfig.recordFailure(strategy, false, context)
+                                        ProxyStats.logRecovery("Tournament: ${strategy.name} failed (Invalid response, possible DPI injection)")
+                                    }
                                 }
                             }
                         }

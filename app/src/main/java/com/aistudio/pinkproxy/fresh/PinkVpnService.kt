@@ -147,6 +147,10 @@ class PinkVpnService : VpnService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setMetered(false)
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                builder.setUnderlyingNetworks(null)
+            }
+            builder.allowBypass()
 
             // Route all traffic
             builder.addRoute("0.0.0.0", 0)

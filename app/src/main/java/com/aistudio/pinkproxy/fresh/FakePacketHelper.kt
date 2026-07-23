@@ -74,8 +74,8 @@ object FakePacketHelper {
         }
     }
 
-    fun buildFakeClientHello(sni: String, intensity: Int = 50, paddingSize: Int = 0): ByteArray {
-        val mangledSni = if (intensity > 30) mangleSni(sni) else sni
+    fun buildFakeClientHello(sni: String, intensity: Int = 50, paddingSize: Int = 0, noMangle: Boolean = false): ByteArray {
+        val mangledSni = if (intensity > 30 && !noMangle) mangleSni(sni) else sni
         val isChrome = java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
         val sniBytes = mangledSni.toByteArray()
         val baos = ByteArrayOutputStream()
