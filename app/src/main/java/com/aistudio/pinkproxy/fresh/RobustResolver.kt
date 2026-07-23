@@ -119,7 +119,14 @@ object RobustResolver {
         "https://dns.nextdns.io",
         "https://doh.aliyun.com/dns-query",
         "https://dns.switch.ch/dns-query",
-        "https://doh.cleanbrowsing.org/doh/family-filter/"
+        "https://doh.cleanbrowsing.org/doh/family-filter/",
+        "https://common-dns.com/dns-query",
+        "https://doh.tiar.app/dns-query",
+        "https://dns.tenta.com/dns-query",
+        "https://doh.east.neostrada.pl/dns-query",
+        "https://doh.libredns.gr/dns-query",
+        "https://doh.linuxsec.org/dns-query",
+        "https://doh.pwneddns.net/dns-query"
     )
     private val userAgents = listOf(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1269,12 +1276,21 @@ object RobustResolver {
         okHttpClient?.let { return it }
         synchronized(this) {
             okHttpClient?.let { return it }
+            
+            val trustManager = object : javax.net.ssl.X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+            }
+            
+            val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf(trustManager), java.security.SecureRandom())
+            
             val client = okhttp3.OkHttpClient.Builder()
                 .connectTimeout(7, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(7, java.util.concurrent.TimeUnit.SECONDS)
                 .dns(object : okhttp3.Dns {
                     override fun lookup(hostname: String): List<InetAddress> {
-                        // Use bootstrap IPs for common DoH providers to avoid recursive lookup loops through the VPN
                         dohBootstrapIps[hostname]?.let { ips ->
                             return try {
                                 ips.map { InetAddress.getByName(it) }
@@ -1284,38 +1300,42 @@ object RobustResolver {
                     }
                 })
                 .socketFactory(object : javax.net.SocketFactory() {
+                    private fun protect(s: Socket) {
+                        (vpnService ?: BypassConfig.activeVpnService)?.protect(s)
+                    }
                     override fun createSocket(): Socket {
                         val s = Socket()
-                        vpnService?.protect(s)
+                        protect(s)
                         return s
                     }
                     override fun createSocket(h: String?, p: Int): Socket {
                         val s = Socket()
-                        vpnService?.protect(s)
-                        s.connect(InetSocketAddress(h, p))
+                        protect(s)
+                        s.connect(InetSocketAddress(h, p), 5000)
                         return s
                     }
                     override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket {
                         val s = Socket()
                         s.bind(InetSocketAddress(lh, lp ?: 0))
-                        vpnService?.protect(s)
-                        s.connect(InetSocketAddress(h, p))
+                        protect(s)
+                        s.connect(InetSocketAddress(h, p), 5000)
                         return s
                     }
                     override fun createSocket(a: InetAddress?, p: Int): Socket {
                         val s = Socket()
-                        vpnService?.protect(s)
-                        s.connect(InetSocketAddress(a, p))
+                        protect(s)
+                        s.connect(InetSocketAddress(a, p), 5000)
                         return s
                     }
                     override fun createSocket(a: InetAddress?, p: Int, la: InetAddress?, lp: Int): Socket {
                         val s = Socket()
                         s.bind(InetSocketAddress(la, lp ?: 0))
-                        vpnService?.protect(s)
-                        s.connect(InetSocketAddress(a, p))
+                        protect(s)
+                        s.connect(InetSocketAddress(a, p), 5000)
                         return s
                     }
                 })
+                .sslSocketFactory(ProtectedSSLSocketFactory(sslContext.socketFactory, vpnService), trustManager)
                 .connectionPool(okhttp3.ConnectionPool(5, 5, java.util.concurrent.TimeUnit.MINUTES))
                 .build()
             okHttpClient = client
@@ -1379,29 +1399,32 @@ class ProtectedSSLSocketFactory(
     private val delegate: javax.net.ssl.SSLSocketFactory,
     private val vpnService: VpnService?
 ) : javax.net.ssl.SSLSocketFactory() {
+    private fun protect(s: Socket?) {
+        s?.let { (vpnService ?: BypassConfig.activeVpnService)?.protect(it) }
+    }
+
     override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
     override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
     
     override fun createSocket(s: Socket?, host: String?, port: Int, autoClose: Boolean): Socket {
-        s?.let { vpnService?.protect(it) }
+        protect(s)
         val protectedSocket = delegate.createSocket(s, host, port, autoClose)
-        vpnService?.protect(protectedSocket)
+        protect(protectedSocket)
         return protectedSocket
     }
     
     override fun createSocket(): Socket {
         val s = delegate.createSocket()
-        vpnService?.protect(s)
+        protect(s)
         return s
     }
     
     override fun createSocket(host: String?, port: Int): Socket {
         val rawSocket = Socket()
-        vpnService?.protect(rawSocket)
+        protect(rawSocket)
         try {
             rawSocket.connect(InetSocketAddress(host, port), 2500)
         } catch (e: Exception) {
-            // If direct connection fails, we might need a bypassed connection even for DNS
             throw e
         }
         return delegate.createSocket(rawSocket, host, port, true)
@@ -1412,14 +1435,14 @@ class ProtectedSSLSocketFactory(
         if (localHost != null) {
             rawSocket.bind(InetSocketAddress(localHost, localPort))
         }
-        vpnService?.protect(rawSocket)
+        protect(rawSocket)
         rawSocket.connect(InetSocketAddress(host, port), 2500)
         return delegate.createSocket(rawSocket, host, port, true)
     }
     
     override fun createSocket(address: InetAddress?, port: Int): Socket {
         val rawSocket = Socket()
-        vpnService?.protect(rawSocket)
+        protect(rawSocket)
         rawSocket.connect(InetSocketAddress(address, port), 2500)
         return delegate.createSocket(rawSocket, address?.hostAddress, port, true)
     }
@@ -1429,7 +1452,7 @@ class ProtectedSSLSocketFactory(
         if (localAddress != null) {
             rawSocket.bind(InetSocketAddress(localAddress, localPort))
         }
-        vpnService?.protect(rawSocket)
+        protect(rawSocket)
         rawSocket.connect(InetSocketAddress(address, port), 2500)
         return delegate.createSocket(rawSocket, address?.hostAddress, port, true)
     }

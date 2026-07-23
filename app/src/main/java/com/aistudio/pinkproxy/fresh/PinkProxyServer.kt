@@ -93,10 +93,10 @@ object ProxyStats {
 
     fun recordDnsResult(success: Boolean) {
         if (success) {
-            _dnsSuccessCount.value += 1
+            _dnsSuccessCount.update { it + 1 }
             recordGlobalSuccess(0)
         } else {
-            _dnsFailureCount.value += 1
+            _dnsFailureCount.update { it + 1 }
             recordCensorshipEvent(true)
         }
     }
@@ -124,10 +124,9 @@ object ProxyStats {
                 val speed = (currentBytes - lastBytes).coerceAtLeast(0)
                 _speedBytesPerSecond.value = speed
                 
-                val history = _speedHistory.value.toMutableList()
-                history.add(0, speed)
-                if (history.size > 60) history.removeAt(history.size - 1)
-                _speedHistory.value = history
+                _speedHistory.update { current ->
+                    (listOf(speed) + current).take(60)
+                }
                 
                 lastBytes = currentBytes
                 
@@ -152,59 +151,54 @@ object ProxyStats {
 
     fun recordGlobalSuccess(rtt: Long) {
         if (rtt > 0) {
-             val current = _stabilityScore.value
-             _stabilityScore.value = (current * 0.95 + 100 * 0.05).toInt().coerceIn(0, 100)
+             _stabilityScore.update { (it * 0.95 + 100 * 0.05).toInt().coerceIn(0, 100) }
         }
-        val rate = _successRate.value
-        _successRate.value = (rate * 0.98 + 100 * 0.02).toInt().coerceIn(0, 100)
+        _successRate.update { (it * 0.98 + 100 * 0.02).toInt().coerceIn(0, 100) }
     }
 
     fun recordCensorshipEvent(isBlocked: Boolean) {
         if (isBlocked) {
-            _errors.value += 1
-            val rate = _successRate.value
-            _successRate.value = (rate * 0.9 + 0 * 0.1).toInt().coerceIn(0, 100)
-            val current = _censorshipIntensity.value
-            _censorshipIntensity.value = (current + 5).coerceAtMost(100)
+            _errors.update { it + 1 }
+            _successRate.update { (it * 0.9 + 0 * 0.1).toInt().coerceIn(0, 100) }
+            _censorshipIntensity.update { (it + 5).coerceAtMost(100) }
         } else {
-            val current = _censorshipIntensity.value
-            _censorshipIntensity.value = (current - 1).coerceAtLeast(0)
+            _censorshipIntensity.update { (it - 1).coerceAtLeast(0) }
         }
     }
 
     fun logRecovery(msg: String) {
-        val current = _recoveryLog.value.toMutableList()
-        current.add(0, "[${java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(Date())}] $msg")
-        if (current.size > 100) current.removeAt(current.size - 1)
-        _recoveryLog.value = current
+        _recoveryLog.update { current ->
+            (listOf("[${java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(Date())}] $msg") + current).take(100)
+        }
     }
 
     fun addTraffic(host: String) {
-        val current = _trafficLog.value.toMutableList()
-        current.add(0, host)
-        if (current.size > 50) current.removeAt(current.size - 1)
-        _trafficLog.value = current
-        
-        val hosts = _topHosts.value.toMutableList()
-        val idx = hosts.indexOfFirst { it.first == host }
-        if (idx != -1) {
-            hosts[idx] = host to hosts[idx].second + 1
-        } else {
-            hosts.add(host to 1)
+        _trafficLog.update { current ->
+            (listOf(host) + current).take(50)
         }
-        _topHosts.value = hosts.sortedByDescending { it.second }.take(10)
+        
+        _topHosts.update { current ->
+            val hosts = current.toMutableList()
+            val idx = hosts.indexOfFirst { it.first == host }
+            if (idx != -1) {
+                hosts[idx] = host to hosts[idx].second + 1
+            } else {
+                hosts.add(host to 1)
+            }
+            hosts.sortedByDescending { it.second }.take(10)
+        }
     }
 
     fun updateBytes(delta: Long) {
-        _bytesTransferred.value += delta
+        _bytesTransferred.update { it + delta }
     }
 
     fun updateConnections(delta: Int) {
-        _activeConnections.value += delta
+        _activeConnections.update { it + delta }
     }
 
     fun updateCongestionWindow(delta: Int) {
-        _congestionWindow.value = (_congestionWindow.value + delta).coerceIn(2, 128)
+        _congestionWindow.update { (it + delta).coerceIn(2, 128) }
     }
     
     fun getSuccessRate() = _successRate.value
@@ -582,9 +576,9 @@ object BypassConfig {
                         if (rnd.nextBoolean()) {
                             val char = mangled[offset + i].toInt().toChar()
                             if (char in 'a'..'z') {
-                                mangled[offset + i] = (char - 32).toInt().toByte()
+                                mangled[offset + i] = (char - 32).code.toByte()
                             } else if (char in 'A'..'Z') {
-                                mangled[offset + i] = (char + 32).toInt().toByte()
+                                mangled[offset + i] = (char + 32).code.toByte()
                             }
                         }
                     }
@@ -694,15 +688,17 @@ object BypassConfig {
 }
 
 class PinkProxyServer(private val vpnService: VpnService, private val port: Int) {
-    private val proxyDispatcher = Executors.newCachedThreadPool().asCoroutineDispatcher()
+    private var proxyDispatcher: ExecutorCoroutineDispatcher? = null
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
     
     fun start() {
         if (serverJob?.isActive == true) return
         
+        val dispatcher = Executors.newCachedThreadPool().asCoroutineDispatcher()
+        proxyDispatcher = dispatcher
         val parentJob = SupervisorJob()
-        val scope = CoroutineScope(proxyDispatcher + parentJob)
+        val scope = CoroutineScope(dispatcher + parentJob)
         serverJob = parentJob
         
         ProxyStats.startSpeedMonitor(scope)
@@ -737,6 +733,8 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         serverJob?.cancel()
         try { serverSocket?.close() } catch (e: Exception) {}
         serverSocket = null
+        proxyDispatcher?.close()
+        proxyDispatcher = null
     }
 
     private suspend fun readExactly(input: InputStream, buffer: ByteArray, offset: Int, length: Int) {
@@ -807,19 +805,35 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             val portBytes = ByteArray(2)
             readExactly(input, portBytes, 0, 2)
             val targetPort = ((portBytes[0].toInt() and 0xff) shl 8) or (portBytes[1].toInt() and 0xff)
-
+            
+            // DNS Resolution with fallback
+            val ips = try {
+                RobustResolver.resolve(host, vpnService)
+            } catch (e: Exception) {
+                emptyList<InetAddress>()
+            }
+            
+            if (ips.isEmpty()) {
+                output.write(byteArrayOf(5, 4, 0, 1, 0, 0, 0, 0, 0, 0)) // Host unreachable
+                output.flush()
+                return
+            }
+            
+            val targetIp = ips.first()
             ProxyStats.addTraffic(host)
 
             // Connect to target
             val socket = Socket()
             targetSocket = socket
             socket.tcpNoDelay = true
+            socket.keepAlive = true
             vpnService.protect(socket)
             try {
-                withTimeout(7000) {
-                    socket.connect(InetSocketAddress(host, targetPort), 7000)
+                withTimeout(10000) {
+                    socket.connect(InetSocketAddress(targetIp, targetPort), 10000)
                 }
             } catch (e: Exception) {
+                Log.e("PinkProxy", "Failed to connect to $host ($targetIp): ${e.message}")
                 output.write(byteArrayOf(5, 1, 0, 1, 0, 0, 0, 0, 0, 0))
                 output.flush()
                 return
@@ -828,6 +842,9 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             // Success response
             output.write(byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0))
             output.flush()
+            
+            client.soTimeout = 0 // Remove timeout for the tunneled connection
+            targetSocket.soTimeout = 0
 
             // Tunneling with bypass
             val targetInput = socket.getInputStream()
@@ -886,7 +903,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                 }
                                 
                                 // Adaptive chunking based on congestion window
-                                val cwnd = ProxyStats.congestionWindow.value * 1024
+                                val cwnd = (ProxyStats.congestionWindow.value * 1024).coerceAtLeast(1024)
                                 var sent = 0
                                 while (sent < len) {
                                     val toSend = (len - sent).coerceAtMost(cwnd)

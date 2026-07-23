@@ -8,18 +8,13 @@
     <string name="label_proxy_statistics">PROXY STATISTICS</string>
     <string name="stat_requests">Requests</string>
     <string name="stat_bypassed">Bypassed</string>
-    <string name="stat_errors">Errors</string>
     <string name="stat_throughput">Throughput</string>
     <string name="unit_ms">ms</string>
     <string name="msg_optimize_battery">OPTIMIZE BATTERY USAGE FOR STABILITY</string>
     <string name="vpn_service_description">Fast and secure HTTP proxy tunnel.</string>
     <string name="label_dpi_bypass">DPI Bypass Active Protection</string>
-    <string name="status_no_internet">NO INTERNET CONNECTION</string>
     <string name="status_recovery">RECOVERY IN PROGRESS...</string>
-    <string name="status_autopilot">SMART AUTO-PILOT ACTIVE</string>
     <string name="status_dns_prefetch">DNS PRE-FETCHING ACTIVE</string>
-    <string name="label_health">HEALTH</string>
-    <string name="label_speed">SPEED</string>
     <string name="label_errors">ERRORS</string>
     <string name="label_secure_tunnel_active">Secure Tunnel Active</string>
     <string name="label_system_offline">System Offline</string>
@@ -49,4 +44,20 @@
     </plurals>
     <string name="action_select_apps">SELECT APPS</string>
     <string name="label_bypass_quality">BYPASS Q</string>
+    <string name="status_ready">READY TO CONNECT</string>
+    <string name="status_protected">PROTECTED</string>
+    <string name="status_recovering">RECOVERING</string>
+    <string name="status_stalled">STALLED</string>
+    <string name="status_probing">PROBING…</string>
+    <string name="status_no_internet">NO INTERNET</string>
+    <string name="status_emergency">EMERGENCY</string>
+    <string name="status_autopilot">AUTOPILOT</string>
+    <string name="label_speed">SPEED</string>
+    <string name="label_data">DATA</string>
+    <string name="label_mtu">MTU</string>
+    <string name="label_time">TIME</string>
+    <string name="label_health">HEALTH</string>
+    <string name="label_stability">STABILITY</string>
+    <string name="label_quality">QUALITY</string>
+    <string name="label_mode">MODE</string>
 </resources>

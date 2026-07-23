@@ -92,10 +92,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) {
+            Log.d("MainActivity", "Notification permission granted")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
         enableEdgeToEdge()
+        
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
         
         try {
             PinkVpnService.loadFilterSettings(this)
@@ -207,24 +217,24 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
     val bytesTransferred by ProxyStats.bytesTransferred.collectAsStateWithLifecycle(initialValue = 0L)
     val activeConnections by ProxyStats.activeConnections.collectAsStateWithLifecycle(initialValue = 0)
     val speedBytes by ProxyStats.speedBytesPerSecond.collectAsStateWithLifecycle(initialValue = 0L)
-    val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle(initialValue = emptyList())
+    val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle(initialValue = emptyList<Long>())
     val errorCount by ProxyStats.errors.collectAsStateWithLifecycle(initialValue = 0L)
     val censorshipIntensity by ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
-    val serviceStatuses by ServiceChecker.statuses.collectAsStateWithLifecycle(initialValue = emptyList())
+    val serviceStatuses by ServiceChecker.statuses.collectAsStateWithLifecycle(initialValue = emptyList<ServiceChecker.ServiceStatus>())
     val isProxyHealthy by ServiceChecker.proxyHealth.collectAsStateWithLifecycle(initialValue = true)
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
     val isStalled by ServiceChecker.isStalled.collectAsStateWithLifecycle(initialValue = false)
     val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
     val lastCheckTime by ServiceChecker.lastCheckTime.collectAsStateWithLifecycle(initialValue = 0L)
 
-    val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList())
-    val trafficLog by ProxyStats.trafficLog.collectAsStateWithLifecycle(initialValue = emptyList())
+    val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList<String>())
+    val trafficLog by ProxyStats.trafficLog.collectAsStateWithLifecycle(initialValue = emptyList<String>())
     val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
     val signalQuality by ProxyStats.signalQuality.collectAsStateWithLifecycle(initialValue = 100)
     val currentNetworkType by BypassConfig.currentNetworkType.collectAsStateWithLifecycle(initialValue = NetworkType.UNKNOWN)
     val currentRttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
     val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
-    val topHosts by ProxyStats.topHosts.collectAsStateWithLifecycle(initialValue = emptyList())
+    val topHosts by ProxyStats.topHosts.collectAsStateWithLifecycle(initialValue = emptyList<Pair<String, Int>>())
     val isCharging by BypassConfig.isChargingFlow.collectAsStateWithLifecycle(initialValue = true)
     val pool8kSize by ProxyStats.pool8kSize.collectAsStateWithLifecycle(initialValue = 0)
     val pool16kSize by ProxyStats.pool16kSize.collectAsStateWithLifecycle(initialValue = 0)
@@ -321,7 +331,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                 StatusBadge(isProxyHealthy, isInternetUp, isProbing, isStalled)
             } else {
                 Text(
-                    text = "READY TO CONNECT",
+                    text = stringResource(R.string.status_ready),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = GentleMediumPink.copy(alpha = 0.5f),
@@ -340,16 +350,37 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                 val connectivityScore by ServiceChecker.connectivityScore.collectAsStateWithLifecycle(initialValue = 0)
                 
                 // Compact Metrics Card
-                MetricsCard(
-                    speedText = speedText,
-                    bytesTransferred = ProxyStats.formatBytes(bytesTransferred),
-                    sessionTime = formattedSessionTime,
-                    connectivityScore = connectivityScore,
-                    successRate = ProxyStats.successRate.collectAsStateWithLifecycle(100).value,
-                    stabilityScore = stabilityScore,
-                    mtu = currentMtu,
-                    isPanicMode = isPanicMode
-                )
+                val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle(emptyList<Long>())
+                
+                Surface(
+                    color = PureBlack,
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, if (isPanicMode) Color(0xFFE57373).copy(alpha = 0.3f) else GentleMediumPink.copy(alpha = 0.1f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        if (speedHistory.isNotEmpty()) {
+                            SpeedGraph(
+                                history = speedHistory,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(60.dp)
+                                    .padding(top = 16.dp, start = 16.dp, end = 16.dp)
+                            )
+                        }
+                        
+                        MetricsCard(
+                            speedText = speedText,
+                            bytesTransferred = ProxyStats.formatBytes(bytesTransferred),
+                            sessionTime = formattedSessionTime,
+                            connectivityScore = connectivityScore,
+                            successRate = ProxyStats.successRate.collectAsStateWithLifecycle(100).value,
+                            stabilityScore = stabilityScore,
+                            mtu = currentMtu,
+                            isPanicMode = isPanicMode
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -580,11 +611,11 @@ fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean, isS
     }
     
     val text = when {
-        !isInternet -> "NO INTERNET"
-        isProbing -> "PROBING..."
-        isStalled -> "STALLED"
-        !isHealthy -> "RECOVERING"
-        else -> "PROTECTED"
+        !isInternet -> stringResource(R.string.status_no_internet)
+        isProbing -> stringResource(R.string.status_probing)
+        isStalled -> stringResource(R.string.status_stalled)
+        !isHealthy -> stringResource(R.string.status_recovering)
+        else -> stringResource(R.string.status_protected)
     }
 
     Surface(
@@ -644,29 +675,66 @@ fun PowerButton(isActive: Boolean, onToggle: () -> Unit, transition: InfiniteTra
 }
 
 @Composable
+fun SpeedGraph(history: List<Long>, modifier: Modifier = Modifier) {
+    val maxSpeed = (history.maxOrNull() ?: 1L).coerceAtLeast(1024L)
+    Canvas(modifier = modifier) {
+        if (history.isEmpty()) return@Canvas
+        val width = size.width
+        val height = size.height
+        val step = width / 60f
+        
+        val path = androidx.compose.ui.graphics.Path()
+        history.take(60).forEachIndexed { i, speed ->
+            val x = width - (i * step)
+            val y = (height - (speed.toFloat() / maxSpeed * height)).coerceIn(0f, height)
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        
+        drawPath(
+            path = path,
+            color = GentleMediumPink,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                width = 2.dp.toPx(), 
+                cap = androidx.compose.ui.graphics.StrokeCap.Round, 
+                join = androidx.compose.ui.graphics.StrokeJoin.Round
+            )
+        )
+        
+        // Gradient fill
+        val fillPath = androidx.compose.ui.graphics.Path().apply {
+            addPath(path)
+            lineTo(width - (history.take(60).size - 1) * step, height)
+            lineTo(width, height)
+            close()
+        }
+        drawPath(
+            path = fillPath,
+            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                colors = listOf(GentleMediumPink.copy(alpha = 0.3f), Color.Transparent),
+                startY = 0f,
+                endY = height
+            )
+        )
+    }
+}
+
+@Composable
 fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String, connectivityScore: Int, successRate: Int, stabilityScore: Int, mtu: Int, isPanicMode: Boolean) {
-    Surface(
-        color = PureBlack,
-        shape = RoundedCornerShape(24.dp),
-        border = BorderStroke(1.dp, if (isPanicMode) Color(0xFFE57373).copy(alpha = 0.3f) else GentleMediumPink.copy(alpha = 0.1f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                MetricItem("SPEED", speedText, GentleLightPink)
-                MetricItem("DATA", bytesTransferred, GentleMediumPink)
-                MetricItem("MTU", mtu.toString(), GentleMediumPink)
-                MetricItem("TIME", sessionTime, GentleMediumPink)
-            }
-            Spacer(modifier = Modifier.height(20.dp))
-            HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.1f))
-            Spacer(modifier = Modifier.height(20.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                MetricItem("HEALTH", "$connectivityScore%", if (connectivityScore > 70) Color(0xFF81C784) else Color(0xFFFFB74D))
-                MetricItem("STABILITY", "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else if (stabilityScore > 50) Color(0xFFFFB74D) else Color(0xFFE57373))
-                MetricItem("QUALITY", "$successRate%", if (successRate > 70) Color(0xFF81C784) else Color(0xFFE57373))
-                MetricItem("MODE", if (isPanicMode) "EMERGENCY" else "AUTOPILOT", if (isPanicMode) Color(0xFFE57373) else GentleMediumPink)
-            }
+    Column(modifier = Modifier.padding(20.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            MetricItem(stringResource(R.string.label_speed), speedText, GentleLightPink)
+            MetricItem(stringResource(R.string.label_data), bytesTransferred, GentleMediumPink)
+            MetricItem(stringResource(R.string.label_mtu), mtu.toString(), GentleMediumPink)
+            MetricItem(stringResource(R.string.label_time), sessionTime, GentleMediumPink)
+        }
+        Spacer(modifier = Modifier.height(20.dp))
+        HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.1f))
+        Spacer(modifier = Modifier.height(20.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            MetricItem(stringResource(R.string.label_health), "$connectivityScore%", if (connectivityScore > 70) Color(0xFF81C784) else Color(0xFFFFB74D))
+            MetricItem(stringResource(R.string.label_stability), "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else if (stabilityScore > 50) Color(0xFFFFB74D) else Color(0xFFE57373))
+            MetricItem(stringResource(R.string.label_quality), "$successRate%", if (successRate > 70) Color(0xFF81C784) else Color(0xFFE57373))
+            MetricItem(stringResource(R.string.label_mode), if (isPanicMode) stringResource(R.string.status_emergency) else stringResource(R.string.status_autopilot), if (isPanicMode) Color(0xFFE57373) else GentleMediumPink)
         }
     }
 }
