@@ -1192,6 +1192,12 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                             val outPacket = java.net.DatagramPacket(payload, payload.size, targetInet, targetPortNum)
                                             
                                             val strategy = BypassConfig.strategy.value
+                                            
+                                            if (BypassConfig.blockQuic && targetPortNum == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0) {
+                                                // Block QUIC traffic to force fallback to TCP
+                                                return@launch
+                                            }
+                                            
                                             if (strategy != BypassStrategy.DIRECT) {
                                                 if (targetPortNum == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0) {
                                                     // QUIC traffic detected - send a fake QUIC Initial packet with low TTL

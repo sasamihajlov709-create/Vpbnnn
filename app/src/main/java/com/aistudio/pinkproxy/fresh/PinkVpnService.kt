@@ -65,6 +65,7 @@ class PinkVpnService : VpnService() {
         super.onCreate()
         instance = this
         BypassConfig.activeVpnService = this
+        BypassConfig.loadTuningSettings(this)
         loadFilterSettings(this)
         
         // Start proxy server

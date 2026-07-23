@@ -104,7 +104,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         
         if (android.os.Build.VERSION.SDK_INT >= 33) {
-            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
         
         try {
@@ -124,8 +126,8 @@ class MainActivity : ComponentActivity() {
             val isVpnActive by PinkVpnService.isRunning.collectAsStateWithLifecycle(initialValue = false)
             
             LaunchedEffect(Unit) {
-                if (autoConnect && !isVpnActive) {
-                    toggleVpn(false) // toggleVpn(false) will start it if not active
+                if (autoConnect && !PinkVpnService.isRunning.value) {
+                    toggleVpn(false) // start it if not active
                 }
                 RobustResolver.updatePublicIpSubnet(null)
                 RobustResolver.startWarmup(null)
