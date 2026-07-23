@@ -16,7 +16,7 @@ class NetworkHelpersTest {
     @Test
     fun testFakePacketHelperClientHello() {
         val host = "example.com"
-        val fakePacket = FakePacketHelper.buildFakeClientHello(host, 50)
+        val fakePacket = FakePacketHelper.buildFakeClientHello(host, 50, noMangle = true)
         
         assertTrue("Fake packet should be larger than 0", fakePacket.isNotEmpty())
         // Should start with TLS Handshake (0x16)

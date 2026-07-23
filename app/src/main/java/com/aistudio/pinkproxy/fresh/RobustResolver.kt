@@ -1277,15 +1277,6 @@ object RobustResolver {
         synchronized(this) {
             okHttpClient?.let { return it }
             
-            val trustManager = object : javax.net.ssl.X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-            }
-            
-            val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
-            sslContext.init(null, arrayOf(trustManager), java.security.SecureRandom())
-            
             val client = okhttp3.OkHttpClient.Builder()
                 .connectTimeout(7, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(7, java.util.concurrent.TimeUnit.SECONDS)
@@ -1316,7 +1307,7 @@ object RobustResolver {
                     }
                     override fun createSocket(h: String?, p: Int, lh: InetAddress?, lp: Int): Socket {
                         val s = Socket()
-                        s.bind(InetSocketAddress(lh, lp ?: 0))
+                        s.bind(InetSocketAddress(lh, lp))
                         protect(s)
                         s.connect(InetSocketAddress(h, p), 5000)
                         return s
@@ -1329,13 +1320,12 @@ object RobustResolver {
                     }
                     override fun createSocket(a: InetAddress?, p: Int, la: InetAddress?, lp: Int): Socket {
                         val s = Socket()
-                        s.bind(InetSocketAddress(la, lp ?: 0))
+                        s.bind(InetSocketAddress(la, lp))
                         protect(s)
                         s.connect(InetSocketAddress(a, p), 5000)
                         return s
                     }
                 })
-                .sslSocketFactory(ProtectedSSLSocketFactory(sslContext.socketFactory, vpnService), trustManager)
                 .connectionPool(okhttp3.ConnectionPool(5, 5, java.util.concurrent.TimeUnit.MINUTES))
                 .build()
             okHttpClient = client

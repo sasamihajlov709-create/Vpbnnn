@@ -109,6 +109,15 @@ object ProxyStats {
     fun reset(clearLog: Boolean) {
         _bytesTransferred.value = 0
         _errors.value = 0
+        _speedHistory.value = emptyList()
+        _speedBytesPerSecond.value = 0
+        _signalQuality.value = 100
+        _topHosts.value = emptyList()
+        _congestionWindow.value = 10
+        _dnsSuccessCount.value = 0
+        _dnsFailureCount.value = 0
+        _stabilityScore.value = 100
+        _successRate.value = 100
         if (clearLog) {
             _recoveryLog.value = emptyList()
             _trafficLog.value = emptyList()
@@ -386,15 +395,44 @@ object BypassConfig {
 
     fun testInitialStrategies(context: Context) {
         CoroutineScope(Dispatchers.IO).launch {
-            val testHosts = listOf("www.youtube.com", "t.me", "twitter.com")
+            val testHosts = listOf("www.google.com", "cloudflare.com")
             for (host in testHosts) {
                 for (strat in listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI)) {
-                    val start = System.currentTimeMillis()
-                    // Simple ping test through DNS or a dummy connection could be here
-                    // We just simulate success/failure randomly for now if no actual test
-                    delay(50)
-                    val rtt = System.currentTimeMillis() - start
-                    recordSuccess(strat, rtt, host)
+                    try {
+                        val start = System.currentTimeMillis()
+                        val socket = java.net.Socket()
+                        socket.soTimeout = 3000
+                        socket.connect(java.net.InetSocketAddress(host, 443), 3000)
+                        
+                        val hello = FakePacketHelper.buildFakeClientHello(host)
+                        val out = socket.getOutputStream()
+                        
+                        // Apply basic strategy behavior
+                        if (strat == BypassStrategy.SNI_SPLIT) {
+                            val split = hello.size / 2
+                            out.write(hello, 0, split)
+                            out.flush()
+                            delay(5)
+                            out.write(hello, split, hello.size - split)
+                            out.flush()
+                        } else {
+                            out.write(hello)
+                            out.flush()
+                        }
+                        
+                        val input = socket.getInputStream()
+                        val resp = input.read()
+                        val rtt = System.currentTimeMillis() - start
+                        
+                        if (resp != -1) {
+                            recordSuccess(strat, rtt, host)
+                        } else {
+                            recordFailure(strat, host)
+                        }
+                        socket.close()
+                    } catch (e: Exception) {
+                        recordFailure(strat, host)
+                    }
                 }
             }
         }
@@ -495,6 +533,14 @@ object BypassConfig {
         val strategy = config.strategy
         
         if (strategy == BypassStrategy.DIRECT) {
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        // Common guard for all strategies: if the packet is too short, avoid index out of bounds
+        // in random split logic.
+        if (length <= 5) {
             output.write(data, 0, length)
             output.flush()
             return

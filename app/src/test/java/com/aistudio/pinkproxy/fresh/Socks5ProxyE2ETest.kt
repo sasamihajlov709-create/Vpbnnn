@@ -50,9 +50,9 @@ class Socks5ProxyE2ETest {
         assertEquals(5.toByte(), authResp[0])
         assertEquals(0.toByte(), authResp[1]) // No auth
 
-        // Send SOCKS5 Connect request (to 8.8.8.8 port 443)
-        // 5, 1 (connect), 0, 1 (ipv4), 8.8.8.8, port 443
-        val connectReq = byteArrayOf(5, 1, 0, 1, 8, 8, 8, 8, 0x01, 0xBB.toByte())
+        // Send SOCKS5 Connect request (to 127.0.0.1 port 18080 - we connect to ourselves just to see if connection works)
+        // 5, 1 (connect), 0, 1 (ipv4), 127.0.0.1, port 18080 (0x46, 0xA0)
+        val connectReq = byteArrayOf(5, 1, 0, 1, 127, 0, 0, 1, 0x46, 0xA0.toByte())
         out.write(connectReq)
         out.flush()
 

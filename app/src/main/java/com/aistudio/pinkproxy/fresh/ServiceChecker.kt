@@ -145,7 +145,7 @@ object ServiceChecker {
                         var connection: HttpURLConnection? = null
                         val attemptStart = System.currentTimeMillis()
                         try {
-                            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
+                            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort))
                             connection = URL(url).openConnection(proxy) as HttpURLConnection
                             connection.connectTimeout = 8000
                             connection.readTimeout = 8000
