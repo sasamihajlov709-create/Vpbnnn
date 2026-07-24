@@ -316,9 +316,12 @@ object BypassConfig {
         }
         
         val scorePrefs = context.getSharedPreferences("pink_proxy_scores", Context.MODE_PRIVATE)
-        BypassStrategy.entries.forEach { strat ->
-            val score = scorePrefs.getInt("score_${strat.name}", 100)
-            strategyScores[HostCategory.OTHER]?.get(strat)?.set(score)
+        HostCategory.entries.forEach { cat ->
+            BypassStrategy.entries.forEach { strat ->
+                val legacyScore = scorePrefs.getInt("score_${strat.name}", 100)
+                val score = scorePrefs.getInt("score_${cat.name}_${strat.name}", legacyScore)
+                strategyScores[cat]?.get(strat)?.set(score)
+            }
         }
     }
 
@@ -337,8 +340,10 @@ object BypassConfig {
     fun saveScores(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_scores", Context.MODE_PRIVATE)
         prefs.edit().apply {
-            strategyScores[HostCategory.OTHER]?.forEach { (strat, score) ->
-                putInt("score_${strat.name}", score.get())
+            HostCategory.entries.forEach { cat ->
+                strategyScores[cat]?.forEach { (strat, score) ->
+                    putInt("score_${cat.name}_${strat.name}", score.get())
+                }
             }
             apply()
         }
@@ -536,51 +541,6 @@ object BypassConfig {
         prefs.edit().clear().apply()
         HostCategory.entries.forEach { cat ->
             BypassStrategy.entries.forEach { strategyScores[cat]?.get(it)?.set(100) }
-        }
-    }
-
-    fun testInitialStrategies(context: Context) {
-        CoroutineScope(Dispatchers.IO).launch {
-            val testHosts = listOf("www.google.com", "cloudflare.com")
-            for (host in testHosts) {
-                for (strat in listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_DIRTY, BypassStrategy.FRAGMENT_MULTI)) {
-                    try {
-                        val start = System.currentTimeMillis()
-                        val socket = java.net.Socket()
-                        socket.soTimeout = 3000
-                        socket.connect(java.net.InetSocketAddress(host, 443), 3000)
-                        
-                        val hello = FakePacketHelper.buildFakeClientHello(host)
-                        val out = socket.getOutputStream()
-                        
-                        // Apply basic strategy behavior
-                        if (strat == BypassStrategy.SNI_SPLIT) {
-                            val split = hello.size / 2
-                            out.write(hello, 0, split)
-                            out.flush()
-                            delay(5)
-                            out.write(hello, split, hello.size - split)
-                            out.flush()
-                        } else {
-                            out.write(hello)
-                            out.flush()
-                        }
-                        
-                        val input = socket.getInputStream()
-                        val resp = input.read()
-                        val rtt = System.currentTimeMillis() - start
-                        
-                        if (resp != -1) {
-                            recordSuccess(strat, rtt, host)
-                        } else {
-                            recordFailure(strat, host)
-                        }
-                        socket.close()
-                    } catch (e: Exception) {
-                        recordFailure(strat, host)
-                    }
-                }
-            }
         }
     }
 

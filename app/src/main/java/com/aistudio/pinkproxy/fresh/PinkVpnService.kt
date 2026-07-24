@@ -77,7 +77,6 @@ class PinkVpnService : VpnService() {
         RobustResolver.startBackgroundProber(serviceScope, this)
         ServiceChecker.startChecking(serviceScope, this)
         BypassConfig.startAutonomousOptimizer(serviceScope)
-        BypassConfig.testInitialStrategies(this)
 
         registerNetworkMonitor()
         startWatchdog()
