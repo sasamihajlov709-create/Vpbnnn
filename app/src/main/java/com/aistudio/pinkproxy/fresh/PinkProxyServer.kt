@@ -728,6 +728,10 @@ object BypassConfig {
             output.write(data, 0, length); output.flush(); return
         }
 
+        try {
+            socket.tcpNoDelay = true
+        } catch (e: Exception) {}
+
         when (strategy) {
             BypassStrategy.SNI_SPLIT -> {
                 val offset = TlsParser.findSniOffset(data, length, host)
@@ -773,21 +777,6 @@ object BypassConfig {
                 while (pos < length) {
                     val size = (config.frag3 + rnd.nextInt(-1, 2)).coerceIn(1, 10).coerceAtMost(length - pos)
                     output.write(data, pos, size); output.flush(); pos += size; if (pos < length) delay(rnd.nextLong(1, 15))
-                }
-            }
-            BypassStrategy.SNI_TRIPLE -> {
-                val offset = TlsParser.findSniOffset(data, length, host)
-                if (offset != -1 && offset + 3 < length) {
-                    val p1 = offset + 1
-                    val p2 = offset + 2
-                    output.write(data, 0, p1); output.flush(); delay(config.delay1)
-                    output.write(data, p1, p2 - p1); output.flush(); delay(config.delay1)
-                    output.write(data, p2, length - p2); output.flush()
-                } else {
-                    val split = length / 3
-                    output.write(data, 0, split); output.flush(); delay(config.delay1)
-                    output.write(data, split, split); output.flush(); delay(config.delay1)
-                    output.write(data, split * 2, length - split * 2); output.flush()
                 }
             }
             BypassStrategy.TLS_DIRTY -> {
@@ -1382,60 +1371,69 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                         }
                                     }
                                 } else {
-                                    // General UDP Forwarding
-                                    launch(Dispatchers.IO) {
-                                        var targetIpStr = targetHost
-                                        if (!RobustResolver.isIpAddress(targetHost)) {
-                                            val resolved = RobustResolver.resolve(targetHost, vpnService)
-                                            if (resolved.isNotEmpty()) {
-                                                targetIpStr = resolved.first().hostAddress ?: targetHost
-                                            }
+                                    // General UDP Forwarding - using shared resolver and avoiding per-packet coroutine where possible
+                                    var targetIpStr = targetHost
+                                    val resolved = RobustResolver.getCached(targetHost)
+                                    if (resolved != null && resolved.isNotEmpty()) {
+                                        targetIpStr = resolved.first().hostAddress ?: targetHost
+                                    }
+                                    
+                                    try {
+                                        val targetInet = InetAddress.getByName(targetIpStr)
+                                        val outPacket = java.net.DatagramPacket(payload, payload.size, targetInet, targetPortNum)
+                                        
+                                        val strategy = BypassConfig.strategy.value
+                                        
+                                        if (BypassConfig.blockQuic && targetPortNum == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0) {
+                                            // Block QUIC traffic to force fallback to TCP
+                                            continue
                                         }
-                                        try {
-                                            val targetInet = InetAddress.getByName(targetIpStr)
-                                            val outPacket = java.net.DatagramPacket(payload, payload.size, targetInet, targetPortNum)
-                                            
-                                            val strategy = BypassConfig.strategy.value
-                                            
-                                            if (BypassConfig.blockQuic && targetPortNum == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0) {
-                                                // Block QUIC traffic to force fallback to TCP
-                                                return@launch
-                                            }
-                                            
-                                            if (strategy != BypassStrategy.DIRECT) {
-                                                if (targetPortNum == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0) {
-                                                    // QUIC traffic detected - send a fake QUIC Initial packet with low TTL
-                                                    val fakeQuic = FakePacketHelper.buildQuicInitial()
-                                                    val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPortNum)
-                                                    TtlHelper.setUdpTtl(outSocket, 5)
-                                                    outSocket.send(fakeQuicPacket)
-                                                    delay(5)
-                                                    TtlHelper.setUdpTtl(outSocket, 64)
-                                                    outSocket.send(outPacket)
-                                                } else if (targetPortNum == 53) {
-                                                    // DNS over UDP - send a Fake QUIC packet first to confuse DPI, then send actual DNS
-                                                    val quicSim = FakePacketHelper.buildQuicInitial()
-                                                    val quicPacket = java.net.DatagramPacket(quicSim, quicSim.size, targetInet, targetPortNum)
-                                                    TtlHelper.setUdpTtl(outSocket, 5)
-                                                    outSocket.send(quicPacket)
-                                                    delay(5)
-                                                    TtlHelper.setUdpTtl(outSocket, 64)
-                                                    outSocket.send(outPacket)
-                                                } else {
-                                                    // General UDP Obfuscation - prepend noise packet with low TTL
-                                                    val noise = FakePacketHelper.buildFakeUdpPacket(java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 150))
-                                                    val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPortNum)
-                                                    TtlHelper.setUdpTtl(outSocket, 5)
-                                                    outSocket.send(noisePacket)
-                                                    delay(5)
-                                                    TtlHelper.setUdpTtl(outSocket, 64)
-                                                    outSocket.send(outPacket)
-                                                }
+                                        
+                                        if (strategy != BypassStrategy.DIRECT) {
+                                            if (targetPortNum == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0) {
+                                                // QUIC traffic detected - send a fake QUIC Initial packet with low TTL
+                                                val fakeQuic = FakePacketHelper.buildQuicInitial()
+                                                val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPortNum)
+                                                TtlHelper.setUdpTtl(outSocket, 5)
+                                                outSocket.send(fakeQuicPacket)
+                                                delay(5)
+                                                TtlHelper.setUdpTtl(outSocket, 64)
+                                                outSocket.send(outPacket)
+                                            } else if (targetPortNum == 53) {
+                                                // DNS over UDP - send a Fake QUIC packet first to confuse DPI, then send actual DNS
+                                                val quicSim = FakePacketHelper.buildQuicInitial()
+                                                val quicPacket = java.net.DatagramPacket(quicSim, quicSim.size, targetInet, targetPortNum)
+                                                TtlHelper.setUdpTtl(outSocket, 5)
+                                                outSocket.send(quicPacket)
+                                                delay(5)
+                                                TtlHelper.setUdpTtl(outSocket, 64)
+                                                outSocket.send(outPacket)
                                             } else {
+                                                // General UDP Obfuscation - prepend noise packet with low TTL
+                                                val noise = FakePacketHelper.buildFakeUdpPacket(java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 150))
+                                                val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPortNum)
+                                                TtlHelper.setUdpTtl(outSocket, 5)
+                                                outSocket.send(noisePacket)
+                                                delay(2)
+                                                TtlHelper.setUdpTtl(outSocket, 64)
                                                 outSocket.send(outPacket)
                                             }
-                                        } catch (e: Exception) {
-                                            // Ignored
+                                        } else {
+                                            outSocket.send(outPacket)
+                                        }
+                                    } catch (e: Exception) {
+                                        // If IP resolution failed or was not in cache, we might need a coroutine for this specific packet
+                                        if (resolved == null) {
+                                            launch(Dispatchers.IO) {
+                                                try {
+                                                    val res = RobustResolver.resolve(targetHost, vpnService)
+                                                    if (res.isNotEmpty()) {
+                                                        val targetInet = res.first()
+                                                        val outPacket = java.net.DatagramPacket(payload, payload.size, targetInet, targetPortNum)
+                                                        outSocket.send(outPacket)
+                                                    }
+                                                } catch (e2: Exception) {}
+                                            }
                                         }
                                     }
                                 }

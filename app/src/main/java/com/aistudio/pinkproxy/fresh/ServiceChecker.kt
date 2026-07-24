@@ -40,16 +40,16 @@ object ServiceChecker {
 
     fun checkStall(currentBytes: Long) {
         val now = System.currentTimeMillis()
-        if (now - lastStallCheck > 90000) { // Check every 90 seconds (was 15s)
+        if (now - lastStallCheck > 45000) { // Check every 45 seconds
             val diff = currentBytes - lastTotalBytes
             val activeConns = ProxyStats.activeConnections.value
             // Stall is only if we have high active connections and no data for a long time,
             // or high error rate. Long polling can legitimately hold connections.
-            val stalled = activeConns > 5 && diff == 0L
+            val stalled = activeConns > 2 && diff == 0L
             _isStalled.value = stalled
             
-            if (stalled && ProxyStats.successRate.value < 70) {
-                ProxyStats.logRecovery("WARNING: Traffic stall detected (many active connections, 0 bytes moved for 90s, low success rate). Self-healing started...")
+            if (stalled && ProxyStats.successRate.value < 75) {
+                ProxyStats.logRecovery("WARNING: Traffic stall detected (active connections, 0 bytes moved for 45s, low success rate). Self-healing started...")
                 RobustResolver.clearCache()
                 BypassConfig.panicOptimize()
                 appContext?.let { ctx ->
