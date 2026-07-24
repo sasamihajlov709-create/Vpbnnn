@@ -398,6 +398,7 @@ object ServiceChecker {
                     
                     for (host in testHosts) {
                         var socket: java.net.Socket? = null
+                        var hostSuccess = false
                         try {
                             val start = System.currentTimeMillis()
                             val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
@@ -422,6 +423,7 @@ object ServiceChecker {
                                     if (readCount >= 1 && response[0] == 0x16.toByte()) {
                                         successCount++
                                         totalDuration += (System.currentTimeMillis() - start)
+                                        hostSuccess = true
                                     }
                                 }
                             }
@@ -430,16 +432,13 @@ object ServiceChecker {
                         } finally {
                             try { socket?.close() } catch (e: Exception) {}
                         }
-                        if (successCount == 0 && host == testHosts.first()) break // Fast fail if first host fails
+                        BypassConfig.recordStrategyResult(host, strategy, hostSuccess)
                     }
                     
                     if (successCount > 0) {
                         val avgDuration = totalDuration / successCount
                         resultsChannel.add(Triple(strategy, avgDuration, successCount))
-                        BypassConfig.recordStrategyResult(testHosts.first(), strategy, true)
                         ProxyStats.logRecovery("Tournament: ${strategy.name} scored $successCount/${testHosts.size} (avg ${avgDuration}ms)")
-                    } else {
-                        BypassConfig.recordStrategyResult(testHosts.first(), strategy, false)
                     }
                 }
             }

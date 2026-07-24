@@ -259,8 +259,9 @@ object BypassConfig {
 
     private val strategyScores = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
     private val hostStrategyMemory = ConcurrentHashMap<String, BypassStrategy>()
-    private val hostBlacklist = ConcurrentHashMap<String, MutableMap<BypassStrategy, Long>>()
-    private val strategyStats = ConcurrentHashMap<BypassStrategy, Triple<Long, Long, Long>>() // Successes, Failures, Total RTT
+    private val hostBlacklist = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Long>>()
+    class StratStats(val successes: AtomicLong = AtomicLong(), val failures: AtomicLong = AtomicLong(), val totalRtt: AtomicLong = AtomicLong())
+    private val strategyStats = ConcurrentHashMap<BypassStrategy, StratStats>()
 
     private val _currentRttMs = MutableStateFlow(50L)
     val currentRttMs: StateFlow<Long> = _currentRttMs.asStateFlow()
@@ -298,7 +299,7 @@ object BypassConfig {
             strategyScores[cat] = catMap
         }
         BypassStrategy.entries.forEach {
-            strategyStats[it] = Triple(0L, 0L, 0L)
+            strategyStats[it] = StratStats()
         }
     }
 
@@ -455,8 +456,9 @@ object BypassConfig {
             hostBlacklist[it]?.remove(strat)
         }
         
-        strategyStats[strat]?.let { (s, f, t) ->
-            strategyStats[strat] = Triple(s + 1, f, t + rtt)
+        strategyStats[strat]?.let { stats ->
+            stats.successes.incrementAndGet()
+            stats.totalRtt.addAndGet(rtt)
         }
     }
 
@@ -482,8 +484,8 @@ object BypassConfig {
             blacklist[strat] = System.currentTimeMillis() + 600000 // 10 min
         }
         
-        strategyStats[strat]?.let { (s, f, t) ->
-            strategyStats[strat] = Triple(s, f + 1, t)
+        strategyStats[strat]?.let { stats ->
+            stats.failures.incrementAndGet()
         }
     }
 
@@ -678,7 +680,10 @@ object BypassConfig {
         return BypassStrategy.entries.map { strat ->
             // Use weighted average score across categories or just OTHER as proxy
             val score = strategyScores[HostCategory.OTHER]?.get(strat)?.get() ?: 0
-            val (s, f, t) = strategyStats[strat] ?: Triple(0L, 0L, 0L)
+            val stats = strategyStats[strat] ?: StratStats()
+            val s = stats.successes.get()
+            val f = stats.failures.get()
+            val t = stats.totalRtt.get()
             val avgRtt = if (s > 0) t / s else 0L
             StrategyMetric(strat, score, s, f, avgRtt)
         }.sortedByDescending { it.score }
@@ -764,6 +769,13 @@ object BypassConfig {
                 val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 91))
                 TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_GREASE -> {
+                if (length > 0 && data[0] == 0x16.toByte()) {
+                    val fakeClientHello = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 90))
+                    TtlHelper.setTtl(socket, config.fakeTtl); output.write(fakeClientHello); output.flush()
+                    delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_OOB_DESYNC -> {
                 try { socket.sendUrgentData(0xFF) } catch (e: Exception) {}
@@ -1462,37 +1474,42 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             // Parallel connect racing for better reliability and speed
             targetSocket = try {
                 withTimeout(15000) {
-                    val deferreds = ips.take(3).map { ip ->
-                        async(Dispatchers.IO) {
+                    val channel = kotlinx.coroutines.channels.Channel<Socket>(ips.size)
+                    val errors = java.util.concurrent.atomic.AtomicInteger(0)
+                    val numJobs = minOf(ips.size, 3)
+                    
+                    val jobs = ips.take(3).map { ip ->
+                        launch(Dispatchers.IO) {
                             val s = Socket()
                             s.tcpNoDelay = true
                             s.keepAlive = true
                             vpnService.protect(s)
                             try {
                                 s.connect(InetSocketAddress(ip, targetPort), 10000)
-                                s
+                                channel.trySend(s)
                             } catch (e: Exception) {
                                 try { s.close() } catch (e2: Exception) {}
-                                throw e
+                                if (errors.incrementAndGet() == numJobs) {
+                                    channel.close()
+                                }
                             }
                         }
                     }
                     
-                    val winner = kotlinx.coroutines.selects.select<Socket> {
-                        deferreds.forEach { deferred ->
-                            deferred.onAwait { it }
-                        }
+                    val winner = try {
+                        channel.receive()
+                    } catch (e: kotlinx.coroutines.channels.ClosedReceiveChannelException) {
+                        throw Exception("All connection attempts failed")
                     }
                     
-                    // Cleanup other attempts
-                    deferreds.forEach { def ->
-                        if (def.isCompleted) {
-                            val res = try { def.getCompleted() } catch (e: Exception) { null }
-                            if (res != null && res !== winner) try { res.close() } catch (e: Exception) {}
-                        } else {
-                            def.cancel()
-                        }
+                    jobs.forEach { it.cancel() }
+                    
+                    // Cleanup any other sockets that might have succeeded
+                    while (true) {
+                        val s = channel.tryReceive().getOrNull() ?: break
+                        if (s !== winner) try { s.close() } catch (e: Exception) {}
                     }
+                    
                     winner
                 }
             } catch (e: Exception) {

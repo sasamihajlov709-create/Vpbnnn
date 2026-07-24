@@ -35,6 +35,26 @@ class Socks5ProxyE2ETest {
 
     @Test
     fun testSocks5HandshakeAndConnect() {
+        // Start a dummy echo server
+        val echoServer = java.net.ServerSocket(0)
+        val targetPort = echoServer.localPort
+        
+        val echoThread = Thread {
+            try {
+                val client = echoServer.accept()
+                val clientIn = client.getInputStream()
+                val clientOut = client.getOutputStream()
+                val buffer = ByteArray(1024)
+                val read = clientIn.read(buffer)
+                if (read > 0) {
+                    clientOut.write(buffer, 0, read)
+                    clientOut.flush()
+                }
+                client.close()
+            } catch (e: Exception) {}
+        }
+        echoThread.start()
+        
         val socket = Socket()
         socket.connect(InetSocketAddress("127.0.0.1", port))
         val out = socket.getOutputStream()
@@ -50,9 +70,10 @@ class Socks5ProxyE2ETest {
         assertEquals(5.toByte(), authResp[0])
         assertEquals(0.toByte(), authResp[1]) // No auth
 
-        // Send SOCKS5 Connect request (to 127.0.0.1 port 18080 - we connect to ourselves just to see if connection works)
-        // 5, 1 (connect), 0, 1 (ipv4), 127.0.0.1, port 18080 (0x46, 0xA0)
-        val connectReq = byteArrayOf(5, 1, 0, 1, 127, 0, 0, 1, 0x46, 0xA0.toByte())
+        // Send SOCKS5 Connect request to our dummy echo server
+        val portHigh = (targetPort shr 8).toByte()
+        val portLow = (targetPort and 0xFF).toByte()
+        val connectReq = byteArrayOf(5, 1, 0, 1, 127, 0, 0, 1, portHigh, portLow)
         out.write(connectReq)
         out.flush()
 
@@ -61,10 +82,8 @@ class Socks5ProxyE2ETest {
         val readLen = input.read(connectResp)
         assertTrue(readLen >= 10)
         assertEquals(5.toByte(), connectResp[0])
-        // If it's a real connect, it would be 0, but since this is Robolectric and we actually connect to internet,
-        // it should succeed if internet is up.
-        // Actually it might fail in CI without network. Let's just check it doesn't crash.
         
         socket.close()
+        echoServer.close()
     }
 }

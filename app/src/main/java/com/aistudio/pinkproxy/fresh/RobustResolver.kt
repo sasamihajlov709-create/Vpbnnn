@@ -599,21 +599,33 @@ object RobustResolver {
                 if (best != null) endpoints.add(best.first)
                 endpoints.addAll(dohEndpoints.shuffled().take(5))
                 
-                val deferreds = endpoints.distinct().map { dns ->
-                    async { queryDoh(host, dns, "A", vpnService) }
+                val distinctEndpoints = endpoints.distinct()
+                val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(distinctEndpoints.size)
+                val errors = java.util.concurrent.atomic.AtomicInteger(0)
+                
+                val jobs = distinctEndpoints.map { dns ->
+                    launch(Dispatchers.IO) {
+                        try {
+                            val res = queryDoh(host, dns, "A", vpnService)
+                            if (res.isNotEmpty()) {
+                                channel.trySend(res)
+                            } else {
+                                if (errors.incrementAndGet() == distinctEndpoints.size) channel.close()
+                            }
+                        } catch (e: Exception) {
+                            if (errors.incrementAndGet() == distinctEndpoints.size) channel.close()
+                        }
+                    }
                 }
                 
                 val result = try {
-                    kotlinx.coroutines.selects.select<List<InetAddress>> {
-                        deferreds.forEach { def ->
-                            def.onAwait { if (it.isNotEmpty()) it else throw Exception("Empty result") }
-                        }
-                    }
-                } catch (e: Exception) {
+                    channel.receive()
+                } catch (e: kotlinx.coroutines.channels.ClosedReceiveChannelException) {
                     emptyList<InetAddress>()
-                } finally {
-                    deferreds.forEach { it.cancel() }
                 }
+                
+                jobs.forEach { it.cancel() }
+                channel.close()
                 result
             }
         } ?: emptyList()
