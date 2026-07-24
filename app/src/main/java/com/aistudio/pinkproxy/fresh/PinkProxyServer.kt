@@ -68,19 +68,26 @@ enum class BypassStrategy(
     HTTP_METHOD_FAKE(StrategyFamily.HTTP, 3, 3),
     TLS_LEGACY_HELLOS(StrategyFamily.TLS, 3, 3),
     TCP_KEEP_ALIVE_FAKE(StrategyFamily.TCP, 2, 2),
+    QUIC_INITIAL_FAKE(StrategyFamily.QUIC, 3, 2),
+    QUIC_RST_SKEW(StrategyFamily.QUIC, 4, 3),
+    QUIC_MTU_PROBE(StrategyFamily.QUIC, 3, 3),
+    DNS_OVER_TCP(StrategyFamily.DNS, 2, 1),
+    DNS_NOISE(StrategyFamily.DNS, 3, 3),
+    DNS_CASE_MANGLE(StrategyFamily.DNS, 2, 2),
+    ADAPTIVE_CHUNK(StrategyFamily.ADAPTIVE, 3, 2),
     HTTP_HOST_CASE_MANGLE(StrategyFamily.HTTP, 2, 3),
     TLS_SESSION_TICKET_SKEW(StrategyFamily.TLS, 3, 2),
     TLS_MULTI_SNI(StrategyFamily.TLS, 4, 4),
     HTTP_CHUNKED_FAKE(StrategyFamily.HTTP, 4, 3),
     TCP_WINDOW_RESTRICT(StrategyFamily.TCP, 3, 2),
     TLS_COMPRESSION_FAKE(StrategyFamily.TLS, 3, 3),
-    TLS_ECH_FAKE(StrategyFamily.TLS, 3, 2),
     TCP_WINDOW_SCAN(StrategyFamily.TCP, 4, 3),
     HTTP_PIPELINE_FAKE(StrategyFamily.HTTP, 4, 4),
     TLS_CHROME_HELLO_FAKE(StrategyFamily.TLS, 2, 1),
     TLS_FIREFOX_HELLO_FAKE(StrategyFamily.TLS, 2, 1),
     TLS_13_HELLO_FAKE(StrategyFamily.TLS, 2, 1),
     TCP_REORDER_DESYNC(StrategyFamily.TCP, 4, 4),
+    TLS_ECH_FAKE(StrategyFamily.TLS, 4, 3),
     TLS_SESSION_ID_RAND(StrategyFamily.TLS, 2, 2),
     TCP_ACK_DELAY(StrategyFamily.TIMING, 4, 3),
     TLS_GREASE_SKEW(StrategyFamily.TLS, 3, 2)
@@ -1181,6 +1188,15 @@ object BypassConfig {
                 TtlHelper.setTtl(socket, config.fakeTtl); output.write(grease); output.flush()
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
+            BypassStrategy.ADAPTIVE_CHUNK -> {
+                var offset = 0
+                while (offset < length) {
+                    val chunkSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 10).coerceAtMost(length - offset)
+                    output.write(data, offset, chunkSize); output.flush()
+                    delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 20))
+                    offset += chunkSize
+                }
+            }
             BypassStrategy.CHAOS -> {
                 val strat = BypassStrategy.entries.filter { it != BypassStrategy.CHAOS && it != BypassStrategy.DIRECT }.random()
                 applyBypass(socket, output, data, length, config.copy(strategy = strat), host)
@@ -1423,14 +1439,14 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     // General UDP Forwarding - using shared resolver with packet queuing
                                     val resolved = RobustResolver.getCached(targetHost)
                                     if (resolved != null && resolved.isNotEmpty()) {
-                                        sendUdpPacket(outSocket, payload, resolved.first(), targetPortNum)
+                                        sendUdpPacket(outSocket, payload, resolved.first(), targetPortNum, targetHost)
                                     } else {
                                         // Queue packet and resolve in background to avoid blocking the main UDP loop
                                         launch(Dispatchers.IO) {
                                             try {
                                                 val res = RobustResolver.resolve(targetHost, vpnService)
                                                 if (res.isNotEmpty()) {
-                                                    sendUdpPacket(outSocket, payload, res.first(), targetPortNum)
+                                                    sendUdpPacket(outSocket, payload, res.first(), targetPortNum, targetHost)
                                                 }
                                             } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                                         }
@@ -1645,9 +1661,9 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         }
     }
 
-    private suspend fun sendUdpPacket(socket: java.net.DatagramSocket, payload: ByteArray, targetInet: java.net.InetAddress, targetPort: Int) {
+    private suspend fun sendUdpPacket(socket: java.net.DatagramSocket, payload: ByteArray, targetInet: java.net.InetAddress, targetPort: Int, targetHost: String = "") {
         val outPacket = java.net.DatagramPacket(payload, payload.size, targetInet, targetPort)
-        val strategy = BypassConfig.strategy.value
+        val strategy = BypassConfig.getBestStrategyForHost(if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress)
         
         val isQuic = targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0
         
@@ -1655,36 +1671,72 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             return
         }
 
-        if (strategy != BypassStrategy.DIRECT) {
-            if (isQuic) {
-                // QUIC obfuscation
-                val fakeQuic = FakePacketHelper.buildQuicInitial()
-                val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
-                TtlHelper.setUdpTtl(socket, 5)
-                socket.send(fakeQuicPacket)
-                delay(3)
-                TtlHelper.setUdpTtl(socket, 64)
-                socket.send(outPacket)
-            } else if (targetPort == 53) {
-                // DNS Obfuscation
-                val noise = FakePacketHelper.buildQuicInitial() // Confuse DPI with QUIC on port 53
-                val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
-                TtlHelper.setUdpTtl(socket, 5)
-                socket.send(noisePacket)
-                delay(3)
-                TtlHelper.setUdpTtl(socket, 64)
-                socket.send(outPacket)
-            } else {
-                // General UDP Obfuscation
-                val noise = FakePacketHelper.buildFakeUdpPacket(java.util.concurrent.ThreadLocalRandom.current().nextInt(30, 150))
-                val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
-                TtlHelper.setUdpTtl(socket, 5)
-                socket.send(noisePacket)
-                delay(3)
-                TtlHelper.setUdpTtl(socket, 64)
-                socket.send(outPacket)
+        if (strategy == BypassStrategy.DIRECT) {
+            socket.send(outPacket)
+            return
+        }
+
+        if (isQuic) {
+            when (strategy) {
+                BypassStrategy.QUIC_INITIAL_FAKE -> {
+                    val fakeQuic = FakePacketHelper.buildQuicInitial()
+                    val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 5)
+                    socket.send(fakeQuicPacket)
+                    delay(3)
+                    TtlHelper.setUdpTtl(socket, 64)
+                    socket.send(outPacket)
+                }
+                BypassStrategy.QUIC_RST_SKEW -> {
+                    val rstPayload = FakePacketHelper.buildFakeUdpPacket(20) // Simulated QUIC Reset
+                    val rstPacket = java.net.DatagramPacket(rstPayload, rstPayload.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 3)
+                    socket.send(rstPacket)
+                    delay(2)
+                    TtlHelper.setUdpTtl(socket, 64)
+                    socket.send(outPacket)
+                }
+                else -> {
+                    // Default QUIC obfuscation
+                    val fakeQuic = FakePacketHelper.buildQuicInitial()
+                    val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 5)
+                    socket.send(fakeQuicPacket)
+                    delay(3)
+                    TtlHelper.setUdpTtl(socket, 64)
+                    socket.send(outPacket)
+                }
+            }
+        } else if (targetPort == 53) {
+            when (strategy) {
+                BypassStrategy.DNS_NOISE -> {
+                    val noise = FakePacketHelper.buildFakeUdpPacket(50)
+                    val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 4)
+                    socket.send(noisePacket)
+                    delay(2)
+                    TtlHelper.setUdpTtl(socket, 64)
+                    socket.send(outPacket)
+                }
+                else -> {
+                    // Default DNS Obfuscation
+                    val noise = FakePacketHelper.buildQuicInitial() // Confuse DPI with QUIC on port 53
+                    val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 5)
+                    socket.send(noisePacket)
+                    delay(3)
+                    TtlHelper.setUdpTtl(socket, 64)
+                    socket.send(outPacket)
+                }
             }
         } else {
+            // General UDP Obfuscation
+            val noise = FakePacketHelper.buildFakeUdpPacket(java.util.concurrent.ThreadLocalRandom.current().nextInt(30, 150))
+            val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
+            TtlHelper.setUdpTtl(socket, 5)
+            socket.send(noisePacket)
+            delay(3)
+            TtlHelper.setUdpTtl(socket, 64)
             socket.send(outPacket)
         }
     }
