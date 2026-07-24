@@ -1197,6 +1197,23 @@ object BypassConfig {
                     offset += chunkSize
                 }
             }
+            BypassStrategy.DNS_OVER_TCP -> {
+                val prefix = byteArrayOf(0, length.toByte())
+                output.write(prefix); output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.DNS_CASE_MANGLE -> {
+                // Simple case mangling (very naive)
+                val mod = data.clone()
+                for (i in 0 until length) {
+                    if (mod[i] >= 65 && mod[i] <= 90) mod[i] = (mod[i] + 32).toByte()
+                    else if (mod[i] >= 97 && mod[i] <= 122 && java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) mod[i] = (mod[i] - 32).toByte()
+                }
+                output.write(mod, 0, length); output.flush()
+            }
+            BypassStrategy.QUIC_MTU_PROBE -> {
+                output.write(data, 0, length); output.flush()
+                repeat(5) { delay(10); output.write(ByteArray(1200) { 0 }); output.flush() }
+            }
             BypassStrategy.CHAOS -> {
                 val strat = BypassStrategy.entries.filter { it != BypassStrategy.CHAOS && it != BypassStrategy.DIRECT }.random()
                 applyBypass(socket, output, data, length, config.copy(strategy = strat), host)
@@ -1681,29 +1698,29 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                 BypassStrategy.QUIC_INITIAL_FAKE -> {
                     val fakeQuic = FakePacketHelper.buildQuicInitial()
                     val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5)
+                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
                     socket.send(fakeQuicPacket)
                     delay(3)
-                    TtlHelper.setUdpTtl(socket, 64)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
                 BypassStrategy.QUIC_RST_SKEW -> {
                     val rstPayload = FakePacketHelper.buildFakeUdpPacket(20) // Simulated QUIC Reset
                     val rstPacket = java.net.DatagramPacket(rstPayload, rstPayload.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 3)
+                    TtlHelper.setUdpTtl(socket, 3, targetInet is java.net.Inet6Address)
                     socket.send(rstPacket)
                     delay(2)
-                    TtlHelper.setUdpTtl(socket, 64)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
                 else -> {
                     // Default QUIC obfuscation
                     val fakeQuic = FakePacketHelper.buildQuicInitial()
                     val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5)
+                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
                     socket.send(fakeQuicPacket)
                     delay(3)
-                    TtlHelper.setUdpTtl(socket, 64)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
             }
@@ -1712,20 +1729,20 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                 BypassStrategy.DNS_NOISE -> {
                     val noise = FakePacketHelper.buildFakeUdpPacket(50)
                     val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 4)
+                    TtlHelper.setUdpTtl(socket, 4, targetInet is java.net.Inet6Address)
                     socket.send(noisePacket)
                     delay(2)
-                    TtlHelper.setUdpTtl(socket, 64)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
                 else -> {
                     // Default DNS Obfuscation
                     val noise = FakePacketHelper.buildQuicInitial() // Confuse DPI with QUIC on port 53
                     val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5)
+                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
                     socket.send(noisePacket)
                     delay(3)
-                    TtlHelper.setUdpTtl(socket, 64)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
             }
@@ -1733,10 +1750,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             // General UDP Obfuscation
             val noise = FakePacketHelper.buildFakeUdpPacket(java.util.concurrent.ThreadLocalRandom.current().nextInt(30, 150))
             val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
-            TtlHelper.setUdpTtl(socket, 5)
+            TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
             socket.send(noisePacket)
             delay(3)
-            TtlHelper.setUdpTtl(socket, 64)
+            TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
             socket.send(outPacket)
         }
     }

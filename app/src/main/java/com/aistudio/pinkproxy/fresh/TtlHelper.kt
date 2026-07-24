@@ -61,12 +61,11 @@ object TtlHelper {
         }
     }
 
-    fun setUdpTtl(socket: java.net.DatagramSocket, ttl: Int): Boolean {
+    fun setUdpTtl(socket: java.net.DatagramSocket, ttl: Int, isIpv6: Boolean = false): Boolean {
         return try {
             val pfd = ParcelFileDescriptor.fromDatagramSocket(socket)
             try {
-                val isIpv6 = socket.inetAddress is java.net.Inet6Address
-                if (isIpv6) {
+                if (isIpv6 || socket.inetAddress is java.net.Inet6Address) {
                     Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IPV6, OsConstants.IPV6_UNICAST_HOPS, ttl)
                 } else {
                     Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IP, OsConstants.IP_TTL, ttl)
