@@ -347,7 +347,7 @@ class PinkVpnService : VpnService() {
         stopVpn()
         try {
             networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         serviceScope.cancel()
         instance = null
         BypassConfig.activeVpnService = null

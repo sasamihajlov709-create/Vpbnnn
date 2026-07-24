@@ -110,7 +110,7 @@ object ServiceChecker {
                     break
                 }
             } catch (e: Exception) { android.util.Log.v("PinkProxy", "Baseline ignored: ${e.message}") } finally {
-                try { conn?.disconnect() } catch (e: Exception) {}
+                try { conn?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
         
@@ -430,7 +430,7 @@ object ServiceChecker {
                         } catch (e: Exception) {
                             // Ignored failure for this host
                         } finally {
-                            try { socket?.close() } catch (e: Exception) {}
+                            try { socket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                         BypassConfig.recordStrategyResult(host, strategy, hostSuccess)
                     }
@@ -452,12 +452,13 @@ object ServiceChecker {
                 .sortedWith(compareByDescending<Triple<BypassStrategy, Long, Int>> { it.third }.thenBy { it.second })
                 .firstOrNull()
                 
-            if (best != null) {
-                BypassConfig.setStrategy(best.first)
-                ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} (${best.third}/${testHosts.size} hosts ok)!")
+            if (best != null && best.third > 0) {
+                // Do not hardcode the global strategy based on a single background smoke test.
+                // Just let the optimizer know this strategy had a successful probe.
+                BypassConfig.recordStrategyResult("global_probe", best.first, true, best.second)
+                ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} (${best.third}/${testHosts.size} hosts ok)! Logged for ranking.")
             } else {
-                BypassConfig.setStrategy(originalStrategy)
-                ProxyStats.logRecovery("Autopilot: No strategy surpassed original. Restored ${originalStrategy.name}")
+                ProxyStats.logRecovery("Autopilot: No clear winner in tournament. Maintaining current states.")
             }
             
             isProbing.set(false)
