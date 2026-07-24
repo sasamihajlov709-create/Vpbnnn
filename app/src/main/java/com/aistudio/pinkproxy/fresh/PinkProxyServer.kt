@@ -90,6 +90,9 @@ enum class BypassStrategy(
     TLS_ECH_FAKE(StrategyFamily.TLS, 4, 3),
     TLS_SESSION_ID_RAND(StrategyFamily.TLS, 2, 2),
     TCP_ACK_DELAY(StrategyFamily.TIMING, 4, 3),
+    TLS_MIXED_CASE_SNI(StrategyFamily.TLS, 3, 2),
+    TLS_0RTT_FAKE(StrategyFamily.TLS, 4, 3),
+    HTTP2_PREAMBLE_FAKE(StrategyFamily.HTTP, 3, 3),
     TLS_GREASE_SKEW(StrategyFamily.TLS, 3, 2)
 }
 
@@ -1100,6 +1103,11 @@ object BypassConfig {
                 val hello = FakePacketHelper.buildMultiSniHello(host)
                 output.write(hello); output.flush(); delay(config.delay1); output.write(data, 0, length); output.flush()
             }
+            BypassStrategy.HTTP2_PREAMBLE_FAKE -> {
+                val preamble = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+                output.write(preamble.toByteArray()); output.flush(); delay(10)
+                output.write(data, 0, length); output.flush()
+            }
             BypassStrategy.HTTP_CHUNKED_FAKE -> {
                 val s = String(data, 0, length)
                 if (s.contains("HTTP/")) {
@@ -1109,6 +1117,19 @@ object BypassConfig {
             }
             BypassStrategy.TCP_WINDOW_RESTRICT -> {
                 socket.sendBufferSize = 512; output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_MIXED_CASE_SNI -> {
+                val mixedHost = host.map { if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) it.uppercaseChar() else it.lowercaseChar() }.joinToString("")
+                val hello = FakePacketHelper.buildFakeClientHello(mixedHost, rnd.nextInt(50, 100))
+                output.write(hello); output.flush(); delay(config.delay1)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_0RTT_FAKE -> {
+                val hello = FakePacketHelper.buildTls13Hello(host)
+                val earlyData = ByteArray(rnd.nextInt(50, 200)) { rnd.nextInt(256).toByte() }
+                output.write(hello); output.flush(); delay(5)
+                output.write(earlyData); output.flush(); delay(config.delay1)
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_COMPRESSION_FAKE -> {
                 val hello = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(50, 100))
@@ -1359,25 +1380,16 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                 val packet = java.net.DatagramPacket(buffer, buffer.size)
                                 outSocket.receive(packet)
                                 if (clientUdpAddress != null) {
-                                    val outBuffer = java.io.ByteArrayOutputStream()
-                                    outBuffer.write(0) // RSV
-                                    outBuffer.write(0) // RSV
-                                    outBuffer.write(0) // FRAG
-                                    
                                     val addrBytes = packet.address.address
-                                    if (addrBytes.size == 4) {
-                                        outBuffer.write(1)
-                                        outBuffer.write(addrBytes)
-                                    } else {
-                                        outBuffer.write(4)
-                                        outBuffer.write(addrBytes)
-                                    }
-                                    outBuffer.write(packet.port shr 8)
-                                    outBuffer.write(packet.port and 0xFF)
-                                    outBuffer.write(packet.data, packet.offset, packet.length)
+                                    val respBytes = ByteArray(packet.length + 22)
+                                    var offset = 0
+                                    respBytes[offset++] = 0; respBytes[offset++] = 0; respBytes[offset++] = 0
+                                    if (addrBytes.size == 4) { respBytes[offset++] = 1 } else { respBytes[offset++] = 4 }
+                                    System.arraycopy(addrBytes, 0, respBytes, offset, addrBytes.size); offset += addrBytes.size
+                                    respBytes[offset++] = (packet.port shr 8).toByte(); respBytes[offset++] = (packet.port and 0xFF).toByte()
+                                    System.arraycopy(packet.data, packet.offset, respBytes, offset, packet.length); offset += packet.length
+                                    udpSocket.send(java.net.DatagramPacket(respBytes, offset, clientUdpAddress, clientUdpPort))
                                     
-                                    val respBytes = outBuffer.toByteArray()
-                                    udpSocket.send(java.net.DatagramPacket(respBytes, respBytes.size, clientUdpAddress, clientUdpPort))
                                 }
                             }
                         } catch (e: Exception) {
@@ -1438,17 +1450,17 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                             if (ipStrs.isNotEmpty()) {
                                                 val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
                                                 
-                                                val outBuffer = java.io.ByteArrayOutputStream()
-                                                outBuffer.write(0); outBuffer.write(0); outBuffer.write(0)
-                                                outBuffer.write(pAtyp)
-                                                if (pAtyp == 1) outBuffer.write(data, 4, 4)
-                                                else if (pAtyp == 3) { outBuffer.write(data[4].toInt()); outBuffer.write(data, 5, data[4].toInt() and 0xFF) }
-                                                else if (pAtyp == 4) outBuffer.write(data, 4, 16)
-                                                outBuffer.write(targetPortNum shr 8); outBuffer.write(targetPortNum and 0xFF)
-                                                outBuffer.write(dnsReply)
-                                                
-                                                val responseBytes = outBuffer.toByteArray()
-                                                udpSocket.send(java.net.DatagramPacket(responseBytes, responseBytes.size, packet.address, packet.port))
+                                                val headerSize = if (pAtyp == 1) 10 else if (pAtyp == 4) 22 else 7 + (data[4].toInt() and 0xFF)
+                                                val responseBytes = ByteArray(headerSize + dnsReply.size)
+                                                var offset = 0
+                                                responseBytes[offset++] = 0; responseBytes[offset++] = 0; responseBytes[offset++] = 0; responseBytes[offset++] = pAtyp.toByte()
+                                                if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, offset, 4); offset += 4 }
+                                                else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[offset++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, offset, dlen); offset += dlen }
+                                                else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, offset, 16); offset += 16 }
+                                                responseBytes[offset++] = (targetPortNum shr 8).toByte(); responseBytes[offset++] = (targetPortNum and 0xFF).toByte()
+                                                System.arraycopy(dnsReply, 0, responseBytes, offset, dnsReply.size)
+                                                offset += dnsReply.size
+                                                udpSocket.send(java.net.DatagramPacket(responseBytes, offset, packet.address, packet.port))
                                             }
                                         }
                                     }
