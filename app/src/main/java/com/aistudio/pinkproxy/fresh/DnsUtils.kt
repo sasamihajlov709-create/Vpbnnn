@@ -26,7 +26,7 @@ object DnsUtils {
                 return ParsedDnsQuery(sb.toString(), qtype)
             }
             return ParsedDnsQuery(sb.toString(), 1)
-        } catch (e: Exception) { return null }
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}"); return null }
     }
 
     fun buildDnsReply(query: ByteArray, ips: List<String>, isIpv6: Boolean): ByteArray {

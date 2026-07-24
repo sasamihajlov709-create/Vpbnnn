@@ -524,7 +524,7 @@ object RobustResolver {
         if (isIpAddress(host)) {
             try {
                 return listOf(java.net.InetAddress.getByName(host))
-            } catch (e: Exception) { return null }
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}"); return null }
         }
         val now = System.currentTimeMillis()
         dnsCache[host]?.let { (addresses, timestamp) ->
@@ -832,7 +832,7 @@ object RobustResolver {
             try {
                 val ips = queryDohRaw(host, dnsIp, vpnService)
                 if (ips.isNotEmpty()) return ips
-            } catch (e: Exception) { }
+            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         }
 
         var conn: java.net.HttpURLConnection? = null
@@ -1135,9 +1135,9 @@ object RobustResolver {
         } catch (e: Exception) {
             return emptyList()
         } finally {
-            try { sslSocket?.close() } catch (e: Exception) { }
+            try { sslSocket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             if (sslSocket == null) {
-                try { rawSocket?.close() } catch (e: Exception) { }
+                try { rawSocket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
     }
