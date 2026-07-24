@@ -591,6 +591,34 @@ object RobustResolver {
         "medium", "quora", "pinterest", "reddit", "linkedin", "spotify", "netflix"
     )
 
+    private suspend fun queryDohRacing(host: String, vpnService: VpnService?): List<InetAddress> {
+        return withTimeoutOrNull(5000) {
+            supervisorScope {
+                val endpoints = mutableListOf<String>()
+                val best = getBestProviderAndLatency()
+                if (best != null) endpoints.add(best.first)
+                endpoints.addAll(dohEndpoints.shuffled().take(5))
+                
+                val deferreds = endpoints.distinct().map { dns ->
+                    async { queryDoh(host, dns, "A", vpnService) }
+                }
+                
+                val result = try {
+                    kotlinx.coroutines.selects.select<List<InetAddress>> {
+                        deferreds.forEach { def ->
+                            def.onAwait { if (it.isNotEmpty()) it else throw Exception("Empty result") }
+                        }
+                    }
+                } catch (e: Exception) {
+                    emptyList<InetAddress>()
+                } finally {
+                    deferreds.forEach { it.cancel() }
+                }
+                result
+            }
+        } ?: emptyList()
+    }
+
     private suspend fun performResolution(host: String, vpnService: android.net.VpnService?, forceSecure: Boolean): List<java.net.InetAddress> {
         val now = System.currentTimeMillis()
         val lHost = host.lowercase(java.util.Locale.ROOT)
@@ -610,90 +638,16 @@ object RobustResolver {
             }
         }
 
-                // Smart Logic: Parallel DoH & DoT Race with staggered start and panic mode support
-                if (isCensored || forceSecure || dnsMode == "Smart DoH" || dnsMode == "Custom" || BypassConfig.isPanicMode) {
-                    try {
-                        val endpoints = getDoHEndpointsForHost(host)
-                        val dotServers = defaultDnsServers.take(2)
-                        val resolved = kotlinx.coroutines.supervisorScope {
-                            val completableDeferred = kotlinx.coroutines.CompletableDeferred<List<InetAddress>>()
-                            val rtt = BypassConfig.currentRttMs.value
-                            val timeoutMs = (rtt * 3 + 500L).coerceIn(2000L, 8000L)
-
-                            // Job 1: System DNS (Fastest if cached, but skip if censored or panic)
-                            val systemJob = if (!isCensored && !BypassConfig.isPanicMode) {
-                                launch(Dispatchers.IO) {
-                                    try {
-                                        val results = java.net.InetAddress.getAllByName(host).toList()
-                                        if (results.isNotEmpty()) {
-                                            if (completableDeferred.complete(results.distinct())) {
-                                                ProxyStats.recordDnsResult(true)
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        logDiag("RobustResolver", "System DNS resolution failed for $host", e)
-                                    }
-                                }
-                            } else null
-
-                             // Job 2: DoH jobs with staggered start
-                             val resultsMap = java.util.concurrent.ConcurrentHashMap<String, List<InetAddress>>()
-                             val dohJobs = endpoints.mapIndexed { index, dns ->
-                                 launch(Dispatchers.IO) {
-                                     // Give bestDohUrl a head start of 50ms
-                                     if (dns != bestDohUrl) {
-                                         delay(if (index == 0) 50L else 50L + index * 40L)
-                                     }
-                                     
-                                     try {
-                                         val results = queryDohRaw(host, dns, vpnService)
-                                         if (results.isNotEmpty()) {
-                                             val distinct = results.distinct()
-                                             resultsMap[dns] = distinct
-                                             
-                                             // Since DoH is encrypted and authenticated via TLS, we can immediately trust the fastest response
-                                             if (completableDeferred.complete(distinct)) {
-                                                 ProxyStats.recordDnsResult(true)
-                                                 bestDohUrl = dns
-                                             }
-                                         }
-                                     } catch (e: Exception) {
-                                         logDiag("RobustResolver", "DoH failed for $host via $dns", e)
-                                     }
-                                 }
-                             }
-                            
-                            // Job 3: DoT jobs
-                            val dotJobs = dotServers.map { dns ->
-                                launch(Dispatchers.IO) {
-                                    delay(100) // DoT is usually slower to connect
-                                    try {
-                                        val results = queryDot(host, dns, vpnService)
-                                        if (results.isNotEmpty()) {
-                                            if (completableDeferred.complete(results.distinct())) {
-                                                ProxyStats.recordDnsResult(true)
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        logDiag("RobustResolver", "DoT failed for $host via $dns", e)
-                                    }
-                                }
-                            }
-                            
-                            val result = withTimeoutOrNull(timeoutMs) {
-                                completableDeferred.await()
-                            }
-                            (dohJobs + dotJobs + (if (systemJob != null) listOf(systemJob) else emptyList())).forEach { it.cancel() }
-                            if (result == null) ProxyStats.recordDnsResult(false)
-                            result
-                        }
-                
-                if (resolved != null && resolved.isNotEmpty()) {
-                    dnsCache[host] = resolved to now
-                    return resolved
+        // Smart Logic: Parallel DoH & DoT Race
+        if (isCensored || forceSecure || dnsMode == "Smart DoH" || dnsMode == "Custom" || BypassConfig.isPanicMode) {
+            try {
+                val racing = queryDohRacing(host, vpnService)
+                if (racing.isNotEmpty()) {
+                    dnsCache[host] = racing to now
+                    return racing
                 }
             } catch (e: Exception) {
-                Log.w("RobustResolver", "DoH Race failed for $host")
+                Log.w("RobustResolver", "Racing DoH failed for $host")
             }
         }
 
@@ -847,7 +801,11 @@ object RobustResolver {
             if (ip.startsWith("0.")) return true
             
             // Known Bogon/Poisoned IPs used by some ISPs
-            val poisonedPrefixes = listOf("146.112.", "128.121.", "67.215.", "204.232.", "198.18.")
+            val poisonedPrefixes = listOf(
+                "146.112.", "128.121.", "67.215.", "204.232.", "198.18.", 
+                "93.184.216.34", "104.239.213.7", "127.0.0.1", "0.0.0.0",
+                "10.0.0.0", "192.0.0.0", "192.0.2.0", "198.51.100.0", "203.0.113.0"
+            )
             if (poisonedPrefixes.any { ip.startsWith(it) }) return true
         }
         return false

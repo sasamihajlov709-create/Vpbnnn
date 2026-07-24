@@ -61,6 +61,8 @@ class PinkVpnService : VpnService() {
     private var connectivityManager: android.net.ConnectivityManager? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
 
+    private var watchdogJob: Job? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -78,6 +80,59 @@ class PinkVpnService : VpnService() {
         BypassConfig.testInitialStrategies(this)
 
         registerNetworkMonitor()
+        startWatchdog()
+    }
+
+    private fun startWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = serviceScope.launch {
+            var lastBytes = 0L
+            var lastDnsFailures = 0L
+            var stagnantCounter = 0
+            while (isActive) {
+                delay(40000)
+                if (!_isRunning.value) continue
+                
+                val currentBytes = ProxyStats.bytesTransferred.value
+                val activeConns = ProxyStats.activeConnections.value
+                val dnsFailures = ProxyStats.dnsFailureCount.value
+                
+                // Local check if proxy is alive
+                try {
+                    val s = java.net.Socket()
+                    s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 2000)
+                    s.close()
+                } catch (e: Exception) {
+                    ProxyStats.logRecovery("Watchdog: Proxy port $PROXY_PORT is unreachable! Restarting proxy...")
+                    proxyServer?.stop()
+                    proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
+                    proxyServer?.start()
+                }
+
+                // DNS health check
+                if (dnsFailures > lastDnsFailures + 10) {
+                    ProxyStats.logRecovery("Watchdog: High DNS failure rate detected. Clearing resolver cache.")
+                    RobustResolver.clearCache()
+                }
+                lastDnsFailures = dnsFailures
+                
+                if (currentBytes > 0 && currentBytes == lastBytes && activeConns > 0) {
+                    stagnantCounter++
+                    if (stagnantCounter >= 3) { // 2 minutes of stagnant active connections
+                        ProxyStats.logRecovery("Watchdog: Engine Stagnant detected. Self-healing...")
+                        stagnantCounter = 0
+                        BypassConfig.panicOptimize()
+                        withContext(Dispatchers.Main) {
+                            val intent = Intent(this@PinkVpnService, PinkVpnService::class.java).apply { action = "RESTART" }
+                            startForegroundService(intent)
+                        }
+                    }
+                } else {
+                    stagnantCounter = 0
+                }
+                lastBytes = currentBytes
+            }
+        }
     }
 
     private fun registerNetworkMonitor() {
@@ -135,9 +190,10 @@ class PinkVpnService : VpnService() {
         if (vpnInterface != null) return
 
         try {
+            val mtu = BypassConfig.currentMtu.value
             val builder = Builder()
                 .setSession("PinkProxy")
-                .setMtu(BypassConfig.currentMtu.value)
+                .setMtu(mtu)
                 .addAddress("10.0.0.2", 24)
                 .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
                 .addDnsServer("1.1.1.1")

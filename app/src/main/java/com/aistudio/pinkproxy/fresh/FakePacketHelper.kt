@@ -26,6 +26,99 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildMultiSniHello(sni: String): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val rnd = Random()
+        
+        // Handshake header (Client Hello)
+        baos.write(0x16) // Content Type: Handshake
+        baos.write(0x03) // Version: 3
+        baos.write(0x01) // Version: 1 (TLS 1.0)
+        
+        val helloBaos = ByteArrayOutputStream()
+        helloBaos.write(0x01) // Handshake Type: Client Hello
+        helloBaos.write(0x00) // Length Placeholder
+        helloBaos.write(0x00)
+        helloBaos.write(0x00)
+        
+        helloBaos.write(0x03) // Version: 3
+        helloBaos.write(0x03) // Version: 3 (TLS 1.2)
+        
+        // Random
+        val randomBytes = ByteArray(32)
+        rnd.nextBytes(randomBytes)
+        helloBaos.write(randomBytes)
+        
+        // Session ID
+        helloBaos.write(0x00)
+        
+        // Cipher Suites
+        helloBaos.write(0x00)
+        helloBaos.write(0x02)
+        helloBaos.write(0xc0)
+        helloBaos.write(0x2b)
+        
+        // Compression Methods
+        helloBaos.write(0x01)
+        helloBaos.write(0x00)
+        
+        // Extensions
+        val extBaos = ByteArrayOutputStream()
+        
+        // SNI Extension 1 (Real)
+        val sniBaos = ByteArrayOutputStream()
+        sniBaos.write(0x00) // List length
+        sniBaos.write(sni.length + 3)
+        sniBaos.write(0x00) // Name type: host_name
+        sniBaos.write(0x00) // Name length
+        sniBaos.write(sni.length)
+        sniBaos.write(sni.toByteArray())
+        
+        extBaos.write(0x00) // Extension Type: server_name
+        extBaos.write(0x00)
+        extBaos.write(0x00)
+        extBaos.write(sniBaos.size())
+        extBaos.write(sniBaos.toByteArray())
+        
+        // SNI Extension 2 (Fake/Grease)
+        val fakeSni = "google.com"
+        val fakeSniBaos = ByteArrayOutputStream()
+        fakeSniBaos.write(0x00)
+        fakeSniBaos.write(fakeSni.length + 3)
+        fakeSniBaos.write(0x00)
+        fakeSniBaos.write(0x00)
+        fakeSniBaos.write(fakeSni.length)
+        fakeSniBaos.write(fakeSni.toByteArray())
+        
+        extBaos.write(0x00) 
+        extBaos.write(0x00)
+        extBaos.write(0x00)
+        extBaos.write(fakeSniBaos.size())
+        extBaos.write(fakeSniBaos.toByteArray())
+        
+        val extData = extBaos.toByteArray()
+        helloBaos.write(0x00) // Extensions length
+        helloBaos.write(extData.size)
+        helloBaos.write(extData)
+        
+        val helloData = helloBaos.toByteArray()
+        val len = helloData.size - 4
+        helloData[1] = ((len shr 16) and 0xFF).toByte()
+        helloData[2] = ((len shr 8) and 0xFF).toByte()
+        helloData[3] = (len and 0xFF).toByte()
+        
+        baos.write(0x00) // Handshake record length placeholder
+        baos.write(helloData.size)
+        baos.write(helloData)
+        
+        val fullData = baos.toByteArray()
+        val recordLen = fullData.size - 5
+        fullData[3] = ((recordLen shr 8) and 0xFF).toByte()
+        fullData[4] = (recordLen and 0xFF).toByte()
+        
+        return fullData
+    }
+
     fun buildPaddingExtension(size: Int): ByteArray {
         val padding = ByteArray(size.coerceAtLeast(0))
         java.util.concurrent.ThreadLocalRandom.current().nextBytes(padding)
@@ -338,6 +431,174 @@ object FakePacketHelper {
         val garbage = ByteArray(length)
         java.util.concurrent.ThreadLocalRandom.current().nextBytes(garbage)
         baos.write(garbage)
+        return baos.toByteArray()
+    }
+
+    fun buildChromeHello(sni: String): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        dos.writeByte(0x16)
+        dos.writeShort(0x0301)
+        val body = ByteArrayOutputStream()
+        val bd = DataOutputStream(body)
+        bd.writeByte(0x01)
+        bd.write(byteArrayOf(0, 0, 0))
+        bd.writeShort(0x0303)
+        val random = ByteArray(32)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(random)
+        bd.write(random)
+        bd.writeByte(32)
+        val sid = ByteArray(32)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(sid)
+        bd.write(sid)
+        val ciphers = byteArrayOf(
+            0x13.toByte(), 0x01.toByte(), 0x13.toByte(), 0x02.toByte(), 0x13.toByte(), 0x03.toByte(),
+            0xc0.toByte(), 0x2b.toByte(), 0xc0.toByte(), 0x2f.toByte(), 0xc0.toByte(), 0x2c.toByte(), 0xc0.toByte(), 0x30.toByte()
+        )
+        bd.writeShort(ciphers.size)
+        bd.write(ciphers)
+        bd.writeByte(1)
+        bd.writeByte(0)
+        val ext = ByteArrayOutputStream()
+        val ed = DataOutputStream(ext)
+        ed.writeShort(0x0000)
+        val sniBaos = ByteArrayOutputStream()
+        sniBaos.write(0x00); sniBaos.write(0x00); sniBaos.write((sni.length + 3) shr 8); sniBaos.write(sni.length + 3)
+        sniBaos.write(0x00); sniBaos.write(sni.length shr 8); sniBaos.write(sni.length)
+        sniBaos.write(sni.toByteArray())
+        ed.writeShort(sniBaos.size())
+        ed.write(sniBaos.toByteArray())
+        val extData = ext.toByteArray()
+        bd.writeShort(extData.size)
+        bd.write(extData)
+        val fullBody = body.toByteArray()
+        val len = fullBody.size - 4
+        fullBody[1] = ((len shr 16) and 0xFF).toByte()
+        fullBody[2] = ((len shr 8) and 0xFF).toByte()
+        fullBody[3] = (len and 0xFF).toByte()
+        dos.writeShort(fullBody.size)
+        dos.write(fullBody)
+        return baos.toByteArray()
+    }
+
+    fun buildFirefoxHello(sni: String): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        dos.writeByte(0x16)
+        dos.writeShort(0x0301)
+        val body = ByteArrayOutputStream()
+        val bd = DataOutputStream(body)
+        bd.writeByte(0x01)
+        bd.write(byteArrayOf(0, 0, 0))
+        bd.writeShort(0x0303)
+        val random = ByteArray(32)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(random)
+        bd.write(random)
+        bd.writeByte(0) // Firefox often uses empty session ID in newer versions or specific configs
+        val ciphers = byteArrayOf(
+            0x13.toByte(), 0x01.toByte(), 0x13.toByte(), 0x02.toByte(), 0x13.toByte(), 0x03.toByte(),
+            0xc0.toByte(), 0x2b.toByte(), 0xc0.toByte(), 0x2f.toByte(), 0xcc.toByte(), 0xa9.toByte(),
+            0xcc.toByte(), 0xa8.toByte(), 0xc0.toByte(), 0xaf.toByte(), 0xc0.toByte(), 0xad.toByte()
+        )
+        bd.writeShort(ciphers.size)
+        bd.write(ciphers)
+        bd.writeByte(1)
+        bd.writeByte(0)
+        
+        val ext = ByteArrayOutputStream()
+        val ed = DataOutputStream(ext)
+        
+        // SNI
+        ed.writeShort(0x0000)
+        val sniBaos = ByteArrayOutputStream()
+        sniBaos.write(0x00); sniBaos.write(0x00); sniBaos.write((sni.length + 3) shr 8); sniBaos.write(sni.length + 3)
+        sniBaos.write(0x00); sniBaos.write(sni.length shr 8); sniBaos.write(sni.length)
+        sniBaos.write(sni.toByteArray())
+        ed.writeShort(sniBaos.size())
+        ed.write(sniBaos.toByteArray())
+        
+        // Supported Versions (TLS 1.3)
+        ed.writeShort(0x002b)
+        ed.writeShort(3)
+        ed.writeByte(2)
+        ed.writeShort(0x0304)
+        
+        val extData = ext.toByteArray()
+        bd.writeShort(extData.size)
+        bd.write(extData)
+        
+        val fullBody = body.toByteArray()
+        val len = fullBody.size - 4
+        fullBody[1] = ((len shr 16) and 0xFF).toByte()
+        fullBody[2] = ((len shr 8) and 0xFF).toByte()
+        fullBody[3] = (len and 0xFF).toByte()
+        dos.writeShort(fullBody.size)
+        dos.write(fullBody)
+        return baos.toByteArray()
+    }
+
+    fun buildTls13Hello(sni: String): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        dos.writeByte(0x16)
+        dos.writeShort(0x0303) // TLS 1.2 record version for compatibility
+        
+        val body = ByteArrayOutputStream()
+        val bd = DataOutputStream(body)
+        bd.writeByte(0x01)
+        bd.write(byteArrayOf(0, 0, 0))
+        bd.writeShort(0x0303)
+        val random = ByteArray(32)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(random)
+        bd.write(random)
+        bd.writeByte(32)
+        val sid = ByteArray(32)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(sid)
+        bd.write(sid)
+        
+        // Only TLS 1.3 ciphers
+        val ciphers = byteArrayOf(0x13, 0x01, 0x13, 0x02, 0x13, 0x03)
+        bd.writeShort(ciphers.size)
+        bd.write(ciphers)
+        bd.writeByte(1)
+        bd.writeByte(0)
+        
+        val ext = ByteArrayOutputStream()
+        val ed = DataOutputStream(ext)
+        
+        // SNI
+        ed.writeShort(0x0000)
+        val sniBaos = ByteArrayOutputStream()
+        sniBaos.write(0x00); sniBaos.write(0x00); sniBaos.write((sni.length + 3) shr 8); sniBaos.write(sni.length + 3)
+        sniBaos.write(0x00); sniBaos.write(sni.length shr 8); sniBaos.write(sni.length)
+        sniBaos.write(sni.toByteArray())
+        ed.writeShort(sniBaos.size())
+        ed.write(sniBaos.toByteArray())
+        
+        // Supported Versions
+        ed.writeShort(0x002b)
+        ed.writeShort(3)
+        ed.writeByte(2)
+        ed.writeShort(0x0304)
+        
+        // Signature Algorithms
+        ed.writeShort(0x000d)
+        val sigs = byteArrayOf(0x04, 0x03, 0x05, 0x03, 0x06, 0x03, 0x08, 0x04, 0x08, 0x05, 0x08, 0x06)
+        ed.writeShort(sigs.size + 2)
+        ed.writeShort(sigs.size)
+        ed.write(sigs)
+        
+        val extData = ext.toByteArray()
+        bd.writeShort(extData.size)
+        bd.write(extData)
+        
+        val fullBody = body.toByteArray()
+        val len = fullBody.size - 4
+        fullBody[1] = ((len shr 16) and 0xFF).toByte()
+        fullBody[2] = ((len shr 8) and 0xFF).toByte()
+        fullBody[3] = (len and 0xFF).toByte()
+        dos.writeShort(fullBody.size)
+        dos.write(fullBody)
         return baos.toByteArray()
     }
 
