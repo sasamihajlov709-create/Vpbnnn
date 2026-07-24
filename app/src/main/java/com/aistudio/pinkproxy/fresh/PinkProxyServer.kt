@@ -1582,19 +1582,41 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         val outPacket = java.net.DatagramPacket(payload, payload.size, targetInet, targetPort)
         val strategy = BypassConfig.strategy.value
         
-        if (BypassConfig.blockQuic && targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0) {
+        val isQuic = targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0
+        
+        if (BypassConfig.blockQuic && isQuic) {
             return
         }
 
         if (strategy != BypassStrategy.DIRECT) {
-            // UDP Obfuscation: send a fake packet with low TTL to confuse DPI
-            val noise = FakePacketHelper.buildFakeUdpPacket(java.util.concurrent.ThreadLocalRandom.current().nextInt(30, 150))
-            val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
-            TtlHelper.setUdpTtl(socket, 5)
-            socket.send(noisePacket)
-            delay(3)
-            TtlHelper.setUdpTtl(socket, 64)
-            socket.send(outPacket)
+            if (isQuic) {
+                // QUIC obfuscation
+                val fakeQuic = FakePacketHelper.buildQuicInitial()
+                val fakeQuicPacket = java.net.DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
+                TtlHelper.setUdpTtl(socket, 5)
+                socket.send(fakeQuicPacket)
+                delay(3)
+                TtlHelper.setUdpTtl(socket, 64)
+                socket.send(outPacket)
+            } else if (targetPort == 53) {
+                // DNS Obfuscation
+                val noise = FakePacketHelper.buildQuicInitial() // Confuse DPI with QUIC on port 53
+                val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
+                TtlHelper.setUdpTtl(socket, 5)
+                socket.send(noisePacket)
+                delay(3)
+                TtlHelper.setUdpTtl(socket, 64)
+                socket.send(outPacket)
+            } else {
+                // General UDP Obfuscation
+                val noise = FakePacketHelper.buildFakeUdpPacket(java.util.concurrent.ThreadLocalRandom.current().nextInt(30, 150))
+                val noisePacket = java.net.DatagramPacket(noise, noise.size, targetInet, targetPort)
+                TtlHelper.setUdpTtl(socket, 5)
+                socket.send(noisePacket)
+                delay(3)
+                TtlHelper.setUdpTtl(socket, 64)
+                socket.send(outPacket)
+            }
         } else {
             socket.send(outPacket)
         }
