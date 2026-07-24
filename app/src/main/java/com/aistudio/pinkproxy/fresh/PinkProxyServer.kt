@@ -1515,7 +1515,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                 s.connect(InetSocketAddress(ip, targetPort), 10000)
                                 channel.trySend(s)
                             } catch (e: Exception) {
-                                try { s.close() } catch (e2: Exception) {}
+                                try { s.close() } catch (e2: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e2.message}") }
                                 if (errors.incrementAndGet() == numJobs) {
                                     channel.close()
                                 }
