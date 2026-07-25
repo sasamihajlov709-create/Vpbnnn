@@ -248,6 +248,15 @@ object UdpTransportHandler {
                     TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
+                BypassStrategy.UDP_DTLS_FAKE -> {
+                    val dtls = byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + ByteArray(20) { ThreadLocalRandom.current().nextInt(256).toByte() }
+                    val dtlsPacket = DatagramPacket(dtls, dtls.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
+                    socket.send(dtlsPacket)
+                    delay(3)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
+                    socket.send(outPacket)
+                }
                 else -> {
                     val fakeQuic = FakePacketHelper.buildQuicInitial()
                     val fakeQuicPacket = DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)

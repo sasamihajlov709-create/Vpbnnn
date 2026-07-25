@@ -1047,19 +1047,32 @@ object BypassConfig {
                 repeat(5) { delay(10); output.write(ByteArray(1200) { 0 }); output.flush() }
             }
             BypassStrategy.PROTOCOL_CONFUSION_SSH -> {
-                val fake = "SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1\r\n".toByteArray()
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
+                val ssh = FakePacketHelper.buildFakeSshHandshake()
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(ssh); output.flush()
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT -> {
-                val fake = ByteArray(68)
-                fake[0] = 19.toByte()
-                System.arraycopy("BitTorrent protocol".toByteArray(), 0, fake, 1, 19)
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
+                val bt = byteArrayOf(19) + "BitTorrent protocol".toByteArray() + ByteArray(28) { 0 }
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(bt); output.flush()
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TCP_TOS_MANGLE -> {
                 try { socket.trafficClass = 0x08 } catch (e: Exception) {}
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.WS_HANDSHAKE_FAKE -> {
+                val ws = FakePacketHelper.buildFakeWebSocketHandshake(host)
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(ws); output.flush()
+                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.SSH_HANDSHAKE_FAKE -> {
+                val ssh = FakePacketHelper.buildFakeSshHandshake()
+                output.write(ssh); output.flush(); delay(config.delay1)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.UDP_DTLS_FAKE -> {
+                val dtls = byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + ByteArray(20) { rnd.nextInt(256).toByte() }
+                output.write(dtls); output.flush(); delay(config.delay1)
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.CHAOS -> {

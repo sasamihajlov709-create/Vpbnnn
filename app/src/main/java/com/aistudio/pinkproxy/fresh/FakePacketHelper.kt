@@ -600,6 +600,35 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildFakeSshHandshake(): ByteArray {
+        val versions = listOf(
+            "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.3",
+            "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3",
+            "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10",
+            "SSH-2.0-Putty_Release_0.81"
+        )
+        return "${versions.random()}\r\n".toByteArray()
+    }
+
+    fun buildFakeWebSocketHandshake(host: String): ByteArray {
+        val key = ByteArray(16)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(key)
+        val base64Key = android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP)
+        
+        val sb = StringBuilder()
+        sb.append("GET /chat HTTP/1.1\r\n")
+        sb.append("Host: $host\r\n")
+        sb.append("Upgrade: websocket\r\n")
+        sb.append("Connection: Upgrade\r\n")
+        sb.append("Sec-WebSocket-Key: $base64Key\r\n")
+        sb.append("Sec-WebSocket-Protocol: chat, superchat\r\n")
+        sb.append("Sec-WebSocket-Version: 13\r\n")
+        sb.append("Origin: https://$host\r\n")
+        sb.append("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36\r\n")
+        sb.append("\r\n")
+        return sb.toString().toByteArray()
+    }
+
     fun buildQuicInitial(destConnId: ByteArray? = null): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)

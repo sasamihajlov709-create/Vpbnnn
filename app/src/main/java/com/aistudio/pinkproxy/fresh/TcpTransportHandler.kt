@@ -33,13 +33,49 @@ object TcpTransportHandler {
             val strategy = BypassConfig.getBestStrategyForHost(targetHost)
             val config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
-            remoteSocket = Socket()
-            vpnService?.protect(remoteSocket)
-            
             val start = System.currentTimeMillis()
-            withTimeout(10000) {
-                remoteSocket.connect(InetSocketAddress(resolved.first(), targetPort), 5000)
+            remoteSocket = try {
+                withTimeout(12000) {
+                    val channel = kotlinx.coroutines.channels.Channel<Socket>(resolved.size)
+                    val activeJobs = mutableListOf<Job>()
+                    val attempted = minOf(resolved.size, 3)
+                    
+                    for (i in 0 until attempted) {
+                        val ip = resolved[i]
+                        activeJobs += scope.launch(Dispatchers.IO) {
+                            val s = Socket()
+                            try {
+                                vpnService?.protect(s)
+                                s.tcpNoDelay = true
+                                s.connect(InetSocketAddress(ip, targetPort), 8000)
+                                if (!channel.isClosedForSend) {
+                                    channel.trySend(s)
+                                } else {
+                                    s.close()
+                                }
+                            } catch (e: Exception) {
+                                try { s.close() } catch (ex: Exception) {}
+                            }
+                        }
+                        if (i < attempted - 1) delay(250) // Staggered start
+                    }
+
+                    val winner = try {
+                        channel.receive()
+                    } catch (e: Exception) {
+                        throw Exception("All TCP connection attempts failed for $targetHost")
+                    } finally {
+                        channel.close()
+                        activeJobs.forEach { it.cancel() }
+                    }
+                    winner
+                }
+            } catch (e: Exception) {
+                Log.w("TcpTransport", "Connection failed to $targetHost: ${e.message}")
+                clientSocket.close()
+                return
             }
+
             val connectTime = System.currentTimeMillis() - start
             BypassConfig.TrafficShaper.updateRtt(connectTime)
 

@@ -98,7 +98,10 @@ enum class BypassStrategy(
     TCP_FRAG_OOB(StrategyFamily.TCP, 5, 4),
     PROTOCOL_CONFUSION_SSH(StrategyFamily.TCP, 3, 2),
     PROTOCOL_CONFUSION_BITTORRENT(StrategyFamily.TCP, 3, 2),
-    TCP_TOS_MANGLE(StrategyFamily.TCP, 2, 1)
+    TCP_TOS_MANGLE(StrategyFamily.TCP, 2, 1),
+    WS_HANDSHAKE_FAKE(StrategyFamily.HTTP, 3, 3),
+    SSH_HANDSHAKE_FAKE(StrategyFamily.TCP, 3, 3),
+    UDP_DTLS_FAKE(StrategyFamily.QUIC, 3, 2)
 }
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }
