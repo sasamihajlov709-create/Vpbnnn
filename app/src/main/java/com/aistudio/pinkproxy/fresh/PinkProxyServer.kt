@@ -359,17 +359,17 @@ object BypassConfig {
     private val _currentMtu = MutableStateFlow(1400)
     val currentMtu: StateFlow<Int> = _currentMtu.asStateFlow()
 
-    var isAutoTuning = true
-    var frag1 = 1
-    var frag2 = 5
-    var frag3 = 2
-    var delay1 = 20L
-    var delay2 = 100L
-    var fakeTtl = 3
-    var isDiagnosticMode = false
-    var blockQuic = true
-    var isPanicMode = false
-    var isCharging = true
+    @Volatile var isAutoTuning = true
+    @Volatile var frag1 = 1
+    @Volatile var frag2 = 5
+    @Volatile var frag3 = 2
+    @Volatile var delay1 = 20L
+    @Volatile var delay2 = 100L
+    @Volatile var fakeTtl = 3
+    @Volatile var isDiagnosticMode = false
+    @Volatile var blockQuic = true
+    @Volatile var isPanicMode = false
+    @Volatile var isCharging = true
 
     init {
         HostCategory.entries.forEach { cat ->
@@ -389,6 +389,12 @@ object BypassConfig {
         isAutoTuning = prefs.getBoolean("is_auto_tuning", true)
         blockQuic = prefs.getBoolean("block_quic", true)
         isDiagnosticMode = prefs.getBoolean("is_diagnostic_mode", false)
+        frag1 = prefs.getInt("frag1", 1)
+        frag2 = prefs.getInt("frag2", 5)
+        frag3 = prefs.getInt("frag3", 2)
+        delay1 = prefs.getLong("delay1", 20L)
+        delay2 = prefs.getLong("delay2", 100L)
+        fakeTtl = prefs.getInt("fakeTtl", 3)
         val savedStrat = prefs.getString("global_strategy", BypassStrategy.SNI_SPLIT.name)
         try {
             _strategy.value = BypassStrategy.valueOf(savedStrat!!)
@@ -412,6 +418,12 @@ object BypassConfig {
             putBoolean("is_auto_tuning", isAutoTuning)
             putBoolean("block_quic", blockQuic)
             putBoolean("is_diagnostic_mode", isDiagnosticMode)
+            putInt("frag1", frag1)
+            putInt("frag2", frag2)
+            putInt("frag3", frag3)
+            putLong("delay1", delay1)
+            putLong("delay2", delay2)
+            putInt("fakeTtl", fakeTtl)
             putString("global_strategy", _strategy.value.name)
             apply()
         }
@@ -1326,7 +1338,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         serverJob = parentJob
         
         ProxyStats.startSpeedMonitor(scope)
-        BypassConfig.startAutonomousOptimizer(scope)
+        
         
         scope.launch {
             try {

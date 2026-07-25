@@ -225,7 +225,6 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
     val serviceStatuses by ServiceChecker.statuses.collectAsStateWithLifecycle(initialValue = emptyList<ServiceChecker.ServiceStatus>())
     val isProxyHealthy by ServiceChecker.proxyHealth.collectAsStateWithLifecycle(initialValue = true)
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
-    val isStalled by ServiceChecker.isStalled.collectAsStateWithLifecycle(initialValue = false)
     val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
     val lastCheckTime by ServiceChecker.lastCheckTime.collectAsStateWithLifecycle(initialValue = 0L)
 
@@ -331,7 +330,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
 
             // Main Status Indicator
             if (isActive) {
-                StatusBadge(isProxyHealthy, isInternetUp, isProbing, isStalled)
+                StatusBadge(isProxyHealthy, isInternetUp, isProbing)
             } else {
                 Text(
                     text = stringResource(R.string.status_ready),
@@ -606,11 +605,10 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
     }
 
 @Composable
-fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean, isStalled: Boolean) {
+fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean) {
     val color = when {
         !isInternet -> Color(0xFF9E9E9E)
         isProbing -> GentleMediumPink
-        isStalled -> Color(0xFFFFB74D)
         isHealthy -> Color(0xFF81C784)
         else -> Color(0xFFE57373)
     }
@@ -618,7 +616,6 @@ fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean, isS
     val text = when {
         !isInternet -> stringResource(R.string.status_no_internet)
         isProbing -> stringResource(R.string.status_probing)
-        isStalled -> stringResource(R.string.status_stalled)
         !isHealthy -> stringResource(R.string.status_recovering)
         else -> stringResource(R.string.status_protected)
     }

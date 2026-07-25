@@ -32,35 +32,9 @@ object ServiceChecker {
     private val _connectivityScore = MutableStateFlow(0)
     val connectivityScore: StateFlow<Int> = _connectivityScore.asStateFlow()
 
-    private val _isStalled = MutableStateFlow(false)
-    val isStalled: StateFlow<Boolean> = _isStalled.asStateFlow()
 
-    private var lastTotalBytes = 0L
-    private var lastStallCheck = System.currentTimeMillis()
 
-    fun checkStall(currentBytes: Long) {
-        val now = System.currentTimeMillis()
-        if (now - lastStallCheck > 45000) { // Check every 45 seconds
-            val diff = currentBytes - lastTotalBytes
-            val activeConns = ProxyStats.activeConnections.value
-            // Stall is only if we have high active connections and no data for a long time,
-            // or high error rate. Long polling can legitimately hold connections.
-            val stalled = activeConns > 2 && diff == 0L
-            _isStalled.value = stalled
-            
-            if (stalled && ProxyStats.successRate.value < 75) {
-                ProxyStats.logRecovery("WARNING: Traffic stall detected (active connections, 0 bytes moved for 45s, low success rate). Self-healing started...")
-                RobustResolver.clearCache()
-                BypassConfig.panicOptimize()
-                appContext?.let { ctx ->
-                    runActiveProbing(ctx)
-                }
-            }
-            
-            lastTotalBytes = currentBytes
-            lastStallCheck = now
-        }
-    }
+
 
     private var job: Job? = null
     private var internalScope: CoroutineScope? = null
@@ -224,28 +198,6 @@ object ServiceChecker {
         
         _proxyHealth.value = proxyResponsive.get()
         _lastCheckTime.value = System.currentTimeMillis()
-
-        // Autopilot Prober: If score is very low, force probe
-        if (finalInternet && totalWeightedScore < 45f && BypassConfig.isAutoTuning && !isProbing.get()) {
-            val now = System.currentTimeMillis()
-            val cooldown = if (BypassConfig.isCharging) 45000L else 120000L // Faster on charging
-            if (now - lastProbeTime > cooldown) { 
-                lastProbeTime = now
-                ProxyStats.logRecovery("Autopilot: Connectivity score dropping ($totalWeightedScore), launching tournament...")
-                appContext?.let { runActiveProbing(it) }
-            }
-        }
-        
-        // Anti-Block: If score is critically low and internet is UP
-        if (finalInternet && totalWeightedScore < 15f && results.isNotEmpty()) {
-            val now = System.currentTimeMillis()
-            if (now - lastProbeTime > 60000) { // Throttle panic
-                ProxyStats.logRecovery("CRITICAL: Severe degradation (Score $totalWeightedScore). Triggering Emergency Recovery.")
-                BypassConfig.panicOptimize()
-                RobustResolver.clearCache()
-                lastProbeTime = now
-            }
-        }
     }
 
     private val _customServices = MutableStateFlow<List<Pair<String, String>>>(emptyList())

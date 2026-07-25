@@ -22,8 +22,8 @@ class PinkVpnService : VpnService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
 
-        var selectedPackages = mutableSetOf<String>()
-        var isExcludeMode = true
+        var selectedPackages: MutableSet<String> = java.util.concurrent.CopyOnWriteArraySet<String>()
+        @Volatile var isExcludeMode = true
         var instance: PinkVpnService? = null
 
         fun saveFilterSettings(context: Context) {
@@ -37,7 +37,9 @@ class PinkVpnService : VpnService() {
 
         fun loadFilterSettings(context: Context) {
             val prefs = context.getSharedPreferences("pink_proxy_filter", Context.MODE_PRIVATE)
-            selectedPackages = prefs.getStringSet("selected_packages", emptySet())?.toMutableSet() ?: mutableSetOf()
+            val saved = prefs.getStringSet("selected_packages", emptySet()) ?: emptySet()
+            selectedPackages.clear()
+            selectedPackages.addAll(saved)
             isExcludeMode = prefs.getBoolean("is_exclude_mode", true)
         }
 
@@ -141,7 +143,6 @@ class PinkVpnService : VpnService() {
                 override fun onAvailable(network: android.net.Network) {
                     Log.i("PinkVpnService", "Network available: $network")
                     RobustResolver.clearCache()
-                    BypassConfig.panicOptimize()
                 }
 
                 override fun onLost(network: android.net.Network) {
