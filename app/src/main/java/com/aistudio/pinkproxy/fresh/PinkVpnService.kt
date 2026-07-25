@@ -76,6 +76,7 @@ class PinkVpnService : VpnService() {
         proxyServer = PinkProxyServer(this, PROXY_PORT)
         proxyServer?.start()
         
+        RobustResolver.initialize(serviceScope)
         RobustResolver.startDnsOptimizer(serviceScope, this)
         ServiceChecker.startChecking(serviceScope, this)
         BypassConfig.startAutonomousOptimizer(serviceScope)
@@ -123,10 +124,6 @@ class PinkVpnService : VpnService() {
                         ProxyStats.logRecovery("Watchdog: Engine Stagnant detected. Self-healing...")
                         stagnantCounter = 0
                         RecoveryManager.handleEvent(RecoveryEvent.TUNNEL_STALL, "Zero traffic and proxy failure")
-                        withContext(Dispatchers.Main) {
-                            val intent = Intent(this@PinkVpnService, PinkVpnService::class.java).apply { action = "RESTART" }
-                            startForegroundService(intent)
-                        }
                     }
                 } else {
                     stagnantCounter = 0
@@ -182,6 +179,7 @@ class PinkVpnService : VpnService() {
         }
 
         saveVpnState(this, true)
+        VpnRuntimeState.updateState(VpnLifecycleState.STARTING)
         startVpn()
         updateTile(this)
         return START_STICKY
@@ -244,6 +242,7 @@ class PinkVpnService : VpnService() {
             VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Error starting VPN", e)
+            VpnRuntimeState.updateState(VpnLifecycleState.FAILED)
             stopVpn()
         }
     }

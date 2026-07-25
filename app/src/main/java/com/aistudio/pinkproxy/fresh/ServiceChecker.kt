@@ -104,7 +104,7 @@ object ServiceChecker {
         _proxyHealth.value = relayResponsive
         
         if (!relayResponsive && finalInternet) {
-            ProxyStats.forceRecovery("Local proxy port $proxyPort unresponsive during check")
+            RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Local proxy port $proxyPort unresponsive during check")
         }
 
         val results = coroutineScope {

@@ -114,7 +114,7 @@ object ProxyStats {
     fun release8k(buf: ByteArray) { bufferPool8k.offer(buf) }
     fun obtain16k(): ByteArray = bufferPool16k.poll() ?: ByteArray(16384)
     fun release16k(buf: ByteArray) { bufferPool16k.offer(buf) }
-    fun obtain64k(): ByteArray = bufferPool64k.poll() ?: ByteArray(65535)
+    fun obtain64k(): ByteArray = bufferPool64k.poll() ?: ByteArray(65536)
     fun release64k(buf: ByteArray) { bufferPool64k.offer(buf) }
 
     private val _bytesTransferred = MutableStateFlow(0L)
@@ -182,8 +182,7 @@ object ProxyStats {
     }
 
     fun forceRecovery(reason: String) {
-        logRecovery("Force recovery: $reason")
-        BypassConfig.rotateGlobalStrategy()
+        RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Manual trigger: $reason")
     }
     
     fun reset(clearLog: Boolean) {

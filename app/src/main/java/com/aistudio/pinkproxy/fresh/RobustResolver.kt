@@ -10,8 +10,12 @@ object RobustResolver {
     @Volatile var dnsMode = "Smart DoH"
     @Volatile var customDnsIp = "1.1.1.1"
 
-    private val resolverScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var resolverScope: CoroutineScope? = null
     private val pendingResolutions = ConcurrentHashMap<String, Deferred<List<InetAddress>>>()
+
+    fun initialize(scope: CoroutineScope) {
+        resolverScope = scope
+    }
 
     fun loadDnsSettings(context: android.content.Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
@@ -42,8 +46,9 @@ object RobustResolver {
         if (cached != null) return cached
 
         val cacheKey = host.lowercase()
+        val scope = resolverScope ?: GlobalScope
         val deferred = pendingResolutions.computeIfAbsent(cacheKey) {
-            resolverScope.async {
+            scope.async {
                 try {
                     performResolution(host, vpnService)
                 } finally {
@@ -53,11 +58,15 @@ object RobustResolver {
         }
 
         return try {
-            withTimeout(10000) {
+            withTimeout(12000) {
                 deferred.await()
             }
         } catch (e: Exception) {
             pendingResolutions.remove(cacheKey)
+            if (e is TimeoutCancellationException) {
+                // Return emergency fallback on timeout instead of failing
+                DnsCacheManager.getEmergencyFallback(host)?.let { return it }
+            }
             throw e
         }
     }

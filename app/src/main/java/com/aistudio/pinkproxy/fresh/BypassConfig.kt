@@ -502,8 +502,16 @@ object BypassConfig {
         fun recordError() {
             errorCounter++
             lastErrorTime = System.currentTimeMillis()
-            if (errorCounter > 5) {
+            if (errorCounter > 8) {
                 ProxyStats.updateCongestionWindow(-5)
+                // Heuristic: continuous errors might be MTU issues
+                if (errorCounter > 20) {
+                    val currentMtu = _currentMtu.value
+                    if (currentMtu > 1200) {
+                        _currentMtu.value = currentMtu - 50
+                        ProxyStats.logRecovery("MTU Auto-tuning: $currentMtu -> ${_currentMtu.value} due to persistent errors.")
+                    }
+                }
                 errorCounter = 0
             }
         }
