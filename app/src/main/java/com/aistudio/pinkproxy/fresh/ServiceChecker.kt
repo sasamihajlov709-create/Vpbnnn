@@ -387,7 +387,10 @@ object ServiceChecker {
         
         scope.launch(Dispatchers.IO) {
             val originalStrategy = BypassConfig.strategy.value
-            val strategiesToTest = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT }
+            val strategiesToTest = BypassStrategy.entries.filter { 
+                it != BypassStrategy.DIRECT && 
+                (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING)
+            }
             
             val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
             

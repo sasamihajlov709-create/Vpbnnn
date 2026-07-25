@@ -93,7 +93,14 @@ enum class BypassStrategy(
     TLS_MIXED_CASE_SNI(StrategyFamily.TLS, 3, 2),
     TLS_0RTT_FAKE(StrategyFamily.TLS, 4, 3),
     HTTP2_PREAMBLE_FAKE(StrategyFamily.HTTP, 3, 3),
-    TLS_GREASE_SKEW(StrategyFamily.TLS, 3, 2)
+    TLS_GREASE_SKEW(StrategyFamily.TLS, 3, 2),
+    TLS_SNI_SYMMETRIC_SPLIT(StrategyFamily.TLS, 3, 2),
+    HTTP_OOB_INJECT(StrategyFamily.HTTP, 4, 4),
+    QUIC_VERSION_NEGOTIATION_SKEW(StrategyFamily.QUIC, 3, 2),
+    TCP_FRAG_OOB(StrategyFamily.TCP, 5, 4),
+    PROTOCOL_CONFUSION_SSH(StrategyFamily.TCP, 3, 2),
+    PROTOCOL_CONFUSION_BITTORRENT(StrategyFamily.TCP, 3, 2),
+    TCP_TOS_MANGLE(StrategyFamily.TCP, 2, 1)
 }
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }
@@ -103,11 +110,14 @@ enum class HostCategory { STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN
 object ProxyStats {
     private val bufferPool8k = LinkedBlockingQueue<ByteArray>(256)
     private val bufferPool16k = LinkedBlockingQueue<ByteArray>(128)
+    private val bufferPool64k = LinkedBlockingQueue<ByteArray>(64)
 
     fun obtain8k(): ByteArray = bufferPool8k.poll() ?: ByteArray(8192)
     fun release8k(buf: ByteArray) { bufferPool8k.offer(buf) }
     fun obtain16k(): ByteArray = bufferPool16k.poll() ?: ByteArray(16384)
     fun release16k(buf: ByteArray) { bufferPool16k.offer(buf) }
+    fun obtain64k(): ByteArray = bufferPool64k.poll() ?: ByteArray(65535)
+    fun release64k(buf: ByteArray) { bufferPool64k.offer(buf) }
 
     private val _bytesTransferred = MutableStateFlow(0L)
     val bytesTransferred: StateFlow<Long> = _bytesTransferred.asStateFlow()
@@ -144,6 +154,9 @@ object ProxyStats {
 
     private val _pool16kSize = MutableStateFlow(0)
     val pool16kSize: StateFlow<Int> = _pool16kSize.asStateFlow()
+
+    private val _pool64kSize = MutableStateFlow(0)
+    val pool64kSize: StateFlow<Int> = _pool64kSize.asStateFlow()
 
     private val _congestionWindow = MutableStateFlow(10)
     val congestionWindow: StateFlow<Int> = _congestionWindow.asStateFlow()
@@ -210,6 +223,7 @@ object ProxyStats {
                 
                 _pool8kSize.value = bufferPool8k.size
                 _pool16kSize.value = bufferPool16k.size
+                _pool64kSize.value = bufferPool64k.size
                 
                 // Adaptive signal quality based on success rate and intensity
                 val quality = (successRate.value - censorshipIntensity.value / 2).coerceIn(0, 100)
@@ -782,6 +796,13 @@ object BypassConfig {
                 output.write(data, 0, safeSplit); output.flush(); delay(config.delay1)
                 output.write(data, safeSplit, length - safeSplit); output.flush()
             }
+            BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT -> {
+                val offset = TlsParser.findSniOffset(data, length, host)
+                val split = if (offset != -1 && host.isNotEmpty()) offset + (host.length / 2) else config.frag1.coerceIn(1, length - 1)
+                val safeSplit = split.coerceIn(1, length - 1)
+                output.write(data, 0, safeSplit); output.flush(); delay(config.delay1)
+                output.write(data, safeSplit, length - safeSplit); output.flush()
+            }
             BypassStrategy.SNI_TRIPLE -> {
                 val offset = TlsParser.findSniOffset(data, length, host)
                 if (offset != -1 && length > offset + host.length + 1) {
@@ -1158,6 +1179,33 @@ object BypassConfig {
                 } else { output.write(data, 0, length) }
                 output.flush()
             }
+            BypassStrategy.HTTP_OOB_INJECT -> {
+                val s = String(data, 0, length, Charsets.US_ASCII)
+                if (s.contains("Host:", ignoreCase = true)) {
+                    val idx = s.indexOf("Host:", ignoreCase = true)
+                    output.write(data, 0, idx)
+                    output.flush()
+                    socket.sendUrgentData('X'.code)
+                    delay(config.delay1)
+                    output.write(data, idx, length - idx)
+                } else {
+                    output.write(data, 0, length)
+                }
+                output.flush()
+            }
+            BypassStrategy.TCP_FRAG_OOB -> {
+                if (length > 5) {
+                    val split = length / 2
+                    output.write(data, 0, split)
+                    output.flush()
+                    socket.sendUrgentData('!'.code)
+                    delay(config.delay1)
+                    output.write(data, split, length - split)
+                } else {
+                    output.write(data, 0, length)
+                }
+                output.flush()
+            }
             BypassStrategy.TLS_CHROME_HELLO_FAKE -> {
                 val fake = FakePacketHelper.buildChromeHello(host)
                 TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
@@ -1234,6 +1282,22 @@ object BypassConfig {
             BypassStrategy.QUIC_MTU_PROBE -> {
                 output.write(data, 0, length); output.flush()
                 repeat(5) { delay(10); output.write(ByteArray(1200) { 0 }); output.flush() }
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_SSH -> {
+                val fake = "SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1\r\n".toByteArray()
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
+                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT -> {
+                val fake = ByteArray(68)
+                fake[0] = 19.toByte()
+                System.arraycopy("BitTorrent protocol".toByteArray(), 0, fake, 1, 19)
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
+                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TCP_TOS_MANGLE -> {
+                try { socket.trafficClass = 0x08 } catch (e: Exception) {}
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.CHAOS -> {
                 val strat = BypassStrategy.entries.filter { it != BypassStrategy.CHAOS && it != BypassStrategy.DIRECT }.random()
@@ -1374,10 +1438,11 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                 coroutineScope {
                     // Receive from Target, forward to SOCKS5 Client
                     launch(Dispatchers.IO) {
+                        val buffer = ProxyStats.obtain64k()
+                        val packet = java.net.DatagramPacket(buffer, buffer.size)
                         try {
-                            val buffer = ByteArray(65535)
                             while (isActive) {
-                                val packet = java.net.DatagramPacket(buffer, buffer.size)
+                                packet.setData(buffer)
                                 outSocket.receive(packet)
                                 if (clientUdpAddress != null) {
                                     val addrBytes = packet.address.address
@@ -1389,20 +1454,22 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     respBytes[offset++] = (packet.port shr 8).toByte(); respBytes[offset++] = (packet.port and 0xFF).toByte()
                                     System.arraycopy(packet.data, packet.offset, respBytes, offset, packet.length); offset += packet.length
                                     udpSocket.send(java.net.DatagramPacket(respBytes, offset, clientUdpAddress, clientUdpPort))
-                                    
                                 }
                             }
                         } catch (e: Exception) {
                             // Ignored
+                        } finally {
+                            ProxyStats.release64k(buffer)
                         }
                     }
 
                     // Receive from SOCKS5 Client, forward to Target
                     launch(Dispatchers.IO) {
+                        val buffer = ProxyStats.obtain64k()
+                        val packet = java.net.DatagramPacket(buffer, buffer.size)
                         try {
-                            val buffer = ByteArray(65535)
                             while (isActive) {
-                                val packet = java.net.DatagramPacket(buffer, buffer.size)
+                                packet.setData(buffer)
                                 udpSocket.receive(packet)
                                 clientUdpAddress = packet.address
                                 clientUdpPort = packet.port
@@ -1485,6 +1552,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                         } catch (e: Exception) {
                             // Ignored
                         } finally {
+                            ProxyStats.release64k(buffer)
                             try { udpSocket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                     }
@@ -1722,6 +1790,17 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     TtlHelper.setUdpTtl(socket, 3, targetInet is java.net.Inet6Address)
                     socket.send(rstPacket)
                     delay(2)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
+                    socket.send(outPacket)
+                }
+                BypassStrategy.QUIC_VERSION_NEGOTIATION_SKEW -> {
+                    val verPayload = ByteArray(100) { (it % 255).toByte() }
+                    verPayload[0] = 0x80.toByte() // Long header
+                    verPayload[1] = 0; verPayload[2] = 0; verPayload[3] = 0; verPayload[4] = 0 // Version Negotiation
+                    val verPacket = java.net.DatagramPacket(verPayload, verPayload.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 3, targetInet is java.net.Inet6Address)
+                    socket.send(verPacket)
+                    delay(5)
                     TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
