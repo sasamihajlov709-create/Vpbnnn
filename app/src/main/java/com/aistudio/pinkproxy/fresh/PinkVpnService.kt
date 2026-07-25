@@ -122,7 +122,7 @@ class PinkVpnService : VpnService() {
                     if (stagnantCounter >= 3) { // 2 minutes of stagnant active connections
                         ProxyStats.logRecovery("Watchdog: Engine Stagnant detected. Self-healing...")
                         stagnantCounter = 0
-                        BypassConfig.panicOptimize()
+                        RecoveryManager.handleEvent(RecoveryEvent.TUNNEL_STALL, "Zero traffic and proxy failure")
                         withContext(Dispatchers.Main) {
                             val intent = Intent(this@PinkVpnService, PinkVpnService::class.java).apply { action = "RESTART" }
                             startForegroundService(intent)
@@ -168,6 +168,7 @@ class PinkVpnService : VpnService() {
             saveVpnState(this, false)
             stopVpn()
             _isRunning.value = false
+            VpnRuntimeState.updateState(VpnLifecycleState.STOPPING)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -240,6 +241,7 @@ class PinkVpnService : VpnService() {
             
             showNotification()
             _isRunning.value = true
+            VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Error starting VPN", e)
             stopVpn()
@@ -316,6 +318,7 @@ class PinkVpnService : VpnService() {
 
     private fun stopVpn() {
         _isRunning.value = false
+        VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
         stopTun2Socks()
         proxyServer?.stop()
         
