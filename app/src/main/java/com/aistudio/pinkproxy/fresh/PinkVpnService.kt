@@ -76,7 +76,7 @@ class PinkVpnService : VpnService() {
         proxyServer = PinkProxyServer(this, PROXY_PORT)
         proxyServer?.start()
         
-        RobustResolver.startBackgroundProber(serviceScope, this)
+        RobustResolver.startDnsOptimizer(serviceScope, this)
         ServiceChecker.startChecking(serviceScope, this)
         BypassConfig.startAutonomousOptimizer(serviceScope)
 

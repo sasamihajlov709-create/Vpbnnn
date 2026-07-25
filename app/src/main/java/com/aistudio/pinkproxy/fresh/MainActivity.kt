@@ -129,8 +129,6 @@ class MainActivity : ComponentActivity() {
                 if (autoConnect && !PinkVpnService.isRunning.value) {
                     toggleVpn(false) // start it if not active
                 }
-                RobustResolver.updatePublicIpSubnet(null)
-                RobustResolver.startWarmup(null)
             }
 
             MyApplicationTheme(dynamicColor = false) {

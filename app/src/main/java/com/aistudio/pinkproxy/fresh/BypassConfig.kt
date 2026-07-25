@@ -33,7 +33,6 @@ object BypassConfig {
     val currentNetworkType: StateFlow<NetworkType> = _currentNetworkType.asStateFlow()
 
     private val strategyScores = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
-    private val hostStrategyMemory = ConcurrentHashMap<String, BypassStrategy>()
     private val hostBlacklist = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Long>>()
     class StratStats(val successes: AtomicLong = AtomicLong(), val failures: AtomicLong = AtomicLong(), val totalRtt: AtomicLong = AtomicLong())
     private val strategyStats = ConcurrentHashMap<BypassStrategy, StratStats>()
@@ -62,8 +61,16 @@ object BypassConfig {
     @Volatile var fakeTtl = 3
     @Volatile var isDiagnosticMode = false
     @Volatile var blockQuic = true
-    @Volatile var isPanicMode = false
     @Volatile var isCharging = true
+
+    // Circuit Breaker state
+    private val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
+    
+    // Session Stickiness with TTL
+    private val hostStrategyMemory = ConcurrentHashMap<String, Pair<BypassStrategy, Long>>()
+    private val SESSION_TTL = 30 * 60 * 1000L // 30 minutes
+
+    val isPanicMode: Boolean get() = _isPanicModeFlow.value
 
     init {
         HostCategory.entries.forEach { cat ->
@@ -152,18 +159,23 @@ object BypassConfig {
             else -> StrategyGroup.LIGHT
         }
         
-        hostStrategyMemory[host]?.let { remembered ->
-            if (blacklisted?.get(remembered)?.let { now < it } == true) {
+        hostStrategyMemory[host]?.let { (remembered, expiry) ->
+            if (now < expiry) {
+                if (blacklisted?.get(remembered)?.let { now < it } == true) {
+                    hostStrategyMemory.remove(host)
+                } else if ((scores[remembered]?.get() ?: 0) > 40 && (circuitBreakers[remembered] ?: 0L) < now) {
+                    return remembered
+                }
+            } else {
                 hostStrategyMemory.remove(host)
-            } else if ((scores[remembered]?.get() ?: 0) > 40) {
-                return remembered
             }
         }
 
         val entries = scores.entries.toList()
         val validEntries = entries.filter { entry ->
             val blacklistedUntil = blacklisted?.get(entry.key) ?: 0L
-            now >= blacklistedUntil
+            val circuitBreakerUntil = circuitBreakers[entry.key] ?: 0L
+            now >= blacklistedUntil && now >= circuitBreakerUntil
         }
         
         if (validEntries.isEmpty()) return BypassStrategy.CHAOS
@@ -171,6 +183,13 @@ object BypassConfig {
         // Weighting by score AND strategy group relevance to censorship level
         val weightedEntries = validEntries.map { entry ->
             var weight = entry.value.get().coerceAtLeast(1).toDouble()
+            
+            // Apply minimum sample size protection: don't drop weight too fast if attempts are low
+            val stats = strategyStats[entry.key] ?: StratStats()
+            if (stats.successes.get() + stats.failures.get() < 5) {
+                weight = weight.coerceAtLeast(80.0)
+            }
+
             val group = strategyGrouping.entries.find { it.value.contains(entry.key) }?.key
             if (group == preferredGroup) weight *= 2.5
             else if (group == StrategyGroup.EXTREME && level < 30) weight *= 0.2 // Don't over-engineer simple cases
@@ -192,9 +211,14 @@ object BypassConfig {
         var random = ThreadLocalRandom.current().nextDouble(totalWeight)
         for (entry in weightedEntries) {
             random -= entry.second
-            if (random <= 0) return entry.first
+            if (random <= 0) {
+                hostStrategyMemory[host] = entry.first to (now + SESSION_TTL)
+                return entry.first
+            }
         }
-        return weightedEntries.maxByOrNull { it.second }?.first ?: BypassStrategy.SNI_SPLIT
+        val fallback = weightedEntries.maxByOrNull { it.second }?.first ?: BypassStrategy.SNI_SPLIT
+        hostStrategyMemory[host] = fallback to (now + SESSION_TTL)
+        return fallback
     }
 
     fun rotateGlobalStrategy() {
@@ -215,6 +239,15 @@ object BypassConfig {
                 delay(30000) // Every 30 seconds
                 performSelfHealing()
                 
+                // Score Decay: Bring scores back towards 100 slowly
+                HostCategory.entries.forEach { cat ->
+                    strategyScores[cat]?.forEach { (_, score) ->
+                        val current = score.get()
+                        if (current < 100) score.addAndGet(1)
+                        else if (current > 100) score.addAndGet(-1)
+                    }
+                }
+
                 // Adaptive censorship level adjustment based on global success rate
                 val currentRate = ProxyStats.getSuccessRate()
                 if (currentRate < 60) {
@@ -230,8 +263,9 @@ object BypassConfig {
                     delay1 = ThreadLocalRandom.current().nextLong(10, 60)
                     
                     if (ThreadLocalRandom.current().nextBoolean()) {
-                        hostStrategyMemory.clear() // Force re-evaluation of some hosts
                         val now = System.currentTimeMillis()
+                        hostStrategyMemory.entries.removeIf { it.value.second < now }
+                        
                         hostBlacklist.entries.removeIf { entry ->
                             entry.value.entries.removeIf { it.value < now }
                             entry.value.isEmpty()
@@ -259,7 +293,7 @@ object BypassConfig {
         }
 
         host?.let { 
-            hostStrategyMemory[it] = strat 
+            hostStrategyMemory[it] = strat to (System.currentTimeMillis() + SESSION_TTL)
             hostBlacklist[it]?.remove(strat)
         }
         
@@ -267,6 +301,9 @@ object BypassConfig {
             stats.successes.incrementAndGet()
             stats.totalRtt.addAndGet(rtt)
         }
+        
+        // Clear circuit breaker on success
+        circuitBreakers.remove(strat)
     }
 
     fun recordSuccess(strat: BypassStrategy, rtt: Long, context: Context?) = recordSuccess(strat, rtt, null as String?)
@@ -285,7 +322,7 @@ object BypassConfig {
         }
         
         host?.let { 
-            if (hostStrategyMemory[it] == strat) hostStrategyMemory.remove(it)
+            if (hostStrategyMemory[it]?.first == strat) hostStrategyMemory.remove(it)
             
             val blacklist = hostBlacklist.getOrPut(it) { ConcurrentHashMap() }
             blacklist[strat] = System.currentTimeMillis() + 600000 // 10 min
@@ -293,6 +330,15 @@ object BypassConfig {
         
         strategyStats[strat]?.let { stats ->
             stats.failures.incrementAndGet()
+            
+            // Trip Circuit Breaker if failure rate is too high globally for this strategy
+            val s = stats.successes.get()
+            val f = stats.failures.get()
+            if (f > 20 && s < f / 10) {
+                ProxyStats.logRecovery("Circuit Breaker Tripped for ${strat.name}")
+                circuitBreakers[strat] = System.currentTimeMillis() + 300000 // 5 min lockout
+                stats.failures.set(0); stats.successes.set(0) // Reset stats for fresh start after lockout
+            }
         }
     }
 
@@ -303,14 +349,12 @@ object BypassConfig {
         if (rate < 40 && !isPanicMode) {
             panicOptimize()
         } else if (rate > 85 && isPanicMode) {
-            isPanicMode = false
             _isPanicModeFlow.value = false
             ProxyStats.logRecovery("Stability restored: $rate%. Normal mode.")
         }
     }
 
     fun panicOptimize() {
-        isPanicMode = true
         _isPanicModeFlow.value = true
         
         val oldMtu = _currentMtu.value

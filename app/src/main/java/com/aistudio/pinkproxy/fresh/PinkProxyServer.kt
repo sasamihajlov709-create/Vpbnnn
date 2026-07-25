@@ -136,7 +136,24 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                 var clientUdpAddress: InetAddress? = null
                 var clientUdpPort = 0
                 
+                // UDP Worker pool for outgoing packets
+                val udpOutChannel = kotlinx.coroutines.channels.Channel<Pair<java.net.DatagramPacket, String>>(100)
+                
                 coroutineScope {
+                    // Outgoing UDP Workers
+                    repeat(4) {
+                        launch(Dispatchers.IO) {
+                            for (work in udpOutChannel) {
+                                try {
+                                    val (packet, targetHost) = work
+                                    sendUdpPacket(outSocket, packet.data.copyOfRange(packet.offset, packet.offset + packet.length), packet.address, packet.port, targetHost)
+                                } catch (e: Exception) {
+                                    android.util.Log.v("PinkProxy", "UDP Outbound worker error: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+
                     // Receive from Target, forward to SOCKS5 Client
                     launch(Dispatchers.IO) {
                         val buffer = ProxyStats.obtain64k()
@@ -158,7 +175,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                 }
                             }
                         } catch (e: Exception) {
-                            // Ignored
                         } finally {
                             ProxyStats.release64k(buffer)
                         }
@@ -236,25 +252,25 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                                     // General UDP Forwarding - using shared resolver with packet queuing
                                     val resolved = RobustResolver.getCached(targetHost)
                                     if (resolved != null && resolved.isNotEmpty()) {
-                                        sendUdpPacket(outSocket, payload, resolved.first(), targetPortNum, targetHost)
+                                        udpOutChannel.trySend(java.net.DatagramPacket(payload, payload.size, resolved.first(), targetPortNum) to targetHost)
                                     } else {
-                                        // Queue packet and resolve in background to avoid blocking the main UDP loop
+                                        // Queue packet and resolve in background
                                         launch(Dispatchers.IO) {
                                             try {
                                                 val res = RobustResolver.resolve(targetHost, vpnService)
                                                 if (res.isNotEmpty()) {
-                                                    sendUdpPacket(outSocket, payload, res.first(), targetPortNum, targetHost)
+                                                    udpOutChannel.trySend(java.net.DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
                                                 }
-                                            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                                            } catch (e: Exception) {}
                                         }
                                     }
                                 }
                             }
                         } catch (e: Exception) {
-                            // Ignored
                         } finally {
                             ProxyStats.release64k(buffer)
-                            try { udpSocket.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                            udpOutChannel.close()
+                            try { udpSocket.close() } catch (e: Exception) {}
                         }
                     }
                     
