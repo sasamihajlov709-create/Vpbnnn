@@ -246,6 +246,7 @@ object RobustResolver {
 
     fun clearCache() {
         dnsCache.clear()
+        ipHeatmap.clear()
         Log.d("RobustResolver", "DNS Cache cleared")
     }
 
@@ -779,6 +780,7 @@ object RobustResolver {
                     }
                     if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
                         dnsCache.clear() // Hard reset if cache is too large to prevent memory leak
+                        ipHeatmap.clear()
                     }
                     
                     val ips = resolve("dns.google", forceSecure = true)

@@ -15,8 +15,6 @@ object FakePacketHelper {
         }
         return cachedQuicInitial
     }
-    private val random = Random()
-
     private fun buildExtension(type: Int, data: ByteArray): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
@@ -28,7 +26,7 @@ object FakePacketHelper {
 
     fun buildMultiSniHello(sni: String): ByteArray {
         val baos = ByteArrayOutputStream()
-        val rnd = Random()
+        
         
         // Handshake header (Client Hello)
         baos.write(0x16) // Content Type: Handshake
@@ -46,7 +44,7 @@ object FakePacketHelper {
         
         // Random
         val randomBytes = ByteArray(32)
-        rnd.nextBytes(randomBytes)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(randomBytes)
         helloBaos.write(randomBytes)
         
         // Session ID
