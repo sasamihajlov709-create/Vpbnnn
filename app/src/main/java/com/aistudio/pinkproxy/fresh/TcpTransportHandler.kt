@@ -76,6 +76,13 @@ object TcpTransportHandler {
                 return
             }
 
+            // Optimization: Reset timeouts and enable TCP_NODELAY for both ends of the tunnel
+            try {
+                clientSocket.soTimeout = 0
+                remoteSocket.soTimeout = 0
+                remoteSocket.tcpNoDelay = true
+            } catch (e: Exception) {}
+
             val connectTime = System.currentTimeMillis() - start
             BypassConfig.TrafficShaper.updateRtt(connectTime)
 
@@ -90,15 +97,20 @@ object TcpTransportHandler {
                     val buffer = ProxyStats.obtain64k()
                     try {
                         var n: Int
-                        while (remoteIn.read(buffer).also { n = it } != -1) {
-                            clientOut.write(buffer, 0, n)
-                            clientOut.flush()
-                            ProxyStats.updateBytes(n.toLong())
+                        while (isActive) {
+                            n = remoteIn.read(buffer)
+                            if (n == -1) break
+                            if (n > 0) {
+                                clientOut.write(buffer, 0, n)
+                                clientOut.flush()
+                                ProxyStats.updateBytes(n.toLong())
+                                if (ProxyStats.censorshipIntensity.value > 85) yield()
+                            }
                         }
                     } catch (e: Exception) {
                     } finally {
                         ProxyStats.release64k(buffer)
-                        try { clientSocket.close() } catch (e: Exception) {}
+                        try { clientSocket.shutdownOutput() } catch (e: Exception) {}
                     }
                 }
 
@@ -108,28 +120,40 @@ object TcpTransportHandler {
                     try {
                         var n: Int
                         var firstPacket = true
-                        while (clientIn.read(buffer).also { n = it } != -1) {
-                            if (firstPacket) {
-                                firstPacket = false
-                                val startBypass = System.currentTimeMillis()
-                                try {
-                                    BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
-                                    BypassConfig.recordSuccess(strategy, System.currentTimeMillis() - startBypass, targetHost)
-                                } catch (e: Exception) {
-                                    BypassConfig.recordFailure(strategy, targetHost)
-                                    throw e
+                        while (isActive) {
+                            n = clientIn.read(buffer)
+                            if (n == -1) break
+                            if (n > 0) {
+                                if (firstPacket) {
+                                    firstPacket = false
+                                    val startBypass = System.currentTimeMillis()
+                                    try {
+                                        BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
+                                        BypassConfig.recordSuccess(strategy, System.currentTimeMillis() - startBypass, targetHost)
+                                    } catch (e: Exception) {
+                                        BypassConfig.recordFailure(strategy, targetHost)
+                                        throw e
+                                    }
+                                } else {
+                                    if (ProxyStats.censorshipIntensity.value > 65 && n > 1100) {
+                                        val mid = n / 2
+                                        remoteOut.write(buffer, 0, mid)
+                                        remoteOut.flush()
+                                        delay(BypassConfig.currentRttMs.value / 25 + 1)
+                                        remoteOut.write(buffer, mid, n - mid)
+                                    } else {
+                                        remoteOut.write(buffer, 0, n)
+                                    }
+                                    remoteOut.flush()
                                 }
-                            } else {
-                                remoteOut.write(buffer, 0, n)
-                                remoteOut.flush()
+                                ProxyStats.updateBytes(n.toLong())
                             }
-                            ProxyStats.updateBytes(n.toLong())
                         }
                     } catch (e: Exception) {
                         BypassConfig.TrafficShaper.recordError()
                     } finally {
                         ProxyStats.release64k(buffer)
-                        try { remoteSocket?.close() } catch (e: Exception) {}
+                        try { remoteSocket?.shutdownOutput() } catch (e: Exception) {}
                     }
                 }
 

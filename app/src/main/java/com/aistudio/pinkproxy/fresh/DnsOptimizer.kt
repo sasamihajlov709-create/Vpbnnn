@@ -25,6 +25,18 @@ object DnsOptimizer {
     )
 
     fun start(scope: CoroutineScope, vpnService: VpnService?) {
+        // Immediate Warm-up phase
+        scope.launch(Dispatchers.IO) {
+            Log.i("DnsOptimizer", "Starting DNS Warm-up...")
+            for (domain in criticalDomains) {
+                try {
+                    val ips = RobustResolver.resolve(domain, vpnService)
+                    if (ips.isNotEmpty()) DnsCacheManager.put(domain, ips)
+                } catch (e: Exception) {}
+            }
+            Log.i("DnsOptimizer", "DNS Warm-up completed.")
+        }
+
         // Latency Prober
         scope.launch(Dispatchers.IO) {
             while (isActive) {

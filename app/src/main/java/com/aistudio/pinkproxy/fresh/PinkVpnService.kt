@@ -151,11 +151,35 @@ class PinkVpnService : VpnService() {
                     if (capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
                         Log.i("PinkVpnService", "Network validated: $network")
                     }
+                    val isWifi = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                    val isMobile = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
+                    BypassConfig.updateNetworkType(if (isWifi) NetworkType.WIFI else if (isMobile) NetworkType.MOBILE else NetworkType.UNKNOWN)
                 }
             }
             connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Failed to register network monitor", e)
+        }
+    }
+
+    private var chaffJob: Job? = null
+    private fun startChaffGenerator() {
+        chaffJob?.cancel()
+        chaffJob = serviceScope.launch {
+            val domains = listOf("google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com")
+            while (isActive) {
+                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(60000, 180000))
+                if (!_isRunning.value) continue
+                
+                // Only send chaff if idle
+                if (ProxyStats.speedBytesPerSecond.value < 1024) {
+                    val domain = domains.random()
+                    Log.v("PinkVpnService", "Sending chaff query to $domain")
+                    try {
+                        RobustResolver.resolve(domain, this@PinkVpnService)
+                    } catch (e: Exception) {}
+                }
+            }
         }
     }
 
@@ -239,6 +263,7 @@ class PinkVpnService : VpnService() {
             
             showNotification()
             _isRunning.value = true
+            startChaffGenerator()
             VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Error starting VPN", e)

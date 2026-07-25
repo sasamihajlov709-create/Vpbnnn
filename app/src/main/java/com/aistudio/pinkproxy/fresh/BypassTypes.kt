@@ -101,7 +101,8 @@ enum class BypassStrategy(
     TCP_TOS_MANGLE(StrategyFamily.TCP, 2, 1),
     WS_HANDSHAKE_FAKE(StrategyFamily.HTTP, 3, 3),
     SSH_HANDSHAKE_FAKE(StrategyFamily.TCP, 3, 3),
-    UDP_DTLS_FAKE(StrategyFamily.QUIC, 3, 2)
+    UDP_DTLS_FAKE(StrategyFamily.QUIC, 3, 2),
+    HTTP_KEEP_ALIVE_FAKE(StrategyFamily.HTTP, 2, 2)
 }
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }

@@ -85,6 +85,14 @@ object BypassConfig {
         }
     }
 
+    fun updateNetworkType(type: NetworkType) {
+        if (_currentNetworkType.value != type) {
+            _currentNetworkType.value = type
+            Log.i("BypassConfig", "Network type updated: $type. Clearing session memory.")
+            hostStrategyMemory.clear() // Network changed, old strategies might not be optimal
+        }
+    }
+
     fun loadTuningSettings(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
         isAutoTuning = prefs.getBoolean("is_auto_tuning", true)
@@ -1044,7 +1052,17 @@ object BypassConfig {
             }
             BypassStrategy.QUIC_MTU_PROBE -> {
                 output.write(data, 0, length); output.flush()
-                repeat(5) { delay(10); output.write(ByteArray(1200) { 0 }); output.flush() }
+                val probe = ProxyStats.obtain8k()
+                try {
+                    java.util.Arrays.fill(probe, 0.toByte())
+                    repeat(3) { 
+                        delay(rnd.nextLong(5, 15))
+                        output.write(probe, 0, 1200)
+                        output.flush() 
+                    }
+                } finally {
+                    ProxyStats.release8k(probe)
+                }
             }
             BypassStrategy.PROTOCOL_CONFUSION_SSH -> {
                 val ssh = FakePacketHelper.buildFakeSshHandshake()
@@ -1073,6 +1091,11 @@ object BypassConfig {
             BypassStrategy.UDP_DTLS_FAKE -> {
                 val dtls = byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + ByteArray(20) { rnd.nextInt(256).toByte() }
                 output.write(dtls); output.flush(); delay(config.delay1)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.HTTP_KEEP_ALIVE_FAKE -> {
+                val keepAlive = "OPTIONS * HTTP/1.1\r\nHost: $host\r\nConnection: keep-alive\r\n\r\n".toByteArray()
+                output.write(keepAlive); output.flush(); delay(config.delay1)
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.CHAOS -> {

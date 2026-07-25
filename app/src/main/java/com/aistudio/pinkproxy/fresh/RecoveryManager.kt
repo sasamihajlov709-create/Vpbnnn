@@ -12,7 +12,8 @@ enum class RecoveryEvent {
 
 object RecoveryManager {
     private var lastRestartTime = 0L
-    private val RESTART_COOLDOWN = 60000L // 1 minute
+    private var restartCooldown = 60000L
+    private var recoveryEscalation = 0
 
     fun handleEvent(event: RecoveryEvent, details: String = "") {
         Log.w("RecoveryManager", "Handling event: $event ($details)")
@@ -20,38 +21,47 @@ object RecoveryManager {
         
         when (event) {
             RecoveryEvent.DNS_FAILURE -> {
-                RobustResolver.clearCache()
-                if (ProxyStats.dnsFailureCount.value > 15) {
+                if (recoveryEscalation < 2) {
+                    RobustResolver.clearCache()
+                    recoveryEscalation++
+                } else {
                     triggerPanic("Repeated DNS failures")
                     requestServiceRestart("Persistent DNS failures")
                 }
             }
             RecoveryEvent.PROXY_UNREACHABLE -> {
+                recoveryEscalation = 3
                 triggerPanic("Proxy unreachable")
                 requestServiceRestart("Proxy crash or unreachable")
             }
             RecoveryEvent.TUNNEL_STALL -> {
-                triggerPanic("Tunnel stall detected")
-                requestServiceRestart("Data flow stalled")
+                if (recoveryEscalation < 3) {
+                    BypassConfig.rotateGlobalStrategy()
+                    recoveryEscalation++
+                } else {
+                    triggerPanic("Tunnel stall detected")
+                    requestServiceRestart("Data flow stalled")
+                }
             }
-            RecoveryEvent.HIGH_RTT -> {
+            RecoveryEvent.HIGH_RTT, RecoveryEvent.HANDSHAKE_FAILURE -> {
                 BypassConfig.rotateGlobalStrategy()
-            }
-            RecoveryEvent.HANDSHAKE_FAILURE -> {
-                BypassConfig.rotateGlobalStrategy()
+                recoveryEscalation = (recoveryEscalation + 1).coerceAtMost(2)
             }
         }
     }
 
     private fun requestServiceRestart(reason: String) {
         val now = System.currentTimeMillis()
-        if (now - lastRestartTime < RESTART_COOLDOWN) {
+        if (now - lastRestartTime < restartCooldown) {
             Log.w("RecoveryManager", "Skipping restart: cooldown active ($reason)")
             return
         }
         
         lastRestartTime = now
+        restartCooldown = (restartCooldown * 1.5).toLong().coerceAtMost(300000L)
+        
         Log.e("RecoveryManager", "Requesting Service Restart: $reason")
+        recoveryEscalation = 0
         
         val context = PinkVpnService.instance ?: return
         val intent = android.content.Intent(context, PinkVpnService::class.java).apply {

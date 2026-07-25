@@ -257,6 +257,19 @@ object UdpTransportHandler {
                     TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
+                BypassStrategy.QUIC_MTU_PROBE -> {
+                    socket.send(outPacket)
+                    val probe = ProxyStats.obtain8k()
+                    try {
+                        java.util.Arrays.fill(probe, 0.toByte())
+                        repeat(2) {
+                            delay(5)
+                            socket.send(DatagramPacket(probe, 1200, targetInet, targetPort))
+                        }
+                    } finally {
+                        ProxyStats.release8k(probe)
+                    }
+                }
                 else -> {
                     val fakeQuic = FakePacketHelper.buildQuicInitial()
                     val fakeQuicPacket = DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
