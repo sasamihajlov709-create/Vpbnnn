@@ -801,18 +801,6 @@ object BypassConfig {
                     output.write(mod.toByteArray()); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
             }
-            BypassStrategy.TLS_HELLO_JUNK -> {
-                val junk = ByteArray(rnd.nextInt(16, 64)) { rnd.nextInt(256).toByte() }
-                output.write(junk); output.flush(); delay(rnd.nextLong(5, 20))
-                output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.HTTP_USER_AGENT_SKEW -> {
-                val s = String(data, 0, length)
-                if (s.contains("User-Agent:", ignoreCase = true)) {
-                    val mod = s.replace("User-Agent:", "User-Agent: PinkProxy/1.0 (Mobile; Censorship-Bypass) ", ignoreCase = true)
-                    output.write(mod.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
-            }
             BypassStrategy.TCP_MSS_CLAMP -> {
                 val clampSize = 536; var offset = 0
                 while (offset < length) {
@@ -895,7 +883,7 @@ object BypassConfig {
                     output.write(data, pos, size); output.flush(); pos += size; delay(rnd.nextLong(1, 10))
                 }
             }
-            BypassStrategy.TCP_URG_SKEW, BypassStrategy.TCP_URGENT_RANDOM -> {
+            BypassStrategy.TCP_URG_SKEW -> {
                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 output.write(data, 0, length); output.flush()
             }
@@ -905,13 +893,6 @@ object BypassConfig {
                     delay(rnd.nextLong(5, 15))
                 }
                 output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.TLS_ALPN_SKEW -> {
-                if (length > 0 && data[0] == 0x16.toByte()) {
-                    val fakeClientHello = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(50, 100), noMangle = true)
-                    output.write(fakeClientHello); output.flush(); delay(config.delay1)
-                    output.write(data, 0, length); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TLS_SNI_SKEW -> {
                 if (length > 0 && data[0] == 0x16.toByte()) {
@@ -1116,14 +1097,6 @@ object BypassConfig {
                     output.write(data, 0, length)
                 }
                 output.flush()
-            }
-            BypassStrategy.HTTP_KEEP_ALIVE_FAKE -> {
-                val s = String(data, 0, length)
-                if (s.contains("Host:", ignoreCase = true)) {
-                    val mod = s.replace("Connection: close", "Connection: keep-alive", ignoreCase = true)
-                        .replace("Connection: Keep-Alive", "Connection: keep-alive", ignoreCase = true)
-                    output.write(mod.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_FRAG_OOB -> {
                 if (length > 5) {

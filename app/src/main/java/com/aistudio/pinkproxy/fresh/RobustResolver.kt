@@ -39,6 +39,7 @@ object RobustResolver {
 
     fun clearCache() = DnsCacheManager.clear()
 
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     suspend fun resolve(host: String, vpnService: VpnService? = null): List<InetAddress> {
         if (DnsCacheManager.isIpAddress(host)) {
             return try { listOf(InetAddress.getByName(host)) } catch (e: Exception) { emptyList() }

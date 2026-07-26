@@ -12,6 +12,7 @@ import kotlinx.coroutines.selects.select
 
 object TcpTransportHandler {
 
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     suspend fun handleTcpSession(
         clientSocket: Socket,
         targetHost: String,

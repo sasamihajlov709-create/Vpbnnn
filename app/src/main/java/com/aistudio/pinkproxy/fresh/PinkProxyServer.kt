@@ -71,7 +71,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         }
     }
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.DelicateCoroutinesApi::class)
     private suspend fun handleClient(client: Socket) {
         ProxyStats.updateConnections(1)
         try {
