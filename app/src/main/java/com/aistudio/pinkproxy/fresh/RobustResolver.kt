@@ -102,18 +102,21 @@ object RobustResolver {
             
             val par = performParallelResolution(host, vpnService)
             if (par.isNotEmpty()) {
-                DnsCacheManager.put(host, par)
-                
-                // Smart Prefetch common subdomains
-                if (!host.startsWith("www.") && host.split(".").size == 2) {
-                    CoroutineScope(Dispatchers.IO).launch {
-                        listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
-                            try { performParallelResolution(prefix + host, vpnService) } catch (e: Exception) {}
+                if (DnsCacheManager.isSuspicious(host, par)) {
+                    ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+                } else {
+                    DnsCacheManager.put(host, par)
+                    
+                    // Smart Prefetch common subdomains
+                    if (!host.startsWith("www.") && host.split(".").size == 2) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
+                                try { performParallelResolution(prefix + host, vpnService) } catch (e: Exception) {}
+                            }
                         }
                     }
+                    return par
                 }
-                
-                return par
             }
         } catch (e: Exception) {}
 

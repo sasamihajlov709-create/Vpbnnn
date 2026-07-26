@@ -32,6 +32,32 @@ object DnsCacheManager {
         "github.com" to listOf("140.82.112.4", "140.82.113.3")
     )
 
+    private val bogonIps = setOf(
+        "127.0.0.1", "0.0.0.0", "1.1.1.1", "8.8.8.8", "10.0.0.1" // Common fake IPs used by some censors
+    )
+
+    fun isSuspicious(host: String, ips: List<InetAddress>): Boolean {
+        if (ips.isEmpty()) return false
+        val ipStrs = ips.map { it.hostAddress ?: "" }
+        
+        // 1. Check for known bogons/fake IPs
+        if (ipStrs.any { it in bogonIps && host != "dns.google" && host != "cloudflare-dns.com" }) return true
+        
+        // 2. Check for unexpected private ranges
+        if (ips.any { it.isSiteLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress }) return true
+        
+        // 3. Compare with static list if available
+        staticIps[host]?.let { trusted ->
+            // If none of the resolved IPs match the trusted ones for very critical domains
+            if (ipStrs.none { it in trusted }) {
+                // This is not always poisoning (CDNs), but for some it is
+                if (host == "dns.google" || host == "cloudflare-dns.com") return true
+            }
+        }
+        
+        return false
+    }
+
     private val emergencyFallback = mapOf(
         "youtube.com" to listOf("142.250.180.142", "142.251.46.206", "172.217.16.206", "142.250.186.78", "142.251.33.206"),
         "googlevideo.com" to listOf("172.217.16.14", "172.217.16.110", "142.250.185.78", "142.250.184.206", "172.217.20.78", "142.251.1.136", "142.251.46.174", "142.251.33.206"),

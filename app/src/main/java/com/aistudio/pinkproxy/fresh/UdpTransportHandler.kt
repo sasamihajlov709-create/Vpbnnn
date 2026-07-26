@@ -355,6 +355,15 @@ object UdpTransportHandler {
                     delay(ThreadLocalRandom.current().nextLong(1, 5))
                     socket.send(outPacket)
                 }
+                BypassStrategy.UDP_STUN_FAKE -> {
+                    val stun = FakePacketHelper.buildFakeStunMessage()
+                    val stunPacket = DatagramPacket(stun, stun.size, targetInet, targetPort)
+                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
+                    socket.send(stunPacket)
+                    delay(3)
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
+                    socket.send(outPacket)
+                }
                 BypassStrategy.QUIC_MTU_PROBE -> {
                     socket.send(outPacket)
                     val probe = ProxyStats.obtain8k()
@@ -388,6 +397,24 @@ object UdpTransportHandler {
                     delay(2)
                     TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
+                }
+                BypassStrategy.DNS_CASE_MANGLE -> {
+                    val query = DnsUtils.parseDnsQName(payload)
+                    if (query != null) {
+                        val mangled = payload.copyOf()
+                        // Find the domain name part and mangle case
+                        // (Rough implementation)
+                        for (i in 12 until payload.size - 4) {
+                            if (payload[i] in 65..90 || payload[i] in 97..122) {
+                                if (ThreadLocalRandom.current().nextBoolean()) {
+                                    mangled[i] = (payload[i].toInt() xor 32).toByte()
+                                }
+                            }
+                        }
+                        socket.send(DatagramPacket(mangled, mangled.size, targetInet, targetPort))
+                    } else {
+                        socket.send(outPacket)
+                    }
                 }
                 else -> {
                     val noise = FakePacketHelper.buildQuicInitial()

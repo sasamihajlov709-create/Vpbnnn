@@ -630,6 +630,21 @@ object FakePacketHelper {
         return sb.toString().toByteArray()
     }
 
+    fun buildFakeStunMessage(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        
+        dos.writeShort(0x0001) // Binding Request
+        dos.writeShort(0x0000) // Message Length
+        dos.writeInt(0x2112A442) // Magic Cookie
+        
+        val transactionId = ByteArray(12).apply { rnd.nextBytes(this) }
+        dos.write(transactionId)
+        
+        return baos.toByteArray()
+    }
+
     fun buildQuicInitial(destConnId: ByteArray? = null): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
