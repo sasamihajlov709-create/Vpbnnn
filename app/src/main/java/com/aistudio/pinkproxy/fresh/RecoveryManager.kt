@@ -1,6 +1,7 @@
 package com.aistudio.pinkproxy.fresh
 
 import android.util.Log
+import kotlinx.coroutines.*
 
 enum class RecoveryEvent {
     DNS_FAILURE,
@@ -14,6 +15,19 @@ object RecoveryManager {
     private var lastRestartTime = 0L
     private var restartCooldown = 60000L
     private var recoveryEscalation = 0
+    private var healthCheckJob: Job? = null
+
+    fun startHealthCheck(scope: CoroutineScope) {
+        healthCheckJob?.cancel()
+        healthCheckJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(30000)
+                if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 30) {
+                    handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop")
+                }
+            }
+        }
+    }
 
     fun handleEvent(event: RecoveryEvent, details: String = "") {
         Log.w("RecoveryManager", "Handling event: $event ($details)")

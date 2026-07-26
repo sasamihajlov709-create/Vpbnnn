@@ -206,6 +206,14 @@ object UdpTransportHandler {
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, payload: ByteArray, targetInet: InetAddress, targetPort: Int, targetHost: String = "") {
         val outPacket = DatagramPacket(payload, payload.size, targetInet, targetPort)
+        
+        // Adaptive Jitter
+        val intensity = ProxyStats.censorshipIntensity.value
+        if (intensity > 40) {
+            val jitter = ThreadLocalRandom.current().nextLong(0, (intensity / 10).toLong())
+            if (jitter > 0) delay(jitter)
+        }
+
         val strategy = BypassConfig.getBestStrategyForHost(if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress)
         
         val isQuic = targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0

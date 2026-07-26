@@ -945,7 +945,26 @@ object BypassConfig {
                 val s = String(data, 0, length)
                 if (s.contains("HTTP/")) {
                     val mod = s.replace("HTTP/1.1\r\n", "HTTP/1.1\r\nTransfer-Encoding: chunked\r\n")
-                    output.write(mod.toByteArray()); output.flush(); delay(10); output.write("0\r\n\r\n".toByteArray()); output.flush()
+                    val headerEnd = mod.indexOf("\r\n\r\n")
+                    if (headerEnd != -1) {
+                        val header = mod.substring(0, headerEnd + 4)
+                        val body = data.copyOfRange(length - (s.length - (s.indexOf("\r\n\r\n") + 4)), length)
+                        output.write(header.toByteArray()); output.flush()
+                        
+                        var pos = 0
+                        while (pos < body.size) {
+                            val chunkSize = rnd.nextInt(1, 10).coerceAtMost(body.size - pos)
+                            output.write("${Integer.toHexString(chunkSize)}\r\n".toByteArray())
+                            output.write(body, pos, chunkSize)
+                            output.write("\r\n".toByteArray())
+                            output.flush()
+                            pos += chunkSize
+                            delay(rnd.nextLong(1, 5))
+                        }
+                        output.write("0\r\n\r\n".toByteArray()); output.flush()
+                    } else {
+                        output.write(mod.toByteArray()); output.flush(); delay(10); output.write("0\r\n\r\n".toByteArray()); output.flush()
+                    }
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_WINDOW_RESTRICT -> {

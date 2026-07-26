@@ -41,7 +41,10 @@ object DnsProtocols {
         val idReal = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val idFake = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val queryReal = DnsPacketEngine.buildDnsQuery(host, 1, idReal)
-        val queryFake = DnsPacketEngine.buildDnsQuery("google.com", 1, idFake)
+        
+        val innocentDomains = listOf("google.com", "bing.com", "apple.com", "microsoft.com", "cloudflare.com")
+        val fakeDomain = innocentDomains.random()
+        val queryFake = DnsPacketEngine.buildDnsQuery(fakeDomain, 1, idFake)
         
         val socket = DatagramSocket()
         try {
@@ -49,16 +52,18 @@ object DnsProtocols {
             socket.soTimeout = 3000
             val dnsAddr = InetAddress.getByName(dnsIp)
             
-            // Send fake query to common host with different ID
+            // Send fake query to innocent host with different ID
             socket.send(DatagramPacket(queryFake, queryFake.size, dnsAddr, 53))
-            delay(10)
+            delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 25)) // Random interval
             socket.send(DatagramPacket(queryReal, queryReal.size, dnsAddr, 53))
             
             val buffer = ByteArray(1024)
             val start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < 3000) {
                 val respPacket = DatagramPacket(buffer, buffer.size)
-                socket.receive(respPacket)
+                try {
+                    socket.receive(respPacket)
+                } catch (e: Exception) { break }
                 val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, idReal)
                 if (res.isNotEmpty()) return res
             }
