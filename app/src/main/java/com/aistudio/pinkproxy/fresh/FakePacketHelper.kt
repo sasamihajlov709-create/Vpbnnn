@@ -787,4 +787,69 @@ object FakePacketHelper {
         
         return baos.toByteArray()
     }
+
+    fun shuffleTlsExtensions(data: ByteArray, length: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)
+        try {
+            var pos = 9 // Skip Record Header(5) + Handshake Header(4)
+            pos += 2 // Version
+            pos += 32 // Random
+            val sessionIdLen = data[pos].toInt() and 0xff
+            pos += 1 + sessionIdLen
+            val cipherSuiteLen = ((data[pos].toInt() and 0xff) shl 8) or (data[pos + 1].toInt() and 0xff)
+            pos += 2 + cipherSuiteLen
+            val compressionLen = data[pos].toInt() and 0xff
+            pos += 1 + compressionLen
+            
+            if (pos >= length - 2) return data.copyOf(length)
+            val extensionsLen = ((data[pos].toInt() and 0xff) shl 8) or (data[pos + 1].toInt() and 0xff)
+            pos += 2
+            
+            if (pos + extensionsLen > length) return data.copyOf(length)
+            
+            val extensions = mutableListOf<ByteArray>()
+            var extPos = pos
+            while (extPos < pos + extensionsLen) {
+                val extType = ((data[extPos].toInt() and 0xff) shl 8) or (data[extPos + 1].toInt() and 0xff)
+                val extLen = ((data[extPos + 2].toInt() and 0xff) shl 8) or (data[extPos + 3].toInt() and 0xff)
+                extensions.add(data.copyOfRange(extPos, extPos + 4 + extLen))
+                extPos += 4 + extLen
+            }
+            
+            if (extensions.size < 2) return data.copyOf(length)
+            
+            // Shuffle but keep SNI (0x0000) first if possible, or just randomize
+            extensions.shuffle()
+            
+            val baos = ByteArrayOutputStream()
+            baos.write(data, 0, pos)
+            extensions.forEach { baos.write(it) }
+            
+            val result = baos.toByteArray()
+            // Fix handshake length and extensions length
+            val newHandshakeLen = result.size - 9
+            result[6] = ((newHandshakeLen shr 16) and 0xff).toByte()
+            result[7] = ((newHandshakeLen shr 8) and 0xff).toByte()
+            result[8] = (newHandshakeLen and 0xff).toByte()
+            
+            val newExtLen = result.size - pos
+            result[pos - 2] = ((newExtLen shr 8) and 0xff).toByte()
+            result[pos - 1] = (newExtLen and 0xff).toByte()
+            
+            // Fix record length
+            val newRecordLen = result.size - 5
+            result[3] = ((newRecordLen shr 8) and 0xff).toByte()
+            result[4] = (newRecordLen and 0xff).toByte()
+            
+            return result
+        } catch (e: Exception) {
+            return data.copyOf(length)
+        }
+    }
+
+    fun buildUdpNoise(size: Int): ByteArray {
+        val noise = ByteArray(size)
+        ThreadLocalRandom.current().nextBytes(noise)
+        return noise
+    }
 }

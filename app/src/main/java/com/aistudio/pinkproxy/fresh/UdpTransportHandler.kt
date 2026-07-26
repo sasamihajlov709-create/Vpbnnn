@@ -247,6 +247,15 @@ object UdpTransportHandler {
             return
         }
 
+        if (strategy == BypassStrategy.UDP_NOISE_PAD) {
+            val noiseSize = if (isQuic) rnd.nextInt(1200, 1400) else rnd.nextInt(10, 100)
+            val noise = FakePacketHelper.buildUdpNoise(noiseSize)
+            socket.send(DatagramPacket(noise, noise.size, targetInet, targetPort))
+            delay(rnd.nextLong(5, 25))
+            socket.send(outPacket)
+            return
+        }
+
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(outPacket)
             return

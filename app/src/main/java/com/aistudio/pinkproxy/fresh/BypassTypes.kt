@@ -124,6 +124,8 @@ enum class BypassStrategy(
     HTTP_FRAGMENT(StrategyFamily.HTTP, 4, 2),
     TCP_SACK_PANIC(StrategyFamily.TCP, 3, 2),
     TCP_GHOST_SKEW(StrategyFamily.TCP, 4, 3),
+    TLS_CLIENT_HELLO_SHUFFLE(StrategyFamily.TLS, 5, 4),
+    UDP_NOISE_PAD(StrategyFamily.UDP, 3, 4),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
@@ -154,7 +156,15 @@ object ProxyStats {
     private val _lastLatency = MutableStateFlow(0L)
     val lastLatency: StateFlow<Long> = _lastLatency.asStateFlow()
 
+    private val _jitter = MutableStateFlow(0L)
+    val jitter: StateFlow<Long> = _jitter.asStateFlow()
+
     fun updateLatency(ms: Long) {
+        val old = _lastLatency.value
+        if (old > 0) {
+            val diff = Math.abs(ms - old)
+            _jitter.value = (_jitter.value * 3 + diff) / 4 // Moving average
+        }
         _lastLatency.value = ms
     }
 

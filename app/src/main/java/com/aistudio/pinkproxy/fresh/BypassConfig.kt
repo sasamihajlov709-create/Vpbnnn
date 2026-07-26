@@ -175,6 +175,7 @@ object BypassConfig {
         }
         
         val dpiType = ProxyStats.currentDpiType.value
+        val jitter = ProxyStats.jitter.value
         
         hostStrategyMemory[host]?.let { (remembered, expiry) ->
             if (now < expiry) {
@@ -187,6 +188,9 @@ object BypassConfig {
                         DpiType.TCP_RESET -> if (remembered.family == StrategyFamily.TCP) boostedScore += 30
                         DpiType.CONNECTION_TIMEOUT -> if (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP) boostedScore += 30
                         else -> {}
+                    }
+                    if (jitter > 100 && (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP || remembered == BypassStrategy.HTTP_FRAGMENT)) {
+                        boostedScore += 20
                     }
                     if (boostedScore > 40 && (circuitBreakers[remembered] ?: 0L) < now) {
                         return remembered
@@ -1301,6 +1305,16 @@ object BypassConfig {
                 output.write(ghost); output.flush()
                 delay(rnd.nextLong(2, 10))
                 TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_CLIENT_HELLO_SHUFFLE -> {
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val shuffled = FakePacketHelper.shuffleTlsExtensions(data, length)
+                    output.write(shuffled); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.UDP_NOISE_PAD -> {
+                // Handled in UdpTransportHandler mostly, but here for completeness if used over TCP (not recommended)
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_SESSION_ID_RAND -> {
