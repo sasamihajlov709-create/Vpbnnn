@@ -42,6 +42,7 @@ object TcpTransportHandler {
                     // Aggressive racing: attempt more IPs if censorship is high
                     val attempted = if (censorship > 70) resolved.size else minOf(resolved.size, 3)
                     val raceDelay = if (censorship > 70) 50L else 250L
+                    val failures = java.util.concurrent.atomic.AtomicInteger(0)
                     
                     for (i in 0 until attempted) {
                         val ip = resolved[i]
@@ -69,7 +70,6 @@ object TcpTransportHandler {
                                     }
                                     throw e
                                 }
-
                                 if (!channel.isClosedForSend) {
                                     channel.trySend(s)
                                 } else {
@@ -77,11 +77,13 @@ object TcpTransportHandler {
                                 }
                             } catch (e: Exception) {
                                 try { s.close() } catch (ex: Exception) {}
+                                if (failures.incrementAndGet() == attempted) {
+                                    channel.close()
+                                }
                             }
                         }
                         if (i < attempted - 1) delay(raceDelay) // Staggered start
                     }
-
                     val winner = try {
                         channel.receive()
                     } catch (e: Exception) {
@@ -229,6 +231,9 @@ object TcpTransportHandler {
                     remoteToClient.onJoin {}
                     clientToRemote.onJoin {}
                 }
+                
+                try { clientSocket.close() } catch(e: Exception) {}
+                try { remoteSocket?.close() } catch(e: Exception) {}
                 
                 keepAliveJob.cancel()
                 remoteToClient.cancel()

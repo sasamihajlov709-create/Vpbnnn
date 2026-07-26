@@ -152,46 +152,44 @@ object RobustResolver {
             }
         }
         
-        val jobs = listOf(
-            async { DnsProtocols.queryDohRacing(host, vpnService) },
-            async { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },
-            async { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },
-            async { DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService) },
-            async { 
+        val queries = listOf<suspend () -> List<InetAddress>>(
+            { DnsProtocols.queryDohRacing(host, vpnService) },
+            { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },
+            { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },
+            { DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService) },
+            { 
                 delay(600) // Slight delay for emergency fallback
                 DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
             }
         )
         
-        val result = select<List<InetAddress>> {
-            jobs.forEach { job ->
-                job.onAwait { res ->
-                    if (res.isNotEmpty()) {
-                        jobs.forEach { it.cancel() }
-                        res
-                    } else {
-                        // If empty, we need to wait for others or eventually fail
-                        // select will continue waiting if no value is returned
-                        // We need a way to know if all failed.
-                        // For simplicity, we just return the first non-empty or throw below.
-                        emptyList<InetAddress>() 
-                    }
-                }
+        val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size)
+        val activeJobs = mutableListOf<Job>()
+        
+        queries.forEach { query ->
+            activeJobs += launch {
+                val res = try { query() } catch (e: Exception) { emptyList() }
+                try { channel.send(res) } catch (e: Exception) {}
             }
-            // Timeout if none respond in 5s
-            onTimeout(5000L) { emptyList<InetAddress>() }
         }
+        
+        var result = emptyList<InetAddress>()
+        var completed = 0
+        while (completed < queries.size) {
+            val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Exception) { emptyList() }
+            if (res.isNotEmpty()) {
+                result = res
+                break
+            }
+            completed++
+        }
+        
+        activeJobs.forEach { it.cancel() }
+        channel.close()
         
         if (result.isNotEmpty()) {
             DnsCacheManager.put(host, result)
             return@coroutineScope result
-        }
-        
-        // Final fallback: wait for any success or throw
-        val any = jobs.awaitAll().flatten().distinct()
-        if (any.isNotEmpty()) {
-            DnsCacheManager.put(host, any)
-            return@coroutineScope any
         }
         
         throw java.net.UnknownHostException("Parallel resolution failed for $host")

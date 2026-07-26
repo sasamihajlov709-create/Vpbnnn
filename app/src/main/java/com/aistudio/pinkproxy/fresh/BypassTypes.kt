@@ -154,6 +154,10 @@ object ProxyStats {
         recordCensorshipEvent(true)
         logRecovery("Detected censorship type: $type")
     }
+    
+    fun clearDpiType() {
+        _currentDpiType.value = DpiType.NONE
+    }
 
     private val _lastLatency = MutableStateFlow(0L)
     val lastLatency: StateFlow<Long> = _lastLatency.asStateFlow()

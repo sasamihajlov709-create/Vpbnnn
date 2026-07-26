@@ -67,6 +67,8 @@ class PinkVpnService : VpnService() {
 
     private var watchdogJob: Job? = null
 
+    private var engineMonitorJob: Job? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -311,7 +313,8 @@ class PinkVpnService : VpnService() {
             startTun2Socks(vpnInterface!!, PROXY_PORT)
             
             // Monitor engine status
-            serviceScope.launch {
+            engineMonitorJob?.cancel()
+            engineMonitorJob = serviceScope.launch {
                 while (isActive && _isRunning.value) {
                     delay(30000)
                     if (_isRunning.value && vpnInterface != null) {
@@ -429,6 +432,9 @@ class PinkVpnService : VpnService() {
         VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
         stopTun2Socks()
         proxyServer?.stop()
+        
+        engineMonitorJob?.cancel()
+        engineMonitorJob = null
         
         try {
             vpnInterface?.close()

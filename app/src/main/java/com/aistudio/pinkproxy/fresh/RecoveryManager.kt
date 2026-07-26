@@ -38,12 +38,15 @@ object RecoveryManager {
                 
                 lastBytes = currentBytes
 
+                // ProxyStats is in BypassTypes.kt
                 if (ProxyStats.currentDpiType.value != DpiType.NONE) {
                     handleEvent(RecoveryEvent.DPI_DETECTED, "DPI: ${ProxyStats.currentDpiType.value}")
+                    ProxyStats.clearDpiType()
                 }
             }
         }
     }
+
 
     fun handleEvent(event: RecoveryEvent, details: String = "") {
         Log.w("RecoveryManager", "Handling event: $event ($details)")
