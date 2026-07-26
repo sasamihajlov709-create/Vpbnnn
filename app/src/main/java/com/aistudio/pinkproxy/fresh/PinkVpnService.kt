@@ -326,7 +326,8 @@ class PinkVpnService : VpnService() {
                             Log.e("PinkVpnService", "Engine health check failed: ${e.message}. Restarting...")
                             ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
                             withContext(Dispatchers.Main) {
-                                startVpn() // Re-run start logic (it handles interface recreation)
+                                stopVpn()
+                                startVpn()
                             }
                         }
                     }

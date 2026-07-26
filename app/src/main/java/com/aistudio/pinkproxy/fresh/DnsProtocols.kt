@@ -135,8 +135,14 @@ object DnsProtocols {
             val dohIps = DnsCacheManager.getStaticIps(dohHost) ?: DnsCacheManager.getEmergencyFallback(dohHost)
             
             val finalUrl = if (!dohIps.isNullOrEmpty()) {
-                val ip = dohIps.random().hostAddress
-                java.net.URL(dohUrl.replace(dohHost, ip!!))
+                val ipAddr = dohIps.random()
+                val ipStr = ipAddr.hostAddress ?: ""
+                val formattedIp = if (ipAddr is java.net.Inet6Address) "[$ipStr]" else ipStr
+                if (formattedIp.isNotEmpty()) {
+                    java.net.URL(dohUrl.replace(dohHost, formattedIp))
+                } else {
+                    url
+                }
             } else {
                 url
             }

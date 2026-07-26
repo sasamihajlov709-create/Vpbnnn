@@ -30,6 +30,15 @@ object DnsUtils {
     }
 
     fun buildDnsReply(query: ByteArray, ips: List<String>, isIpv6: Boolean): ByteArray {
+        val parsedAddrs = ips.mapNotNull { ip ->
+            try {
+                val addr = InetAddress.getByName(ip)
+                if (isIpv6 && addr is java.net.Inet6Address) addr
+                else if (!isIpv6 && addr is java.net.Inet4Address) addr
+                else null
+            } catch (e: Exception) { null }
+        }
+
         val bos = java.io.ByteArrayOutputStream()
         // ID
         bos.write(query.getOrNull(0)?.toInt() ?: 0)
@@ -41,8 +50,8 @@ object DnsUtils {
         bos.write(0)
         bos.write(1)
         // Answer count
-        bos.write((ips.size shr 8) and 0xFF)
-        bos.write(ips.size and 0xFF)
+        bos.write((parsedAddrs.size shr 8) and 0xFF)
+        bos.write(parsedAddrs.size and 0xFF)
         // Authority / Additional
         bos.write(0); bos.write(0)
         bos.write(0); bos.write(0)
@@ -73,10 +82,11 @@ object DnsUtils {
         }
         
         // Answers
-        for (ip in ips) {
+        for (addr in parsedAddrs) {
             // Name: pointer to offset 12 (0xc00c)
             bos.write(0xc0)
             bos.write(0x0c)
+            val bytes = addr.address
             if (isIpv6) {
                 // Type AAAA (28 = 0x001c)
                 bos.write(0); bos.write(28)
@@ -90,13 +100,7 @@ object DnsUtils {
                 bos.write(ttl and 0xFF)
                 // Data length (16 bytes for IPv6)
                 bos.write(0); bos.write(16)
-                // Parse and write IPv6 safely
-                val addr = try { InetAddress.getByName(ip) } catch (e: Exception) { null }
-                if (addr != null) {
-                    bos.write(addr.address)
-                } else {
-                    bos.write(ByteArray(16))
-                }
+                bos.write(bytes)
             } else {
                 // Type A (1 = 0x0001)
                 bos.write(0); bos.write(1)
@@ -110,13 +114,7 @@ object DnsUtils {
                 bos.write(ttl and 0xFF)
                 // Data length (4 bytes for IPv4)
                 bos.write(0); bos.write(4)
-                // IP address safely
-                val addr = try { InetAddress.getByName(ip) } catch (e: Exception) { null }
-                if (addr != null) {
-                    bos.write(addr.address)
-                } else {
-                    bos.write(ByteArray(4))
-                }
+                bos.write(bytes)
             }
         }
         return bos.toByteArray()
