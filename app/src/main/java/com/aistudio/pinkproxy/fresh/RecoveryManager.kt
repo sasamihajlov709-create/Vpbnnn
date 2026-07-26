@@ -72,6 +72,13 @@ object RecoveryManager {
             RecoveryEvent.TUNNEL_STALL -> {
                 if (recoveryEscalation < 3) {
                     BypassConfig.rotateGlobalStrategy()
+                    if (recoveryEscalation > 1) {
+                        val currentMtu = BypassConfig.currentMtu.value
+                        if (currentMtu > 1200) {
+                            BypassConfig.setMtu(currentMtu - 100)
+                            ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - 100}")
+                        }
+                    }
                     recoveryEscalation++
                 } else {
                     triggerPanic("Tunnel stall detected")

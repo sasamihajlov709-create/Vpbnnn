@@ -119,6 +119,11 @@ enum class BypassStrategy(
     TCP_WINDOW_CLAMPING(StrategyFamily.TCP, 2, 2),
     TLS_CLIENT_HELLO_CHOP(StrategyFamily.TLS, 5, 4),
     UDP_FAKE_DTLS(StrategyFamily.UDP, 3, 4),
+    TLS_APP_DATA_SPLIT(StrategyFamily.TLS, 4, 2),
+    HTTP_HOST_MANGLE(StrategyFamily.HTTP, 3, 3),
+    HTTP_FRAGMENT(StrategyFamily.HTTP, 4, 2),
+    TCP_SACK_PANIC(StrategyFamily.TCP, 3, 2),
+    TCP_GHOST_SKEW(StrategyFamily.TCP, 4, 3),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
@@ -144,6 +149,13 @@ object ProxyStats {
         _currentDpiType.value = type
         recordCensorshipEvent(true)
         logRecovery("Detected censorship type: $type")
+    }
+
+    private val _lastLatency = MutableStateFlow(0L)
+    val lastLatency: StateFlow<Long> = _lastLatency.asStateFlow()
+
+    fun updateLatency(ms: Long) {
+        _lastLatency.value = ms
     }
 
     private val bufferPool8k = LinkedBlockingQueue<ByteArray>(256)

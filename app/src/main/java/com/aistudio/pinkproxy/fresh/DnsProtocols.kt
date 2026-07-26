@@ -31,7 +31,8 @@ object DnsProtocols {
             val buffer = ByteArray(1024)
             val respPacket = DatagramPacket(buffer, buffer.size)
             socket.receive(respPacket)
-            return DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
+            val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
+            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } finally {
             try { socket.close() } catch (e: Exception) {}
         }
@@ -65,7 +66,8 @@ object DnsProtocols {
                     socket.receive(respPacket)
                 } catch (e: Exception) { break }
                 val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, idReal)
-                if (res.isNotEmpty()) return res
+                val clean = res.filter { !DnsCacheManager.isPoisoned(it, host) }
+                if (clean.isNotEmpty()) return clean
             }
         } catch (e: Exception) {} finally {
             try { socket.close() } catch (e: Exception) {}
@@ -90,7 +92,8 @@ object DnsProtocols {
             val len = dis.readUnsignedShort()
             val resp = ByteArray(len)
             dis.readFully(resp)
-            return DnsPacketEngine.parseDnsResponse(resp, len, id)
+            val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
+            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } finally {
             try { socket.close() } catch (e: Exception) {}
         }
@@ -113,7 +116,8 @@ object DnsProtocols {
             val len = dis.readUnsignedShort()
             val resp = ByteArray(len)
             dis.readFully(resp)
-            return DnsPacketEngine.parseDnsResponse(resp, len, id)
+            val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
+            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } catch (e: Exception) {
         } finally {
             try { socket.close() } catch (e: Exception) {}
@@ -159,7 +163,8 @@ object DnsProtocols {
             
             if (conn.responseCode == 200) {
                 val resp = conn.inputStream.use { it.readBytes() }
-                return DnsPacketEngine.parseDnsResponse(resp, resp.size)
+                val ips = DnsPacketEngine.parseDnsResponse(resp, resp.size)
+                return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
             }
         } catch (e: Exception) {} finally {
             try { conn?.disconnect() } catch (e: Exception) {}

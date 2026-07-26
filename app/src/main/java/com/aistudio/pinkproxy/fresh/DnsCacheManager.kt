@@ -107,7 +107,10 @@ object DnsCacheManager {
 
     fun isPoisoned(address: InetAddress, host: String): Boolean {
         val ip = address.hostAddress ?: return true
-        if (poisonedIps.contains(ip)) return true
+        if (poisonedIps.contains(ip)) {
+            ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+            return true
+        }
         if (address.isLoopbackAddress || address.isAnyLocalAddress) return true
         
         val isLocalHost = host.endsWith(".local") || host.contains("localhost") || 
@@ -119,9 +122,13 @@ object DnsCacheManager {
             
             val poisonedPrefixes = listOf(
                 "146.112.", "128.121.", "67.215.", "204.232.", "198.18.", 
-                "93.184.216.34", "104.239.213.7"
+                "93.184.216.34", "104.239.213.7", "188.114.96.", "188.114.97.",
+                "188.114.98.", "188.114.99.", "37.228.114.", "8.254.218."
             )
-            if (poisonedPrefixes.any { ip.startsWith(it) }) return true
+            if (poisonedPrefixes.any { ip.startsWith(it) }) {
+                ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+                return true
+            }
         }
         return false
     }

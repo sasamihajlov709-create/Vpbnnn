@@ -95,6 +95,11 @@ object RobustResolver {
 
         // 2. Try Smart Parallel Resolution (DoH, DoT, Shadow UDP)
         try {
+            if (ProxyStats.censorshipIntensity.value > 95) {
+                val cached = DnsCacheManager.getCached(host) ?: DnsCacheManager.getEmergencyFallback(host)
+                if (cached != null) return cached
+            }
+            
             val par = performParallelResolution(host, vpnService)
             if (par.isNotEmpty()) {
                 DnsCacheManager.put(host, par)

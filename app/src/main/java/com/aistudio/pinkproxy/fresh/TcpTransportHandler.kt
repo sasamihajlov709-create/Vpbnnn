@@ -52,7 +52,9 @@ object TcpTransportHandler {
                                 s.tcpNoDelay = true
                                 // Dynamic timeout based on RTT
                                 val connectTimeout = (BypassConfig.currentRttMs.value * 4).coerceIn(2000, 8000).toInt()
+                                val start = System.currentTimeMillis()
                                 s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
+                                ProxyStats.updateLatency(System.currentTimeMillis() - start)
                                 if (!channel.isClosedForSend) {
                                     channel.trySend(s)
                                 } else {

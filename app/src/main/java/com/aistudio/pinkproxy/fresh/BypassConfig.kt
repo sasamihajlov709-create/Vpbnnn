@@ -87,6 +87,11 @@ object BypassConfig {
         }
     }
 
+    fun setMtu(mtu: Int) {
+        _currentMtu.value = mtu.coerceIn(576, 1500)
+        Log.i("BypassConfig", "MTU set to ${_currentMtu.value}")
+    }
+
     fun updateNetworkType(type: NetworkType) {
         if (_currentNetworkType.value != type) {
             _currentNetworkType.value = type
@@ -1244,6 +1249,59 @@ object BypassConfig {
                         output.flush()
                     }
                 } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TLS_APP_DATA_SPLIT -> {
+                if (length > 5 && data[0] == 0x17.toByte()) {
+                    // Split the first application data record
+                    val head = 5
+                    val bodyLen = length - head
+                    if (bodyLen > 1) {
+                        val part = rnd.nextInt(1, bodyLen)
+                        // Record 1
+                        output.write(data[0].toInt()); output.write(data[1].toInt()); output.write(data[2].toInt())
+                        output.write((part shr 8) and 0xff); output.write(part and 0xff)
+                        output.write(data, head, part); output.flush()
+                        delay(rnd.nextLong(1, 5))
+                        // Record 2
+                        val part2 = bodyLen - part
+                        output.write(data[0].toInt()); output.write(data[1].toInt()); output.write(data[2].toInt())
+                        output.write((part2 shr 8) and 0xff); output.write(part2 and 0xff)
+                        output.write(data, head + part, part2); output.flush()
+                    } else { output.write(data, 0, length); output.flush() }
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_HOST_MANGLE -> {
+                val s = String(data, 0, length, Charsets.US_ASCII)
+                if (s.contains("Host:", ignoreCase = true)) {
+                    val mangled = s.replace("Host:", "hOsT:", ignoreCase = true)
+                    output.write(mangled.toByteArray(Charsets.US_ASCII))
+                    output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_FRAGMENT -> {
+                if (length > 20) {
+                    val part = rnd.nextInt(5, 15)
+                    output.write(data, 0, part); output.flush()
+                    delay(rnd.nextLong(2, 8))
+                    output.write(data, part, length - part); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_SACK_PANIC -> {
+                // Force strange window sizes to confuse DPI state tracking
+                socket.receiveBufferSize = 1
+                socket.sendBufferSize = 1460
+                output.write(data, 0, length); output.flush()
+                delay(rnd.nextLong(1, 3))
+                socket.receiveBufferSize = 65535
+            }
+            BypassStrategy.TCP_GHOST_SKEW -> {
+                // Send fake data with low TTL to poison DPI state
+                val ghost = FakePacketHelper.buildFakeUdpPacket(rnd.nextInt(10, 60))
+                TtlHelper.setTtl(socket, rnd.nextInt(3, 7))
+                output.write(ghost); output.flush()
+                delay(rnd.nextLong(2, 10))
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_SESSION_ID_RAND -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
