@@ -63,12 +63,26 @@ object DnsProtocols {
         var conn: HttpURLConnection? = null
         try {
             val url = java.net.URL(dohUrl)
-            conn = url.openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+            // Bootstrap: resolve DoH hostname manually to avoid recursion or block
+            val dohHost = url.host
+            val dohIps = DnsCacheManager.getStaticIps(dohHost) ?: DnsCacheManager.getEmergencyFallback(dohHost)
+            
+            val finalUrl = if (!dohIps.isNullOrEmpty()) {
+                val ip = dohIps.random().hostAddress
+                java.net.URL(dohUrl.replace(dohHost, ip!!))
+            } else {
+                url
+            }
+
+            conn = finalUrl.openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
             if (conn is HttpsURLConnection) {
                 val sslContext = SSLContext.getInstance("TLS")
                 sslContext.init(null, null, null)
                 conn.sslSocketFactory = ProtectedSSLSocketFactory(sslContext.socketFactory, vpnService)
-                conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
+                // If we used IP, we MUST verify hostname
+                conn.hostnameVerifier = HostnameVerifier { hostname, _ -> 
+                    hostname == dohHost || hostname == finalUrl.host
+                }
             }
             
             conn.connectTimeout = 4000

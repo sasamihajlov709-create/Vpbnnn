@@ -257,6 +257,32 @@ object UdpTransportHandler {
                     TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }
+                BypassStrategy.UDP_GHOST_SKEW -> {
+                    repeat(ThreadLocalRandom.current().nextInt(1, 3)) {
+                        val ghost = FakePacketHelper.buildFakeUdpPacket(ThreadLocalRandom.current().nextInt(10, 40))
+                        val ghostPacket = DatagramPacket(ghost, ghost.size, targetInet, targetPort)
+                        TtlHelper.setUdpTtl(socket, 2, targetInet is java.net.Inet6Address)
+                        socket.send(ghostPacket)
+                        delay(2)
+                    }
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
+                    socket.send(outPacket)
+                }
+                BypassStrategy.UDP_FRAGMENT_SKEW -> {
+                    if (payload.size > 20) {
+                        val p1 = payload.copyOfRange(0, 10)
+                        val p2 = payload.copyOfRange(10, payload.size)
+                        socket.send(DatagramPacket(p1, p1.size, targetInet, targetPort))
+                        delay(1)
+                        socket.send(DatagramPacket(p2, p2.size, targetInet, targetPort))
+                    } else {
+                        socket.send(outPacket)
+                    }
+                }
+                BypassStrategy.UDP_STUTTER -> {
+                    delay(ThreadLocalRandom.current().nextLong(1, 5))
+                    socket.send(outPacket)
+                }
                 BypassStrategy.QUIC_MTU_PROBE -> {
                     socket.send(outPacket)
                     val probe = ProxyStats.obtain8k()

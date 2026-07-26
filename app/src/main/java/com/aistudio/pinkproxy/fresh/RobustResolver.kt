@@ -4,6 +4,8 @@ import android.net.VpnService
 import android.util.Log
 import java.net.InetAddress
 import kotlinx.coroutines.*
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.selects.onTimeout
 import java.util.concurrent.ConcurrentHashMap
 
 object RobustResolver {
@@ -72,6 +74,11 @@ object RobustResolver {
     }
 
     private suspend fun performResolution(host: String, vpnService: VpnService?): List<InetAddress> {
+        val censorship = BypassConfig.censorshipLevel.value
+        if (censorship > 50) {
+            return performParallelResolution(host, vpnService)
+        }
+        
         val isCensored = BypassConfig.isHostCensored(host)
         val isDirect = BypassConfig.isHostDirect(host)
 
@@ -114,6 +121,51 @@ object RobustResolver {
         }
 
         throw java.net.UnknownHostException("Resolution failed for $host")
+    }
+
+    private suspend fun performParallelResolution(host: String, vpnService: VpnService?): List<InetAddress> = coroutineScope {
+        val jobs = listOf(
+            async { DnsProtocols.queryDohRacing(host, vpnService) },
+            async { DnsProtocols.queryUdpDns(host, "1.1.1.1", vpnService) },
+            async { DnsProtocols.queryUdpDns(host, "8.8.8.8", vpnService) },
+            async { 
+                delay(500) // Slight delay for emergency fallback
+                DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
+            }
+        )
+        
+        val result = select<List<InetAddress>> {
+            jobs.forEach { job ->
+                job.onAwait { res ->
+                    if (res.isNotEmpty()) {
+                        jobs.forEach { it.cancel() }
+                        res
+                    } else {
+                        // If empty, we need to wait for others or eventually fail
+                        // select will continue waiting if no value is returned
+                        // We need a way to know if all failed.
+                        // For simplicity, we just return the first non-empty or throw below.
+                        emptyList<InetAddress>() 
+                    }
+                }
+            }
+            // Timeout if none respond in 5s
+            onTimeout(5000L) { emptyList<InetAddress>() }
+        }
+        
+        if (result.isNotEmpty()) {
+            DnsCacheManager.put(host, result)
+            return@coroutineScope result
+        }
+        
+        // Final fallback: wait for any success or throw
+        val any = jobs.awaitAll().flatten().distinct()
+        if (any.isNotEmpty()) {
+            DnsCacheManager.put(host, any)
+            return@coroutineScope any
+        }
+        
+        throw java.net.UnknownHostException("Parallel resolution failed for $host")
     }
 
     fun startDnsOptimizer(scope: CoroutineScope, vpnService: VpnService?) {

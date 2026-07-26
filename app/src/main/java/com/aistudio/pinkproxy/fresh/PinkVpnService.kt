@@ -166,18 +166,25 @@ class PinkVpnService : VpnService() {
     private fun startChaffGenerator() {
         chaffJob?.cancel()
         chaffJob = serviceScope.launch {
-            val domains = listOf("google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com")
+            val domains = listOf(
+                "google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com",
+                "wikipedia.org", "reddit.com", "github.com", "stackoverflow.com", "medium.com",
+                "mozilla.org", "adobe.com", "dropbox.com", "spotify.com", "zoom.us"
+            )
             while (isActive) {
-                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(60000, 180000))
+                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(45000, 240000))
                 if (!_isRunning.value) continue
                 
                 // Only send chaff if idle
-                if (ProxyStats.speedBytesPerSecond.value < 1024) {
-                    val domain = domains.random()
-                    Log.v("PinkVpnService", "Sending chaff query to $domain")
-                    try {
-                        RobustResolver.resolve(domain, this@PinkVpnService)
-                    } catch (e: Exception) {}
+                if (ProxyStats.speedBytesPerSecond.value < 2048) {
+                    repeat(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4)) {
+                        val domain = domains.random()
+                        Log.v("PinkVpnService", "Sending chaff query to $domain")
+                        try {
+                            RobustResolver.resolve(domain, this@PinkVpnService)
+                        } catch (e: Exception) {}
+                        delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(1000, 8000))
+                    }
                 }
             }
         }
@@ -264,11 +271,26 @@ class PinkVpnService : VpnService() {
             showNotification()
             _isRunning.value = true
             startChaffGenerator()
+            startSessionWarmup()
             VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Error starting VPN", e)
             VpnRuntimeState.updateState(VpnLifecycleState.FAILED)
             stopVpn()
+        }
+    }
+
+    private fun startSessionWarmup() {
+        serviceScope.launch {
+            delay(5000)
+            val importantHosts = listOf("google.com", "telegram.org", "github.com", "dns.google", "cloudflare.com")
+            importantHosts.forEach { host ->
+                if (!_isRunning.value) return@launch
+                try {
+                    RobustResolver.resolve(host, this@PinkVpnService)
+                } catch (e: Exception) {}
+                delay(3000)
+            }
         }
     }
     

@@ -15,7 +15,7 @@ object FakePacketHelper {
         }
         return cachedQuicInitial
     }
-    private fun buildExtension(type: Int, data: ByteArray): ByteArray {
+    fun buildExtension(type: Int, data: ByteArray): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
         dos.writeShort(type)

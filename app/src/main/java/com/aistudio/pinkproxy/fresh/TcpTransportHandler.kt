@@ -34,11 +34,14 @@ object TcpTransportHandler {
             val config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
             val start = System.currentTimeMillis()
+            val censorship = BypassConfig.censorshipLevel.value
             remoteSocket = try {
                 withTimeout(12000) {
                     val channel = kotlinx.coroutines.channels.Channel<Socket>(resolved.size)
                     val activeJobs = mutableListOf<Job>()
-                    val attempted = minOf(resolved.size, 3)
+                    // Aggressive racing: attempt more IPs if censorship is high
+                    val attempted = if (censorship > 70) resolved.size else minOf(resolved.size, 3)
+                    val raceDelay = if (censorship > 70) 50L else 250L
                     
                     for (i in 0 until attempted) {
                         val ip = resolved[i]
@@ -47,7 +50,9 @@ object TcpTransportHandler {
                             try {
                                 vpnService?.protect(s)
                                 s.tcpNoDelay = true
-                                s.connect(InetSocketAddress(ip, targetPort), 8000)
+                                // Dynamic timeout based on RTT
+                                val connectTimeout = (BypassConfig.currentRttMs.value * 4).coerceIn(2000, 8000).toInt()
+                                s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
                                 if (!channel.isClosedForSend) {
                                     channel.trySend(s)
                                 } else {
@@ -57,7 +62,7 @@ object TcpTransportHandler {
                                 try { s.close() } catch (ex: Exception) {}
                             }
                         }
-                        if (i < attempted - 1) delay(250) // Staggered start
+                        if (i < attempted - 1) delay(raceDelay) // Staggered start
                     }
 
                     val winner = try {
@@ -81,6 +86,10 @@ object TcpTransportHandler {
                 clientSocket.soTimeout = 0
                 remoteSocket.soTimeout = 0
                 remoteSocket.tcpNoDelay = true
+                remoteSocket.sendBufferSize = 128 * 1024
+                remoteSocket.receiveBufferSize = 128 * 1024
+                clientSocket.sendBufferSize = 128 * 1024
+                clientSocket.receiveBufferSize = 128 * 1024
             } catch (e: Exception) {}
 
             val connectTime = System.currentTimeMillis() - start
@@ -101,7 +110,16 @@ object TcpTransportHandler {
                             n = remoteIn.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
-                                clientOut.write(buffer, 0, n)
+                                // Downstream Fragmentation: Help against local downstream DPI
+                                if (ProxyStats.censorshipIntensity.value > 92 && n > 800) {
+                                    val part = n / 2
+                                    clientOut.write(buffer, 0, part)
+                                    clientOut.flush()
+                                    delay(1)
+                                    clientOut.write(buffer, part, n - part)
+                                } else {
+                                    clientOut.write(buffer, 0, n)
+                                }
                                 clientOut.flush()
                                 ProxyStats.updateBytes(n.toLong())
                                 if (ProxyStats.censorshipIntensity.value > 85) yield()
@@ -111,6 +129,7 @@ object TcpTransportHandler {
                     } finally {
                         ProxyStats.release64k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Exception) {}
+                        try { clientSocket.close() } catch (e: Exception) {}
                     }
                 }
 

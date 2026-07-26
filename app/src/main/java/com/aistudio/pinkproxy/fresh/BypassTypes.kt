@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 enum class StrategyFamily {
-    TCP, TLS, HTTP, TIMING, FRAGMENTATION, ADAPTIVE, DNS, QUIC, GENERIC
+    TCP, TLS, HTTP, TIMING, FRAGMENTATION, ADAPTIVE, DNS, QUIC, GENERIC, UDP, DIRECT
 }
 
 enum class BypassStrategy(
@@ -20,7 +20,6 @@ enum class BypassStrategy(
     val cost: Int = 1,
     val risk: Int = 1
 ) {
-    DIRECT(StrategyFamily.GENERIC, 1, 1),
     FAKE_PACKET(StrategyFamily.TCP, 2, 2),
     SNI_SPLIT(StrategyFamily.FRAGMENTATION, 3, 3),
     SNI_TRIPLE(StrategyFamily.FRAGMENTATION, 4, 3),
@@ -102,7 +101,12 @@ enum class BypassStrategy(
     WS_HANDSHAKE_FAKE(StrategyFamily.HTTP, 3, 3),
     SSH_HANDSHAKE_FAKE(StrategyFamily.TCP, 3, 3),
     UDP_DTLS_FAKE(StrategyFamily.QUIC, 3, 2),
-    HTTP_KEEP_ALIVE_FAKE(StrategyFamily.HTTP, 2, 2)
+    HTTP_KEEP_ALIVE_FAKE(StrategyFamily.HTTP, 2, 2),
+    UDP_GHOST_SKEW(StrategyFamily.UDP, 3, 3),
+    UDP_FRAGMENT_SKEW(StrategyFamily.UDP, 4, 4),
+    UDP_STUTTER(StrategyFamily.TIMING, 2, 2),
+    TLS_CLIENT_HELLO_GREASE(StrategyFamily.TLS, 2, 1),
+    DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }
@@ -138,6 +142,16 @@ object ProxyStats {
 
     private val _censorshipIntensity = MutableStateFlow(0)
     val censorshipIntensity: StateFlow<Int> = _censorshipIntensity.asStateFlow()
+
+    fun recordCensorshipEvent(isFailure: Boolean) {
+        if (isFailure) {
+            _errors.update { it + 1 }
+            _successRate.update { (it * 0.9).toInt().coerceIn(0, 100) }
+            _censorshipIntensity.update { (it + 5).coerceAtMost(100) }
+        } else {
+            _censorshipIntensity.update { (it - 1).coerceAtLeast(0) }
+        }
+    }
 
     private val _recoveryLog = MutableStateFlow(emptyList<String>())
     val recoveryLog: StateFlow<List<String>> = _recoveryLog.asStateFlow()
@@ -244,19 +258,12 @@ object ProxyStats {
 
     fun recordGlobalSuccess(rtt: Long) {
         if (rtt > 0) {
-             _stabilityScore.update { (it * 0.95 + 100 * 0.05).toInt().coerceIn(0, 100) }
+             val lastRtt = _speedHistory.value.firstOrNull() ?: rtt
+             val jitter = Math.abs(rtt - lastRtt)
+             val jitterPenalty = (jitter / 10).coerceAtMost(20)
+             _stabilityScore.update { (it * 0.95 + (100 - jitterPenalty) * 0.05).toInt().coerceIn(0, 100) }
         }
         _successRate.update { (it * 0.98 + 100 * 0.02).toInt().coerceIn(0, 100) }
-    }
-
-    fun recordCensorshipEvent(isBlocked: Boolean) {
-        if (isBlocked) {
-            _errors.update { it + 1 }
-            _successRate.update { (it * 0.9 + 0 * 0.1).toInt().coerceIn(0, 100) }
-            _censorshipIntensity.update { (it + 5).coerceAtMost(100) }
-        } else {
-            _censorshipIntensity.update { (it - 1).coerceAtLeast(0) }
-        }
     }
 
     fun logRecovery(msg: String) {
