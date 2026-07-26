@@ -301,11 +301,11 @@ object UdpTransportHandler {
                     socket.send(outPacket)
                 }
                 BypassStrategy.QUIC_RST_SKEW -> {
-                    val rstPayload = FakePacketHelper.buildFakeUdpPacket(20)
+                    val rstPayload = FakePacketHelper.buildQuicStatelessReset()
                     val rstPacket = DatagramPacket(rstPayload, rstPayload.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 3, targetInet is java.net.Inet6Address)
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(3, 7), targetInet is java.net.Inet6Address)
                     socket.send(rstPacket)
-                    delay(2)
+                    delay(rnd.nextLong(1, 5))
                     TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                     socket.send(outPacket)
                 }

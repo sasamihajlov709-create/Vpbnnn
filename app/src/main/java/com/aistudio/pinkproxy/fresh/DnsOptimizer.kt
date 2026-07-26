@@ -28,6 +28,11 @@ object DnsOptimizer {
         "instagram.com", "twitter.com", "x.com", "discord.com", "chatgpt.com"
     )
 
+    fun forceRefresh() {
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        start(scope, null)
+    }
+
     fun start(scope: CoroutineScope, vpnService: VpnService?) {
         // Immediate Warm-up phase
         scope.launch(Dispatchers.IO) {

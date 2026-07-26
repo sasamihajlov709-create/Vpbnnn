@@ -645,6 +645,15 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildQuicStatelessReset(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val data = ByteArray(rnd.nextInt(25, 60))
+        rnd.nextBytes(data)
+        // Set some realistic bits for a short header
+        data[0] = (0x40 or (rnd.nextInt(4))).toByte() 
+        return data
+    }
+
     fun buildQuicInitial(destConnId: ByteArray? = null): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)

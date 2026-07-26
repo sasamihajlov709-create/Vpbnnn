@@ -158,6 +158,17 @@ object BypassConfig {
         }
     }
 
+    fun loadScores(context: Context) {
+        val prefs = context.getSharedPreferences("pink_proxy_scores", Context.MODE_PRIVATE)
+        HostCategory.entries.forEach { cat ->
+            strategyScores[cat]?.forEach { (strat, score) ->
+                val saved = prefs.getInt("score_${cat.name}_${strat.name}", 100)
+                score.set(saved)
+            }
+        }
+        Log.i("BypassConfig", "Loaded strategy scores from persistence.")
+    }
+
     fun getBestStrategyForHost(host: String): BypassStrategy {
         if (!isAutoTuning) return _strategy.value
         
@@ -262,12 +273,17 @@ object BypassConfig {
     }
 
     private var optimizerJob: Job? = null
-    fun startAutonomousOptimizer(scope: CoroutineScope) {
+    fun startAutonomousOptimizer(scope: CoroutineScope, context: Context) {
         if (optimizerJob?.isActive == true) return
+        loadScores(context)
         optimizerJob = scope.launch {
+            var saveCounter = 0
             while (isActive) {
                 delay(30000) // Every 30 seconds
                 performSelfHealing()
+                
+                saveCounter++
+                if (saveCounter % 10 == 0) saveScores(context) // Every 5 minutes
                 
                 // Score Decay: Bring scores back towards 100 slowly
                 HostCategory.entries.forEach { cat ->
@@ -352,6 +368,33 @@ object BypassConfig {
     }
 
     fun recordSuccess(strat: BypassStrategy, rtt: Long, context: Context?) = recordSuccess(strat, rtt, null as String?)
+
+    fun recordDpiFailure(strat: BypassStrategy, host: String?, type: DpiType) {
+        recordFailure(strat, host)
+        ProxyStats.recordDpiEvent(type)
+        
+        when (type) {
+            DpiType.DNS_POISONING -> {
+                DnsCacheManager.clear()
+                DnsOptimizer.forceRefresh()
+            }
+            DpiType.TCP_RESET -> {
+                // Heuristic: if TCP Reset is detected, prioritize strategies that use fake packets or desync
+                val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+                val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
+                listOf(BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_SPLIT).forEach {
+                    scores[it]?.addAndGet(15)
+                }
+            }
+            DpiType.CONNECTION_TIMEOUT -> {
+                // If timeout, maybe lower MTU and try simpler strategies
+                if (ProxyStats.censorshipIntensity.value > 50) {
+                    _currentMtu.update { (it - 50).coerceAtLeast(1000) }
+                }
+            }
+            else -> {}
+        }
+    }
 
     fun recordFailure(strat: BypassStrategy, host: String?) {
         ProxyStats.recordCensorshipEvent(true)
@@ -1041,11 +1084,16 @@ object BypassConfig {
                 output.write(ech); output.flush(); delay(config.delay1); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TCP_WINDOW_SCAN -> {
-                val step = (length / 4).coerceAtLeast(1); var pos = 0; val windows = listOf(512, 1024, 2048, 4096); var wIdx = 0
+                val rnd = ThreadLocalRandom.current()
+                val step = (length / (rnd.nextInt(3, 7))).coerceAtLeast(1)
+                var pos = 0
+                val baseWindows = listOf(256, 512, 1024, 2048, 4096, 8192)
                 while (pos < length) {
-                    socket.sendBufferSize = windows[wIdx % windows.size]
-                    val size = step.coerceAtMost(length - pos); output.write(data, pos, size); output.flush()
-                    pos += size; wIdx++; if (pos < length) delay(10)
+                    socket.sendBufferSize = baseWindows.random()
+                    val size = step.coerceAtMost(length - pos)
+                    output.write(data, pos, size); output.flush()
+                    pos += size
+                    if (pos < length) delay(rnd.nextLong(5, 25))
                 }
             }
             BypassStrategy.HTTP_PIPELINE_FAKE -> {
@@ -1375,11 +1423,15 @@ object BypassConfig {
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.ADAPTIVE_CHUNK -> {
+                val rnd = java.util.concurrent.ThreadLocalRandom.current()
+                val jitter = ProxyStats.jitter.value.coerceIn(1, 100)
+                val baseChunk = if (jitter > 50) 1 else 3
                 var offset = 0
                 while (offset < length) {
-                    val chunkSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 10).coerceAtMost(length - offset)
+                    val chunkSize = rnd.nextInt(baseChunk, baseChunk + 5).coerceAtMost(length - offset)
                     output.write(data, offset, chunkSize); output.flush()
-                    delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 20))
+                    val d = (rnd.nextLong(2, 10) + jitter / 10).coerceIn(2, 50)
+                    delay(d)
                     offset += chunkSize
                 }
             }

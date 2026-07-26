@@ -33,7 +33,9 @@ object DnsCacheManager {
     )
 
     private val bogonIps = setOf(
-        "127.0.0.1", "0.0.0.0", "1.1.1.1", "8.8.8.8", "10.0.0.1" // Common fake IPs used by some censors
+        "127.0.0.1", "0.0.0.0", "1.1.1.1", "8.8.8.8", "10.0.0.1",
+        "37.61.54.158", "78.153.224.238", "93.188.160.219", "159.106.121.75",
+        "203.98.7.65", "243.185.187.39", "46.82.174.68", "78.16.49.15"
     )
 
     fun isSuspicious(host: String, ips: List<InetAddress>): Boolean {

@@ -21,12 +21,23 @@ object RecoveryManager {
     fun startHealthCheck(scope: CoroutineScope) {
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch(Dispatchers.IO) {
+            var lastBytes = ProxyStats.bytesTransferred.value
             while (isActive) {
                 delay(30000)
+                
+                val currentBytes = ProxyStats.bytesTransferred.value
+                val active = ProxyStats.activeConnections.value
+                
                 if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 30) {
                     handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop")
                 }
                 
+                if (active > 0 && currentBytes == lastBytes && ProxyStats.censorshipIntensity.value > 50) {
+                    handleEvent(RecoveryEvent.TUNNEL_STALL, "Ghosting detected: $active connections, 0 bytes in 30s")
+                }
+                
+                lastBytes = currentBytes
+
                 if (ProxyStats.currentDpiType.value != DpiType.NONE) {
                     handleEvent(RecoveryEvent.DPI_DETECTED, "DPI: ${ProxyStats.currentDpiType.value}")
                 }

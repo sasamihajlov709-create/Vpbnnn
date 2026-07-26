@@ -63,9 +63,9 @@ object TcpTransportHandler {
                                     val elapsed = System.currentTimeMillis() - start
                                     val msg = e.message?.lowercase() ?: ""
                                     if (elapsed >= connectTimeout - 500) {
-                                        ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                                        BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.CONNECTION_TIMEOUT)
                                     } else if (msg.contains("reset")) {
-                                        ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                                        BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TCP_RESET)
                                     }
                                     throw e
                                 }

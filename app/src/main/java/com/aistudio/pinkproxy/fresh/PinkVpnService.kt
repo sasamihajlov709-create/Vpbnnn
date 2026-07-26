@@ -81,7 +81,7 @@ class PinkVpnService : VpnService() {
         RobustResolver.initialize(serviceScope)
         RobustResolver.startDnsOptimizer(serviceScope, this)
         ServiceChecker.startChecking(serviceScope, this)
-        BypassConfig.startAutonomousOptimizer(serviceScope)
+        BypassConfig.startAutonomousOptimizer(serviceScope, this)
         RecoveryManager.startHealthCheck(serviceScope)
 
         registerNetworkMonitor()
@@ -194,16 +194,23 @@ class PinkVpnService : VpnService() {
                                 RobustResolver.resolve(domain, this@PinkVpnService)
                             } else {
                                 withContext(Dispatchers.IO) {
-                                    val socket = Socket()
-                                    protect(socket)
-                                    // Use a random unblocked domain for HTTP probe
                                     val probeHost = if (intensity > 90) "google.com" else domain
-                                    socket.connect(InetSocketAddress(probeHost, 80), 2000)
-                                    val out = socket.getOutputStream()
-                                    out.write("GET / HTTP/1.1\r\nHost: $probeHost\r\nConnection: close\r\n\r\n".toByteArray())
-                                    out.flush()
-                                    delay(200)
-                                    socket.close()
+                                    val socket = java.net.Socket()
+                                    protect(socket)
+                                    try {
+                                        val ips = java.net.InetAddress.getAllByName(probeHost)
+                                        if (ips.isNotEmpty()) {
+                                            socket.connect(java.net.InetSocketAddress(ips[0], 80), 5000)
+                                            socket.tcpNoDelay = true
+                                            val out = socket.getOutputStream()
+                                            out.write("GET / HTTP/1.1\r\nHost: $probeHost\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray())
+                                            out.flush()
+                                            delay(100)
+                                            socket.close()
+                                        }
+                                    } catch (e: Exception) {
+                                        try { socket.close() } catch (ex: Exception) {}
+                                    }
                                 }
                             }
                         } catch (e: Exception) {}
@@ -307,12 +314,18 @@ class PinkVpnService : VpnService() {
             serviceScope.launch {
                 while (isActive && _isRunning.value) {
                     delay(30000)
-                    // If engine died but we should be running, restart it
                     if (_isRunning.value && vpnInterface != null) {
                         try {
-                           // Simple check: see if we can still talk to proxy through the interface
-                           // (Internal logic usually handles this, but we add a safety layer)
-                        } catch (e: Exception) {}
+                            val s = java.net.Socket()
+                            s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1500)
+                            s.close()
+                        } catch (e: Exception) {
+                            Log.e("PinkVpnService", "Engine health check failed: ${e.message}. Restarting...")
+                            ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                            withContext(Dispatchers.Main) {
+                                startVpn() // Re-run start logic (it handles interface recreation)
+                            }
+                        }
                     }
                 }
             }
