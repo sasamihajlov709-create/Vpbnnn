@@ -308,6 +308,7 @@ class PinkVpnService : VpnService() {
             }
 
             proxyServer?.start() // Ensure proxy is running
+            _isRunning.value = true
             
             // Start tun2socks
             startTun2Socks(vpnInterface!!, PROXY_PORT)
@@ -335,7 +336,6 @@ class PinkVpnService : VpnService() {
             }
             
             showNotification()
-            _isRunning.value = true
             startChaffGenerator()
             startSessionWarmup()
             VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
