@@ -114,6 +114,9 @@ enum class BypassStrategy(
     TLS_CLIENT_HELLO_REORDER(StrategyFamily.TLS, 4, 3),
     TCP_WINDOW_SIZE_SKEW(StrategyFamily.TCP, 2, 2),
     TCP_DATA_REPETITION(StrategyFamily.TCP, 4, 2),
+    TLS_SNI_SPLIT(StrategyFamily.TLS, 4, 4),
+    UDP_STUN_FAKE(StrategyFamily.UDP, 2, 4),
+    TCP_WINDOW_CLAMPING(StrategyFamily.TCP, 2, 2),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
@@ -121,7 +124,26 @@ enum class NetworkType { WIFI, MOBILE, UNKNOWN }
 
 enum class HostCategory { STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN, NEWS, GAMING, SHOPPING, DEV, OTHER }
 
+enum class DpiType {
+    NONE,
+    TCP_RESET,
+    UDP_BLOCK,
+    TLS_SNI_BLOCK,
+    DNS_POISONING,
+    CONNECTION_TIMEOUT,
+    HTTP_BLOCK
+}
+
 object ProxyStats {
+    private val _currentDpiType = MutableStateFlow(DpiType.NONE)
+    val currentDpiType: StateFlow<DpiType> = _currentDpiType.asStateFlow()
+
+    fun recordDpiEvent(type: DpiType) {
+        _currentDpiType.value = type
+        recordCensorshipEvent(true)
+        logRecovery("Detected censorship type: $type")
+    }
+
     private val bufferPool8k = LinkedBlockingQueue<ByteArray>(256)
     private val bufferPool16k = LinkedBlockingQueue<ByteArray>(128)
     private val bufferPool64k = LinkedBlockingQueue<ByteArray>(64)

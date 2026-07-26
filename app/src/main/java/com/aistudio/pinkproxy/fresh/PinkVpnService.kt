@@ -182,7 +182,9 @@ class PinkVpnService : VpnService() {
                 // Only send chaff if idle or under high censorship
                 val intensity = ProxyStats.censorshipIntensity.value
                 val speed = ProxyStats.speedBytesPerSecond.value
-                if (speed < 5000 || intensity > 80) {
+                val activeConns = ProxyStats.activeConnections.value
+                
+                if (speed < 5000 || intensity > 80 || activeConns == 0) {
                     repeat(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 3)) {
                         val domain = domains.random()
                         Log.v("PinkVpnService", "Sending chaff probe to $domain")
@@ -194,17 +196,30 @@ class PinkVpnService : VpnService() {
                                 withContext(Dispatchers.IO) {
                                     val socket = Socket()
                                     protect(socket)
-                                    socket.connect(InetSocketAddress(domain, 80), 2000)
+                                    // Use a random unblocked domain for HTTP probe
+                                    val probeHost = if (intensity > 90) "google.com" else domain
+                                    socket.connect(InetSocketAddress(probeHost, 80), 2000)
                                     val out = socket.getOutputStream()
-                                    out.write("GET / HTTP/1.1\r\nHost: $domain\r\n\r\n".toByteArray())
+                                    out.write("GET / HTTP/1.1\r\nHost: $probeHost\r\nConnection: close\r\n\r\n".toByteArray())
                                     out.flush()
-                                    delay(100)
+                                    delay(200)
                                     socket.close()
                                 }
                             }
                         } catch (e: Exception) {}
                         delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(2000, 10000))
                     }
+                }
+                
+                // Aggressive NAT keep-alive: pulse empty UDP packets if active
+                if (activeConns > 0) {
+                     try {
+                         val dummySocket = java.net.DatagramSocket()
+                         protect(dummySocket)
+                         val dummyPacket = java.net.DatagramPacket(ByteArray(0), 0, java.net.InetAddress.getByName("8.8.8.8"), 53)
+                         dummySocket.send(dummyPacket)
+                         dummySocket.close()
+                     } catch (e: Exception) {}
                 }
             }
         }

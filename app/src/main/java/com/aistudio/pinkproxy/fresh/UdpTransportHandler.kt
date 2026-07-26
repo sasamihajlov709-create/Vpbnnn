@@ -231,6 +231,14 @@ object UdpTransportHandler {
         
         if (BypassConfig.blockQuic && isQuic) return
 
+        if (strategy == BypassStrategy.UDP_STUN_FAKE) {
+            val stun = FakePacketHelper.buildStunBindingRequest()
+            socket.send(DatagramPacket(stun, stun.size, targetInet, targetPort))
+            delay(rnd.nextLong(10, 50))
+            socket.send(outPacket)
+            return
+        }
+
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(outPacket)
             return

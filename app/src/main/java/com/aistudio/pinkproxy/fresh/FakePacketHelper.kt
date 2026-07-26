@@ -3,6 +3,7 @@ package com.aistudio.pinkproxy.fresh
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.util.Random
+import java.util.concurrent.ThreadLocalRandom
 
 object FakePacketHelper {
     private var cachedQuicInitial = buildQuicInitial()
@@ -728,5 +729,16 @@ object FakePacketHelper {
         } catch (e: Exception) {
             return data.copyOf(length)
         }
+    }
+
+    fun buildStunBindingRequest(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        dos.writeShort(0x0001) // Binding Request
+        dos.writeShort(0x0000) // Message Length
+        dos.writeInt(0x2112A442) // Magic Cookie
+        dos.writeLong(ThreadLocalRandom.current().nextLong()) // Transaction ID part 1
+        dos.writeInt(ThreadLocalRandom.current().nextInt()) // Transaction ID part 2
+        return baos.toByteArray()
     }
 }

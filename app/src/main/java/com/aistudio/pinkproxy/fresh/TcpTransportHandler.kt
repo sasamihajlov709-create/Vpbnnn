@@ -147,6 +147,12 @@ object TcpTransportHandler {
                             }
                         }
                     } catch (e: Exception) {
+                        val msg = e.message?.lowercase() ?: ""
+                        when {
+                            msg.contains("reset") -> ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                            msg.contains("timeout") -> ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                            else -> ProxyStats.recordCensorshipEvent(true)
+                        }
                     } finally {
                         if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Exception) {}

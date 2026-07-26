@@ -1166,6 +1166,65 @@ object BypassConfig {
                 socket.sendBufferSize = win
                 output.write(data, 0, length); output.flush()
             }
+            BypassStrategy.TCP_WINDOW_CLAMPING -> {
+                socket.receiveBufferSize = 1460
+                socket.sendBufferSize = 1460
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_CLIENT_HELLO_REORDER -> {
+                if (length > 10 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    // Split ClientHello into multiple records
+                    val header = data.copyOfRange(0, 5)
+                    val body = data.copyOfRange(5, length)
+                    val part1 = body.size / 3
+                    val part2 = body.size * 2 / 3
+                    
+                    // Record 1
+                    output.write(data[0].toInt()); output.write(data[1].toInt()); output.write(data[2].toInt())
+                    output.write((part1 shr 8) and 0xff)
+                    output.write(part1 and 0xff)
+                    output.write(body, 0, part1); output.flush()
+                    delay(rnd.nextLong(5, 15))
+                    
+                    // Record 2
+                    output.write(data[0].toInt()); output.write(data[1].toInt()); output.write(data[2].toInt())
+                    val len2 = part2 - part1
+                    output.write((len2 shr 8) and 0xff)
+                    output.write(len2 and 0xff)
+                    output.write(body, part1, len2); output.flush()
+                    delay(rnd.nextLong(5, 15))
+                    
+                    // Record 3
+                    output.write(data[0].toInt()); output.write(data[1].toInt()); output.write(data[2].toInt())
+                    val len3 = body.size - part2
+                    output.write((len3 shr 8) and 0xff)
+                    output.write(len3 and 0xff)
+                    output.write(body, part2, len3); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TLS_SNI_SPLIT -> {
+                if (length > 100 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    // Find SNI and split before it
+                    var sniPos = -1
+                    for (i in 0 until length - 5) {
+                        if (data[i] == 0x00.toByte() && data[i+1] == 0x00.toByte() && data[i+2] == 0x00.toByte()) {
+                           // Potential Server Name extension
+                           sniPos = i
+                           break
+                        }
+                    }
+                    if (sniPos != -1 && sniPos > 5) {
+                        output.write(data, 0, sniPos); output.flush()
+                        delay(rnd.nextLong(2, 10))
+                        output.write(data, sniPos, length - sniPos); output.flush()
+                    } else {
+                        val part = length / 2
+                        output.write(data, 0, part); output.flush()
+                        delay(rnd.nextLong(2, 10))
+                        output.write(data, part, length - part); output.flush()
+                    }
+                } else { output.write(data, 0, length); output.flush() }
+            }
             BypassStrategy.TLS_SESSION_ID_RAND -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
                     val mangled = data.copyOf()
