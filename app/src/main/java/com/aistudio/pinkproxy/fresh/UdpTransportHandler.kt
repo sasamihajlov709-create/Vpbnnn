@@ -205,18 +205,29 @@ object UdpTransportHandler {
     }
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, payload: ByteArray, targetInet: InetAddress, targetPort: Int, targetHost: String = "") {
+        val isQuic = targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0
         val outPacket = DatagramPacket(payload, payload.size, targetInet, targetPort)
         
-        // Adaptive Jitter
+        // Adaptive Jitter & Fragmentation
         val intensity = ProxyStats.censorshipIntensity.value
+        val rnd = ThreadLocalRandom.current()
         if (intensity > 40) {
-            val jitter = ThreadLocalRandom.current().nextLong(0, (intensity / 10).toLong())
+            val jitter = rnd.nextLong(0, (intensity / 5).toLong())
             if (jitter > 0) delay(jitter)
         }
 
+        // UDP Fragmentation for large non-QUIC packets
+        if (!isQuic && payload.size > 1200 && intensity > 70) {
+            val mid = payload.size / 2
+            val p1 = payload.copyOfRange(0, mid)
+            val p2 = payload.copyOfRange(mid, payload.size)
+            socket.send(DatagramPacket(p1, p1.size, targetInet, targetPort))
+            delay(rnd.nextLong(2, 10))
+            socket.send(DatagramPacket(p2, p2.size, targetInet, targetPort))
+            return
+        }
+
         val strategy = BypassConfig.getBestStrategyForHost(if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress)
-        
-        val isQuic = targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0
         
         if (BypassConfig.blockQuic && isQuic) return
 

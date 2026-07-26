@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.util.Log
+import java.net.InetSocketAddress
+import java.net.Socket
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -170,21 +172,38 @@ class PinkVpnService : VpnService() {
             val domains = listOf(
                 "google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com",
                 "wikipedia.org", "reddit.com", "github.com", "stackoverflow.com", "medium.com",
-                "mozilla.org", "adobe.com", "dropbox.com", "spotify.com", "zoom.us"
+                "mozilla.org", "adobe.com", "dropbox.com", "spotify.com", "zoom.us", "vimeo.com",
+                "discord.com", "slack.com", "trello.com", "notion.so", "figma.com", "bitbucket.org"
             )
             while (isActive) {
-                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(45000, 240000))
+                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(30000, 180000))
                 if (!_isRunning.value) continue
                 
-                // Only send chaff if idle
-                if (ProxyStats.speedBytesPerSecond.value < 2048) {
-                    repeat(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4)) {
+                // Only send chaff if idle or under high censorship
+                val intensity = ProxyStats.censorshipIntensity.value
+                val speed = ProxyStats.speedBytesPerSecond.value
+                if (speed < 5000 || intensity > 80) {
+                    repeat(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 3)) {
                         val domain = domains.random()
-                        Log.v("PinkVpnService", "Sending chaff query to $domain")
+                        Log.v("PinkVpnService", "Sending chaff probe to $domain")
                         try {
-                            RobustResolver.resolve(domain, this@PinkVpnService)
+                            // Alternate between DNS probe and fake HTTP probe
+                            if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) {
+                                RobustResolver.resolve(domain, this@PinkVpnService)
+                            } else {
+                                withContext(Dispatchers.IO) {
+                                    val socket = Socket()
+                                    protect(socket)
+                                    socket.connect(InetSocketAddress(domain, 80), 2000)
+                                    val out = socket.getOutputStream()
+                                    out.write("GET / HTTP/1.1\r\nHost: $domain\r\n\r\n".toByteArray())
+                                    out.flush()
+                                    delay(100)
+                                    socket.close()
+                                }
+                            }
                         } catch (e: Exception) {}
-                        delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(1000, 8000))
+                        delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(2000, 10000))
                     }
                 }
             }

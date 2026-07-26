@@ -502,7 +502,14 @@ object BypassConfig {
         }
 
         // Region specific or unblocked
-        return h.endsWith(".ru") || h.endsWith(".by") || h.contains("yandex") || h.contains("vk.com") || h.contains("ok.ru")
+        val bypassList = listOf(
+            ".ru", ".by", ".kz", ".ua", ".su", ".local", ".lan", ".arpa",
+            "yandex", "vk.com", "ok.ru", "mail.ru", "gosuslugi.ru",
+            "ozon.ru", "wildberries.ru", "avito.ru", "tbank.ru", "sberbank.ru",
+            "kinopoisk.ru", "rambler.ru", "mts.ru", "megafon.ru", "beeline.ru",
+            "doubleclick.net", "googleadservices.com", "googletagmanager.com"
+        )
+        return bypassList.any { h.contains(it) }
     }
     
     fun reset() {
@@ -1096,9 +1103,20 @@ object BypassConfig {
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TLS_CLIENT_HELLO_PAD -> {
-                if (length > 5 && data[0] == 0x16.toByte()) {
-                    val pad = FakePacketHelper.buildExtension(0x0015, ByteArray(rnd.nextInt(64, 256)) { 0 })
-                    output.write(data, 0, length); output.write(pad); output.flush()
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val padded = FakePacketHelper.injectTlsPadding(data, length, rnd.nextInt(64, 512))
+                    output.write(padded); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_DATA_REPETITION -> {
+                if (length > 10) {
+                    val part = length.coerceAtMost(rnd.nextInt(5, 50))
+                    output.write(data, 0, part); output.flush()
+                    delay(rnd.nextLong(1, 5))
+                    // Repeat the same part
+                    output.write(data, 0, part); output.flush()
+                    delay(rnd.nextLong(5, 15))
+                    output.write(data, part, length - part); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TLS_HANDSHAKE_RANDOM_PADDING -> {

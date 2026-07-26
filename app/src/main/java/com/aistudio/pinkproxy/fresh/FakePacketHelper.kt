@@ -660,4 +660,73 @@ object FakePacketHelper {
         dos.write(ByteArray(size) { 0 })
         return baos.toByteArray()
     }
+
+    fun buildFakeDohRequest(host: String): ByteArray {
+        val path = "/dns-query?dns=" + java.util.Base64.getEncoder().encodeToString(DnsPacketEngine.buildDnsQuery(host, 1))
+        val req = "GET $path HTTP/1.1\r\n" +
+                "Host: dns.google\r\n" +
+                "Accept: application/dns-message\r\n" +
+                "User-Agent: Mozilla/5.0\r\n" +
+                "\r\n"
+        return req.toByteArray()
+    }
+
+    fun injectTlsPadding(data: ByteArray, length: Int, paddingSize: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)
+        try {
+            val baos = ByteArrayOutputStream()
+            val dos = DataOutputStream(baos)
+            
+            // Record Header
+            dos.writeByte(data[0].toInt())
+            dos.writeShort(0x0303) // TLS 1.2
+            val oldHandshakeLen = ((data[6].toInt() and 0xff) shl 16) or ((data[7].toInt() and 0xff) shl 8) or (data[8].toInt() and 0xff)
+            
+            // New handshake length
+            val newHandshakeLen = oldHandshakeLen + paddingSize + 4
+            dos.writeShort(newHandshakeLen + 4) // Record length
+            
+            // Handshake Header
+            dos.writeByte(0x01) // Client Hello
+            dos.writeByte((newHandshakeLen shr 16) and 0xff)
+            dos.writeByte((newHandshakeLen shr 8) and 0xff)
+            dos.writeByte(newHandshakeLen and 0xff)
+            
+            // Client Hello Body (until extensions)
+            // Skip Record Header (5) + Handshake Header (4) = 9 bytes
+            var pos = 9
+            pos += 2 // Version
+            pos += 32 // Random
+            val sessionIDLen = data[pos].toInt() and 0xff
+            pos += 1 + sessionIDLen
+            val cipherSuiteLen = ((data[pos].toInt() and 0xff) shl 8) or (data[pos+1].toInt() and 0xff)
+            pos += 2 + cipherSuiteLen
+            val compressionLen = data[pos].toInt() and 0xff
+            pos += 1 + compressionLen
+            
+            // Extensions length pos
+            val extLenPos = pos
+            val oldExtLen = if (pos < length - 1) (((data[pos].toInt() and 0xff) shl 8) or (data[pos+1].toInt() and 0xff)) else 0
+            
+            // Write everything before extensions
+            dos.write(data, 9, pos - 9)
+            
+            // Write new extensions length
+            dos.writeShort(oldExtLen + paddingSize + 4)
+            
+            // Write old extensions
+            if (oldExtLen > 0) {
+                dos.write(data, pos + 2, oldExtLen)
+            }
+            
+            // Write Padding Extension (0x0015)
+            dos.writeShort(0x0015)
+            dos.writeShort(paddingSize)
+            dos.write(ByteArray(paddingSize) { 0 })
+            
+            return baos.toByteArray()
+        } catch (e: Exception) {
+            return data.copyOf(length)
+        }
+    }
 }

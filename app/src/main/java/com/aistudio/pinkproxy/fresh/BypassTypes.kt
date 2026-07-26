@@ -113,6 +113,7 @@ enum class BypassStrategy(
     HTTP_HOST_REORDER(StrategyFamily.HTTP, 2, 3),
     TLS_CLIENT_HELLO_REORDER(StrategyFamily.TLS, 4, 3),
     TCP_WINDOW_SIZE_SKEW(StrategyFamily.TCP, 2, 2),
+    TCP_DATA_REPETITION(StrategyFamily.TCP, 4, 2),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
