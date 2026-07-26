@@ -144,29 +144,49 @@ object UdpTransportHandler {
                         if (targetPortNum == 53) {
                             val query = DnsUtils.parseDnsQName(payload)
                             if (query != null) {
-                                val resolvedIps = RobustResolver.resolve(query.qname, vpnService)
-                                if (resolvedIps.isNotEmpty()) {
-                                    val ipStrs = resolvedIps.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
+                                val host = query.qname
+                                val cached = RobustResolver.getCached(host)
+                                if (cached != null) {
+                                    val ipStrs = cached.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
                                     if (ipStrs.isNotEmpty()) {
                                         val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
                                         val headerSize = if (pAtyp == 1) 10 else if (pAtyp == 4) 22 else 7 + (data[4].toInt() and 0xFF)
                                         val responseBytes = ByteArray(headerSize + dnsReply.size)
-                                        var offset = 0
-                                        responseBytes[offset++] = 0; responseBytes[offset++] = 0; responseBytes[offset++] = 0; responseBytes[offset++] = pAtyp.toByte()
-                                        if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, offset, 4); offset += 4 }
-                                        else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[offset++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, offset, dlen); offset += dlen }
-                                        else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, offset, 16); offset += 16 }
-                                        responseBytes[offset++] = (targetPortNum shr 8).toByte(); responseBytes[offset++] = (targetPortNum and 0xFF).toByte()
-                                        System.arraycopy(dnsReply, 0, responseBytes, offset, dnsReply.size)
-                                        offset += dnsReply.size
-                                        udpSocket.send(DatagramPacket(responseBytes, offset, packet.address, packet.port))
+                                        var off = 0
+                                        responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = pAtyp.toByte()
+                                        if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, off, 4); off += 4 }
+                                        else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[off++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, off, dlen); off += dlen }
+                                        else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
+                                        responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
+                                        System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
+                                        udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, packet.address, packet.port))
+                                    }
+                                } else {
+                                    launch(Dispatchers.IO) {
+                                        try {
+                                            val res = RobustResolver.resolve(host, vpnService)
+                                            if (res.isNotEmpty()) {
+                                                val ipStrs = res.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
+                                                val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
+                                                val headerSize = if (pAtyp == 1) 10 else if (pAtyp == 4) 22 else 7 + (data[4].toInt() and 0xFF)
+                                                val responseBytes = ByteArray(headerSize + dnsReply.size)
+                                                var off = 0
+                                                responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = pAtyp.toByte()
+                                                if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, off, 4); off += 4 }
+                                                else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[off++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, off, dlen); off += dlen }
+                                                else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
+                                                responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
+                                                System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
+                                                udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, packet.address, packet.port))
+                                            }
+                                        } catch (e: Exception) {}
                                     }
                                 }
                             }
                         } else {
-                            val resolved = RobustResolver.getCached(targetHost)
-                            if (resolved != null && resolved.isNotEmpty()) {
-                                udpOutChannel.trySend(DatagramPacket(payload, payload.size, resolved.first(), targetPortNum) to targetHost)
+                            val cached = RobustResolver.getCached(targetHost)
+                            if (cached != null && cached.isNotEmpty()) {
+                                udpOutChannel.trySend(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
                             } else {
                                 launch(Dispatchers.IO) {
                                     try {
@@ -252,6 +272,14 @@ object UdpTransportHandler {
             val noise = FakePacketHelper.buildUdpNoise(noiseSize)
             socket.send(DatagramPacket(noise, noise.size, targetInet, targetPort))
             delay(rnd.nextLong(5, 25))
+            socket.send(outPacket)
+            return
+        }
+
+        if (strategy == BypassStrategy.QUIC_INITIAL_FAKE) {
+            val initial = FakePacketHelper.buildQuicInitial()
+            socket.send(DatagramPacket(initial, initial.size, targetInet, targetPort))
+            delay(rnd.nextLong(10, 40))
             socket.send(outPacket)
             return
         }

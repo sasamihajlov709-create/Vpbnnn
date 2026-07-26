@@ -32,38 +32,46 @@ object DnsOptimizer {
         // Immediate Warm-up phase
         scope.launch(Dispatchers.IO) {
             Log.i("DnsOptimizer", "Starting DNS Warm-up...")
-            for (domain in criticalDomains) {
-                try {
-                    val ips = RobustResolver.resolve(domain, vpnService)
-                    if (ips.isNotEmpty()) DnsCacheManager.put(domain, ips)
-                } catch (e: Exception) {}
-            }
+            criticalDomains.map { domain ->
+                async {
+                    try {
+                        val ips = RobustResolver.resolve(domain, vpnService)
+                        if (ips.isNotEmpty()) DnsCacheManager.put(domain, ips)
+                    } catch (e: Exception) {}
+                }
+            }.awaitAll()
             Log.i("DnsOptimizer", "DNS Warm-up completed.")
         }
 
         // Latency Prober
         scope.launch(Dispatchers.IO) {
             while (isActive) {
-                for (url in dohUrls) {
-                    val start = System.currentTimeMillis()
-                    val res = DnsProtocols.queryDoh("google.com", url, vpnService)
-                    if (res.isNotEmpty()) {
-                        providerLatencies[url] = System.currentTimeMillis() - start
-                    } else {
-                        providerLatencies[url] = 9999L
+                val dohJobs = dohUrls.map { url ->
+                    async {
+                        val start = System.currentTimeMillis()
+                        val res = DnsProtocols.queryDoh("google.com", url, vpnService)
+                        if (res.isNotEmpty()) {
+                            providerLatencies[url] = System.currentTimeMillis() - start
+                        } else {
+                            providerLatencies[url] = 9999L
+                        }
                     }
                 }
-                bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value }?.key ?: dohUrls[0]
+                val dotJobs = dotServers.map { server ->
+                    async {
+                        val start = System.currentTimeMillis()
+                        val res = DnsProtocols.queryDot("google.com", server, vpnService)
+                        if (res.isNotEmpty()) {
+                            providerLatencies[server] = System.currentTimeMillis() - start
+                        } else {
+                            providerLatencies[server] = 9999L
+                        }
+                    }
+                }
+                dohJobs.awaitAll()
+                dotJobs.awaitAll()
                 
-                for (server in dotServers) {
-                    val start = System.currentTimeMillis()
-                    val res = DnsProtocols.queryDot("google.com", server, vpnService)
-                    if (res.isNotEmpty()) {
-                        providerLatencies[server] = System.currentTimeMillis() - start
-                    } else {
-                        providerLatencies[server] = 9999L
-                    }
-                }
+                bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value }?.key ?: dohUrls[0]
                 bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") }.minByOrNull { it.value }?.key ?: dotServers[0]
                 
                 delay(10 * 60 * 1000L) // Every 10 min
@@ -73,16 +81,14 @@ object DnsOptimizer {
         // Prefetcher
         scope.launch(Dispatchers.IO) {
             while (isActive) {
-                for (domain in criticalDomains) {
-                    try {
-                        val ips = RobustResolver.resolve(domain, vpnService)
-                        if (ips.isNotEmpty()) {
-                            DnsCacheManager.put(domain, ips)
-                        }
-                    } catch (e: Exception) {}
-                    delay(5000)
-                }
                 delay(15 * 60 * 1000L)
+                criticalDomains.map { domain ->
+                    async {
+                        try {
+                            RobustResolver.resolve(domain, vpnService)
+                        } catch (e: Exception) {}
+                    }
+                }.awaitAll()
             }
         }
 

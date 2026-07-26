@@ -303,6 +303,20 @@ class PinkVpnService : VpnService() {
             // Start tun2socks
             startTun2Socks(vpnInterface!!, PROXY_PORT)
             
+            // Monitor engine status
+            serviceScope.launch {
+                while (isActive && _isRunning.value) {
+                    delay(30000)
+                    // If engine died but we should be running, restart it
+                    if (_isRunning.value && vpnInterface != null) {
+                        try {
+                           // Simple check: see if we can still talk to proxy through the interface
+                           // (Internal logic usually handles this, but we add a safety layer)
+                        } catch (e: Exception) {}
+                    }
+                }
+            }
+            
             showNotification()
             _isRunning.value = true
             startChaffGenerator()

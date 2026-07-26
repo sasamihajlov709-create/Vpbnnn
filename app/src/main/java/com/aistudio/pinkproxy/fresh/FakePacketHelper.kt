@@ -633,19 +633,38 @@ object FakePacketHelper {
     fun buildQuicInitial(destConnId: ByteArray? = null): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
-        dos.writeByte(0xC0) 
-        dos.writeInt(0x00000001)
-        val dcid = destConnId ?: ByteArray(8).apply { java.util.concurrent.ThreadLocalRandom.current().nextBytes(this) }
+        val rnd = ThreadLocalRandom.current()
+        
+        dos.writeByte(0xC0 or (rnd.nextInt(4) and 0x03)) // Long Header + Initial + Type bits
+        dos.writeInt(0x00000001) // Version (Draft-01 or similar, or just 1)
+        
+        val dcid = destConnId ?: ByteArray(rnd.nextInt(8, 21)).apply { rnd.nextBytes(this) }
         dos.writeByte(dcid.size); dos.write(dcid)
-        val scid = ByteArray(8).apply { java.util.concurrent.ThreadLocalRandom.current().nextBytes(this) }
+        
+        val scid = ByteArray(rnd.nextInt(8, 21)).apply { rnd.nextBytes(this) }
         dos.writeByte(scid.size); dos.write(scid)
-        dos.writeByte(0x00)
-        val payloadLen = 1200
-        dos.writeShort(0x4000 or (payloadLen and 0x3FFF))
-        val packetNumber = ByteArray(4).apply { java.util.concurrent.ThreadLocalRandom.current().nextBytes(this) }
-        dos.write(packetNumber)
-        val payload = ByteArray(payloadLen - 4).apply { java.util.concurrent.ThreadLocalRandom.current().nextBytes(this) }
-        payload[0] = 0x06; payload[1] = 0x00; payload[2] = 0x40; payload[3] = 0x01
+        
+        dos.writeByte(0x00) // Token Length
+        
+        val totalPacketLen = 1200
+        val headerEstimate = 1 + 4 + 1 + dcid.size + 1 + scid.size + 1 + 2 + 1 // ~30-50 bytes
+        val payloadLen = totalPacketLen - headerEstimate
+        
+        dos.writeShort(0x4000 or (payloadLen and 0x3FFF)) // Length field (Varint)
+        
+        // Packet Number (1 byte for simplicity in fake)
+        dos.writeByte(rnd.nextInt(256))
+        
+        // Frames: PADDING (0x00) + PING (0x01) + CRYPTO (0x06) + more PADDING
+        val payload = ByteArray(payloadLen - 1)
+        rnd.nextBytes(payload)
+        
+        // Inject some real-looking frames at start
+        payload[0] = 0x01 // PING
+        payload[1] = 0x06 // CRYPTO
+        payload[2] = 0x00 // Offset 0
+        payload[3] = 0x40; payload[4] = 0x80.toByte() // Length 128
+        
         dos.write(payload)
         return baos.toByteArray()
     }
@@ -735,15 +754,36 @@ object FakePacketHelper {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
         val rnd = ThreadLocalRandom.current()
+        
+        // 1. Calculate body size with attributes
+        val software = "PinkProxy/2.0".toByteArray()
+        val softwareAttrLen = software.size
+        val softwareAttrTotalLen = 4 + ((softwareAttrLen + 3) and 0xFFFC.toInt())
+        
+        val priority = rnd.nextInt()
+        val priorityAttrTotalLen = 8
+        
+        val totalBodyLen = softwareAttrTotalLen + priorityAttrTotalLen
+        
+        // 2. Header
         dos.writeShort(0x0001) // Binding Request
-        val padding = rnd.nextInt(0, 16)
-        dos.writeShort(padding) // Message Length
+        dos.writeShort(totalBodyLen) // Message Length
         dos.writeInt(0x2112A442) // Magic Cookie
         dos.writeLong(rnd.nextLong()) // Transaction ID part 1
         dos.writeInt(rnd.nextInt()) // Transaction ID part 2
-        if (padding > 0) {
-            dos.write(ByteArray(padding) { rnd.nextInt(256).toByte() })
-        }
+        
+        // 3. SOFTWARE attribute (0x8022)
+        dos.writeShort(0x8022)
+        dos.writeShort(softwareAttrLen)
+        dos.write(software)
+        val padding = ((softwareAttrLen + 3) and 0xFFFC.toInt()) - softwareAttrLen
+        if (padding > 0) dos.write(ByteArray(padding) { 0 })
+        
+        // 4. PRIORITY attribute (0x0024)
+        dos.writeShort(0x0024)
+        dos.writeShort(0x0004)
+        dos.writeInt(priority)
+        
         return baos.toByteArray()
     }
 
@@ -786,6 +826,55 @@ object FakePacketHelper {
         dos.writeByte(0x00) // Cookie length
         
         return baos.toByteArray()
+    }
+
+    fun addTlsGreaseExtensions(data: ByteArray, length: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)
+        try {
+            val rnd = ThreadLocalRandom.current()
+            // Find extensions start (same logic as shuffleTlsExtensions)
+            var pos = 9 
+            pos += 2 // Version
+            pos += 32 // Random
+            val sessionIdLen = data[pos].toInt() and 0xff
+            pos += 1 + sessionIdLen
+            val cipherSuiteLen = ((data[pos].toInt() and 0xff) shl 8) or (data[pos + 1].toInt() and 0xff)
+            pos += 2 + cipherSuiteLen
+            val compressionLen = data[pos].toInt() and 0xff
+            pos += 1 + compressionLen
+            
+            if (pos >= length - 2) return data.copyOf(length)
+            val extensionsLen = ((data[pos].toInt() and 0xff) shl 8) or (data[pos + 1].toInt() and 0xff)
+            pos += 2
+            
+            val greaseType = (rnd.nextInt(16) shl 12) or (rnd.nextInt(16) shl 8) or 0x0A
+            val greaseData = ByteArray(rnd.nextInt(0, 32)).apply { rnd.nextBytes(this) }
+            val greaseExt = buildExtension(greaseType, greaseData)
+            
+            val baos = ByteArrayOutputStream()
+            baos.write(data, 0, pos)
+            baos.write(greaseExt)
+            baos.write(data, pos, length - pos)
+            
+            val result = baos.toByteArray()
+            // Fix lengths (same as shuffle)
+            val newHandshakeLen = result.size - 9
+            result[6] = ((newHandshakeLen shr 16) and 0xff).toByte()
+            result[7] = ((newHandshakeLen shr 8) and 0xff).toByte()
+            result[8] = (newHandshakeLen and 0xff).toByte()
+            
+            val newExtLen = result.size - pos
+            result[pos - 2] = ((newExtLen shr 8) and 0xff).toByte()
+            result[pos - 1] = (newExtLen and 0xff).toByte()
+            
+            val newRecordLen = result.size - 5
+            result[3] = ((newRecordLen shr 8) and 0xff).toByte()
+            result[4] = (newRecordLen and 0xff).toByte()
+            
+            return result
+        } catch (e: Exception) {
+            return data.copyOf(length)
+        }
     }
 
     fun shuffleTlsExtensions(data: ByteArray, length: Int): ByteArray {

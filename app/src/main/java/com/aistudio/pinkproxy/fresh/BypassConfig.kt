@@ -654,7 +654,10 @@ object BypassConfig {
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_GREASE -> {
-                if (length > 0 && data[0] == 0x16.toByte()) {
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val greased = FakePacketHelper.addTlsGreaseExtensions(data, length)
+                    output.write(greased); output.flush()
+                } else if (length > 0 && data[0] == 0x16.toByte()) {
                     val fakeClientHello = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 90))
                     TtlHelper.setTtl(socket, config.fakeTtl); output.write(fakeClientHello); output.flush()
                     delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
@@ -1290,6 +1293,19 @@ object BypassConfig {
                     output.write(data, part, length - part); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
             }
+            BypassStrategy.HTTP_HOST_SMUGGLE -> {
+                val s = String(data, 0, length, Charsets.US_ASCII)
+                if (s.contains("Host:", ignoreCase = true)) {
+                    val lines = s.split("\r\n").toMutableList()
+                    val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                    if (hostIdx != -1) {
+                        lines.add(hostIdx, "Host: www.google.com")
+                        val smuggled = lines.joinToString("\r\n")
+                        output.write(smuggled.toByteArray(Charsets.US_ASCII))
+                        output.flush()
+                    } else { output.write(data, 0, length); output.flush() }
+                } else { output.write(data, 0, length); output.flush() }
+            }
             BypassStrategy.TCP_SACK_PANIC -> {
                 // Force strange window sizes to confuse DPI state tracking
                 socket.receiveBufferSize = 1
@@ -1316,6 +1332,24 @@ object BypassConfig {
             BypassStrategy.UDP_NOISE_PAD -> {
                 // Handled in UdpTransportHandler mostly, but here for completeness if used over TCP (not recommended)
                 output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_RECORD_FRAGMENTATION -> {
+                if (length > 5 && (data[0] == 0x16.toByte() || data[0] == 0x17.toByte())) {
+                    val head = 5
+                    val bodyLen = length - head
+                    if (bodyLen > 100) {
+                        val chunkSize = rnd.nextInt(20, 50)
+                        var sent = 0
+                        while (sent < bodyLen) {
+                            val cur = (bodyLen - sent).coerceAtMost(chunkSize)
+                            output.write(data[0].toInt()); output.write(data[1].toInt()); output.write(data[2].toInt())
+                            output.write((cur shr 8) and 0xff); output.write(cur and 0xff)
+                            output.write(data, head + sent, cur); output.flush()
+                            sent += cur
+                            if (sent < bodyLen) delay(rnd.nextLong(1, 3))
+                        }
+                    } else { output.write(data, 0, length); output.flush() }
+                } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TLS_SESSION_ID_RAND -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {

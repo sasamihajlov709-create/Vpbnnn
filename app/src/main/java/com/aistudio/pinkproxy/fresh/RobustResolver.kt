@@ -139,6 +139,16 @@ object RobustResolver {
     }
 
     private suspend fun performParallelResolution(host: String, vpnService: VpnService?): List<InetAddress> = coroutineScope {
+        // Obfuscation: send fake queries for popular domains to hide the real one
+        if (ProxyStats.censorshipIntensity.value > 30 && !host.contains("google") && !host.contains("facebook")) {
+            launch {
+                val shadows = listOf("google.com", "bing.com", "cloudflare.com", "apple.com")
+                shadows.shuffled().take(1).forEach { shadow ->
+                    try { DnsProtocols.queryUdpDnsShadow(shadow, "1.1.1.1", vpnService) } catch (e: Exception) {}
+                }
+            }
+        }
+        
         val jobs = listOf(
             async { DnsProtocols.queryDohRacing(host, vpnService) },
             async { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },

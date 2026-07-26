@@ -50,11 +50,26 @@ object TcpTransportHandler {
                             try {
                                 vpnService?.protect(s)
                                 s.tcpNoDelay = true
-                                // Dynamic timeout based on RTT
-                                val connectTimeout = (BypassConfig.currentRttMs.value * 4).coerceIn(2000, 8000).toInt()
+                                // Dynamic timeout based on RTT and Jitter
+                                val baseTimeout = (BypassConfig.currentRttMs.value * 3).coerceIn(1500, 7000)
+                                val jitter = ProxyStats.jitter.value
+                                val connectTimeout = (baseTimeout + jitter).toInt().coerceIn(2000, 10000)
+                                
                                 val start = System.currentTimeMillis()
-                                s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
-                                ProxyStats.updateLatency(System.currentTimeMillis() - start)
+                                try {
+                                    s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
+                                    ProxyStats.updateLatency(System.currentTimeMillis() - start)
+                                } catch (e: Exception) {
+                                    val elapsed = System.currentTimeMillis() - start
+                                    val msg = e.message?.lowercase() ?: ""
+                                    if (elapsed >= connectTimeout - 500) {
+                                        ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                                    } else if (msg.contains("reset")) {
+                                        ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                                    }
+                                    throw e
+                                }
+
                                 if (!channel.isClosedForSend) {
                                     channel.trySend(s)
                                 } else {

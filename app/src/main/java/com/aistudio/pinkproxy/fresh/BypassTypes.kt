@@ -65,7 +65,6 @@ enum class BypassStrategy(
     HTTP_METHOD_FAKE(StrategyFamily.HTTP, 3, 3),
     TLS_LEGACY_HELLOS(StrategyFamily.TLS, 3, 3),
     TCP_KEEP_ALIVE_FAKE(StrategyFamily.TCP, 2, 2),
-    QUIC_INITIAL_FAKE(StrategyFamily.QUIC, 3, 2),
     QUIC_RST_SKEW(StrategyFamily.QUIC, 4, 3),
     QUIC_MTU_PROBE(StrategyFamily.QUIC, 3, 3),
     DNS_OVER_TCP(StrategyFamily.DNS, 2, 1),
@@ -126,6 +125,9 @@ enum class BypassStrategy(
     TCP_GHOST_SKEW(StrategyFamily.TCP, 4, 3),
     TLS_CLIENT_HELLO_SHUFFLE(StrategyFamily.TLS, 5, 4),
     UDP_NOISE_PAD(StrategyFamily.UDP, 3, 4),
+    TLS_RECORD_FRAGMENTATION(StrategyFamily.TLS, 4, 3),
+    QUIC_INITIAL_FAKE(StrategyFamily.UDP, 3, 4),
+    HTTP_HOST_SMUGGLE(StrategyFamily.HTTP, 3, 3),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
