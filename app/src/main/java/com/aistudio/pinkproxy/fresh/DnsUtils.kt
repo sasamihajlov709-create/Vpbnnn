@@ -82,8 +82,12 @@ object DnsUtils {
                 bos.write(0); bos.write(28)
                 // Class IN
                 bos.write(0); bos.write(1)
-                // TTL (60s)
-                bos.write(0); bos.write(0); bos.write(0); bos.write(60)
+                // TTL (randomized 30-600s)
+                val ttl = java.util.concurrent.ThreadLocalRandom.current().nextInt(30, 600)
+                bos.write((ttl shr 24) and 0xFF)
+                bos.write((ttl shr 16) and 0xFF)
+                bos.write((ttl shr 8) and 0xFF)
+                bos.write(ttl and 0xFF)
                 // Data length (16 bytes for IPv6)
                 bos.write(0); bos.write(16)
                 // Parse and write IPv6 safely
@@ -98,8 +102,12 @@ object DnsUtils {
                 bos.write(0); bos.write(1)
                 // Class IN
                 bos.write(0); bos.write(1)
-                // TTL (60s)
-                bos.write(0); bos.write(0); bos.write(0); bos.write(60)
+                // TTL (randomized 30-600s)
+                val ttl = java.util.concurrent.ThreadLocalRandom.current().nextInt(30, 600)
+                bos.write((ttl shr 24) and 0xFF)
+                bos.write((ttl shr 16) and 0xFF)
+                bos.write((ttl shr 8) and 0xFF)
+                bos.write(ttl and 0xFF)
                 // Data length (4 bytes for IPv4)
                 bos.write(0); bos.write(4)
                 // IP address safely

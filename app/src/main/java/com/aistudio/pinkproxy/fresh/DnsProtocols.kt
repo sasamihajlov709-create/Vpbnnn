@@ -19,7 +19,8 @@ import kotlinx.coroutines.*
 object DnsProtocols {
 
     suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
-        val query = DnsPacketEngine.buildDnsQuery(host, 1)
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         val socket = DatagramSocket()
         try {
             vpnService?.protect(socket)
@@ -30,14 +31,46 @@ object DnsProtocols {
             val buffer = ByteArray(1024)
             val respPacket = DatagramPacket(buffer, buffer.size)
             socket.receive(respPacket)
-            return DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length)
+            return DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
         } finally {
             try { socket.close() } catch (e: Exception) {}
         }
     }
 
+    suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+        val idReal = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val idFake = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val queryReal = DnsPacketEngine.buildDnsQuery(host, 1, idReal)
+        val queryFake = DnsPacketEngine.buildDnsQuery("google.com", 1, idFake)
+        
+        val socket = DatagramSocket()
+        try {
+            vpnService?.protect(socket)
+            socket.soTimeout = 3000
+            val dnsAddr = InetAddress.getByName(dnsIp)
+            
+            // Send fake query to common host with different ID
+            socket.send(DatagramPacket(queryFake, queryFake.size, dnsAddr, 53))
+            delay(10)
+            socket.send(DatagramPacket(queryReal, queryReal.size, dnsAddr, 53))
+            
+            val buffer = ByteArray(1024)
+            val start = System.currentTimeMillis()
+            while (System.currentTimeMillis() - start < 3000) {
+                val respPacket = DatagramPacket(buffer, buffer.size)
+                socket.receive(respPacket)
+                val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, idReal)
+                if (res.isNotEmpty()) return res
+            }
+        } catch (e: Exception) {} finally {
+            try { socket.close() } catch (e: Exception) {}
+        }
+        return emptyList()
+    }
+
     suspend fun queryTcpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
-        val query = DnsPacketEngine.buildDnsQuery(host, 1)
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         val socket = Socket()
         try {
             vpnService?.protect(socket)
@@ -52,7 +85,7 @@ object DnsProtocols {
             val len = dis.readUnsignedShort()
             val resp = ByteArray(len)
             dis.readFully(resp)
-            return DnsPacketEngine.parseDnsResponse(resp, len)
+            return DnsPacketEngine.parseDnsResponse(resp, len, id)
         } finally {
             try { socket.close() } catch (e: Exception) {}
         }

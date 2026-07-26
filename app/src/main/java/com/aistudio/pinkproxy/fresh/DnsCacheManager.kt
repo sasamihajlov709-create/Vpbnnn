@@ -2,6 +2,7 @@ package com.aistudio.pinkproxy.fresh
 
 import android.util.Log
 import java.net.InetAddress
+import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
 
 object DnsCacheManager {
@@ -93,7 +94,12 @@ object DnsCacheManager {
     }
 
     fun getSortedIps(ips: List<InetAddress>): List<InetAddress> {
-        return ips.sortedByDescending { ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) }
+        val preferIpv6 = BypassConfig.preferIpv6
+        return ips.sortedWith(compareByDescending<InetAddress> { 
+            ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) 
+        }.thenByDescending { 
+            if (preferIpv6) it is Inet6Address else it !is Inet6Address
+        })
     }
 
     fun isPoisoned(address: InetAddress, host: String): Boolean {

@@ -112,7 +112,7 @@ object RobustResolver {
         val servers = if (dnsMode == "Custom") listOf(customDnsIp) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
         for (dns in servers) {
             try {
-                val res = DnsProtocols.queryUdpDns(host, dns, vpnService)
+                val res = DnsProtocols.queryUdpDnsShadow(host, dns, vpnService)
                 if (res.isNotEmpty()) {
                     DnsCacheManager.put(host, res)
                     return res
@@ -126,8 +126,8 @@ object RobustResolver {
     private suspend fun performParallelResolution(host: String, vpnService: VpnService?): List<InetAddress> = coroutineScope {
         val jobs = listOf(
             async { DnsProtocols.queryDohRacing(host, vpnService) },
-            async { DnsProtocols.queryUdpDns(host, "1.1.1.1", vpnService) },
-            async { DnsProtocols.queryUdpDns(host, "8.8.8.8", vpnService) },
+            async { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },
+            async { DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService) },
             async { 
                 delay(500) // Slight delay for emergency fallback
                 DnsCacheManager.getEmergencyFallback(host) ?: emptyList()

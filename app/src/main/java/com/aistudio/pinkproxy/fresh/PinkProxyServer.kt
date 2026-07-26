@@ -144,6 +144,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             output.flush()
             
             client.soTimeout = 0 // Remove timeout for the tunneled connection
+            try { client.keepAlive = true } catch (e: Exception) {}
             TcpTransportHandler.handleTcpSession(client, host ?: "", targetPort, vpnService, PinkVpnService.instance?.getServiceScope() ?: GlobalScope)
 
         } catch (e: Exception) {

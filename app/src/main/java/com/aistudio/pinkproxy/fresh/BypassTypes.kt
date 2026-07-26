@@ -106,6 +106,8 @@ enum class BypassStrategy(
     UDP_FRAGMENT_SKEW(StrategyFamily.UDP, 4, 4),
     UDP_STUTTER(StrategyFamily.TIMING, 2, 2),
     TLS_CLIENT_HELLO_GREASE(StrategyFamily.TLS, 2, 1),
+    TLS_CLIENT_HELLO_PAD(StrategyFamily.TLS, 3, 1),
+    TCP_DATA_OOB_SKEW(StrategyFamily.TCP, 3, 2),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 

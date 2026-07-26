@@ -62,9 +62,11 @@ object BypassConfig {
     @Volatile var isDiagnosticMode = false
     @Volatile var blockQuic = true
     @Volatile var isCharging = true
+    @Volatile var preferIpv6 = false
 
     // Circuit Breaker state
     private val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
+    private val BREAKER_TTL = 5 * 60 * 1000L // 5 minutes
     
     // Session Stickiness with TTL
     private val hostStrategyMemory = ConcurrentHashMap<String, Pair<BypassStrategy, Long>>()
@@ -318,6 +320,18 @@ object BypassConfig {
 
     fun recordFailure(strat: BypassStrategy, host: String?) {
         ProxyStats.recordCensorshipEvent(true)
+        
+        val stats = strategyStats[strat]
+        stats?.failures?.incrementAndGet()
+
+        // Circuit Breaker: if strategy fails too much globally, disable it for a while
+        if ((stats?.failures?.get() ?: 0) % 5 == 0L) {
+             val failRate = stats?.failures?.get()?.toDouble() ?: 0.0 / ((stats?.successes?.get() ?: 0) + 1)
+             if (failRate > 0.7) {
+                 circuitBreakers[strat] = System.currentTimeMillis()
+                 Log.w("BypassConfig", "Circuit Breaker: strategy $strat is now blacklisted for 5 minutes")
+             }
+        }
         
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
@@ -1046,6 +1060,24 @@ object BypassConfig {
                     output.write(grease); output.flush(); delay(rnd.nextLong(2, 10))
                     output.write(data, 0, length); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TLS_CLIENT_HELLO_PAD -> {
+                if (length > 5 && data[0] == 0x16.toByte()) {
+                    val pad = FakePacketHelper.buildExtension(0x0015, ByteArray(rnd.nextInt(64, 256)) { 0 })
+                    output.write(data, 0, length); output.write(pad); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_DATA_OOB_SKEW -> {
+                var pos = 0
+                while (pos < length) {
+                    val sz = rnd.nextInt(10, 50).coerceAtMost(length - pos)
+                    output.write(data, pos, sz); output.flush()
+                    pos += sz
+                    if (pos < length && rnd.nextInt(100) < 30) {
+                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) {}
+                        delay(rnd.nextLong(1, 10))
+                    }
+                }
             }
             BypassStrategy.TLS_SESSION_ID_RAND -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {

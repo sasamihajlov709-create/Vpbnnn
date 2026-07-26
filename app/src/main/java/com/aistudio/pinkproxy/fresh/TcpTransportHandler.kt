@@ -86,9 +86,13 @@ object TcpTransportHandler {
                 clientSocket.soTimeout = 0
                 remoteSocket.soTimeout = 0
                 remoteSocket.tcpNoDelay = true
+                
+                val intensity = ProxyStats.censorshipIntensity.value
+                val bufSize = if (intensity > 88) 16384 else if (intensity > 70) 32768 else 128 * 1024
+                
                 remoteSocket.sendBufferSize = 128 * 1024
-                remoteSocket.receiveBufferSize = 128 * 1024
-                clientSocket.sendBufferSize = 128 * 1024
+                remoteSocket.receiveBufferSize = bufSize
+                clientSocket.sendBufferSize = bufSize
                 clientSocket.receiveBufferSize = 128 * 1024
             } catch (e: Exception) {}
 

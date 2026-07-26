@@ -7,11 +7,11 @@ import java.io.ByteArrayInputStream
 
 object DnsPacketEngine {
 
-    fun buildDnsQuery(host: String, type: Int): ByteArray {
+    fun buildDnsQuery(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)): ByteArray {
         val bos = ByteArrayOutputStream()
         val dos = java.io.DataOutputStream(bos)
         
-        dos.writeShort(java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)) // ID
+        dos.writeShort(id) // ID
         dos.writeShort(0x0100) // Flags: Standard query, RD=1
         dos.writeShort(1) // Questions
         dos.writeShort(0) // Answer RRs
@@ -32,12 +32,13 @@ object DnsPacketEngine {
         return bos.toByteArray()
     }
 
-    fun parseDnsResponse(data: ByteArray, length: Int): List<InetAddress> {
+    fun parseDnsResponse(data: ByteArray, length: Int, expectedId: Int = -1): List<InetAddress> {
         if (length < 12) return emptyList()
         val ips = mutableListOf<InetAddress>()
         try {
             val dis = DataInputStream(ByteArrayInputStream(data, 0, length))
-            dis.skipBytes(2) // ID
+            val id = dis.readUnsignedShort()
+            if (expectedId != -1 && id != expectedId) return emptyList()
             val flags = dis.readUnsignedShort()
             val qCount = dis.readUnsignedShort()
             val aCount = dis.readUnsignedShort()
