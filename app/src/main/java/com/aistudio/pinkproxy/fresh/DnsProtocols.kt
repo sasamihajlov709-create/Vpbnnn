@@ -162,6 +162,7 @@ object DnsProtocols {
             conn.readTimeout = 4000
             conn.requestMethod = "POST"
             conn.doOutput = true
+            conn.setRequestProperty("Host", dohHost)
             conn.setRequestProperty("Content-Type", "application/dns-message")
             conn.setRequestProperty("Accept", "application/dns-message")
             
@@ -183,9 +184,10 @@ object DnsProtocols {
             kotlinx.coroutines.supervisorScope {
                 val urls = DnsOptimizer.getDohUrls().shuffled().take(4)
                 val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(urls.size)
+                val jobs = mutableListOf<Job>()
                 
                 urls.forEach { url ->
-                    launch(Dispatchers.IO) {
+                    jobs += launch(Dispatchers.IO) {
                         val res = queryDoh(host, url, vpnService)
                         if (res.isNotEmpty()) channel.trySend(res)
                     }
@@ -195,6 +197,8 @@ object DnsProtocols {
                     channel.receive()
                 } catch (e: Exception) {
                     emptyList<InetAddress>()
+                } finally {
+                    jobs.forEach { it.cancel() }
                 }
                 result
             }
@@ -207,7 +211,10 @@ class ProtectedSSLSocketFactory(private val base: SSLSocketFactory, private val 
     override fun getSupportedCipherSuites() = base.supportedCipherSuites
 
     override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket {
-        return base.createSocket(s, host, port, autoClose)
+        vpnService?.protect(s)
+        val sslSocket = base.createSocket(s, host, port, autoClose)
+        vpnService?.protect(sslSocket)
+        return sslSocket
     }
 
     override fun createSocket(host: String, port: Int): Socket {

@@ -91,6 +91,10 @@ object TcpTransportHandler {
                     } finally {
                         channel.close()
                         activeJobs.forEach { it.cancel() }
+                        while (true) {
+                            val leftover = channel.tryReceive().getOrNull() ?: break
+                            try { leftover.close() } catch (e: Exception) {}
+                        }
                     }
                     winner
                 }

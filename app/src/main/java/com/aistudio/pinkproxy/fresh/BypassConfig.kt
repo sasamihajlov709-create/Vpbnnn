@@ -404,9 +404,12 @@ object BypassConfig {
 
         // Circuit Breaker: if strategy fails too much globally, disable it for a while
         if ((stats?.failures?.get() ?: 0) % 5 == 0L) {
-             val failRate = stats?.failures?.get()?.toDouble() ?: 0.0 / ((stats?.successes?.get() ?: 0) + 1)
+             val successes = stats?.successes?.get() ?: 0
+             val failures = stats?.failures?.get() ?: 0
+             val total = (successes + failures).coerceAtLeast(1)
+             val failRate = failures.toDouble() / total
              if (failRate > 0.7) {
-                 circuitBreakers[strat] = System.currentTimeMillis()
+                 circuitBreakers[strat] = System.currentTimeMillis() + 300000L
                  Log.w("BypassConfig", "Circuit Breaker: strategy $strat is now blacklisted for 5 minutes")
              }
         }

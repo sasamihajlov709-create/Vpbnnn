@@ -145,6 +145,8 @@ object UdpTransportHandler {
                             val query = DnsUtils.parseDnsQName(payload)
                             if (query != null) {
                                 val host = query.qname
+                                val clientAddr = packet.address
+                                val clientPort = packet.port
                                 val cached = RobustResolver.getCached(host)
                                 if (cached != null) {
                                     val ipStrs = cached.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
@@ -159,7 +161,7 @@ object UdpTransportHandler {
                                         else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
                                         responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
                                         System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
-                                        udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, packet.address, packet.port))
+                                        udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, clientAddr, clientPort))
                                     }
                                 } else {
                                     launch(Dispatchers.IO) {
@@ -177,7 +179,7 @@ object UdpTransportHandler {
                                                 else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
                                                 responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
                                                 System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
-                                                udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, packet.address, packet.port))
+                                                udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, clientAddr, clientPort))
                                             }
                                         } catch (e: Exception) {}
                                     }
