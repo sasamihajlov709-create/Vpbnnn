@@ -239,6 +239,14 @@ object UdpTransportHandler {
             return
         }
 
+        if (strategy == BypassStrategy.UDP_FAKE_DTLS) {
+            val dtls = FakePacketHelper.buildFakeDtlsClientHello()
+            socket.send(DatagramPacket(dtls, dtls.size, targetInet, targetPort))
+            delay(rnd.nextLong(15, 60))
+            socket.send(outPacket)
+            return
+        }
+
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(outPacket)
             return

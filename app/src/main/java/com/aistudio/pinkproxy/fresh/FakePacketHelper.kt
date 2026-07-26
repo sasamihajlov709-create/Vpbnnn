@@ -741,4 +741,36 @@ object FakePacketHelper {
         dos.writeInt(ThreadLocalRandom.current().nextInt()) // Transaction ID part 2
         return baos.toByteArray()
     }
+
+    fun buildFakeDtlsClientHello(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        
+        dos.writeByte(0x16) // Content Type: Handshake
+        dos.writeShort(0xfeff) // Version: DTLS 1.0
+        dos.writeShort(0x0000) // Epoch
+        dos.write(ByteArray(6) { 0 }) // Sequence Number
+        
+        val bodySize = 44 + rnd.nextInt(10, 30)
+        dos.writeShort(bodySize) // Length
+        
+        dos.writeByte(0x01) // Client Hello
+        dos.writeByte(0x00)
+        dos.writeShort(bodySize - 4) // Length
+        dos.writeShort(0x0000) // Message Seq
+        dos.writeByte(0x00)
+        dos.writeShort(0x0000) // Fragment Offset
+        dos.writeByte(0x00)
+        dos.writeShort(bodySize - 4) // Fragment Length
+        
+        dos.writeShort(0xfeff) // Version
+        val random = ByteArray(32)
+        rnd.nextBytes(random)
+        dos.write(random)
+        dos.writeByte(0x00) // Session ID length
+        dos.writeByte(0x00) // Cookie length
+        
+        return baos.toByteArray()
+    }
 }

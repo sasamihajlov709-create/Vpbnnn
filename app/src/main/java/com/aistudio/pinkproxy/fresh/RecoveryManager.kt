@@ -8,7 +8,8 @@ enum class RecoveryEvent {
     PROXY_UNREACHABLE,
     TUNNEL_STALL,
     HIGH_RTT,
-    HANDSHAKE_FAILURE
+    HANDSHAKE_FAILURE,
+    DPI_DETECTED
 }
 
 object RecoveryManager {
@@ -25,6 +26,10 @@ object RecoveryManager {
                 if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 30) {
                     handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop")
                 }
+                
+                if (ProxyStats.currentDpiType.value != DpiType.NONE) {
+                    handleEvent(RecoveryEvent.DPI_DETECTED, "DPI: ${ProxyStats.currentDpiType.value}")
+                }
             }
         }
     }
@@ -34,6 +39,22 @@ object RecoveryManager {
         ProxyStats.logRecovery("Event: $event ($details)")
         
         when (event) {
+            RecoveryEvent.DPI_DETECTED -> {
+                val type = ProxyStats.currentDpiType.value
+                when (type) {
+                    DpiType.TCP_RESET -> {
+                        BypassConfig.setGlobalStrategy(BypassStrategy.TLS_CLIENT_HELLO_CHOP)
+                        triggerPanic("Active TCP Reset DPI detected")
+                    }
+                    DpiType.CONNECTION_TIMEOUT -> {
+                        BypassConfig.setGlobalStrategy(BypassStrategy.TLS_CLIENT_HELLO_PAD)
+                    }
+                    else -> {
+                        BypassConfig.rotateGlobalStrategy()
+                    }
+                }
+                recoveryEscalation = (recoveryEscalation + 1).coerceAtMost(3)
+            }
             RecoveryEvent.DNS_FAILURE -> {
                 if (recoveryEscalation < 2) {
                     RobustResolver.clearCache()

@@ -169,12 +169,23 @@ object BypassConfig {
             else -> StrategyGroup.LIGHT
         }
         
+        val dpiType = ProxyStats.currentDpiType.value
+        
         hostStrategyMemory[host]?.let { (remembered, expiry) ->
             if (now < expiry) {
                 if (blacklisted?.get(remembered)?.let { now < it } == true) {
                     hostStrategyMemory.remove(host)
-                } else if ((scores[remembered]?.get() ?: 0) > 40 && (circuitBreakers[remembered] ?: 0L) < now) {
-                    return remembered
+                } else {
+                    val baseScore = scores[remembered]?.get() ?: 0
+                    var boostedScore = baseScore
+                    when (dpiType) {
+                        DpiType.TCP_RESET -> if (remembered.family == StrategyFamily.TCP) boostedScore += 30
+                        DpiType.CONNECTION_TIMEOUT -> if (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP) boostedScore += 30
+                        else -> {}
+                    }
+                    if (boostedScore > 40 && (circuitBreakers[remembered] ?: 0L) < now) {
+                        return remembered
+                    }
                 }
             } else {
                 hostStrategyMemory.remove(host)
@@ -1203,25 +1214,34 @@ object BypassConfig {
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TLS_SNI_SPLIT -> {
-                if (length > 100 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
-                    // Find SNI and split before it
-                    var sniPos = -1
-                    for (i in 0 until length - 5) {
-                        if (data[i] == 0x00.toByte() && data[i+1] == 0x00.toByte() && data[i+2] == 0x00.toByte()) {
-                           // Potential Server Name extension
-                           sniPos = i
-                           break
-                        }
-                    }
-                    if (sniPos != -1 && sniPos > 5) {
-                        output.write(data, 0, sniPos); output.flush()
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val sniOffset = TlsParser.findSniOffset(data, length)
+                    if (sniOffset != -1 && sniOffset > 5) {
+                        // Split right before the SNI string starts (usually 3 bytes before for type/length)
+                        val splitPos = (sniOffset - 3).coerceAtLeast(5)
+                        output.write(data, 0, splitPos); output.flush()
                         delay(rnd.nextLong(2, 10))
-                        output.write(data, sniPos, length - sniPos); output.flush()
+                        output.write(data, splitPos, length - splitPos); output.flush()
                     } else {
                         val part = length / 2
                         output.write(data, 0, part); output.flush()
                         delay(rnd.nextLong(2, 10))
                         output.write(data, part, length - part); output.flush()
+                    }
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TLS_CLIENT_HELLO_CHOP -> {
+                if (length > 5 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    // Chop the first 50 bytes into tiny pieces
+                    val limit = 50.coerceAtMost(length)
+                    for (i in 0 until limit) {
+                        output.write(data[i].toInt())
+                        output.flush()
+                        if (i < 10) delay(rnd.nextLong(1, 3))
+                    }
+                    if (length > limit) {
+                        output.write(data, limit, length - limit)
+                        output.flush()
                     }
                 } else { output.write(data, 0, length); output.flush() }
             }

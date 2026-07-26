@@ -117,6 +117,8 @@ enum class BypassStrategy(
     TLS_SNI_SPLIT(StrategyFamily.TLS, 4, 4),
     UDP_STUN_FAKE(StrategyFamily.UDP, 2, 4),
     TCP_WINDOW_CLAMPING(StrategyFamily.TCP, 2, 2),
+    TLS_CLIENT_HELLO_CHOP(StrategyFamily.TLS, 5, 4),
+    UDP_FAKE_DTLS(StrategyFamily.UDP, 3, 4),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
