@@ -265,6 +265,21 @@ object BypassConfig {
                 } else if (currentRate > 90) {
                     ProxyStats.recordCensorshipEvent(false)
                 }
+
+                // Dynamic MTU adjustment based on stability
+                val stability = ProxyStats.stabilityScore.value
+                if (stability < 60 && _currentMtu.value > 1200) {
+                    _currentMtu.value = 1100
+                    ProxyStats.logRecovery("Stability drop detected. Reducing MTU to 1100.")
+                } else if (stability > 90 && _currentMtu.value < 1400) {
+                    _currentMtu.value = 1400
+                }
+                
+                // IP Version Preference: If stability is low, try flipping IPv6 preference
+                if (stability < 40 && currentRate < 40) {
+                     preferIpv6 = !preferIpv6
+                     ProxyStats.logRecovery("Switching IPv6 preference to $preferIpv6 due to high failure rate.")
+                }
                 
                 // Periodic jitter and memory management
                 if (ThreadLocalRandom.current().nextInt(100) < 15) {
@@ -1086,6 +1101,13 @@ object BypassConfig {
                     output.write(data, 0, length); output.write(pad); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
             }
+            BypassStrategy.TLS_HANDSHAKE_RANDOM_PADDING -> {
+                if (length > 5 && data[0] == 0x16.toByte()) {
+                    val padding = FakePacketHelper.buildTlsHandshakePadding(rnd.nextInt(10, 100))
+                    output.write(padding); output.flush(); delay(rnd.nextLong(2, 8))
+                    output.write(data, 0, length); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
             BypassStrategy.TCP_DATA_OOB_SKEW -> {
                 var pos = 0
                 while (pos < length) {
@@ -1097,6 +1119,34 @@ object BypassConfig {
                         delay(rnd.nextLong(1, 10))
                     }
                 }
+            }
+            BypassStrategy.TCP_SACK_FAKE -> {
+                if (length > 20) {
+                    val part = length / 2
+                    output.write(data, 0, part); output.flush()
+                    // Simulate SACK by sending a tiny piece with urgent data
+                    try { socket.sendUrgentData(0) } catch (e: Exception) {}
+                    delay(rnd.nextLong(5, 15))
+                    output.write(data, part, length - part); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_HOST_REORDER -> {
+                val s = String(data, 0, length)
+                if (s.contains("Host:", ignoreCase = true)) {
+                    val lines = s.split("\r\n").toMutableList()
+                    val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                    if (hostIdx != -1 && hostIdx < lines.size - 2) {
+                        val hostLine = lines.removeAt(hostIdx)
+                        lines.add(1, hostLine) // Move host to 2nd line
+                        output.write(lines.joinToString("\r\n").toByteArray()); output.flush()
+                    } else { output.write(data, 0, length); output.flush() }
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_WINDOW_SIZE_SKEW -> {
+                val win = intArrayOf(4096, 8192, 16384, 32768, 65535).random()
+                socket.receiveBufferSize = win
+                socket.sendBufferSize = win
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_SESSION_ID_RAND -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {

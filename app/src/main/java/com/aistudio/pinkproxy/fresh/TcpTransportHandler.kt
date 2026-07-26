@@ -104,16 +104,33 @@ object TcpTransportHandler {
             val remoteIn = remoteSocket.getInputStream()
             val remoteOut = remoteSocket.getOutputStream()
 
+            var lastActivity = System.currentTimeMillis()
+
             coroutineScope {
+                // Keep-alive to prevent NAT/Firewall timeout
+                val keepAliveJob = launch {
+                    while (isActive) {
+                        delay(45000)
+                        if (System.currentTimeMillis() - lastActivity > 40000) {
+                            try { remoteSocket?.sendUrgentData(0) } catch (e: Exception) {}
+                        }
+                    }
+                }
+
                 // Forward from Remote to Client (Direct)
                 val remoteToClient = launch(Dispatchers.IO) {
-                    val buffer = ProxyStats.obtain64k()
+                    val intensity = ProxyStats.censorshipIntensity.value
+                    val activeConns = ProxyStats.activeConnections.value
+                    val useSmallBuf = activeConns > 30 || intensity > 85
+                    val buffer = if (useSmallBuf) ProxyStats.obtain16k() else ProxyStats.obtain64k()
+                    
                     try {
                         var n: Int
                         while (isActive) {
                             n = remoteIn.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
+                                lastActivity = System.currentTimeMillis()
                                 // Downstream Fragmentation: Help against local downstream DPI
                                 if (ProxyStats.censorshipIntensity.value > 92 && n > 800) {
                                     val part = n / 2
@@ -131,7 +148,7 @@ object TcpTransportHandler {
                         }
                     } catch (e: Exception) {
                     } finally {
-                        ProxyStats.release64k(buffer)
+                        if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Exception) {}
                         try { clientSocket.close() } catch (e: Exception) {}
                     }
@@ -139,7 +156,11 @@ object TcpTransportHandler {
 
                 // Forward from Client to Remote (with Bypass)
                 val clientToRemote = launch(Dispatchers.IO) {
-                    val buffer = ProxyStats.obtain64k()
+                    val intensity = ProxyStats.censorshipIntensity.value
+                    val activeConns = ProxyStats.activeConnections.value
+                    val useSmallBuf = activeConns > 30 || intensity > 85
+                    val buffer = if (useSmallBuf) ProxyStats.obtain16k() else ProxyStats.obtain64k()
+                    
                     try {
                         var n: Int
                         var firstPacket = true
@@ -147,6 +168,7 @@ object TcpTransportHandler {
                             n = clientIn.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
+                                lastActivity = System.currentTimeMillis()
                                 if (firstPacket) {
                                     firstPacket = false
                                     val startBypass = System.currentTimeMillis()
@@ -175,7 +197,7 @@ object TcpTransportHandler {
                     } catch (e: Exception) {
                         BypassConfig.TrafficShaper.recordError()
                     } finally {
-                        ProxyStats.release64k(buffer)
+                        if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
                         try { remoteSocket?.shutdownOutput() } catch (e: Exception) {}
                     }
                 }
@@ -185,6 +207,7 @@ object TcpTransportHandler {
                     clientToRemote.onJoin {}
                 }
                 
+                keepAliveJob.cancel()
                 remoteToClient.cancel()
                 clientToRemote.cancel()
             }

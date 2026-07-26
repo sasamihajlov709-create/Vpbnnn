@@ -648,4 +648,16 @@ object FakePacketHelper {
         dos.write(payload)
         return baos.toByteArray()
     }
+
+    fun buildTlsHandshakePadding(size: Int): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        dos.writeByte(0x16) // Handshake
+        dos.writeShort(0x0303) // TLS 1.2
+        dos.writeShort(size + 4)
+        dos.writeByte(0x00) // HelloRequest as padding
+        dos.writeByte(0x00); dos.writeShort(size)
+        dos.write(ByteArray(size) { 0 })
+        return baos.toByteArray()
+    }
 }

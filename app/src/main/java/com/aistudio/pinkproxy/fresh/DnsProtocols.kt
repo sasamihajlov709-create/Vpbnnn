@@ -96,6 +96,31 @@ object DnsProtocols {
         }
     }
 
+    suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?): List<InetAddress> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val socket = SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory.createSocket()
+        try {
+            vpnService?.protect(socket)
+            socket.connect(InetSocketAddress(dotIp, 853), 3000)
+            socket.soTimeout = 3000
+            val dos = DataOutputStream(socket.getOutputStream())
+            dos.writeShort(query.size)
+            dos.write(query)
+            dos.flush()
+            
+            val dis = DataInputStream(socket.getInputStream())
+            val len = dis.readUnsignedShort()
+            val resp = ByteArray(len)
+            dis.readFully(resp)
+            return DnsPacketEngine.parseDnsResponse(resp, len, id)
+        } catch (e: Exception) {
+        } finally {
+            try { socket.close() } catch (e: Exception) {}
+        }
+        return emptyList()
+    }
+
     suspend fun queryDoh(host: String, dohUrl: String, vpnService: VpnService?): List<InetAddress> {
         val query = DnsPacketEngine.buildDnsQuery(host, 1)
         var conn: HttpURLConnection? = null

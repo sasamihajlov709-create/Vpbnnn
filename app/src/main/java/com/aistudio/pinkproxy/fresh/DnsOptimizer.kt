@@ -13,11 +13,15 @@ object DnsOptimizer {
         "https://dns.adguard-dns.com/dns-query",
         "https://doh.opendns.com/dns-query"
     )
+    
+    private val dotServers = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "94.140.14.14")
 
     private val providerLatencies = ConcurrentHashMap<String, Long>()
     @Volatile var bestDohUrl = "https://dns.google/dns-query"
+    @Volatile var bestDotServer = "8.8.8.8"
     
     fun getDohUrls() = dohUrls
+    fun getDotServers() = dotServers
 
     private val criticalDomains = listOf(
         "youtube.com", "googlevideo.com", "google.com", "t.me", "telegram.org",
@@ -49,7 +53,19 @@ object DnsOptimizer {
                         providerLatencies[url] = 9999L
                     }
                 }
-                bestDohUrl = providerLatencies.entries.minByOrNull { it.value }?.key ?: dohUrls[0]
+                bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value }?.key ?: dohUrls[0]
+                
+                for (server in dotServers) {
+                    val start = System.currentTimeMillis()
+                    val res = DnsProtocols.queryDot("google.com", server, vpnService)
+                    if (res.isNotEmpty()) {
+                        providerLatencies[server] = System.currentTimeMillis() - start
+                    } else {
+                        providerLatencies[server] = 9999L
+                    }
+                }
+                bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") }.minByOrNull { it.value }?.key ?: dotServers[0]
+                
                 delay(10 * 60 * 1000L) // Every 10 min
             }
         }

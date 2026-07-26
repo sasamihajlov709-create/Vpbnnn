@@ -140,6 +140,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             val targetPort = ((portBytes[0].toInt() and 0xff) shl 8) or (portBytes[1].toInt() and 0xff)
             
             // SOCKS5 success response
+            if (ProxyStats.censorshipIntensity.value > 85) delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(10, 50))
             output.write(byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0))
             output.flush()
             

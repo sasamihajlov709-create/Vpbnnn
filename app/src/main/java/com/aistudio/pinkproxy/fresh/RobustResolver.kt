@@ -93,12 +93,12 @@ object RobustResolver {
             } catch (e: Exception) {}
         }
 
-        // 2. Try Smart DoH / Racing
+        // 2. Try Smart Parallel Resolution (DoH, DoT, Shadow UDP)
         try {
-            val racing = DnsProtocols.queryDohRacing(host, vpnService)
-            if (racing.isNotEmpty()) {
-                DnsCacheManager.put(host, racing)
-                return racing
+            val par = performParallelResolution(host, vpnService)
+            if (par.isNotEmpty()) {
+                DnsCacheManager.put(host, par)
+                return par
             }
         } catch (e: Exception) {}
 
@@ -126,10 +126,11 @@ object RobustResolver {
     private suspend fun performParallelResolution(host: String, vpnService: VpnService?): List<InetAddress> = coroutineScope {
         val jobs = listOf(
             async { DnsProtocols.queryDohRacing(host, vpnService) },
+            async { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },
             async { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },
             async { DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService) },
             async { 
-                delay(500) // Slight delay for emergency fallback
+                delay(600) // Slight delay for emergency fallback
                 DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
             }
         )

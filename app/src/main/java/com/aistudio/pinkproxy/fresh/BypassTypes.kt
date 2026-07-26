@@ -108,6 +108,11 @@ enum class BypassStrategy(
     TLS_CLIENT_HELLO_GREASE(StrategyFamily.TLS, 2, 1),
     TLS_CLIENT_HELLO_PAD(StrategyFamily.TLS, 3, 1),
     TCP_DATA_OOB_SKEW(StrategyFamily.TCP, 3, 2),
+    TCP_SACK_FAKE(StrategyFamily.TCP, 3, 3),
+    TLS_HANDSHAKE_RANDOM_PADDING(StrategyFamily.TLS, 4, 2),
+    HTTP_HOST_REORDER(StrategyFamily.HTTP, 2, 3),
+    TLS_CLIENT_HELLO_REORDER(StrategyFamily.TLS, 4, 3),
+    TCP_WINDOW_SIZE_SKEW(StrategyFamily.TCP, 2, 2),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
