@@ -150,8 +150,8 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
 
         } catch (e: Exception) {
             Log.v("PinkProxy", "Client handling error: ${e.message}")
-            try { client.close() } catch (ex: Exception) {}
         } finally {
+            try { client.close() } catch (ex: Exception) {}
             ProxyStats.updateConnections(-1)
         }
     }

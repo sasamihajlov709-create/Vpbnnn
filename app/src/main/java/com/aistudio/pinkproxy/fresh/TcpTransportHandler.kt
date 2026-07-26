@@ -20,7 +20,6 @@ object TcpTransportHandler {
         scope: CoroutineScope
     ) {
         var remoteSocket: Socket? = null
-        ProxyStats.updateConnections(1)
         try {
             val resolved = RobustResolver.resolve(targetHost, vpnService)
             if (resolved.isEmpty()) {
@@ -242,7 +241,6 @@ object TcpTransportHandler {
         } catch (e: Exception) {
             Log.v("TcpTransport", "Session $targetHost:$targetPort failed: ${e.message}")
         } finally {
-            ProxyStats.updateConnections(-1)
             try { clientSocket.close() } catch (e: Exception) {}
             try { remoteSocket?.close() } catch (e: Exception) {}
         }

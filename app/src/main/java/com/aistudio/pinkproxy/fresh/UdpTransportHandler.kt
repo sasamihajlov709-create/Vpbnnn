@@ -222,6 +222,8 @@ object UdpTransportHandler {
                 }
             }
         }
+        try { outSocket.close() } catch (e: Exception) {}
+        try { udpSocket.close() } catch (e: Exception) {}
     }
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, payload: ByteArray, targetInet: InetAddress, targetPort: Int, targetHost: String = "") {
