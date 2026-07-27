@@ -1025,6 +1025,28 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildSshHandshake(): ByteArray {
+        return "SSH-2.0-OpenSSH_9.7p1 Ubuntu-1ubuntu3\r\n".toByteArray()
+    }
+
+    fun buildBitTorrentHandshake(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        baos.write(19) // pstrlen
+        baos.write("BitTorrent protocol".toByteArray())
+        baos.write(ByteArray(8) { 0 }) // reserved
+        val peerId = ByteArray(20)
+        ThreadLocalRandom.current().nextBytes(peerId)
+        baos.write(peerId) // peer_id
+        val infoHash = ByteArray(20)
+        ThreadLocalRandom.current().nextBytes(infoHash)
+        baos.write(infoHash) // info_hash
+        return baos.toByteArray()
+    }
+
+    fun buildHttpHandshake(): ByteArray {
+        return "GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray()
+    }
+
     fun addTlsGreaseExtensions(data: ByteArray, length: Int): ByteArray {
         if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)
         try {

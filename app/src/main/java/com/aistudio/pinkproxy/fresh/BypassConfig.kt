@@ -1598,14 +1598,21 @@ object BypassConfig {
                 }
             }
             BypassStrategy.PROTOCOL_CONFUSION_SSH -> {
-                val ssh = FakePacketHelper.buildFakeSshHandshake()
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(ssh); output.flush()
-                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
+                val fake = FakePacketHelper.buildSshHandshake()
+                writeWithFake(socket, output, fake, data, length, config)
             }
             BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT -> {
-                val bt = byteArrayOf(19) + "BitTorrent protocol".toByteArray() + ByteArray(28) { 0 }
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(bt); output.flush()
-                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
+                val fake = FakePacketHelper.buildBitTorrentHandshake()
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_HTTP -> {
+                val fake = FakePacketHelper.buildHttpHandshake()
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.TCP_ACK_DELAY -> {
+                delay(rnd.nextLong(100, 300))
+                output.write(data, 0, length)
+                output.flush()
             }
             BypassStrategy.TCP_TOS_MANGLE -> {
                 try { socket.trafficClass = 0x08 } catch (e: Exception) {}

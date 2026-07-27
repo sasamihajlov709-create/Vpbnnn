@@ -59,8 +59,9 @@ object TcpTransportHandler {
                                 val startConnect = System.currentTimeMillis()
                                 try {
                                     s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
-                                    ProxyStats.updateLatency(System.currentTimeMillis() - startConnect)
-                                    DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "")
+                                    val rtt = System.currentTimeMillis() - startConnect
+                                    ProxyStats.updateLatency(rtt)
+                                    DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "", rtt)
                                 } catch (e: Exception) {
                                     val elapsed = System.currentTimeMillis() - startConnect
                                     val msg = e.message?.lowercase() ?: ""

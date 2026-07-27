@@ -11,6 +11,7 @@ object DnsCacheManager {
     
     private val dnsCache = ConcurrentHashMap<String, Pair<List<InetAddress>, Long>>()
     private val ipHeatmap = ConcurrentHashMap<String, Int>()
+    private val ipRtt = ConcurrentHashMap<String, Long>()
     
     private val poisonedIps = java.util.Collections.synchronizedSet(mutableSetOf(
         "127.0.0.1", "0.0.0.0", "10.10.10.10", "192.168.1.1", "1.2.3.4",
@@ -116,14 +117,19 @@ object DnsCacheManager {
         return null
     }
 
-    fun recordIpSuccess(ip: String) {
+    fun recordIpSuccess(ip: String, rtt: Long = 0) {
         val current = ipHeatmap.getOrDefault(ip, 50)
         ipHeatmap[ip] = (current + 5).coerceAtMost(100)
+        if (rtt > 0) {
+            val oldRtt = ipRtt.getOrDefault(ip, rtt)
+            ipRtt[ip] = (oldRtt * 0.7 + rtt * 0.3).toLong()
+        }
     }
 
     fun recordIpFailure(ip: String) {
         val current = ipHeatmap.getOrDefault(ip, 50)
         ipHeatmap[ip] = (current - 15).coerceAtLeast(0)
+        ipRtt[ip] = 5000L
     }
 
     private val negativeCache = ConcurrentHashMap<String, Long>()
@@ -146,6 +152,8 @@ object DnsCacheManager {
         val preferIpv6 = BypassConfig.preferIpv6
         return ips.sortedWith(compareByDescending<InetAddress> { 
             ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) 
+        }.thenBy {
+            ipRtt.getOrDefault(it.hostAddress ?: "", 200L)
         }.thenByDescending { 
             if (preferIpv6) it is Inet6Address else it !is Inet6Address
         }.thenBy { 
