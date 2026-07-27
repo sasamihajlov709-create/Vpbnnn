@@ -73,6 +73,7 @@ class PinkVpnService : VpnService() {
         super.onCreate()
         instance = this
         BypassConfig.activeVpnService = this
+        DnsCacheManager.load(this)
         BypassConfig.loadTuningSettings(this)
         loadFilterSettings(this)
         
@@ -432,6 +433,7 @@ class PinkVpnService : VpnService() {
     private fun stopVpn() {
         _isRunning.value = false
         VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
+        DnsCacheManager.save(this)
         stopTun2Socks()
         proxyServer?.stop()
         
@@ -464,6 +466,7 @@ class PinkVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        DnsCacheManager.save(this)
         stopVpn()
         try {
             networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }

@@ -43,6 +43,7 @@ object TcpTransportHandler {
                     val attempted = if (censorship > 70) resolved.size else minOf(resolved.size, 3)
                     val raceDelay = if (censorship > 70) 50L else 250L
                     val failures = java.util.concurrent.atomic.AtomicInteger(0)
+                    val nextSignal = kotlinx.coroutines.channels.Channel<Unit>(1)
                     
                     for (i in 0 until attempted) {
                         val ip = resolved[i]
@@ -51,7 +52,6 @@ object TcpTransportHandler {
                             try {
                                 vpnService?.protect(s)
                                 s.tcpNoDelay = true
-                                // Dynamic timeout based on RTT and Jitter
                                 val baseTimeout = (BypassConfig.currentRttMs.value * 3).coerceIn(1500, 7000)
                                 val jitter = ProxyStats.jitter.value
                                 val connectTimeout = (baseTimeout + jitter).toInt().coerceIn(2000, 10000)
@@ -63,6 +63,7 @@ object TcpTransportHandler {
                                     ProxyStats.updateLatency(rtt)
                                     DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "", rtt)
                                 } catch (e: Exception) {
+                                    nextSignal.trySend(Unit) // Start next racer immediately
                                     val elapsed = System.currentTimeMillis() - startConnect
                                     val msg = e.message?.lowercase() ?: ""
                                     DnsCacheManager.recordIpFailure(ip.hostAddress ?: "")
@@ -86,9 +87,10 @@ object TcpTransportHandler {
                             }
                         }
                         if (i < attempted - 1) {
-                            // Progressive race delay: prioritize top IPs
                             val dynamicDelay = if (censorship > 85) (raceDelay / 2) else (raceDelay + i * 100L)
-                            delay(dynamicDelay)
+                            withTimeoutOrNull(dynamicDelay) {
+                                nextSignal.receive()
+                            }
                         }
                     }
                     val winner = try {

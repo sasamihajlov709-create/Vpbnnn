@@ -194,6 +194,43 @@ object DnsCacheManager {
         return host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")) || host.contains(":")
     }
 
+    fun save(context: android.content.Context) {
+        try {
+            val prefs = context.getSharedPreferences("dns_metrics", android.content.Context.MODE_PRIVATE)
+            val editor = prefs.edit()
+            
+            // Serialize heatmap: ip|score;ip|score
+            val heatmapStr = ipHeatmap.entries.joinToString(";") { "${it.key}|${it.value}" }
+            editor.putString("ip_heatmap", heatmapStr)
+            
+            // Serialize RTT: ip|rtt;ip|rtt
+            val rttStr = ipRtt.entries.take(500).joinToString(";") { "${it.key}|${it.value}" }
+            editor.putString("ip_rtt", rttStr)
+            
+            editor.apply()
+        } catch (e: Exception) {}
+    }
+
+    fun load(context: android.content.Context) {
+        try {
+            val prefs = context.getSharedPreferences("dns_metrics", android.content.Context.MODE_PRIVATE)
+            
+            prefs.getString("ip_heatmap", "")?.split(";")?.forEach {
+                val parts = it.split("|")
+                if (parts.size == 2) {
+                    ipHeatmap[parts[0]] = parts[1].toIntOrNull() ?: 50
+                }
+            }
+            
+            prefs.getString("ip_rtt", "")?.split(";")?.forEach {
+                val parts = it.split("|")
+                if (parts.size == 2) {
+                    ipRtt[parts[0]] = parts[1].toLongOrNull() ?: 200L
+                }
+            }
+        } catch (e: Exception) {}
+    }
+
     fun clear() {
         dnsCache.clear()
         ipHeatmap.clear()

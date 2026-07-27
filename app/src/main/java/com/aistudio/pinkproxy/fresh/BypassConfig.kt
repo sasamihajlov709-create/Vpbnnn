@@ -248,6 +248,24 @@ object BypassConfig {
             val group = strategyGrouping.entries.find { it.value.contains(entry.key) }?.key
             if (group == preferredGroup) weight *= 2.5
             else if (group == StrategyGroup.EXTREME && level < 30) weight *= 0.2 // Don't over-engineer simple cases
+
+            // Category-specific weights
+            when (cat) {
+                HostCategory.STREAMING -> {
+                    if (entry.key.family == StrategyFamily.FRAGMENTATION) weight *= 1.5
+                    if (entry.key == BypassStrategy.WINDOW_SIZE) weight *= 2.0
+                }
+                HostCategory.MESSENGER -> {
+                    if (entry.key.family == StrategyFamily.UDP || entry.key == BypassStrategy.QUIC_INITIAL_FAKE) weight *= 1.8
+                }
+                HostCategory.SOCIAL -> {
+                    if (entry.key.family == StrategyFamily.TLS || entry.key.family == StrategyFamily.FRAGMENTATION) weight *= 1.6
+                }
+                HostCategory.AI -> {
+                    if (entry.key.family == StrategyFamily.TLS || entry.key == BypassStrategy.TLS_SNI_SKEW) weight *= 1.7
+                }
+                else -> {}
+            }
             
             val strat = entry.key
             // Adjust weight based on cost and risk according to network conditions
@@ -1608,11 +1626,6 @@ object BypassConfig {
             BypassStrategy.PROTOCOL_CONFUSION_HTTP -> {
                 val fake = FakePacketHelper.buildHttpHandshake()
                 writeWithFake(socket, output, fake, data, length, config)
-            }
-            BypassStrategy.TCP_ACK_DELAY -> {
-                delay(rnd.nextLong(100, 300))
-                output.write(data, 0, length)
-                output.flush()
             }
             BypassStrategy.TCP_TOS_MANGLE -> {
                 try { socket.trafficClass = 0x08 } catch (e: Exception) {}
