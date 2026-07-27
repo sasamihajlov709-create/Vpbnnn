@@ -180,25 +180,38 @@ object DnsProtocols {
     }
 
     suspend fun queryDohRacing(host: String, vpnService: VpnService?): List<InetAddress> {
-        return kotlinx.coroutines.withTimeoutOrNull(5000) {
+        return kotlinx.coroutines.withTimeoutOrNull(6000) {
             kotlinx.coroutines.supervisorScope {
-                val urls = DnsOptimizer.getDohUrls().shuffled().take(4)
+                val allUrls = DnsOptimizer.getDohUrls()
+                val urls = allUrls.shuffled().take(6)
                 val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(urls.size)
                 val jobs = mutableListOf<Job>()
                 
-                urls.forEach { url ->
+                urls.forEachIndexed { index, url ->
                     jobs += launch(Dispatchers.IO) {
+                        // Staggered racing: give top 2 providers a head start
+                        if (index >= 2) delay(150L * (index - 1))
                         val res = queryDoh(host, url, vpnService)
-                        if (res.isNotEmpty()) channel.trySend(res)
+                        if (res.isNotEmpty()) {
+                            channel.trySend(res)
+                            DnsOptimizer.recordDohSuccess(url)
+                        } else {
+                            DnsOptimizer.recordDohFailure(url)
+                        }
                     }
                 }
                 
-                val result = try {
+                var result = try {
                     channel.receive()
                 } catch (e: Exception) {
                     emptyList<InetAddress>()
                 } finally {
                     jobs.forEach { it.cancel() }
+                }
+                
+                // If the winner is empty (unlikely with receive()), try one more time from channel
+                if (result.isEmpty()) {
+                    result = channel.tryReceive().getOrNull() ?: emptyList()
                 }
                 result
             }

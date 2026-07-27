@@ -56,13 +56,15 @@ object TcpTransportHandler {
                                 val jitter = ProxyStats.jitter.value
                                 val connectTimeout = (baseTimeout + jitter).toInt().coerceIn(2000, 10000)
                                 
-                                val start = System.currentTimeMillis()
+                                val startConnect = System.currentTimeMillis()
                                 try {
                                     s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
-                                    ProxyStats.updateLatency(System.currentTimeMillis() - start)
+                                    ProxyStats.updateLatency(System.currentTimeMillis() - startConnect)
+                                    DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "")
                                 } catch (e: Exception) {
-                                    val elapsed = System.currentTimeMillis() - start
+                                    val elapsed = System.currentTimeMillis() - startConnect
                                     val msg = e.message?.lowercase() ?: ""
+                                    DnsCacheManager.recordIpFailure(ip.hostAddress ?: "")
                                     if (elapsed >= connectTimeout - 500) {
                                         BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.CONNECTION_TIMEOUT)
                                     } else if (msg.contains("reset")) {
@@ -82,7 +84,11 @@ object TcpTransportHandler {
                                 }
                             }
                         }
-                        if (i < attempted - 1) delay(raceDelay) // Staggered start
+                        if (i < attempted - 1) {
+                            // Progressive race delay: prioritize top IPs
+                            val dynamicDelay = if (censorship > 85) (raceDelay / 2) else (raceDelay + i * 100L)
+                            delay(dynamicDelay)
+                        }
                     }
                     val winner = try {
                         channel.receive()
@@ -154,16 +160,7 @@ object TcpTransportHandler {
                             if (n == -1) break
                             if (n > 0) {
                                 lastActivity = System.currentTimeMillis()
-                                // Downstream Fragmentation: Help against local downstream DPI
-                                if (ProxyStats.censorshipIntensity.value > 92 && n > 800) {
-                                    val part = n / 2
-                                    clientOut.write(buffer, 0, part)
-                                    clientOut.flush()
-                                    delay(1)
-                                    clientOut.write(buffer, part, n - part)
-                                } else {
-                                    clientOut.write(buffer, 0, n)
-                                }
+                                clientOut.write(buffer, 0, n)
                                 clientOut.flush()
                                 ProxyStats.updateBytes(n.toLong())
                                 if (ProxyStats.censorshipIntensity.value > 85) yield()
@@ -171,6 +168,9 @@ object TcpTransportHandler {
                         }
                     } catch (e: Exception) {
                         val msg = e.message?.lowercase() ?: ""
+                        if (System.currentTimeMillis() - start < 15000) {
+                            BypassConfig.recordFailure(strategy, targetHost)
+                        }
                         when {
                             msg.contains("reset") -> ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
                             msg.contains("timeout") -> ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
@@ -179,7 +179,6 @@ object TcpTransportHandler {
                     } finally {
                         if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Exception) {}
-                        try { clientSocket.close() } catch (e: Exception) {}
                     }
                 }
 
@@ -209,22 +208,33 @@ object TcpTransportHandler {
                                         throw e
                                     }
                                 } else {
-                                    if (ProxyStats.censorshipIntensity.value > 65 && n > 1100) {
-                                        val mid = n / 2
-                                        remoteOut.write(buffer, 0, mid)
-                                        remoteOut.flush()
-                                        delay(BypassConfig.currentRttMs.value / 25 + 1)
-                                        remoteOut.write(buffer, mid, n - mid)
+                                    val currentIntensity = ProxyStats.censorshipIntensity.value
+                                    if (currentIntensity > 65 && n > 1000) {
+                                        val fragCount = if (currentIntensity > 90) 3 else 2
+                                        val partSize = n / fragCount
+                                        for (i in 0 until fragCount) {
+                                            val offset = i * partSize
+                                            val len = if (i == fragCount - 1) n - offset else partSize
+                                            remoteOut.write(buffer, offset, len)
+                                            remoteOut.flush()
+                                            if (i < fragCount - 1) {
+                                                val d = (BypassConfig.currentRttMs.value / 30 + 1).coerceAtMost(30)
+                                                delay(d)
+                                            }
+                                        }
                                     } else {
                                         remoteOut.write(buffer, 0, n)
+                                        remoteOut.flush()
                                     }
-                                    remoteOut.flush()
                                 }
                                 ProxyStats.updateBytes(n.toLong())
                             }
                         }
                     } catch (e: Exception) {
                         BypassConfig.TrafficShaper.recordError()
+                        if (System.currentTimeMillis() - start < 15000) {
+                            BypassConfig.recordFailure(strategy, targetHost)
+                        }
                     } finally {
                         if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
                         try { remoteSocket?.shutdownOutput() } catch (e: Exception) {}
@@ -234,6 +244,12 @@ object TcpTransportHandler {
                 select<Unit> {
                     remoteToClient.onJoin {}
                     clientToRemote.onJoin {}
+                }
+                
+                // Allow up to 2 seconds for graceful termination of the other direction
+                withTimeoutOrNull(2000) {
+                    if (remoteToClient.isActive) remoteToClient.join()
+                    if (clientToRemote.isActive) clientToRemote.join()
                 }
                 
                 try { clientSocket.close() } catch(e: Exception) {}

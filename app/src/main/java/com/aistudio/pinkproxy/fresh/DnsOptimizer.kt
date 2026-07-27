@@ -11,16 +11,34 @@ object DnsOptimizer {
         "https://cloudflare-dns.com/dns-query",
         "https://dns.quad9.net/dns-query",
         "https://dns.adguard-dns.com/dns-query",
-        "https://doh.opendns.com/dns-query"
+        "https://doh.opendns.com/dns-query",
+        "https://doh.mullvad.net/dns-query",
+        "https://dns.nextdns.io/dns-query",
+        "https://dns.controld.com/dns-query",
+        "https://dns.google/dns-query?source=pink",
+        "https://1.1.1.1/dns-query"
     )
     
-    private val dotServers = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "94.140.14.14")
+    private val dotServers = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "94.140.14.14", "45.90.28.0")
 
     private val providerLatencies = ConcurrentHashMap<String, Long>()
+    private val providerFailures = ConcurrentHashMap<String, Int>()
     @Volatile var bestDohUrl = "https://dns.google/dns-query"
     @Volatile var bestDotServer = "8.8.8.8"
     
-    fun getDohUrls() = dohUrls
+    fun getDohUrls(): List<String> {
+        // Return sorted by performance
+        return dohUrls.sortedBy { (providerLatencies[it] ?: 500L) + (providerFailures[it] ?: 0) * 100L }
+    }
+    
+    fun recordDohSuccess(url: String) {
+        providerFailures[url] = (providerFailures[url] ?: 1) - 1
+        if (providerFailures[url]!! < 0) providerFailures[url] = 0
+    }
+    
+    fun recordDohFailure(url: String) {
+        providerFailures[url] = (providerFailures[url] ?: 0) + 1
+    }
     fun getDotServers() = dotServers
 
     private val criticalDomains = listOf(

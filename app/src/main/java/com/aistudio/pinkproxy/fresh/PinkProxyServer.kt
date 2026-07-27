@@ -13,17 +13,14 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.io.*
 class PinkProxyServer(private val vpnService: VpnService, private val port: Int) {
-    private var proxyDispatcher: ExecutorCoroutineDispatcher? = null
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
     
     fun start() {
         if (serverJob?.isActive == true) return
         
-        val dispatcher = Executors.newCachedThreadPool().asCoroutineDispatcher()
-        proxyDispatcher = dispatcher
         val parentJob = SupervisorJob()
-        val scope = CoroutineScope(dispatcher + parentJob)
+        val scope = CoroutineScope(Dispatchers.IO + parentJob)
         serverJob = parentJob
         
         ProxyStats.startSpeedMonitor(scope)
@@ -58,8 +55,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
         serverJob?.cancel()
         try { serverSocket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         serverSocket = null
-        proxyDispatcher?.close()
-        proxyDispatcher = null
     }
 
     private suspend fun readExactly(input: InputStream, buffer: ByteArray, offset: Int, length: Int) {

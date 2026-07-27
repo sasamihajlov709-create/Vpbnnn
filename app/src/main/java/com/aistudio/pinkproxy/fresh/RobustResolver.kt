@@ -106,7 +106,8 @@ object RobustResolver {
                 if (DnsCacheManager.isSuspicious(host, par)) {
                     ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
                 } else {
-                    DnsCacheManager.put(host, par)
+                    val sorted = DnsCacheManager.getSortedIps(par)
+                    DnsCacheManager.put(host, sorted)
                     
                     // Smart Prefetch common subdomains
                     if (!host.startsWith("www.") && host.split(".").size == 2) {
@@ -116,7 +117,7 @@ object RobustResolver {
                             }
                         }
                     }
-                    return par
+                    return sorted
                 }
             }
         } catch (e: Exception) {}
@@ -189,8 +190,14 @@ object RobustResolver {
         channel.close()
         
         if (result.isNotEmpty()) {
-            DnsCacheManager.put(host, result)
-            return@coroutineScope result
+            val sorted = DnsCacheManager.getSortedIps(result)
+            DnsCacheManager.put(host, sorted)
+            return@coroutineScope sorted
+        }
+        
+        ProxyStats.recordDnsFailure()
+        if (ProxyStats.dnsFailureCount.value > 5) {
+            RecoveryManager.handleEvent(RecoveryEvent.DNS_FAILURE, "Multiple sequential DNS failures")
         }
         
         throw java.net.UnknownHostException("Parallel resolution failed for $host")

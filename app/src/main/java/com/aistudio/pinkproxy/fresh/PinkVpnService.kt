@@ -111,6 +111,7 @@ class PinkVpnService : VpnService() {
                     s.close()
                 } catch (e: Exception) {
                     ProxyStats.logRecovery("Watchdog: Proxy port $PROXY_PORT is unreachable! Restarting proxy...")
+                    RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Port $PROXY_PORT dead")
                     proxyServer?.stop()
                     proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
                     proxyServer?.start()
@@ -368,7 +369,7 @@ class PinkVpnService : VpnService() {
             key.setDevice("fd://${vpnInterface.fd}")
             key.setLogLevel("info")
             engine.Engine.insert(key)
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            serviceScope.launch {
                 try {
                     engine.Engine.start()
                     Log.i("PinkVpnService", "tun2socks stopped naturally")

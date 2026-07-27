@@ -347,13 +347,13 @@ object UdpTransportHandler {
                 BypassStrategy.UDP_FRAGMENT_SKEW -> {
                     if (payload.size > 20) {
                         val p1 = payload.copyOfRange(0, 10)
-                        val p2 = payload.copyOfRange(10, payload.size)
-                        socket.send(DatagramPacket(p1, p1.size, targetInet, targetPort))
-                        delay(1)
-                        socket.send(DatagramPacket(p2, p2.size, targetInet, targetPort))
-                    } else {
-                        socket.send(outPacket)
+                        val fakePacket = DatagramPacket(p1, p1.size, targetInet, targetPort)
+                        TtlHelper.setUdpTtl(socket, 4, targetInet is java.net.Inet6Address)
+                        socket.send(fakePacket)
+                        delay(2)
                     }
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
+                    socket.send(outPacket)
                 }
                 BypassStrategy.UDP_STUTTER -> {
                     delay(ThreadLocalRandom.current().nextLong(1, 5))

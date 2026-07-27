@@ -155,6 +155,11 @@ object ProxyStats {
         logRecovery("Detected censorship type: $type")
     }
     
+    fun recordDnsFailure() {
+        _dnsFailureCount.update { it + 1 }
+        recordCensorshipEvent(true)
+    }
+    
     fun clearDpiType() {
         _currentDpiType.value = DpiType.NONE
     }
@@ -291,7 +296,14 @@ object ProxyStats {
                 _speedBytesPerSecond.value = speed
                 
                 _speedHistory.update { current ->
-                    (listOf(speed) + current).take(60)
+                    val newList = ArrayList<Long>(60)
+                    newList.add(speed)
+                    if (current.size > 59) {
+                        newList.addAll(current.subList(0, 59))
+                    } else {
+                        newList.addAll(current)
+                    }
+                    newList
                 }
                 
                 lastBytes = currentBytes
@@ -318,12 +330,13 @@ object ProxyStats {
 
     fun recordGlobalSuccess(rtt: Long) {
         if (rtt > 0) {
-             val lastRtt = _speedHistory.value.firstOrNull() ?: rtt
+             val lastRtt = _lastLatency.value
              val jitter = Math.abs(rtt - lastRtt)
-             val jitterPenalty = (jitter / 10).coerceAtMost(20)
-             _stabilityScore.update { (it * 0.95 + (100 - jitterPenalty) * 0.05).toInt().coerceIn(0, 100) }
+             val jitterPenalty = (jitter / 15).coerceAtMost(25)
+             _stabilityScore.update { (it * 0.97 + (100 - jitterPenalty) * 0.03).toInt().coerceIn(0, 100) }
+             updateLatency(rtt)
         }
-        _successRate.update { (it * 0.98 + 100 * 0.02).toInt().coerceIn(0, 100) }
+        _successRate.update { (it * 0.99 + 100 * 0.01).toInt().coerceIn(0, 100) }
     }
 
     fun logRecovery(msg: String) {
