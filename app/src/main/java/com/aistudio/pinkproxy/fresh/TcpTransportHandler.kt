@@ -140,6 +140,25 @@ object TcpTransportHandler {
             var lastActivity = System.currentTimeMillis()
 
             coroutineScope {
+                val inactivityJob = launch {
+                    while (isActive) {
+                        delay(30000)
+                        val now = System.currentTimeMillis()
+                        val idleTime = now - lastActivity
+                        // Adaptive idle timeout: tighter when system is under load or high censorship
+                        val maxIdle = when {
+                            ProxyStats.activeConnections.value > 50 -> 60000L
+                            ProxyStats.censorshipIntensity.value > 80 -> 120000L
+                            else -> 300000L // 5 minutes
+                        }
+                        if (idleTime > maxIdle) {
+                            Log.v("TcpTransport", "Reaping idle session: $targetHost (idle ${idleTime/1000}s)")
+                            this@coroutineScope.cancel("Idle timeout")
+                            break
+                        }
+                    }
+                }
+
                 // Keep-alive to prevent NAT/Firewall timeout with minimal noise
                 val keepAliveJob = launch {
                     val rnd = ThreadLocalRandom.current()

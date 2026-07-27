@@ -209,7 +209,8 @@ object DnsProtocols {
         return kotlinx.coroutines.withTimeoutOrNull(7000) {
             kotlinx.coroutines.supervisorScope {
                 val allUrls = DnsOptimizer.getDohUrls()
-                val urls = allUrls.shuffled().take(8) // More racing for better reliability
+                // Sort by latency, put high latency at the end. Use 5000 as default for unknown.
+                val urls = allUrls.sortedBy { DnsOptimizer.getLatencyForUrl(it) }.take(8)
                 val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(urls.size)
                 val jobs = mutableListOf<Job>()
                 val completed = java.util.concurrent.atomic.AtomicInteger(0)

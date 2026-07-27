@@ -346,13 +346,20 @@ class PinkVpnService : VpnService() {
     private fun startSessionWarmup() {
         serviceScope.launch {
             delay(5000)
-            val importantHosts = listOf("google.com", "telegram.org", "github.com", "dns.google", "cloudflare.com")
-            importantHosts.forEach { host ->
-                if (!_isRunning.value) return@launch
-                try {
-                    RobustResolver.resolve(host, this@PinkVpnService)
-                } catch (e: Exception) {}
-                delay(3000)
+            val importantHosts = listOf(
+                "google.com", "telegram.org", "github.com", "dns.google", "cloudflare.com",
+                "youtube.com", "googlevideo.com", "t.me", "chatgpt.com", "discord.com",
+                "instagram.com", "facebook.com", "twitter.com", "x.com", "netflix.com"
+            )
+            while (isActive && _isRunning.value) {
+                importantHosts.forEach { host ->
+                    if (!_isRunning.value) return@launch
+                    try {
+                        RobustResolver.resolve(host, this@PinkVpnService)
+                    } catch (e: Exception) {}
+                    delay(5000)
+                }
+                delay(300000) // Re-prefetch every 5 minutes
             }
         }
     }

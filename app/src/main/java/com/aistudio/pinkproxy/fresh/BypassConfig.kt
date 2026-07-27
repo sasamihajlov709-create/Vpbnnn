@@ -117,7 +117,31 @@ object BypassConfig {
             _currentNetworkType.value = type
             Log.i("BypassConfig", "Network type updated: $type. Clearing session memory.")
             hostStrategyMemory.clear() // Network changed, old strategies might not be optimal
+            circuitBreakers.clear()
         }
+    }
+
+    private val lastCleanup = AtomicLong(0)
+    private fun ensureMemoryEfficiency() {
+        val now = System.currentTimeMillis()
+        if (now - lastCleanup.get() < 60000L) return
+        lastCleanup.set(now)
+        
+        // Limit session memory size to prevent leaks
+        if (hostStrategyMemory.size > 2000) {
+            val sorted = hostStrategyMemory.entries.sortedBy { it.value.second }
+            val toRemove = sorted.take(500)
+            toRemove.forEach { hostStrategyMemory.remove(it.key) }
+        }
+        
+        // Clear old circuit breakers
+        circuitBreakers.entries.removeIf { now - it.value > BREAKER_TTL }
+        
+        // Clear old blacklist entries
+        hostBlacklist.forEach { (_, map) ->
+            map.entries.removeIf { now - it.value > BREAKER_TTL * 2 }
+        }
+        hostBlacklist.entries.removeIf { it.value.isEmpty() }
     }
 
     fun loadTuningSettings(context: Context) {
@@ -188,6 +212,7 @@ object BypassConfig {
     }
 
     fun getBestStrategyForHost(host: String): BypassStrategy {
+        ensureMemoryEfficiency()
         if (!isAutoTuning) return _strategy.value
         
         val now = System.currentTimeMillis()
@@ -580,6 +605,14 @@ object BypassConfig {
             }
             HostCategory.MESSENGER -> {
                 d1 = (d1 * 0.7).toLong().coerceAtLeast(5)
+            }
+            HostCategory.AI -> {
+                f1 = 1
+                d1 = (d1 * 1.2).toLong()
+            }
+            HostCategory.FINANCE -> {
+                f1 = (f1 * 2).coerceAtLeast(10)
+                d1 = (d1 * 0.8).toLong().coerceAtLeast(5)
             }
             HostCategory.AD -> {
                 // For ads, use a very heavy/slow strategy or just return a "cheap" one if we don't want to block

@@ -56,6 +56,10 @@ object DnsOptimizer {
         providerFailures[url] = (providerFailures[url] ?: 0) + 1
     }
     fun getDotServers() = dotServers
+    
+    fun getLatencyForUrl(url: String): Long {
+        return providerLatencies[url] ?: (400L + java.util.concurrent.ThreadLocalRandom.current().nextLong(0, 100))
+    }
 
     private val criticalDomains = listOf(
         "youtube.com", "googlevideo.com", "google.com", "t.me", "telegram.org",

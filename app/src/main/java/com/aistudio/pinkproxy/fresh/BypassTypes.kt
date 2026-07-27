@@ -413,8 +413,8 @@ object HostClassifier {
             h.contains("facebook") || h.contains("instagram") || h.contains("twitter") || h.contains("tiktok") || h.contains("linkedin") || h.contains("reddit") -> HostCategory.SOCIAL
             h.contains("whatsapp") || h.contains("telegram") || h.contains("discord") || h.contains("signal.org") || h.contains("slack") -> HostCategory.MESSENGER
             h.contains("google") || h.contains("bing") || h.contains("duckduckgo") || h.contains("yahoo") || h.contains("baidu") || h.contains("yandex") -> HostCategory.SEARCH
-            h.contains("openai") || h.contains("anthropic") || h.contains("mistral") || h.contains("perplexity") || h.contains("gemini") -> HostCategory.AI
-            h.contains("bank") || h.contains("crypto") || h.contains("binance") || h.contains("paypal") || h.contains("visa") || h.contains("stripe") -> HostCategory.FINANCE
+            h.contains("openai") || h.contains("anthropic") || h.contains("mistral") || h.contains("perplexity") || h.contains("gemini") || h.contains("chatgpt") || h.contains("claude") -> HostCategory.AI
+            h.contains("bank") || h.contains("crypto") || h.contains("binance") || h.contains("paypal") || h.contains("visa") || h.contains("stripe") || h.contains("wallet") || h.contains("coinbase") || h.contains("revolut") -> HostCategory.FINANCE
             h.contains("github") || h.contains("gitlab") || h.contains("npm") || h.contains("docker") || h.contains("stackoverflow") || h.contains("jetbrains") || h.contains("android") -> HostCategory.DEV
             h.contains("cloudflare") || h.contains("akamai") || h.contains("fastly") || h.contains("cloudfront") -> HostCategory.CDN
             h.contains("steam") || h.contains("epicgames") || h.contains("roblox") || h.contains("playstation") || h.contains("xbox") -> HostCategory.GAMING
