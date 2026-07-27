@@ -93,7 +93,9 @@ object RobustResolver {
                     DnsCacheManager.put(host, res)
                     return res
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
         }
 
         // 2. Try Smart Parallel Resolution (DoH, DoT, Shadow UDP)
@@ -115,14 +117,16 @@ object RobustResolver {
                     if (!host.startsWith("www.") && host.split(".").size == 2) {
                         (resolverScope ?: CoroutineScope(Dispatchers.IO)).launch {
                             listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
-                                try { performParallelResolution(prefix + host, vpnService) } catch (e: Exception) {}
+                                try { performParallelResolution(prefix + host, vpnService) } catch (e: Exception) { if (e is CancellationException) throw e }
                             }
                         }
                     }
                     return sorted
                 }
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
 
         // 3. Emergency Fallback
         DnsCacheManager.getEmergencyFallback(host)?.let {
@@ -139,7 +143,9 @@ object RobustResolver {
                     DnsCacheManager.put(host, res)
                     return res
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
         }
 
         DnsCacheManager.putNegative(host)

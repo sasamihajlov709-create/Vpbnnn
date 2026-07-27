@@ -515,6 +515,31 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                             }
                         }
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CompactActionButton("EXPORT DIAGNOSTICS", Modifier.fillMaxWidth()) {
+                        val report = StringBuilder().apply {
+                            appendLine("=== PinkProxy Diagnostic Report ===")
+                            appendLine("OS: Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
+                            appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+                            appendLine("Strategy: ${BypassConfig.strategy.value.name}")
+                            appendLine("Censorship Level: ${ProxyStats.censorshipIntensity.value}%")
+                            appendLine("Stability: ${ProxyStats.stabilityScore.value}%")
+                            appendLine("DNS Mode: ${RobustResolver.dnsMode}")
+                            appendLine("\n=== Recent Logs ===")
+                            recoveryLog.takeLast(20).forEach { appendLine(it) }
+                        }.toString()
+
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "PinkProxy Diagnostics")
+                            putExtra(Intent.EXTRA_TEXT, report)
+                        }
+                        try {
+                            context.startActivity(Intent.createChooser(shareIntent, "Share Diagnostics"))
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Could not open share sheet", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))

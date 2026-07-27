@@ -822,7 +822,7 @@ object BypassConfig {
             output.write(data, 0, length); output.flush(); return
         }
 
-        if (length <= 5) {
+        if (length <= 5 || TlsParser.isEchDetected(data, length)) {
             output.write(data, 0, length); output.flush(); return
         }
 
