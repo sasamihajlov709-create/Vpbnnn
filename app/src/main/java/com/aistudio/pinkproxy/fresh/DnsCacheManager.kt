@@ -206,6 +206,12 @@ object DnsCacheManager {
         })
     }
 
+    private val poisonedPrefixes = setOf(
+        "146.112.", "128.121.", "67.215.", "204.232.", "198.18.", 
+        "93.184.216.34", "104.239.213.7", "188.114.96.", "188.114.97.",
+        "188.114.98.", "188.114.99.", "37.228.114.", "8.254.218."
+    )
+
     fun isPoisoned(address: InetAddress, host: String): Boolean {
         val ip = address.hostAddress ?: return true
         if (poisonedIps.contains(ip)) {
@@ -221,11 +227,6 @@ object DnsCacheManager {
             if (address.isLinkLocalAddress || address.isSiteLocalAddress) return true
             if (ip.startsWith("10.") || ip.startsWith("127.") || ip.startsWith("0.")) return true
             
-            val poisonedPrefixes = listOf(
-                "146.112.", "128.121.", "67.215.", "204.232.", "198.18.", 
-                "93.184.216.34", "104.239.213.7", "188.114.96.", "188.114.97.",
-                "188.114.98.", "188.114.99.", "37.228.114.", "8.254.218."
-            )
             if (poisonedPrefixes.any { ip.startsWith(it) }) {
                 ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
                 return true
@@ -237,7 +238,13 @@ object DnsCacheManager {
     private val ipv4Regex = Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")
 
     fun isIpAddress(host: String): Boolean {
-        return ipv4Regex.matches(host) || host.contains(":")
+        if (host.isEmpty()) return false
+        val first = host[0]
+        return if (first.isDigit()) {
+            ipv4Regex.matches(host)
+        } else {
+            host.contains(":")
+        }
     }
 
     fun save(context: android.content.Context) {
@@ -245,7 +252,7 @@ object DnsCacheManager {
             val prefs = context.getSharedPreferences("dns_metrics", android.content.Context.MODE_PRIVATE)
             
             // Serialize heatmap: ip|score;ip|score
-            val heatmapStr = ipHeatmap.entries.joinToString(";") { "${it.key}|${it.value}" }
+            val heatmapStr = ipHeatmap.entries.take(1000).joinToString(";") { "${it.key}|${it.value}" }
             
             // Serialize RTT: ip|rtt;ip|rtt
             val rttStr = ipRtt.entries.take(500).joinToString(";") { "${it.key}|${it.value}" }

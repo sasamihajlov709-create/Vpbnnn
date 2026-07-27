@@ -77,34 +77,34 @@ object DnsPacketEngine {
         if (length < 12) return emptyList()
         val ips = mutableListOf<InetAddress>()
         try {
-            val dis = DataInputStream(ByteArrayInputStream(data, 0, length))
-            val id = dis.readUnsignedShort()
+            val bb = java.nio.ByteBuffer.wrap(data, 0, length)
+            val id = bb.short.toInt() and 0xFFFF
             if (expectedId != -1 && id != expectedId) return emptyList()
-            val flags = dis.readUnsignedShort()
-            val qCount = dis.readUnsignedShort()
-            val aCount = dis.readUnsignedShort()
-            dis.skipBytes(4) // Authority and Additional counts
+            val flags = bb.short.toInt() and 0xFFFF
+            val qCount = bb.short.toInt() and 0xFFFF
+            val aCount = bb.short.toInt() and 0xFFFF
+            bb.position(bb.position() + 4) // Skip Authority and Additional counts
             
             // Skip questions
             for (i in 0 until qCount) {
-                skipName(dis, data)
-                dis.skipBytes(4) // Type and Class
+                skipName(bb)
+                bb.position(bb.position() + 4) // Type and Class
             }
             
             // Parse answers
             for (i in 0 until aCount) {
-                skipName(dis, data)
-                val type = dis.readUnsignedShort()
-                dis.skipBytes(2) // Class
-                dis.skipBytes(4) // TTL
-                val rdLen = dis.readUnsignedShort()
-                val rData = ByteArray(rdLen)
-                dis.readFully(rData)
+                skipName(bb)
+                val type = bb.short.toInt() and 0xFFFF
+                bb.position(bb.position() + 2) // Class
+                bb.position(bb.position() + 4) // TTL
+                val rdLen = bb.short.toInt() and 0xFFFF
                 
-                if (type == 1 && rdLen == 4) { // A
+                if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
+                    val rData = ByteArray(rdLen)
+                    bb.get(rData)
                     ips.add(InetAddress.getByAddress(rData))
-                } else if (type == 28 && rdLen == 16) { // AAAA
-                    ips.add(InetAddress.getByAddress(rData))
+                } else {
+                    bb.position(bb.position() + rdLen)
                 }
             }
         } catch (e: Exception) {
@@ -113,15 +113,15 @@ object DnsPacketEngine {
         return ips
     }
 
-    private fun skipName(dis: DataInputStream, data: ByteArray) {
-        var b = dis.readUnsignedByte()
+    private fun skipName(bb: java.nio.ByteBuffer) {
+        var b = bb.get().toInt() and 0xFF
         while (b != 0) {
             if ((b and 0xC0) == 0xC0) { // Pointer
-                dis.skipBytes(1)
+                bb.get() // Skip the second byte of pointer
                 break
             } else {
-                dis.skipBytes(b)
-                b = dis.readUnsignedByte()
+                bb.position(bb.position() + b)
+                b = bb.get().toInt() and 0xFF
             }
         }
     }

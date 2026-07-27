@@ -143,7 +143,7 @@ enum class BypassStrategy(
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }
 
-enum class HostCategory { STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN, NEWS, GAMING, SHOPPING, DEV, OTHER }
+enum class HostCategory { STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN, NEWS, GAMING, SHOPPING, DEV, AD, OTHER }
 
 enum class DpiType {
     NONE,
@@ -419,6 +419,7 @@ object HostClassifier {
             h.contains("cloudflare") || h.contains("akamai") || h.contains("fastly") || h.contains("cloudfront") -> HostCategory.CDN
             h.contains("steam") || h.contains("epicgames") || h.contains("roblox") || h.contains("playstation") || h.contains("xbox") -> HostCategory.GAMING
             h.contains("amazon") || h.contains("ebay") || h.contains("aliexpress") || h.contains("shopify") -> HostCategory.SHOPPING
+            h.contains("ads.") || h.contains("doubleclick") || h.contains("adservice") || h.contains("analytics") || h.contains("telemetry") || h.contains("metrics") -> HostCategory.AD
             else -> HostCategory.OTHER
         }
     }

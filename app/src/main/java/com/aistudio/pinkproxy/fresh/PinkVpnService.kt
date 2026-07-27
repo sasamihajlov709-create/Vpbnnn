@@ -108,16 +108,22 @@ class PinkVpnService : VpnService() {
                 val dnsFailures = ProxyStats.dnsFailureCount.value
                 
                 // Local check if proxy is alive
-                try {
-                    val s = java.net.Socket()
-                    s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 2000)
-                    s.close()
-                } catch (e: Exception) {
-                    ProxyStats.logRecovery("Watchdog: Proxy port $PROXY_PORT is unreachable! Restarting proxy...")
-                    RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Port $PROXY_PORT dead")
-                    proxyServer?.stop()
+                if (proxyServer == null) {
+                    ProxyStats.logRecovery("Watchdog: Proxy server missing! Starting...")
                     proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
                     proxyServer?.start()
+                } else if (System.currentTimeMillis() % 120000 < 40000) {
+                    try {
+                        val s = java.net.Socket()
+                        s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1000)
+                        s.close()
+                    } catch (e: Exception) {
+                        ProxyStats.logRecovery("Watchdog: Proxy port $PROXY_PORT is unreachable! Restarting proxy...")
+                        RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Port $PROXY_PORT dead")
+                        proxyServer?.stop()
+                        proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
+                        proxyServer?.start()
+                    }
                 }
 
                 // DNS health check

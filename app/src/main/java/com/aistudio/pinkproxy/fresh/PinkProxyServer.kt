@@ -123,7 +123,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     if (len == -1) throw IOException("EOF")
                     val addr = ByteArray(len)
                     readExactly(input, addr, 0, len)
-                    String(addr)
+                    String(addr, java.nio.charset.StandardCharsets.UTF_8)
                 }
                 4 -> { // IPv6
                     val addr = ByteArray(16)

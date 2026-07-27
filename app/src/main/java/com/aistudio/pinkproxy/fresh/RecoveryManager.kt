@@ -33,9 +33,13 @@ object RecoveryManager {
                 
                 // Strategy Cooling: Periodically try to reduce escalation if things are stable
                 if (now - lastCoolDown > 300000) { // Every 5 minutes
-                    if (recoveryEscalation > 0 && ProxyStats.getSuccessRate() > 80) {
-                        recoveryEscalation--
-                        Log.i("RecoveryManager", "Strategy cooling: Escalation reduced to $recoveryEscalation")
+                    val rate = ProxyStats.getSuccessRate()
+                    if (recoveryEscalation > 0 && rate > 80) {
+                        // Double cool-down if rate is perfect
+                        val reduction = if (rate > 95) 2 else 1
+                        recoveryEscalation = (recoveryEscalation - reduction).coerceAtLeast(0)
+                        
+                        Log.i("RecoveryManager", "Strategy cooling: Escalation reduced by $reduction to $recoveryEscalation")
                         if (recoveryEscalation == 0) BypassConfig.setPanicMode(false)
                     }
                     lastCoolDown = now

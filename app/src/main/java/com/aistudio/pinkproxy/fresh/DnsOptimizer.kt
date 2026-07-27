@@ -26,7 +26,13 @@ object DnsOptimizer {
         "https://doh.powerdns.org",
         "https://doh.applied-privacy.net/query",
         "https://dns.google/resolve",
-        "https://dns11.quad9.net/dns-query"
+        "https://dns11.quad9.net/dns-query",
+        "https://doh.mullvad.net/dns-query",
+        "https://dns.google/dns-query?source=android",
+        "https://1.0.0.1/dns-query",
+        "https://doh.opendns.com/dns-query",
+        "https://doh.xfinity.com/dns-query",
+        "https://doh.ff.avast.com/dns-query"
     )
     
     private val dotServers = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "94.140.14.14", "45.90.28.0", "185.228.168.9", "76.76.2.0")
@@ -53,7 +59,9 @@ object DnsOptimizer {
 
     private val criticalDomains = listOf(
         "youtube.com", "googlevideo.com", "google.com", "t.me", "telegram.org",
-        "instagram.com", "twitter.com", "x.com", "discord.com", "chatgpt.com"
+        "instagram.com", "twitter.com", "x.com", "discord.com", "chatgpt.com",
+        "openai.com", "netflix.com", "facebook.com", "googleusercontent.com",
+        "gstatic.com", "googleapis.com", "apple.com", "icloud.com"
     )
 
     fun forceRefresh() {

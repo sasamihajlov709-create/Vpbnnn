@@ -193,6 +193,9 @@ object BypassConfig {
         val now = System.currentTimeMillis()
         val blacklisted = hostBlacklist[host]
         val cat = HostClassifier.classify(host)
+        
+        if (cat == HostCategory.AD) return BypassStrategy.TCP_RST_FAKE // Block ads
+
         val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
         
         val level = _censorshipLevel.value
@@ -578,11 +581,11 @@ object BypassConfig {
             HostCategory.MESSENGER -> {
                 d1 = (d1 * 0.7).toLong().coerceAtLeast(5)
             }
-            HostCategory.AI -> {
-                f1 = (f1 * 2).coerceAtMost(40)
-            }
-            HostCategory.FINANCE -> {
-                d1 = (d1 * 1.5).toLong()
+            HostCategory.AD -> {
+                // For ads, use a very heavy/slow strategy or just return a "cheap" one if we don't want to block
+                // Actually, let's make it easy to block ads by returning a strategy that we can handle specifically
+                f1 = 1
+                d1 = 200
             }
             else -> {}
         }
