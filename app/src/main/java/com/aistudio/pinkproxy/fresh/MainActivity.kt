@@ -378,6 +378,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                             connectivityScore = connectivityScore,
                             successRate = ProxyStats.successRate.collectAsStateWithLifecycle(100).value,
                             stabilityScore = stabilityScore,
+                            signalQuality = ProxyStats.signalQuality.collectAsStateWithLifecycle(100).value,
                             mtu = currentMtu,
                             isPanicMode = isPanicMode
                         )
@@ -721,7 +722,7 @@ fun SpeedGraph(history: List<Long>, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String, connectivityScore: Int, successRate: Int, stabilityScore: Int, mtu: Int, isPanicMode: Boolean) {
+fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String, connectivityScore: Int, successRate: Int, stabilityScore: Int, signalQuality: Int, mtu: Int, isPanicMode: Boolean) {
     Column(modifier = Modifier.padding(20.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MetricItem(stringResource(R.string.label_speed), speedText, GentleLightPink)
@@ -735,7 +736,7 @@ fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MetricItem(stringResource(R.string.label_health), "$connectivityScore%", if (connectivityScore > 70) Color(0xFF81C784) else Color(0xFFFFB74D))
             MetricItem(stringResource(R.string.label_stability), "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else if (stabilityScore > 50) Color(0xFFFFB74D) else Color(0xFFE57373))
-            MetricItem(stringResource(R.string.label_quality), "$successRate%", if (successRate > 70) Color(0xFF81C784) else Color(0xFFE57373))
+            MetricItem(stringResource(R.string.label_quality), "$signalQuality%", if (signalQuality > 70) Color(0xFF81C784) else Color(0xFFE57373))
             MetricItem(stringResource(R.string.label_mode), if (isPanicMode) stringResource(R.string.status_emergency) else stringResource(R.string.status_autopilot), if (isPanicMode) Color(0xFFE57373) else GentleMediumPink)
         }
     }

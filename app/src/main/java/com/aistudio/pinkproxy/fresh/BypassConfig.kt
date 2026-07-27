@@ -1998,11 +1998,21 @@ object BypassConfig {
                      applyBypass(socket, output, data, length, config.copy(strategy = s1), host)
                 }
             }
-            BypassStrategy.UDP_GHOST_SKEW, BypassStrategy.UDP_FRAGMENT_SKEW, BypassStrategy.UDP_STUTTER -> {
-                // These are primarily for UDP handler, but if called here we do a simple desync
-                val split = length / 2
-                output.write(data, 0, split); output.flush(); delay(rnd.nextLong(5, 15))
-                output.write(data, split, length - split); output.flush()
+            BypassStrategy.TLS_CLIENT_HELLO_GREASE_RANDOM -> {
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val mangled = data.copyOf()
+                    // Randomize GREASE values in ClientHello if found (heuristic)
+                    for (i in 44 until length - 2) {
+                        if (mangled[i] == mangled[i+1] && (mangled[i].toInt() and 0x0F) == 0x0A) {
+                             mangled[i] = rnd.nextInt(256).toByte()
+                             mangled[i+1] = rnd.nextInt(256).toByte()
+                        }
+                    }
+                    output.write(mangled); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.DIRECT -> {
+                output.write(data, 0, length); output.flush()
             }
             else -> {
                 val split = 1; output.write(data, 0, split); output.flush(); delay(5)

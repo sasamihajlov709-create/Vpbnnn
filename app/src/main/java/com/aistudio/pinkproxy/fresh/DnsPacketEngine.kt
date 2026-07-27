@@ -53,11 +53,23 @@ object DnsPacketEngine {
         dos.writeByte(0) // EDNS version
         dos.writeShort(0) // Z (flags)
         
-        // RDLEN
+        // RDLEN calculation with padding
         val ecsOption = buildEcsOption()
-        dos.writeShort(ecsOption.size)
+        val paddingSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(16, 64)
+        val paddingOption = buildPaddingOption(paddingSize)
+        dos.writeShort(ecsOption.size + paddingOption.size)
         dos.write(ecsOption)
+        dos.write(paddingOption)
         
+        return bos.toByteArray()
+    }
+
+    private fun buildPaddingOption(size: Int): ByteArray {
+        val bos = ByteArrayOutputStream()
+        val dos = java.io.DataOutputStream(bos)
+        dos.writeShort(12) // Option Code: Padding
+        dos.writeShort(size) // Option Length
+        dos.write(ByteArray(size)) // Null padding
         return bos.toByteArray()
     }
 

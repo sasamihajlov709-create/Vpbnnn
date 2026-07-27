@@ -141,6 +141,7 @@ enum class BypassStrategy(
     UDP_ZERO_LEN_SKEW(StrategyFamily.UDP, 2, 1, StrategyGroup.LIGHT),
     TCP_WINDOW_SIZE_CHAOS(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_MSS_CLUMPING(StrategyFamily.TCP, 3, 2, StrategyGroup.HEAVY),
+    TLS_CLIENT_HELLO_GREASE_RANDOM(StrategyFamily.TLS, 2, 2, StrategyGroup.LIGHT),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -323,8 +324,17 @@ object ProxyStats {
     fun startSpeedMonitor(scope: CoroutineScope) {
         scope.launch {
             var lastBytes = rawBytesTransferred.get()
+            var lastCleanup = System.currentTimeMillis()
             while (isActive) {
                 delay(1000)
+                val now = System.currentTimeMillis()
+                
+                if (now - lastCleanup > 300000) { // Every 5 minutes
+                    DnsCacheManager.ageHeatmap()
+                    DnsCacheManager.clearExpired()
+                    lastCleanup = now
+                }
+
                 val currentBytes = rawBytesTransferred.get()
                 _bytesTransferred.value = currentBytes
                 val speed = (currentBytes - lastBytes).coerceAtLeast(0)

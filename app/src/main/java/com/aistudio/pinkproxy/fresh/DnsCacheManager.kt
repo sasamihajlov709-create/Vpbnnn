@@ -151,18 +151,32 @@ object DnsCacheManager {
 
     fun recordIpFailure(ip: String) {
         val current = ipHeatmap.getOrDefault(ip, 50)
-        val newVal = (current - 15).coerceAtLeast(0)
+        val penalty = if (ProxyStats.censorshipIntensity.value > 70) 25 else 15
+        val newVal = (current - penalty).coerceAtLeast(0)
         ipHeatmap[ip] = newVal
-        ipRtt[ip] = 5000L
+        ipRtt[ip] = (ipRtt.getOrDefault(ip, 1000L) * 1.5).toLong().coerceAtMost(10000L)
         
         if (newVal == 0 && isPoisonable(ip)) {
             val count = suspectedPoisonedIps.getOrDefault(ip, 0) + 1
             suspectedPoisonedIps[ip] = count
-            if (count >= 5) {
+            if (count >= 3) { // Faster marking when really failing
                 poisonedIps.add(ip)
                 ProxyStats.logRecovery("Dynamic Detection: Marked $ip as poisoned")
             }
         }
+    }
+
+    fun ageHeatmap() {
+        val keys = ipHeatmap.keys()
+        while (keys.hasMoreElements()) {
+            val key = keys.nextElement()
+            val score = ipHeatmap[key] ?: continue
+            if (score < 100) {
+                 ipHeatmap[key] = (score * 0.98).toInt()
+            }
+        }
+        // Cleanup near-zero entries
+        ipHeatmap.entries.removeIf { it.value < 5 }
     }
 
     private fun isPoisonable(ip: String): Boolean {
