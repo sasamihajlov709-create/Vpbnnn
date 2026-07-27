@@ -123,9 +123,17 @@ object DnsCacheManager {
     fun recordIpSuccess(ip: String, rtt: Long = 0) {
         val current = ipHeatmap.getOrDefault(ip, 50)
         ipHeatmap[ip] = (current + 5).coerceAtMost(100)
+        if (ipHeatmap.size > 2000) {
+            val lowest = ipHeatmap.entries.minByOrNull { it.value }
+            if (lowest != null) ipHeatmap.remove(lowest.key)
+        }
         if (rtt > 0) {
             val oldRtt = ipRtt.getOrDefault(ip, rtt)
             ipRtt[ip] = (oldRtt * 0.7 + rtt * 0.3).toLong()
+            if (ipRtt.size > 2000) {
+                val highest = ipRtt.entries.maxByOrNull { it.value }
+                if (highest != null) ipRtt.remove(highest.key)
+            }
         }
         
         // Propagate success to same-IP domains
@@ -150,6 +158,10 @@ object DnsCacheManager {
 
     fun putNegative(host: String) {
         negativeCache[host] = System.currentTimeMillis()
+        if (negativeCache.size > MAX_DNS_CACHE_SIZE) {
+            val oldest = negativeCache.entries.minByOrNull { it.value }
+            if (oldest != null) negativeCache.remove(oldest.key)
+        }
     }
 
     fun isNegative(host: String): Boolean {

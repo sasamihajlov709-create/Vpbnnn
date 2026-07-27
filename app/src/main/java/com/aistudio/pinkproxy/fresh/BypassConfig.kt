@@ -22,7 +22,11 @@ object BypassConfig {
     private val USER_AGENT_REGEX = Regex("User-Agent:.*?\r\n", RegexOption.IGNORE_CASE)
     private val CRLF_BYTES = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte())
     private val END_CHUNK_BYTES = byteArrayOf('0'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
-    private val CHUNK_HEADERS = Array(10) { "${it.toString(16)}\r\n".toByteArray() }
+    private val CHUNK_HEADERS = Array(4097) { "${it.toString(16)}\r\n".toByteArray() }
+    
+    private val FAKE_AUTH_HEADER = "Authorization: Basic ZmFrZTpmYWtl\r\n".toByteArray()
+    private val FAKE_RANGE_HEADER = "Range: bytes=0-\r\n".toByteArray()
+    private val SPOOFED_USER_AGENT = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n".toByteArray()
 
     private val HTTP2_PREAMBLE = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
 
@@ -810,6 +814,16 @@ object BypassConfig {
                c == 'O'.code.toByte() || c == 'C'.code.toByte() || c == 'D'.code.toByte() || c == 'T'.code.toByte()
     }
 
+    private fun findHeaderEnd(data: ByteArray, length: Int): Int {
+        for (i in 0..length - 4) {
+            if (data[i] == '\r'.code.toByte() && data[i+1] == '\n'.code.toByte() &&
+                data[i+2] == '\r'.code.toByte() && data[i+3] == '\n'.code.toByte()) {
+                return i + 4
+            }
+        }
+        return -1
+    }
+
     private fun containsHostHeader(data: ByteArray, length: Int): Boolean {
         if (!isProbableHttp(data, length)) return false
         for (i in 0..length - 5) {
@@ -823,6 +837,24 @@ object BypassConfig {
             }
         }
         return false
+    }
+
+    private fun injectHeaderAfterFirstLine(data: ByteArray, length: Int, header: ByteArray, output: java.io.OutputStream) {
+        var firstCrLf = -1
+        for (i in 0..length - 2) {
+            if (data[i] == '\r'.code.toByte() && data[i+1] == '\n'.code.toByte()) {
+                firstCrLf = i
+                break
+            }
+        }
+        if (firstCrLf != -1) {
+            output.write(data, 0, firstCrLf + 2)
+            output.write(header)
+            output.write(data, firstCrLf + 2, length - (firstCrLf + 2))
+        } else {
+            output.write(data, 0, length)
+        }
+        output.flush()
     }
 
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) {
@@ -917,9 +949,15 @@ object BypassConfig {
             }
             BypassStrategy.FRAGMENT_MULTI -> {
                 var pos = 0
+                var isFirstPart = true
                 while (pos < length) {
-                    val size = (config.frag3 + rnd.nextInt(-1, 2)).coerceIn(1, 10).coerceAtMost(length - pos)
-                    output.write(data, pos, size); output.flush(); pos += size; if (pos < length) delay(rnd.nextLong(1, 15))
+                    val baseSize = if (isFirstPart && pos < 500) config.frag3 else 1024
+                    val size = (baseSize + rnd.nextInt(-1, 2)).coerceIn(1, 4096).coerceAtMost(length - pos)
+                    output.write(data, pos, size)
+                    output.flush()
+                    pos += size
+                    if (isFirstPart && pos > 500) isFirstPart = false
+                    if (isFirstPart && pos < length) delay(rnd.nextLong(1, 5))
                 }
             }
             BypassStrategy.TLS_DIRTY -> {
@@ -935,9 +973,18 @@ object BypassConfig {
                 output.write(pad); output.flush()
             }
             BypassStrategy.SLOW_SEND -> {
-                for (i in 0 until length) {
-                    output.write(data[i].toInt()); output.flush()
-                    if (i < length - 1) delay(rnd.nextLong(1, 5))
+                var pos = 0
+                val limit = 500.coerceAtMost(length)
+                while (pos < limit) {
+                    val size = rnd.nextInt(1, 5).coerceAtMost(limit - pos)
+                    output.write(data, pos, size)
+                    output.flush()
+                    pos += size
+                    delay(config.delay1)
+                }
+                if (length > limit) {
+                    output.write(data, limit, length - limit)
+                    output.flush()
                 }
             }
             BypassStrategy.SNI_MANGLE -> {
@@ -988,9 +1035,16 @@ object BypassConfig {
                 if (!containsHostHeader(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length)
-                    val modified = s.replace("Host:", "Host:  ", ignoreCase = true)
-                    output.write(modified.toByteArray()); output.flush()
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val s = String(data, 0, headerEnd)
+                        val modified = s.replace("Host:", "Host:  ", ignoreCase = true)
+                        output.write(modified.toByteArray())
+                        output.write(data, headerEnd, length - headerEnd)
+                        output.flush()
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
                 }
             }
             BypassStrategy.HTTP_VERSION_SKEW -> {
@@ -1033,48 +1087,56 @@ object BypassConfig {
                 if (!isProbableHttp(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length)
-                    if (s.contains("HTTP/")) {
-                        val fakeAuth = "Authorization: Basic ZmFrZTpmYWtl\r\n"
-                        val modified = s.replaceFirst("\r\n", "\r\n$fakeAuth")
-                        output.write(modified.toByteArray()); output.flush()
-                    } else { output.write(data, 0, length); output.flush() }
+                    injectHeaderAfterFirstLine(data, length, FAKE_AUTH_HEADER, output)
                 }
             }
             BypassStrategy.HTTP_HEADER_FUZZING -> {
                 if (!isProbableHttp(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length)
-                    if (s.contains("HTTP/")) {
-                        val junkHeader = "X-Fuzz-Value: ${java.util.UUID.randomUUID()}\r\n"
-                        val modified = s.replaceFirst("\r\n", "\r\n$junkHeader")
-                        output.write(modified.toByteArray()); output.flush()
-                    } else { output.write(data, 0, length); output.flush() }
+                    val junkHeader = "X-Fuzz-Value: ${java.util.UUID.randomUUID()}\r\n".toByteArray()
+                    injectHeaderAfterFirstLine(data, length, junkHeader, output)
                 }
             }
             BypassStrategy.HTTP_METHOD_FAKE -> {
-                if (length > 5 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
-                    val raw = String(data, 0, length)
-                    val mod = when {
-                        raw.startsWith("GET ") -> "gEt " + raw.substring(4)
-                        raw.startsWith("POST ") -> "pOsT " + raw.substring(5)
-                        raw.startsWith("HEAD ") -> "hEaD " + raw.substring(5)
-                        else -> raw
+                if (length > 5) {
+                    if (data[0] == 'G'.code.toByte() && data[1] == 'E'.code.toByte() && data[2] == 'T'.code.toByte()) {
+                        data[0] = 'g'.code.toByte()
+                        data[1] = 'E'.code.toByte()
+                        data[2] = 't'.code.toByte()
+                    } else if (data[0] == 'P'.code.toByte() && data[1] == 'O'.code.toByte() && data[2] == 'S'.code.toByte() && data[3] == 'T'.code.toByte()) {
+                        data[0] = 'p'.code.toByte()
+                        data[1] = 'O'.code.toByte()
+                        data[2] = 's'.code.toByte()
+                        data[3] = 'T'.code.toByte()
+                    } else if (data[0] == 'H'.code.toByte() && data[1] == 'E'.code.toByte() && data[2] == 'A'.code.toByte() && data[3] == 'D'.code.toByte()) {
+                        data[0] = 'h'.code.toByte()
+                        data[1] = 'E'.code.toByte()
+                        data[2] = 'a'.code.toByte()
+                        data[3] = 'D'.code.toByte()
                     }
-                    output.write(mod.toByteArray())
-                } else { output.write(data, 0, length) }
+                }
+                output.write(data, 0, length)
                 output.flush()
             }
             BypassStrategy.HTTP_USER_AGENT_SKEW -> {
                 if (!isProbableHttp(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length)
-                    if (s.contains("User-Agent:", ignoreCase = true)) {
-                        val modified = s.replace(USER_AGENT_REGEX, "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n")
-                        output.write(modified.toByteArray()); output.flush()
-                    } else { output.write(data, 0, length); output.flush() }
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val s = String(data, 0, headerEnd)
+                        if (s.contains("User-Agent:", ignoreCase = true)) {
+                            val modified = s.replace(USER_AGENT_REGEX, "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n")
+                            output.write(modified.toByteArray())
+                            output.write(data, headerEnd, length - headerEnd)
+                            output.flush()
+                        } else {
+                            output.write(data, 0, length); output.flush()
+                        }
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
                 }
             }
             BypassStrategy.OOB_DESYNC -> {
@@ -1094,12 +1156,7 @@ object BypassConfig {
                 if (!isProbableHttp(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length)
-                    if (s.startsWith("GET ") || s.startsWith("POST ")) {
-                        val fakeRange = "Range: bytes=0-\r\n"
-                        val modified = s.replaceFirst("\r\n", "\r\n$fakeRange")
-                        output.write(modified.toByteArray()); output.flush()
-                    } else { output.write(data, 0, length); output.flush() }
+                    injectHeaderAfterFirstLine(data, length, FAKE_RANGE_HEADER, output)
                 }
             }
             BypassStrategy.TLS_REHANDSHAKE_FAKE -> {
@@ -1226,11 +1283,18 @@ object BypassConfig {
                 if (!containsHostHeader(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length)
-                    val mod = s.replace("Host: ", "hOsT: ")
-                        .replace("host: ", "Host: ")
-                        .replace("Connection: ", "connecTION: ")
-                    output.write(mod.toByteArray()); output.flush()
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val s = String(data, 0, headerEnd)
+                        val mod = s.replace("Host: ", "hOsT: ")
+                            .replace("host: ", "Host: ")
+                            .replace("Connection: ", "connecTION: ")
+                        output.write(mod.toByteArray())
+                        output.write(data, headerEnd, length - headerEnd)
+                        output.flush()
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
                 }
             }
             BypassStrategy.TLS_SESSION_TICKET_SKEW -> {
@@ -1260,28 +1324,33 @@ object BypassConfig {
                 }
                 
                 if (foundHttp != -1) {
-                    val s = String(data, 0, length)
-                    val mod = s.replace("HTTP/1.1\r\n", "HTTP/1.1\r\nTransfer-Encoding: chunked\r\n")
-                    val headerEnd = mod.indexOf("\r\n\r\n")
-                    if (headerEnd != -1) {
-                        val header = mod.substring(0, headerEnd + 4)
-                        val originalHeaderEnd = s.indexOf("\r\n\r\n")
-                        val body = if (originalHeaderEnd != -1) data.copyOfRange(originalHeaderEnd + 4, length) else ByteArray(0)
-                        output.write(header.toByteArray()); output.flush()
+                    val originalHeaderEnd = findHeaderEnd(data, length)
+                    if (originalHeaderEnd != -1) {
+                        val s = String(data, 0, originalHeaderEnd)
+                        val mod = s.replace("HTTP/1.1\r\n", "HTTP/1.1\r\nTransfer-Encoding: chunked\r\n")
+                        val body = data.copyOfRange(originalHeaderEnd, length)
+                        output.write(mod.toByteArray()); output.flush()
                         
                         var pos = 0
+                        var isFirstChunks = true
                         while (pos < body.size) {
-                            val chunkSize = rnd.nextInt(1, 10).coerceAtMost(body.size - pos)
+                            val maxChunk = if (isFirstChunks && pos < 1000) 10 else 1024
+                            val minChunk = if (isFirstChunks && pos < 1000) 1 else 256
+                            val chunkSize = rnd.nextInt(minChunk, maxChunk + 1).coerceAtMost(body.size - pos)
+                            
                             output.write(CHUNK_HEADERS[chunkSize])
+                            
                             output.write(body, pos, chunkSize)
                             output.write(CRLF_BYTES)
                             output.flush()
+                            
                             pos += chunkSize
-                            delay(rnd.nextLong(1, 5))
+                            if (isFirstChunks && pos > 1000) isFirstChunks = false
+                            if (isFirstChunks) delay(rnd.nextLong(1, 4))
                         }
                         output.write(END_CHUNK_BYTES); output.flush()
                     } else {
-                        output.write(mod.toByteArray()); output.flush(); delay(10); output.write(END_CHUNK_BYTES); output.flush()
+                        output.write(data, 0, length); output.flush()
                     }
                 } else { output.write(data, 0, length); output.flush() }
             }
@@ -1443,16 +1512,27 @@ object BypassConfig {
                 if (!containsHostHeader(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length)
-                    if (s.contains("Host:", ignoreCase = true)) {
-                        val lines = s.split("\r\n").toMutableList()
-                        val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
-                        if (hostIdx != -1 && hostIdx < lines.size - 2) {
-                            val hostLine = lines.removeAt(hostIdx)
-                            lines.add(1, hostLine) // Move host to 2nd line
-                            output.write(lines.joinToString("\r\n").toByteArray()); output.flush()
-                        } else { output.write(data, 0, length); output.flush() }
-                    } else { output.write(data, 0, length); output.flush() }
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val s = String(data, 0, headerEnd)
+                        if (s.contains("Host:", ignoreCase = true)) {
+                            val lines = s.split("\r\n").toMutableList()
+                            val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                            if (hostIdx != -1 && hostIdx < lines.size - 2) {
+                                val hostLine = lines.removeAt(hostIdx)
+                                lines.add(1, hostLine) // Move host to 2nd line
+                                output.write(lines.joinToString("\r\n").toByteArray())
+                                output.write(data, headerEnd, length - headerEnd)
+                                output.flush()
+                            } else {
+                                output.write(data, 0, length); output.flush()
+                            }
+                        } else {
+                            output.write(data, 0, length); output.flush()
+                        }
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
                 }
             }
             BypassStrategy.TCP_WINDOW_SIZE_SKEW -> {
@@ -1578,17 +1658,27 @@ object BypassConfig {
                 if (!containsHostHeader(data, length)) {
                     output.write(data, 0, length); output.flush()
                 } else {
-                    val s = String(data, 0, length, Charsets.US_ASCII)
-                    if (s.contains("Host:", ignoreCase = true)) {
-                        val lines = s.split("\r\n").toMutableList()
-                        val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
-                        if (hostIdx != -1) {
-                            lines.add(hostIdx, "Host: www.google.com")
-                            val smuggled = lines.joinToString("\r\n")
-                            output.write(smuggled.toByteArray(Charsets.US_ASCII))
-                            output.flush()
-                        } else { output.write(data, 0, length); output.flush() }
-                    } else { output.write(data, 0, length); output.flush() }
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val s = String(data, 0, headerEnd, Charsets.US_ASCII)
+                        if (s.contains("Host:", ignoreCase = true)) {
+                            val lines = s.split("\r\n").toMutableList()
+                            val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                            if (hostIdx != -1) {
+                                lines.add(hostIdx, "Host: www.google.com")
+                                val smuggled = lines.joinToString("\r\n")
+                                output.write(smuggled.toByteArray(Charsets.US_ASCII))
+                                output.write(data, headerEnd, length - headerEnd)
+                                output.flush()
+                            } else {
+                                output.write(data, 0, length); output.flush()
+                            }
+                        } else {
+                            output.write(data, 0, length); output.flush()
+                        }
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
                 }
             }
             BypassStrategy.TCP_SACK_PANIC -> {

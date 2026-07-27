@@ -208,6 +208,12 @@ object ProxyStats {
 
     private val _bytesTransferred = MutableStateFlow(0L)
     val bytesTransferred: StateFlow<Long> = _bytesTransferred.asStateFlow()
+    
+    private val rawBytesTransferred = AtomicLong(0)
+    
+    fun updateBytes(delta: Long) {
+        rawBytesTransferred.addAndGet(delta)
+    }
 
     private val _activeConnections = MutableStateFlow(0)
     val activeConnections: StateFlow<Int> = _activeConnections.asStateFlow()
@@ -293,6 +299,7 @@ object ProxyStats {
     }
     
     fun reset(clearLog: Boolean) {
+        rawBytesTransferred.set(0)
         _bytesTransferred.value = 0
         _errors.value = 0
         _speedHistory.value = emptyList()
@@ -312,10 +319,11 @@ object ProxyStats {
 
     fun startSpeedMonitor(scope: CoroutineScope) {
         scope.launch {
-            var lastBytes = _bytesTransferred.value
+            var lastBytes = rawBytesTransferred.get()
             while (isActive) {
                 delay(1000)
-                val currentBytes = _bytesTransferred.value
+                val currentBytes = rawBytesTransferred.get()
+                _bytesTransferred.value = currentBytes
                 val speed = (currentBytes - lastBytes).coerceAtLeast(0)
                 _speedBytesPerSecond.value = speed
                 
@@ -384,10 +392,6 @@ object ProxyStats {
             }
             hosts.sortedByDescending { it.second }.take(10)
         }
-    }
-
-    fun updateBytes(delta: Long) {
-        _bytesTransferred.update { it + delta }
     }
 
     fun updateConnections(delta: Int) {

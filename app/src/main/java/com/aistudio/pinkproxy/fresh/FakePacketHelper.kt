@@ -1065,14 +1065,18 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    private val CACHED_SSH_HANDSHAKE = "SSH-2.0-OpenSSH_9.7p1 Ubuntu-1ubuntu3\r\n".toByteArray()
+    
     fun buildSshHandshake(): ByteArray {
-        return "SSH-2.0-OpenSSH_9.7p1 Ubuntu-1ubuntu3\r\n".toByteArray()
+        return CACHED_SSH_HANDSHAKE
     }
+
+    private val BITTORRENT_HEADER = "BitTorrent protocol".toByteArray()
 
     fun buildBitTorrentHandshake(): ByteArray {
         val baos = ByteArrayOutputStream()
         baos.write(19) // pstrlen
-        baos.write("BitTorrent protocol".toByteArray())
+        baos.write(BITTORRENT_HEADER)
         baos.write(ByteArray(8) { 0 }) // reserved
         val peerId = ByteArray(20)
         ThreadLocalRandom.current().nextBytes(peerId)
@@ -1083,8 +1087,10 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    private val CACHED_HTTP_HANDSHAKE = "GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray()
+
     fun buildHttpHandshake(): ByteArray {
-        return "GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray()
+        return CACHED_HTTP_HANDSHAKE
     }
     
     fun buildTelegramFake(): ByteArray {
