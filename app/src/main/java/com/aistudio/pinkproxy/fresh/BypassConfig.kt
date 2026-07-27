@@ -979,48 +979,56 @@ object BypassConfig {
             }
             BypassStrategy.TCP_REORDER_CHAOS -> {
                 val p1 = length / 3; val p2 = 2 * length / 3
-                output.write(data, p2, length - p2); output.flush(); delay(10)
-                output.write(data, p1, p2 - p1); output.flush(); delay(10)
-                output.write(data, 0, p1); output.flush()
+                output.write(data, 0, p1); output.flush(); delay(rnd.nextLong(20, 50))
+                output.write(data, p1, p2 - p1); output.flush(); delay(rnd.nextLong(20, 50))
+                output.write(data, p2, length - p2); output.flush()
             }
             BypassStrategy.TLS_LEGACY_HELLOS -> {
                 val hello = FakePacketHelper.buildFakeClientHello(host, 60)
                 if (hello.size > 10) { hello[1] = 0x03; hello[2] = 0x01; hello[9] = 0x03; hello[10] = 0x01 }
-                output.write(hello); output.flush()
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(hello); output.flush()
+                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TCP_KEEP_ALIVE_FAKE -> {
                 output.write(data, 0, length); output.flush()
-                repeat(3) { delay(30); output.write(byteArrayOf(0x00)); output.flush() }
+                repeat(3) { delay(30); try { socket.sendUrgentData(0x00) } catch (e: Exception) {} }
             }
             BypassStrategy.HTTP_HOST_CASE_MANGLE -> {
-                val s = String(data, 0, length)
-                val mod = s.replace("Host: ", "hOsT: ")
-                    .replace("host: ", "Host: ")
-                    .replace("Connection: ", "connecTION: ")
-                output.write(mod.toByteArray()); output.flush()
+                if (length > 4 && data[0].toInt() != 0x16) {
+                    val s = String(data, 0, length)
+                    val mod = s.replace("Host: ", "hOsT: ")
+                        .replace("host: ", "Host: ")
+                        .replace("Connection: ", "connecTION: ")
+                    output.write(mod.toByteArray()); output.flush()
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
             }
             BypassStrategy.TLS_SESSION_TICKET_SKEW -> {
                 val hello = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(100, 200))
-                output.write(hello); output.flush(); delay(config.delay1)
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(hello); output.flush(); delay(config.delay1)
                 output.write(byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x20) + ByteArray(32) { 0x00.toByte() }); output.flush()
+                delay(config.delay2); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_MULTI_SNI -> {
                 val hello = FakePacketHelper.buildMultiSniHello(host)
-                output.write(hello); output.flush(); delay(config.delay1); output.write(data, 0, length); output.flush()
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(hello); output.flush(); delay(config.delay1)
+                TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP2_PREAMBLE_FAKE -> {
                 val preamble = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-                output.write(preamble.toByteArray()); output.flush(); delay(10)
-                output.write(data, 0, length); output.flush()
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(preamble.toByteArray()); output.flush(); delay(10)
+                TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP_CHUNKED_FAKE -> {
                 val s = String(data, 0, length)
-                if (s.contains("HTTP/")) {
+                if (s.contains("HTTP/1.1\r\n")) {
                     val mod = s.replace("HTTP/1.1\r\n", "HTTP/1.1\r\nTransfer-Encoding: chunked\r\n")
                     val headerEnd = mod.indexOf("\r\n\r\n")
                     if (headerEnd != -1) {
                         val header = mod.substring(0, headerEnd + 4)
-                        val body = data.copyOfRange(length - (s.length - (s.indexOf("\r\n\r\n") + 4)), length)
+                        val originalHeaderEnd = s.indexOf("\r\n\r\n")
+                        val body = if (originalHeaderEnd != -1) data.copyOfRange(originalHeaderEnd + 4, length) else ByteArray(0)
                         output.write(header.toByteArray()); output.flush()
                         
                         var pos = 0

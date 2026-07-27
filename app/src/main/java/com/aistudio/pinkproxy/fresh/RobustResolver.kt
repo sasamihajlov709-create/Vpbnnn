@@ -110,7 +110,7 @@ object RobustResolver {
                     
                     // Smart Prefetch common subdomains
                     if (!host.startsWith("www.") && host.split(".").size == 2) {
-                        CoroutineScope(Dispatchers.IO).launch {
+                        (resolverScope ?: CoroutineScope(Dispatchers.IO)).launch {
                             listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
                                 try { performParallelResolution(prefix + host, vpnService) } catch (e: Exception) {}
                             }
