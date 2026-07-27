@@ -859,10 +859,6 @@ object BypassConfig {
                 val fake = FakePacketHelper.buildTls13Hello(host)
                 writeWithFake(socket, output, fake, data, length, config)
             }
-            BypassStrategy.TLS_SESSION_ID_RAND -> {
-                val fake = FakePacketHelper.buildSafariHello(host)
-                writeWithFake(socket, output, fake, data, length, config)
-            }
             BypassStrategy.TCP_WINDOW_CLAMPING -> {
                 val intensity = ProxyStats.censorshipIntensity.value
                 val winSize = if (intensity > 85) rnd.nextInt(256, 512) else if (intensity > 60) rnd.nextInt(1024, 2048) else 4096
@@ -872,13 +868,6 @@ object BypassConfig {
                 } catch (e: Exception) {}
                 output.write(data, 0, length)
                 output.flush()
-            }
-            BypassStrategy.WINDOW_SIZE -> {
-                var pos = 0; val chunkSize = rnd.nextInt(1, 5)
-                while (pos < length) {
-                    val size = chunkSize.coerceAtMost(length - pos)
-                    output.write(data, pos, size); output.flush(); pos += size; delay(1)
-                }
             }
             BypassStrategy.TLS_GREASE -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
@@ -1298,21 +1287,6 @@ object BypassConfig {
                 }
                 output.flush()
             }
-            BypassStrategy.TLS_CHROME_HELLO_FAKE -> {
-                val fake = FakePacketHelper.buildChromeHello(host)
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
-                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.TLS_FIREFOX_HELLO_FAKE -> {
-                val fake = FakePacketHelper.buildFirefoxHello(host)
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
-                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.TLS_13_HELLO_FAKE -> {
-                val fake = FakePacketHelper.buildTls13Hello(host)
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(fake); output.flush()
-                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
-            }
             BypassStrategy.TCP_REORDER_DESYNC -> {
                 if (length > 10) {
                     val split = length / 2
@@ -1395,11 +1369,6 @@ object BypassConfig {
                 val win = intArrayOf(4096, 8192, 16384, 32768, 65535).random()
                 socket.receiveBufferSize = win
                 socket.sendBufferSize = win
-                output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.TCP_WINDOW_CLAMPING -> {
-                socket.receiveBufferSize = 1460
-                socket.sendBufferSize = 1460
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_CLIENT_HELLO_REORDER -> {
@@ -1490,16 +1459,16 @@ object BypassConfig {
                 var modified = false
                 var newData: ByteArray? = null
                 for (i in 0 until length - 4) {
-                    if ((data[i] == 'H'.toByte() || data[i] == 'h'.toByte()) &&
-                        (data[i+1] == 'o'.toByte() || data[i+1] == 'O'.toByte()) &&
-                        (data[i+2] == 's'.toByte() || data[i+2] == 'S'.toByte()) &&
-                        (data[i+3] == 't'.toByte() || data[i+3] == 'T'.toByte()) &&
-                        data[i+4] == ':'.toByte()) {
+                    if ((data[i] == 'H'.code.toByte() || data[i] == 'h'.code.toByte()) &&
+                        (data[i+1] == 'o'.code.toByte() || data[i+1] == 'O'.code.toByte()) &&
+                        (data[i+2] == 's'.code.toByte() || data[i+2] == 'S'.code.toByte()) &&
+                        (data[i+3] == 't'.code.toByte() || data[i+3] == 'T'.code.toByte()) &&
+                        data[i+4] == ':'.code.toByte()) {
                         newData = data.copyOf(length)
-                        newData[i] = 'h'.toByte()
-                        newData[i+1] = 'O'.toByte()
-                        newData[i+2] = 's'.toByte()
-                        newData[i+3] = 'T'.toByte()
+                        newData[i] = 'h'.code.toByte()
+                        newData[i+1] = 'O'.code.toByte()
+                        newData[i+2] = 's'.code.toByte()
+                        newData[i+3] = 'T'.code.toByte()
                         modified = true
                         break
                     }
@@ -1692,19 +1661,7 @@ object BypassConfig {
                 } catch (e: Exception) {}
                 output.write(data, 0, length); output.flush()
             }
-            BypassStrategy.TLS_RECORD_PADDING -> {
-                output.write(data, 0, length)
-                if (length > 0 && data[0] == 0x17.toByte()) { // Application Data
-                    val padSize = rnd.nextInt(1, 100)
-                    val padRecord = ByteArray(5 + padSize)
-                    padRecord[0] = 0x17.toByte() // Type
-                    padRecord[1] = 0x03.toByte(); padRecord[2] = 0x03.toByte() // Version
-                    padRecord[3] = (padSize shr 8).toByte(); padRecord[4] = (padSize and 0xFF).toByte()
-                    rnd.nextBytes(padRecord.copyOfRange(5, 5 + padSize))
-                    output.write(padRecord)
-                }
-                output.flush()
-            }
+
             BypassStrategy.TCP_TOS_MANGLE -> {
                 try { socket.trafficClass = 0x08 } catch (e: Exception) {}
                 output.write(data, 0, length); output.flush()
