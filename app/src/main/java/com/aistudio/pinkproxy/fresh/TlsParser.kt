@@ -72,24 +72,6 @@ object TlsParser {
             // Ignore structured parsing error and try brute force search
         }
         
-        if (host != null) {
-            try {
-                val hostBytes = host.toByteArray(Charsets.US_ASCII)
-                if (hostBytes.size in 4..256) {
-                    for (i in 0..(length - hostBytes.size)) {
-                        var match = true
-                        for (j in hostBytes.indices) {
-                            if (buffer[i + j] != hostBytes[j]) {
-                                match = false
-                                break
-                            }
-                        }
-                        if (match) return i
-                    }
-                }
-            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-        }
-        
         return -1
     }
 

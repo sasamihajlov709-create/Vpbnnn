@@ -391,6 +391,7 @@ object ProxyStats {
              _stabilityScore.update { (it * 0.97 + (100 - jitterPenalty) * 0.03).toInt().coerceIn(0, 100) }
              updateLatency(rtt)
         }
+        _censorshipIntensity.update { (it - 2).coerceAtLeast(0) }
         _successRate.update { (it * 0.99 + 100 * 0.01).toInt().coerceIn(0, 100) }
     }
 
