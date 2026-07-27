@@ -12,12 +12,15 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.io.*
-class PinkProxyServer(private val vpnService: VpnService, private val port: Int) {
+class PinkProxyServer(private val vpnService: VpnService, private val port: Int, val sessionSecret: String = "") {
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
+    private val activeConnectionSemaphore = Semaphore(300)
 
     companion object {
         private val SOCKS5_AUTH_SUCCESS = byteArrayOf(5, 0)
+        private val SOCKS5_AUTH_USER_PASS = byteArrayOf(5, 2)
+        private val SOCKS5_AUTH_NO_ACCEPTABLE = byteArrayOf(5, 0xFF.toByte())
         private val SOCKS5_CONNECT_SUCCESS = byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0)
     }
 
@@ -44,8 +47,19 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
                     } catch (e: SocketException) {
                         null
                     } ?: break
+
+                    if (!activeConnectionSemaphore.tryAcquire()) {
+                        try { client.close() } catch (e: Exception) {}
+                        continue
+                    }
                     
-                    launch { handleClient(client) }
+                    launch {
+                        try {
+                            handleClient(client)
+                        } finally {
+                            activeConnectionSemaphore.release()
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 if (isActive) Log.e("PinkProxy", "Server error", e)
@@ -73,6 +87,25 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.DelicateCoroutinesApi::class)
     private suspend fun handleClient(client: Socket) {
+        // UID Verification for Android 10+ (API 29+)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try {
+                val cm = vpnService.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                val remoteEndpoint = client.remoteSocketAddress as? InetSocketAddress
+                val localEndpoint = client.localSocketAddress as? InetSocketAddress
+                if (cm != null && remoteEndpoint != null && localEndpoint != null) {
+                    val uid = cm.getConnectionOwnerUid(android.system.OsConstants.IPPROTO_TCP, remoteEndpoint, localEndpoint)
+                    if (uid != -1 && uid != android.os.Process.myUid()) {
+                        Log.w("PinkProxy", "Rejected unauthorized proxy access attempt from UID $uid")
+                        client.close()
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                Log.v("PinkProxy", "UID check exception: ${e.message}")
+            }
+        }
+
         ProxyStats.updateConnections(1)
         try {
             client.soTimeout = 10000
@@ -92,9 +125,45 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             val methods = ByteArray(nMethods)
             readExactly(input, methods, 0, nMethods)
 
-            // No authentication required
-            output.write(SOCKS5_AUTH_SUCCESS)
-            output.flush()
+            val supportsNoAuth = methods.contains(0.toByte())
+            val supportsUserPass = methods.contains(2.toByte())
+
+            if (supportsUserPass && sessionSecret.isNotEmpty()) {
+                output.write(SOCKS5_AUTH_USER_PASS)
+                output.flush()
+
+                val subVer = input.read()
+                if (subVer != 1) { client.close(); return }
+                val uLen = input.read()
+                if (uLen <= 0) { client.close(); return }
+                val usernameBytes = ByteArray(uLen)
+                readExactly(input, usernameBytes, 0, uLen)
+                val pLen = input.read()
+                if (pLen <= 0) { client.close(); return }
+                val passwordBytes = ByteArray(pLen)
+                readExactly(input, passwordBytes, 0, pLen)
+
+                val uname = String(usernameBytes, java.nio.charset.StandardCharsets.UTF_8)
+                val passwd = String(passwordBytes, java.nio.charset.StandardCharsets.UTF_8)
+
+                if (uname == sessionSecret && passwd == sessionSecret) {
+                    output.write(byteArrayOf(1, 0)) // Auth success
+                    output.flush()
+                } else {
+                    output.write(byteArrayOf(1, 1)) // Auth failed
+                    output.flush()
+                    client.close()
+                    return
+                }
+            } else if (supportsNoAuth) {
+                output.write(SOCKS5_AUTH_SUCCESS)
+                output.flush()
+            } else {
+                output.write(SOCKS5_AUTH_NO_ACCEPTABLE)
+                output.flush()
+                client.close()
+                return
+            }
 
             // 2. Request details
             val version2 = input.read()

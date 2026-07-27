@@ -119,7 +119,7 @@ object DnsOptimizer {
                 bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value }?.key ?: dohUrls[0]
                 bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") }.minByOrNull { it.value }?.key ?: dotServers[0]
                 
-                delay(10 * 60 * 1000L) // Every 10 min
+                delay(30 * 60 * 1000L) // Every 30 min
             }
         }
 

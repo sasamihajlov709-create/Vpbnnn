@@ -60,6 +60,7 @@ class PinkVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var proxyServer: PinkProxyServer? = null
+    private val proxySecret = java.util.UUID.randomUUID().toString()
     private var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     fun getServiceScope(): CoroutineScope = serviceScope
     private var sessionScope: CoroutineScope? = null
@@ -79,8 +80,8 @@ class PinkVpnService : VpnService() {
         BypassConfig.loadTuningSettings(this)
         loadFilterSettings(this)
         
-        // Start proxy server
-        proxyServer = PinkProxyServer(this, PROXY_PORT)
+        // Start proxy server with session secret
+        proxyServer = PinkProxyServer(this, PROXY_PORT, proxySecret)
         proxyServer?.start()
         
         RobustResolver.initialize(serviceScope)
@@ -110,7 +111,7 @@ class PinkVpnService : VpnService() {
                 // Local check if proxy is alive
                 if (proxyServer == null) {
                     ProxyStats.logRecovery("Watchdog: Proxy server missing! Starting...")
-                    proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
+                    proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
                     proxyServer?.start()
                 } else if (System.currentTimeMillis() % 120000 < 40000) {
                     try {
@@ -121,7 +122,7 @@ class PinkVpnService : VpnService() {
                         ProxyStats.logRecovery("Watchdog: Proxy port $PROXY_PORT is unreachable! Restarting proxy...")
                         RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Port $PROXY_PORT dead")
                         proxyServer?.stop()
-                        proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT)
+                        proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
                         proxyServer?.start()
                     }
                 }
@@ -177,58 +178,8 @@ class PinkVpnService : VpnService() {
         }
     }
 
-    private var chaffJob: Job? = null
     private fun startChaffGenerator() {
-        chaffJob?.cancel()
-        chaffJob = serviceScope.launch {
-            val domains = listOf(
-                "google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com",
-                "wikipedia.org", "reddit.com", "github.com", "stackoverflow.com", "medium.com",
-                "mozilla.org", "adobe.com", "dropbox.com", "spotify.com", "zoom.us", "vimeo.com",
-                "discord.com", "slack.com", "trello.com", "notion.so", "figma.com", "bitbucket.org"
-            )
-            while (isActive) {
-                // Adaptive delay: more chaff when censorship is high
-                val intensity = ProxyStats.censorshipIntensity.value
-                val baseDelay = if (intensity > 80) 20000L else 60000L
-                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(baseDelay, baseDelay * 3))
-                
-                if (!_isRunning.value) continue
-                
-                val speed = ProxyStats.speedBytesPerSecond.value
-                val activeConns = ProxyStats.activeConnections.value
-                
-                // Only send chaff if idle or under high censorship to blend in
-                if (speed < 10000 || intensity > 70 || activeConns == 0) {
-                    repeat(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4)) {
-                        val domain = domains.random()
-                        try {
-                            if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) {
-                                RobustResolver.resolve(domain, this@PinkVpnService)
-                            } else {
-                                withContext(Dispatchers.IO) {
-                                    val probeHost = if (intensity > 90) "google.com" else domain
-                                    val socket = java.net.Socket()
-                                    protect(socket)
-                                    try {
-                                        val ips = java.net.InetAddress.getAllByName(probeHost)
-                                        if (ips.isNotEmpty()) {
-                                            socket.connect(java.net.InetSocketAddress(ips[0], 443), 5000)
-                                            socket.tcpNoDelay = true
-                                            // Send a fake TLS Client Hello if possible, or just connect/close
-                                            socket.close()
-                                        }
-                                    } catch (e: Exception) {
-                                        try { socket.close() } catch (ex: Exception) {}
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {}
-                        delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(1000, 5000))
-                    }
-                }
-            }
-        }
+        // Disabled background traffic generator to save bandwidth and battery
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -345,21 +296,15 @@ class PinkVpnService : VpnService() {
 
     private fun startSessionWarmup() {
         serviceScope.launch {
-            delay(5000)
+            delay(2000)
             val importantHosts = listOf(
-                "google.com", "telegram.org", "github.com", "dns.google", "cloudflare.com",
-                "youtube.com", "googlevideo.com", "t.me", "chatgpt.com", "discord.com",
-                "instagram.com", "facebook.com", "twitter.com", "x.com", "netflix.com"
+                "google.com", "telegram.org", "github.com", "youtube.com", "googlevideo.com"
             )
-            while (isActive && _isRunning.value) {
-                importantHosts.forEach { host ->
-                    if (!_isRunning.value) return@launch
-                    try {
-                        RobustResolver.resolve(host, this@PinkVpnService)
-                    } catch (e: Exception) {}
-                    delay(5000)
-                }
-                delay(300000) // Re-prefetch every 5 minutes
+            importantHosts.forEach { host ->
+                if (!_isRunning.value) return@launch
+                try {
+                    RobustResolver.resolve(host, this@PinkVpnService)
+                } catch (e: Exception) {}
             }
         }
     }
@@ -368,7 +313,7 @@ class PinkVpnService : VpnService() {
         try {
             engine.Engine.touch()
             val key = engine.Key()
-            key.setProxy("socks5://127.0.0.1:$proxyPort")
+            key.setProxy("socks5://$proxySecret:$proxySecret@127.0.0.1:$proxyPort")
             key.setDevice("fd://${vpnInterface.fd}")
             key.setLogLevel("info")
             engine.Engine.insert(key)
@@ -441,8 +386,6 @@ class PinkVpnService : VpnService() {
         
         watchdogJob?.cancel()
         watchdogJob = null
-        chaffJob?.cancel()
-        chaffJob = null
         engineMonitorJob?.cancel()
         engineMonitorJob = null
         

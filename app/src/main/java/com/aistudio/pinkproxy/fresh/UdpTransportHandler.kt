@@ -111,8 +111,20 @@ object UdpTransportHandler {
                         } catch (e: java.net.SocketTimeoutException) {
                             continue
                         }
-                        clientUdpAddress = packet.address
-                        clientUdpPort = packet.port
+                        val pktAddr = packet.address
+                        val pktPort = packet.port
+                        if (clientUdpAddress == null) {
+                            if (pktAddr.isLoopbackAddress || pktAddr.hostAddress == "127.0.0.1") {
+                                clientUdpAddress = pktAddr
+                                clientUdpPort = pktPort
+                            } else {
+                                continue
+                            }
+                        } else {
+                            if (pktAddr != clientUdpAddress || pktPort != clientUdpPort) {
+                                continue
+                            }
+                        }
                         
                         val data = packet.data
                         val len = packet.length

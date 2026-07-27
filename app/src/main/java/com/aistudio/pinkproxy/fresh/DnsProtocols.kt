@@ -46,19 +46,19 @@ object DnsProtocols {
             .dns(BootstrapDns())
         
         try {
-            val sc = SSLContext.getInstance("TLS")
-            sc.init(null, null, null)
-            builder.sslSocketFactory(ProtectedSSLSocketFactory(sc.socketFactory, vpnService), 
-                object : javax.net.ssl.X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                    override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-                })
+            val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+            trustManagerFactory.init(null as java.security.KeyStore?)
+            val trustManagers = trustManagerFactory.trustManagers
+            val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
+            
+            if (defaultTrustManager != null) {
+                val sc = SSLContext.getInstance("TLS")
+                sc.init(null, arrayOf(defaultTrustManager), null)
+                builder.sslSocketFactory(ProtectedSSLSocketFactory(sc.socketFactory, vpnService), defaultTrustManager)
+            }
         } catch (e: Exception) {
             Log.e("DnsProtocols", "Failed to setup protected SSL", e)
         }
-        
-        builder.hostnameVerifier { _, _ -> true }
         
         val client = builder.build()
         cachedProtectedClient = client
@@ -74,11 +74,15 @@ object DnsProtocols {
         try {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
-            val packet = DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
+            val targetAddr = InetAddress.getByName(dnsIp)
+            val packet = DatagramPacket(query, query.size, targetAddr, 53)
             socket.send(packet)
             
             val respPacket = DatagramPacket(buffer, buffer.size)
             socket.receive(respPacket)
+            if (respPacket.address != targetAddr) {
+                return emptyList()
+            }
             val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } finally {
@@ -155,17 +159,25 @@ object DnsProtocols {
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
-        val socket = SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory.createSocket()
+        val sslSocket = SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory.createSocket() as? javax.net.ssl.SSLSocket ?: return emptyList()
         try {
-            vpnService?.protect(socket)
-            socket.connect(InetSocketAddress(dotIp, 853), 3000)
-            socket.soTimeout = 3000
-            val dos = DataOutputStream(socket.getOutputStream())
+            vpnService?.protect(sslSocket)
+            sslSocket.connect(InetSocketAddress(dotIp, 853), 3000)
+            sslSocket.soTimeout = 3000
+            sslSocket.startHandshake()
+
+            val session = sslSocket.session
+            if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(dotIp, session)) {
+                Log.w("DnsProtocols", "DoT hostname verification failed for $dotIp")
+                return emptyList()
+            }
+
+            val dos = DataOutputStream(sslSocket.getOutputStream())
             dos.writeShort(query.size)
             dos.write(query)
             dos.flush()
             
-            val dis = DataInputStream(socket.getInputStream())
+            val dis = DataInputStream(sslSocket.getInputStream())
             val len = dis.readUnsignedShort()
             if (len > 8192) return emptyList()
             val resp = ByteArray(len)
@@ -174,7 +186,7 @@ object DnsProtocols {
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } catch (e: Exception) {
         } finally {
-            try { socket.close() } catch (e: Exception) {}
+            try { sslSocket.close() } catch (e: Exception) {}
         }
         return emptyList()
     }

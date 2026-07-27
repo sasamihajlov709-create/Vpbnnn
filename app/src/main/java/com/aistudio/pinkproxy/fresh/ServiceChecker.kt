@@ -122,14 +122,24 @@ object ServiceChecker {
                         try {
                             val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort))
                             connection = URL(url).openConnection(proxy) as HttpURLConnection
-                            connection.connectTimeout = 8000
-                            connection.readTimeout = 8000
+                            connection.connectTimeout = 5000
+                            connection.readTimeout = 5000
                             connection.instanceFollowRedirects = true
-                            connection.requestMethod = "GET"
+                            connection.requestMethod = "HEAD"
                             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                             
-                            val code = connection.responseCode
-                            isUp = (code in 200..399) // Strictly require successful connection and response, ignoring 4xx which could be block pages
+                            var code = connection.responseCode
+                            if (code == 405) { // Method Not Allowed for HEAD, fallback to quick GET without reading body
+                                connection.disconnect()
+                                connection = URL(url).openConnection(proxy) as HttpURLConnection
+                                connection.connectTimeout = 5000
+                                connection.readTimeout = 5000
+                                connection.instanceFollowRedirects = true
+                                connection.requestMethod = "GET"
+                                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                                code = connection.responseCode
+                            }
+                            isUp = (code in 200..399)
                             
                             val attemptDuration = System.currentTimeMillis() - attemptStart
                             if (isUp) {
@@ -272,16 +282,9 @@ object ServiceChecker {
                 val currentServices = defaultServices + _customServices.value
                 checkServices(currentServices)
                 
-                // Adaptive delay: check faster if key services are down, conserve battery if healthy
-                val youtubeDown = _statuses.value.find { it.name == "YouTube" }?.isUp == false
-                val streamDown = _statuses.value.find { it.name == "YT Video Stream" }?.isUp == false
-                val delayTime = if (youtubeDown || streamDown) {
-                    30000L // 30s recovery (less aggressive)
-                } else {
-                    if (BypassConfig.isCharging) 120000L else 300000L // 2 min charging, 5 min on battery
-                }
-                // Add minor jitter to avoid synchronized wakeups
-                val jitter = (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 2000).toLong()
+                // Interval: 20 minutes in background to conserve battery and data
+                val delayTime = 1200000L
+                val jitter = (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 5000).toLong()
                 delay(delayTime + jitter)
             }
         }

@@ -159,20 +159,15 @@ object TcpTransportHandler {
                     }
                 }
 
-                // Keep-alive to prevent NAT/Firewall timeout with minimal noise
+                // Keep-alive to prevent NAT/Firewall timeout with standard SO_KEEPALIVE
                 val keepAliveJob = launch {
                     val rnd = ThreadLocalRandom.current()
                     while (isActive) {
-                        delay(rnd.nextLong(30000, 60000))
-                        if (System.currentTimeMillis() - lastActivity > 40000) {
+                        delay(rnd.nextLong(45000, 90000))
+                        if (System.currentTimeMillis() - lastActivity > 60000) {
                             try { 
-                                if (ProxyStats.censorshipIntensity.value > 60) {
-                                    // Send 1 byte of random noise
-                                    remoteOut.write(rnd.nextInt(256))
-                                    remoteOut.flush()
-                                } else {
-                                    remoteSocket?.sendUrgentData(0) 
-                                }
+                                remoteSocket?.keepAlive = true
+                                remoteSocket?.sendUrgentData(0) 
                             } catch (e: Exception) {}
                         }
                     }
