@@ -136,12 +136,21 @@ object TcpTransportHandler {
             var lastActivity = System.currentTimeMillis()
 
             coroutineScope {
-                // Keep-alive to prevent NAT/Firewall timeout
+                // Keep-alive to prevent NAT/Firewall timeout with minimal noise
                 val keepAliveJob = launch {
+                    val rnd = ThreadLocalRandom.current()
                     while (isActive) {
-                        delay(45000)
+                        delay(rnd.nextLong(30000, 60000))
                         if (System.currentTimeMillis() - lastActivity > 40000) {
-                            try { remoteSocket?.sendUrgentData(0) } catch (e: Exception) {}
+                            try { 
+                                if (ProxyStats.censorshipIntensity.value > 60) {
+                                    // Send 1 byte of random noise
+                                    remoteOut.write(rnd.nextInt(256))
+                                    remoteOut.flush()
+                                } else {
+                                    remoteSocket?.sendUrgentData(0) 
+                                }
+                            } catch (e: Exception) {}
                         }
                     }
                 }

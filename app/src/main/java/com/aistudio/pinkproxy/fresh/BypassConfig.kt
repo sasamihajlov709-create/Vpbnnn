@@ -826,6 +826,20 @@ object BypassConfig {
                 val fake = FakePacketHelper.buildTls13Hello(host)
                 writeWithFake(socket, output, fake, data, length, config)
             }
+            BypassStrategy.TLS_SESSION_ID_RAND -> {
+                val fake = FakePacketHelper.buildSafariHello(host)
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.WINDOW_SIZE, BypassStrategy.TCP_WINDOW_CLAMPING -> {
+                val intensity = ProxyStats.censorshipIntensity.value
+                val winSize = if (intensity > 85) rnd.nextInt(256, 512) else if (intensity > 60) rnd.nextInt(1024, 2048) else 4096
+                try {
+                    socket.receiveBufferSize = winSize
+                    socket.sendBufferSize = winSize
+                } catch (e: Exception) {}
+                output.write(data, 0, length)
+                output.flush()
+            }
             BypassStrategy.TLS_GREASE -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
                     val greased = FakePacketHelper.addTlsGreaseExtensions(data, length)
