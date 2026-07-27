@@ -7,6 +7,7 @@ import android.net.VpnService
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -23,12 +24,12 @@ class BootReceiver : BroadcastReceiver() {
                         ContextCompat.startForegroundService(context, serviceIntent)
                     } else {
                         Log.w("BootReceiver", "VPN permission was revoked, cannot auto-start.")
-                        prefs.edit().putBoolean("vpn_was_active", false).apply()
+                        prefs.edit { putBoolean("vpn_was_active", false) }
                     }
                 } catch (e: Exception) {
                     if (e.javaClass.simpleName == "ForegroundServiceStartNotAllowedException") {
                         Log.e("BootReceiver", "Foreground service start not allowed on this Android version: ${e.message}")
-                        prefs.edit().putBoolean("vpn_was_active", false).apply()
+                        prefs.edit { putBoolean("vpn_was_active", false) }
                     } else {
                         Log.e("BootReceiver", "Failed to auto-start VPN on boot: ${e.message}")
                     }

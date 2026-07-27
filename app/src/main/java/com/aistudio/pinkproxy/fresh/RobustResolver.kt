@@ -3,6 +3,7 @@ package com.aistudio.pinkproxy.fresh
 import android.net.VpnService
 import android.util.Log
 import java.net.InetAddress
+import androidx.core.content.edit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.selects.onTimeout
@@ -28,10 +29,10 @@ object RobustResolver {
     fun saveDnsSettings(context: android.content.Context, mode: String, ip: String) {
         dnsMode = mode
         customDnsIp = ip
-        context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).edit()
-            .putString("dns_mode", mode)
-            .putString("custom_dns_ip", ip)
-            .apply()
+        context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).edit {
+            putString("dns_mode", mode)
+            putString("custom_dns_ip", ip)
+        }
         DnsCacheManager.clear()
     }
 

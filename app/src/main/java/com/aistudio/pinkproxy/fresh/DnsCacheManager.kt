@@ -2,6 +2,7 @@ package com.aistudio.pinkproxy.fresh
 
 import android.util.Log
 import java.net.InetAddress
+import androidx.core.content.edit
 import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
 
@@ -209,17 +210,17 @@ object DnsCacheManager {
     fun save(context: android.content.Context) {
         try {
             val prefs = context.getSharedPreferences("dns_metrics", android.content.Context.MODE_PRIVATE)
-            val editor = prefs.edit()
             
             // Serialize heatmap: ip|score;ip|score
             val heatmapStr = ipHeatmap.entries.joinToString(";") { "${it.key}|${it.value}" }
-            editor.putString("ip_heatmap", heatmapStr)
             
             // Serialize RTT: ip|rtt;ip|rtt
             val rttStr = ipRtt.entries.take(500).joinToString(";") { "${it.key}|${it.value}" }
-            editor.putString("ip_rtt", rttStr)
             
-            editor.apply()
+            prefs.edit {
+                putString("ip_heatmap", heatmapStr)
+                putString("ip_rtt", rttStr)
+            }
         } catch (e: Exception) {}
     }
 

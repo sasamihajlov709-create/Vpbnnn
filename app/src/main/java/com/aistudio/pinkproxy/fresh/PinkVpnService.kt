@@ -14,6 +14,7 @@ import android.util.Log
 import java.net.InetSocketAddress
 import java.net.Socket
 import androidx.core.app.NotificationCompat
+import androidx.core.content.edit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,10 +31,9 @@ class PinkVpnService : VpnService() {
 
         fun saveFilterSettings(context: Context) {
             val prefs = context.getSharedPreferences("pink_proxy_filter", Context.MODE_PRIVATE)
-            prefs.edit().apply {
+            prefs.edit {
                 putStringSet("selected_packages", selectedPackages)
                 putBoolean("is_exclude_mode", isExcludeMode)
-                apply()
             }
         }
 
@@ -47,8 +47,10 @@ class PinkVpnService : VpnService() {
 
         fun saveVpnState(context: Context, isRunning: Boolean) {
             val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
-            prefs.edit().putBoolean("vpn_should_be_running", isRunning).apply()
-            prefs.edit().putBoolean("vpn_was_active", isRunning).apply()
+            prefs.edit {
+                putBoolean("vpn_should_be_running", isRunning)
+                putBoolean("vpn_was_active", isRunning)
+            }
         }
 
         fun updateTile(context: Context) {
@@ -424,6 +426,10 @@ class PinkVpnService : VpnService() {
         stopTun2Socks()
         proxyServer?.stop()
         
+        watchdogJob?.cancel()
+        watchdogJob = null
+        chaffJob?.cancel()
+        chaffJob = null
         engineMonitorJob?.cancel()
         engineMonitorJob = null
         

@@ -3,6 +3,7 @@ package com.aistudio.pinkproxy.fresh
 import android.content.Context
 import android.net.VpnService
 import android.util.Log
+import androidx.core.content.edit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.net.*
@@ -130,7 +131,7 @@ object BypassConfig {
 
     fun saveTuningSettings(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
-        prefs.edit().apply {
+        prefs.edit {
             putBoolean("is_auto_tuning", isAutoTuning)
             putBoolean("block_quic", blockQuic)
             putBoolean("is_diagnostic_mode", isDiagnosticMode)
@@ -141,20 +142,18 @@ object BypassConfig {
             putLong("delay2", delay2)
             putInt("fakeTtl", fakeTtl)
             putString("global_strategy", _strategy.value.name)
-            apply()
         }
         saveScores(context)
     }
 
     fun saveScores(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_scores", Context.MODE_PRIVATE)
-        prefs.edit().apply {
+        prefs.edit {
             HostCategory.entries.forEach { cat ->
                 strategyScores[cat]?.forEach { (strat, score) ->
                     putInt("score_${cat.name}_${strat.name}", score.get())
                 }
             }
-            apply()
         }
     }
 
@@ -516,7 +515,7 @@ object BypassConfig {
 
     fun clearScores(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_scores", Context.MODE_PRIVATE)
-        prefs.edit().clear().apply()
+        prefs.edit { clear() }
         HostCategory.entries.forEach { cat ->
             BypassStrategy.entries.forEach { strategyScores[cat]?.get(it)?.set(100) }
         }
@@ -792,6 +791,28 @@ object BypassConfig {
         }
     }
 
+    private fun isProbableHttp(data: ByteArray, length: Int): Boolean {
+        if (length < 10) return false
+        val c = data[0]
+        return c == 'G'.code.toByte() || c == 'P'.code.toByte() || c == 'H'.code.toByte() || 
+               c == 'O'.code.toByte() || c == 'C'.code.toByte() || c == 'D'.code.toByte() || c == 'T'.code.toByte()
+    }
+
+    private fun containsHostHeader(data: ByteArray, length: Int): Boolean {
+        if (!isProbableHttp(data, length)) return false
+        for (i in 0..length - 5) {
+            if ((data[i] == 'H'.code.toByte() || data[i] == 'h'.code.toByte()) &&
+                (data[i+1] == 'o'.code.toByte() || data[i+1] == 'O'.code.toByte()) &&
+                (data[i+2] == 's'.code.toByte() || data[i+2] == 'S'.code.toByte()) &&
+                (data[i+3] == 't'.code.toByte() || data[i+3] == 'T'.code.toByte()) &&
+                data[i+4] == ':'.code.toByte()
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) {
         val rnd = ThreadLocalRandom.current()
         val strategy = config.strategy
@@ -952,18 +973,37 @@ object BypassConfig {
                 }
             }
             BypassStrategy.HTTP_HOST_SPACE -> {
-                val s = String(data, 0, length)
-                if (s.contains("Host:", ignoreCase = true)) {
+                if (!containsHostHeader(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    val s = String(data, 0, length)
                     val modified = s.replace("Host:", "Host:  ", ignoreCase = true)
                     output.write(modified.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
+                }
             }
             BypassStrategy.HTTP_VERSION_SKEW -> {
-                val s = String(data, 0, length)
-                if (s.contains("HTTP/1.1")) {
-                    val mod = s.replace("HTTP/1.1", "HTTP/1.2")
-                    output.write(mod.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
+                var found = false
+                var idx = -1
+                for (i in 0..length - 8) {
+                    if (data[i] == 'H'.code.toByte() && data[i+1] == 'T'.code.toByte() && 
+                        data[i+2] == 'T'.code.toByte() && data[i+3] == 'P'.code.toByte() && 
+                        data[i+4] == '/'.code.toByte() && data[i+5] == '1'.code.toByte() && 
+                        data[i+6] == '.'.code.toByte() && data[i+7] == '1'.code.toByte()) {
+                        found = true
+                        idx = i
+                        break
+                    }
+                }
+                
+                if (found && idx != -1) {
+                    output.write(data, 0, idx + 7)
+                    output.write('2'.code) // change to HTTP/1.2
+                    output.write(data, idx + 8, length - (idx + 8))
+                    output.flush()
+                } else {
+                    output.write(data, 0, length)
+                    output.flush()
+                }
             }
             BypassStrategy.TCP_MSS_CLAMP -> {
                 val intensity = ProxyStats.censorshipIntensity.value
@@ -978,20 +1018,28 @@ object BypassConfig {
                 }
             }
             BypassStrategy.HTTP_AUTH_RANDOM -> {
-                val s = String(data, 0, length)
-                if (s.contains("HTTP/")) {
-                    val fakeAuth = "Authorization: Basic " + java.util.Base64.getEncoder().encodeToString("fake:fake".toByteArray()) + "\r\n"
-                    val modified = s.replaceFirst("\r\n", "\r\n$fakeAuth")
-                    output.write(modified.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
+                if (!isProbableHttp(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    val s = String(data, 0, length)
+                    if (s.contains("HTTP/")) {
+                        val fakeAuth = "Authorization: Basic " + java.util.Base64.getEncoder().encodeToString("fake:fake".toByteArray()) + "\r\n"
+                        val modified = s.replaceFirst("\r\n", "\r\n$fakeAuth")
+                        output.write(modified.toByteArray()); output.flush()
+                    } else { output.write(data, 0, length); output.flush() }
+                }
             }
             BypassStrategy.HTTP_HEADER_FUZZING -> {
-                val s = String(data, 0, length)
-                if (s.contains("HTTP/")) {
-                    val junkHeader = "X-Fuzz-Value: ${java.util.UUID.randomUUID()}\r\n"
-                    val modified = s.replaceFirst("\r\n", "\r\n$junkHeader")
-                    output.write(modified.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
+                if (!isProbableHttp(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    val s = String(data, 0, length)
+                    if (s.contains("HTTP/")) {
+                        val junkHeader = "X-Fuzz-Value: ${java.util.UUID.randomUUID()}\r\n"
+                        val modified = s.replaceFirst("\r\n", "\r\n$junkHeader")
+                        output.write(modified.toByteArray()); output.flush()
+                    } else { output.write(data, 0, length); output.flush() }
+                }
             }
             BypassStrategy.HTTP_METHOD_FAKE -> {
                 if (length > 5 && (data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte())) {
@@ -1007,11 +1055,15 @@ object BypassConfig {
                 output.flush()
             }
             BypassStrategy.HTTP_USER_AGENT_SKEW -> {
-                val s = String(data, 0, length)
-                if (s.contains("User-Agent:", ignoreCase = true)) {
-                    val modified = s.replace(Regex("User-Agent:.*?\r\n", RegexOption.IGNORE_CASE), "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n")
-                    output.write(modified.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
+                if (!isProbableHttp(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    val s = String(data, 0, length)
+                    if (s.contains("User-Agent:", ignoreCase = true)) {
+                        val modified = s.replace(Regex("User-Agent:.*?\r\n", RegexOption.IGNORE_CASE), "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n")
+                        output.write(modified.toByteArray()); output.flush()
+                    } else { output.write(data, 0, length); output.flush() }
+                }
             }
             BypassStrategy.OOB_DESYNC -> {
                 val split = rnd.nextInt(1, length.coerceAtMost(5))
@@ -1027,12 +1079,16 @@ object BypassConfig {
                 }
             }
             BypassStrategy.HTTP_RANGE_SKEW -> {
-                val s = String(data, 0, length)
-                if (s.startsWith("GET ") || s.startsWith("POST ")) {
-                    val fakeRange = "Range: bytes=0-\r\n"
-                    val modified = s.replaceFirst("\r\n", "\r\n$fakeRange")
-                    output.write(modified.toByteArray()); output.flush()
-                } else { output.write(data, 0, length); output.flush() }
+                if (!isProbableHttp(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    val s = String(data, 0, length)
+                    if (s.startsWith("GET ") || s.startsWith("POST ")) {
+                        val fakeRange = "Range: bytes=0-\r\n"
+                        val modified = s.replaceFirst("\r\n", "\r\n$fakeRange")
+                        output.write(modified.toByteArray()); output.flush()
+                    } else { output.write(data, 0, length); output.flush() }
+                }
             }
             BypassStrategy.TLS_REHANDSHAKE_FAKE -> {
                 output.write(data, 0, length); output.flush(); delay(config.delay1)
@@ -1157,14 +1213,14 @@ object BypassConfig {
                 repeat(3) { delay(30); try { socket.sendUrgentData(0x00) } catch (e: Exception) {} }
             }
             BypassStrategy.HTTP_HOST_CASE_MANGLE -> {
-                if (length > 4 && data[0].toInt() != 0x16) {
+                if (!containsHostHeader(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
                     val s = String(data, 0, length)
                     val mod = s.replace("Host: ", "hOsT: ")
                         .replace("host: ", "Host: ")
                         .replace("Connection: ", "connecTION: ")
                     output.write(mod.toByteArray()); output.flush()
-                } else {
-                    output.write(data, 0, length); output.flush()
                 }
             }
             BypassStrategy.TLS_SESSION_TICKET_SKEW -> {
@@ -1184,8 +1240,19 @@ object BypassConfig {
                 TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP_CHUNKED_FAKE -> {
-                val s = String(data, 0, length)
-                if (s.contains("HTTP/1.1\r\n")) {
+                // Optimization: Search for "HTTP/1.1\r\n" without allocating a String
+                val targetSeq = byteArrayOf('H'.code.toByte(), 'T'.code.toByte(), 'T'.code.toByte(), 'P'.code.toByte(), '/'.code.toByte(), '1'.code.toByte(), '.'.code.toByte(), '1'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
+                var foundHttp = -1
+                for (i in 0..length - targetSeq.size) {
+                    var match = true
+                    for (j in targetSeq.indices) {
+                        if (data[i + j] != targetSeq[j]) { match = false; break }
+                    }
+                    if (match) { foundHttp = i; break }
+                }
+                
+                if (foundHttp != -1) {
+                    val s = String(data, 0, length)
                     val mod = s.replace("HTTP/1.1\r\n", "HTTP/1.1\r\nTransfer-Encoding: chunked\r\n")
                     val headerEnd = mod.indexOf("\r\n\r\n")
                     if (headerEnd != -1) {
@@ -1261,14 +1328,25 @@ object BypassConfig {
                 output.flush()
             }
             BypassStrategy.HTTP_OOB_INJECT -> {
-                val s = String(data, 0, length, Charsets.US_ASCII)
-                if (s.contains("Host:", ignoreCase = true)) {
-                    val idx = s.indexOf("Host:", ignoreCase = true)
-                    output.write(data, 0, idx)
+                var hostIdx = -1
+                for (i in 0..length - 5) {
+                    if ((data[i] == 'H'.code.toByte() || data[i] == 'h'.code.toByte()) &&
+                        (data[i+1] == 'o'.code.toByte() || data[i+1] == 'O'.code.toByte()) &&
+                        (data[i+2] == 's'.code.toByte() || data[i+2] == 'S'.code.toByte()) &&
+                        (data[i+3] == 't'.code.toByte() || data[i+3] == 'T'.code.toByte()) &&
+                        data[i+4] == ':'.code.toByte()
+                    ) {
+                        hostIdx = i
+                        break
+                    }
+                }
+                
+                if (hostIdx != -1) {
+                    output.write(data, 0, hostIdx)
                     output.flush()
                     try { socket.sendUrgentData('X'.code) } catch (e: Exception) {}
                     delay(config.delay1)
-                    output.write(data, idx, length - idx)
+                    output.write(data, hostIdx, length - hostIdx)
                 } else {
                     output.write(data, 0, length)
                 }
@@ -1354,16 +1432,20 @@ object BypassConfig {
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.HTTP_HOST_REORDER -> {
-                val s = String(data, 0, length)
-                if (s.contains("Host:", ignoreCase = true)) {
-                    val lines = s.split("\r\n").toMutableList()
-                    val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
-                    if (hostIdx != -1 && hostIdx < lines.size - 2) {
-                        val hostLine = lines.removeAt(hostIdx)
-                        lines.add(1, hostLine) // Move host to 2nd line
-                        output.write(lines.joinToString("\r\n").toByteArray()); output.flush()
+                if (!containsHostHeader(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    val s = String(data, 0, length)
+                    if (s.contains("Host:", ignoreCase = true)) {
+                        val lines = s.split("\r\n").toMutableList()
+                        val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                        if (hostIdx != -1 && hostIdx < lines.size - 2) {
+                            val hostLine = lines.removeAt(hostIdx)
+                            lines.add(1, hostLine) // Move host to 2nd line
+                            output.write(lines.joinToString("\r\n").toByteArray()); output.flush()
+                        } else { output.write(data, 0, length); output.flush() }
                     } else { output.write(data, 0, length); output.flush() }
-                } else { output.write(data, 0, length); output.flush() }
+                }
             }
             BypassStrategy.TCP_WINDOW_SIZE_SKEW -> {
                 val win = intArrayOf(4096, 8192, 16384, 32768, 65535).random()
@@ -1485,17 +1567,21 @@ object BypassConfig {
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.HTTP_HOST_SMUGGLE -> {
-                val s = String(data, 0, length, Charsets.US_ASCII)
-                if (s.contains("Host:", ignoreCase = true)) {
-                    val lines = s.split("\r\n").toMutableList()
-                    val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
-                    if (hostIdx != -1) {
-                        lines.add(hostIdx, "Host: www.google.com")
-                        val smuggled = lines.joinToString("\r\n")
-                        output.write(smuggled.toByteArray(Charsets.US_ASCII))
-                        output.flush()
+                if (!containsHostHeader(data, length)) {
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    val s = String(data, 0, length, Charsets.US_ASCII)
+                    if (s.contains("Host:", ignoreCase = true)) {
+                        val lines = s.split("\r\n").toMutableList()
+                        val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                        if (hostIdx != -1) {
+                            lines.add(hostIdx, "Host: www.google.com")
+                            val smuggled = lines.joinToString("\r\n")
+                            output.write(smuggled.toByteArray(Charsets.US_ASCII))
+                            output.flush()
+                        } else { output.write(data, 0, length); output.flush() }
                     } else { output.write(data, 0, length); output.flush() }
-                } else { output.write(data, 0, length); output.flush() }
+                }
             }
             BypassStrategy.TCP_SACK_PANIC -> {
                 // Force strange window sizes to confuse DPI state tracking

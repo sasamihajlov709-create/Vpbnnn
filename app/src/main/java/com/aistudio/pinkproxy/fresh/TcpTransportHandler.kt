@@ -180,12 +180,19 @@ object TcpTransportHandler {
                                     
                                     // Detect DPI blocks in payload
                                     if (n > 10) {
-                                        val content = String(buffer, 0, n.coerceAtMost(200), Charsets.US_ASCII)
-                                        if (content.contains("HTTP/1.1 403") || content.contains("Access Denied") || content.contains("Forbidden")) {
-                                            ProxyStats.recordDpiEvent(DpiType.HTTP_BLOCK)
-                                        }
                                         if (buffer[0] == 0x15.toByte()) { // TLS Alert
                                             ProxyStats.recordDpiEvent(DpiType.TLS_SNI_BLOCK)
+                                        } else {
+                                            // Fast byte-level scan for HTTP 403 / Forbidden
+                                            var foundBlock = false
+                                            val scanLen = n.coerceAtMost(200)
+                                            for (i in 0 until scanLen - 12) {
+                                                if (buffer[i] == 'H'.code.toByte() && buffer[i+1] == 'T'.code.toByte() && buffer[i+9] == '4'.code.toByte() && buffer[i+10] == '0'.code.toByte() && buffer[i+11] == '3'.code.toByte()) { foundBlock = true; break }
+                                                if (buffer[i] == 'F'.code.toByte() && buffer[i+1] == 'o'.code.toByte() && buffer[i+2] == 'r'.code.toByte() && buffer[i+3] == 'b'.code.toByte() && buffer[i+4] == 'i'.code.toByte() && buffer[i+5] == 'd'.code.toByte() && buffer[i+6] == 'd'.code.toByte() && buffer[i+7] == 'e'.code.toByte() && buffer[i+8] == 'n'.code.toByte()) { foundBlock = true; break }
+                                            }
+                                            if (foundBlock) {
+                                                ProxyStats.recordDpiEvent(DpiType.HTTP_BLOCK)
+                                            }
                                         }
                                     }
                                 }

@@ -72,6 +72,8 @@ import kotlinx.coroutines.Dispatchers
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -928,7 +930,7 @@ fun AutoConnectCard(context: android.content.Context) {
                     checked = autoConnect,
                     onCheckedChange = {
                         autoConnect = it
-                        prefs.edit().putBoolean("auto_connect_on_launch", it).apply()
+                        prefs.edit { putBoolean("auto_connect_on_launch", it) }
                     },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = GentleMediumPink,
@@ -964,7 +966,7 @@ fun AutoConnectCard(context: android.content.Context) {
                     checked = autoBoot,
                     onCheckedChange = {
                         autoBoot = it
-                        prefs.edit().putBoolean("auto_start_on_boot", it).apply()
+                        prefs.edit { putBoolean("auto_start_on_boot", it) }
                     },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = GentleMediumPink,
@@ -1016,13 +1018,13 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
                 onClick = {
                     try {
                         val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data = android.net.Uri.parse("package:${context.packageName}")
+                            data = "package:${context.packageName}".toUri()
                         }
                         context.startActivity(intent)
                     } catch (e: Exception) {
                         try {
                             val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = android.net.Uri.parse("package:${context.packageName}")
+                                data = "package:${context.packageName}".toUri()
                             }
                             context.startActivity(intent)
                         } catch (ex: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${ex.message}") }
@@ -1489,7 +1491,7 @@ fun ExpertSettingsCard(
                         onCheckedChange = { 
                             autoConnect = it
                             context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
-                                .edit().putBoolean("auto_connect_on_launch", it).apply()
+                                .edit { putBoolean("auto_connect_on_launch", it) }
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = GentleMediumPink,

@@ -128,14 +128,13 @@ object UdpTransportHandler {
                             1 -> {
                                 headerLen += 4
                                 if (len < headerLen + 2) continue
-                                val ipBytes = data.copyOfRange(4, 8)
-                                targetHost = InetAddress.getByAddress(ipBytes).hostAddress ?: ""
+                                targetHost = "${data[4].toInt() and 0xFF}.${data[5].toInt() and 0xFF}.${data[6].toInt() and 0xFF}.${data[7].toInt() and 0xFF}"
                             }
                             3 -> {
                                 val dlen = data[4].toInt() and 0xFF
                                 headerLen += 1 + dlen
                                 if (len < headerLen + 2) continue
-                                targetHost = String(data, 5, dlen)
+                                targetHost = String(data, 5, dlen, Charsets.US_ASCII)
                             }
                             4 -> {
                                 headerLen += 16

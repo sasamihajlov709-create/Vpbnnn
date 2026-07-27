@@ -3,6 +3,7 @@ package com.aistudio.pinkproxy.fresh
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.content.Context
+import androidx.core.content.edit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -237,7 +238,7 @@ object ServiceChecker {
     private fun saveCustomServices(context: android.content.Context, list: List<Pair<String, String>>) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
         val serialized = list.joinToString(";") { "${it.first}|${it.second}" }
-        prefs.edit().putString("custom_services", serialized).apply()
+        prefs.edit { putString("custom_services", serialized) }
     }
 
     fun startChecking(scope: CoroutineScope, context: android.content.Context) {
