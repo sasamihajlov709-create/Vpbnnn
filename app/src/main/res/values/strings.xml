@@ -60,4 +60,5 @@
     <string name="label_stability">STABILITY</string>
     <string name="label_quality">QUALITY</string>
     <string name="label_mode">MODE</string>
+    <string name="label_censorship">CENSORSHIP</string>
 </resources>

@@ -478,6 +478,44 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                                 modifier = Modifier.padding(vertical = 1.dp)
                             )
                         }
+                        
+                        if (trafficLog.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "REAL-TIME TRAFFIC",
+                                color = GentleMediumPink,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                            trafficLog.forEach { host ->
+                                val category = HostClassifier.classify(host)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(4.dp)
+                                            .background(
+                                                when(category) {
+                                                    HostCategory.AI -> Color(0xFFCE93D8)
+                                                    HostCategory.STREAMING -> Color(0xFFE57373)
+                                                    HostCategory.MESSENGER -> Color(0xFF81C784)
+                                                    HostCategory.SOCIAL -> Color(0xFF64B5F6)
+                                                    HostCategory.DEV -> Color(0xFFBA68C8)
+                                                    else -> GentleMediumPink.copy(alpha = 0.5f)
+                                                },
+                                                CircleShape
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = host,
+                                        color = GentleLightPink.copy(alpha = 0.7f),
+                                        fontSize = 9.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -736,8 +774,8 @@ fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MetricItem(stringResource(R.string.label_health), "$connectivityScore%", if (connectivityScore > 70) Color(0xFF81C784) else Color(0xFFFFB74D))
             MetricItem(stringResource(R.string.label_stability), "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else if (stabilityScore > 50) Color(0xFFFFB74D) else Color(0xFFE57373))
+            MetricItem(stringResource(R.string.label_censorship), "${ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(0).value}%", if (ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(0).value < 30) Color(0xFF81C784) else Color(0xFFE57373))
             MetricItem(stringResource(R.string.label_quality), "$signalQuality%", if (signalQuality > 70) Color(0xFF81C784) else Color(0xFFE57373))
-            MetricItem(stringResource(R.string.label_mode), if (isPanicMode) stringResource(R.string.status_emergency) else stringResource(R.string.status_autopilot), if (isPanicMode) Color(0xFFE57373) else GentleMediumPink)
         }
     }
 }
