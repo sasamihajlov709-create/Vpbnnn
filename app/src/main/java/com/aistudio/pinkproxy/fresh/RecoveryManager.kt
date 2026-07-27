@@ -25,37 +25,38 @@ object RecoveryManager {
             var lastCoolDown = System.currentTimeMillis()
             
             while (isActive) {
-                delay(30000)
+                // Adaptive delay: 60s if active, 120s if idle
+                val activeConns = ProxyStats.activeConnections.value
+                val delayMs = if (activeConns > 0) 60000L else 120000L
+                delay(delayMs)
                 
                 val now = System.currentTimeMillis()
                 val currentBytes = ProxyStats.bytesTransferred.value
-                val active = ProxyStats.activeConnections.value
                 
                 // Strategy Cooling: Periodically try to reduce escalation if things are stable
-                if (now - lastCoolDown > 300000) { // Every 5 minutes
+                if (now - lastCoolDown > 600000) { // Every 10 minutes
                     val rate = ProxyStats.getSuccessRate()
                     if (recoveryEscalation > 0 && rate > 80) {
-                        // Double cool-down if rate is perfect
                         val reduction = if (rate > 95) 2 else 1
                         recoveryEscalation = (recoveryEscalation - reduction).coerceAtLeast(0)
-                        
                         Log.i("RecoveryManager", "Strategy cooling: Escalation reduced by $reduction to $recoveryEscalation")
                         if (recoveryEscalation == 0) BypassConfig.setPanicMode(false)
                     }
                     lastCoolDown = now
                 }
                 
-                if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 30) {
-                    handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop")
-                }
-                
-                if (active > 0 && currentBytes == lastBytes && ProxyStats.censorshipIntensity.value > 50) {
-                    handleEvent(RecoveryEvent.TUNNEL_STALL, "Ghosting detected: $active connections, 0 bytes in 30s")
+                if (activeConns > 0) {
+                    if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 25) {
+                        handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop during active session")
+                    }
+                    
+                    if (currentBytes == lastBytes && ProxyStats.censorshipIntensity.value > 60) {
+                        handleEvent(RecoveryEvent.TUNNEL_STALL, "Ghosting detected: $activeConns connections, 0 bytes in ${delayMs/1000}s")
+                    }
                 }
                 
                 lastBytes = currentBytes
 
-                // ProxyStats is in BypassTypes.kt
                 if (ProxyStats.currentDpiType.value != DpiType.NONE) {
                     handleEvent(RecoveryEvent.DPI_DETECTED, "DPI: ${ProxyStats.currentDpiType.value}")
                     ProxyStats.clearDpiType()

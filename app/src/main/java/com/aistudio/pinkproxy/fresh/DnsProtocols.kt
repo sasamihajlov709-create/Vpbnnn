@@ -75,14 +75,13 @@ object DnsProtocols {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
             val targetAddr = InetAddress.getByName(dnsIp)
-            val packet = DatagramPacket(query, query.size, targetAddr, 53)
+            socket.connect(targetAddr, 53)
+            val packet = DatagramPacket(query, query.size)
             socket.send(packet)
             
             val respPacket = DatagramPacket(buffer, buffer.size)
             socket.receive(respPacket)
-            if (respPacket.address != targetAddr) {
-                return emptyList()
-            }
+            // No need to check address anymore as connect() filters it
             val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } finally {
@@ -109,11 +108,12 @@ object DnsProtocols {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
             val dnsAddr = InetAddress.getByName(dnsIp)
+            socket.connect(dnsAddr, 53)
             
             // Send fake query to innocent host with different ID
-            socket.send(DatagramPacket(queryFake, queryFake.size, dnsAddr, 53))
+            socket.send(DatagramPacket(queryFake, queryFake.size))
             delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 25)) // Random interval
-            socket.send(DatagramPacket(queryReal, queryReal.size, dnsAddr, 53))
+            socket.send(DatagramPacket(queryReal, queryReal.size))
             
             val start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < 3000) {
@@ -156,19 +156,45 @@ object DnsProtocols {
         }
     }
 
+    private val dotHostnames = mapOf(
+        "8.8.8.8" to "dns.google",
+        "8.8.4.4" to "dns.google",
+        "1.1.1.1" to "one.one.one.one",
+        "1.0.0.1" to "one.one.one.one",
+        "9.9.9.9" to "dns.quad9.net",
+        "149.112.112.112" to "dns.quad9.net",
+        "76.76.2.0" to "dns.controld.com",
+        "76.76.10.0" to "dns.controld.com",
+        "94.140.14.14" to "dns.adguard.com",
+        "94.140.15.15" to "dns.adguard.com"
+    )
+
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
-        val sslSocket = SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory.createSocket() as? javax.net.ssl.SSLSocket ?: return emptyList()
+        
+        val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+        trustManagerFactory.init(null as java.security.KeyStore?)
+        val trustManagers = trustManagerFactory.trustManagers
+        val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
+        
+        val sc = SSLContext.getInstance("TLS")
+        sc.init(null, if (defaultTrustManager != null) arrayOf(defaultTrustManager) else null, null)
+        
+        val factory = ProtectedSSLSocketFactory(sc.socketFactory, vpnService)
+        val sslSocket = factory.createSocket() as? javax.net.ssl.SSLSocket ?: return emptyList()
+        
         try {
-            vpnService?.protect(sslSocket)
             sslSocket.connect(InetSocketAddress(dotIp, 853), 3000)
             sslSocket.soTimeout = 3000
             sslSocket.startHandshake()
 
             val session = sslSocket.session
-            if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(dotIp, session)) {
-                Log.w("DnsProtocols", "DoT hostname verification failed for $dotIp")
+            val verifier = HttpsURLConnection.getDefaultHostnameVerifier()
+            val expectedHost = dotHostnames[dotIp] ?: dotIp
+            
+            if (!verifier.verify(expectedHost, session)) {
+                Log.w("DnsProtocols", "DoT hostname verification failed for $dotIp (expected $expectedHost)")
                 return emptyList()
             }
 

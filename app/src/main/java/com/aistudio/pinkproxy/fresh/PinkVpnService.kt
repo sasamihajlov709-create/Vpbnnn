@@ -101,45 +101,48 @@ class PinkVpnService : VpnService() {
             var lastDnsFailures = 0L
             var stagnantCounter = 0
             while (isActive) {
-                delay(40000)
+                // Adaptive watchdog: 90s if active, 180s if idle
+                val activeConns = ProxyStats.activeConnections.value
+                val delayMs = if (activeConns > 0) 90000L else 180000L
+                delay(delayMs)
+                
                 if (!_isRunning.value) continue
                 
                 val currentBytes = ProxyStats.bytesTransferred.value
-                val activeConns = ProxyStats.activeConnections.value
                 val dnsFailures = ProxyStats.dnsFailureCount.value
                 
-                // Local check if proxy is alive
+                // Local check if proxy is alive (reduced frequency: only every ~5 mins)
                 if (proxyServer == null) {
                     ProxyStats.logRecovery("Watchdog: Proxy server missing! Starting...")
                     proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
                     proxyServer?.start()
-                } else if (System.currentTimeMillis() % 120000 < 40000) {
+                } else if (System.currentTimeMillis() % 300000 < delayMs) {
                     try {
                         val s = java.net.Socket()
                         s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1000)
                         s.close()
                     } catch (e: Exception) {
-                        ProxyStats.logRecovery("Watchdog: Proxy port $PROXY_PORT is unreachable! Restarting proxy...")
-                        RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Port $PROXY_PORT dead")
+                        ProxyStats.logRecovery("Watchdog: Proxy port $PROXY_PORT dead. Restarting engine...")
+                        RecoveryManager.handleEvent(RecoveryEvent.PROXY_UNREACHABLE, "Engine port dead")
                         proxyServer?.stop()
                         proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
                         proxyServer?.start()
                     }
                 }
 
-                // DNS health check
-                if (dnsFailures > lastDnsFailures + 10) {
-                    ProxyStats.logRecovery("Watchdog: High DNS failure rate detected. Clearing resolver cache.")
+                // DNS health check (more tolerant)
+                if (dnsFailures > lastDnsFailures + 20) {
+                    ProxyStats.logRecovery("Watchdog: High DNS failures (${dnsFailures - lastDnsFailures}). Flushing resolver.")
                     RobustResolver.clearCache()
                 }
                 lastDnsFailures = dnsFailures
                 
                 if (currentBytes > 0 && currentBytes == lastBytes && activeConns > 0) {
                     stagnantCounter++
-                    if (stagnantCounter >= 3) { // 2 minutes of stagnant active connections
-                        ProxyStats.logRecovery("Watchdog: Engine Stagnant detected. Self-healing...")
+                    if (stagnantCounter >= 2) { // ~3-6 minutes of stagnant active connections
+                        ProxyStats.logRecovery("Watchdog: Tunnel stagnation detected.")
                         stagnantCounter = 0
-                        RecoveryManager.handleEvent(RecoveryEvent.TUNNEL_STALL, "Zero traffic and proxy failure")
+                        RecoveryManager.handleEvent(RecoveryEvent.TUNNEL_STALL, "Active but stagnant")
                     }
                 } else {
                     stagnantCounter = 0

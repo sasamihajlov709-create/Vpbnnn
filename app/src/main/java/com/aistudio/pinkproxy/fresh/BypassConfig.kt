@@ -897,9 +897,56 @@ object BypassConfig {
                     }
                 }
             }
-            BypassStrategy.HTTP_VERSION_SKEW, BypassStrategy.TCP_RST_FAKE, BypassStrategy.TCP_KEEP_ALIVE_FAKE, BypassStrategy.HTTP_METHOD_FAKE, BypassStrategy.HTTP_AUTH_RANDOM, BypassStrategy.HTTP_HEADER_FUZZING -> {
-                output.write(data, 0, length)
-                output.flush()
+            BypassStrategy.HTTP_METHOD_FAKE -> {
+                if (isProbableHttp(data, length)) {
+                    val fake = "POST / HTTP/1.1\r\nHost: $host\r\nContent-Length: 10\r\nConnection: keep-alive\r\n\r\nFAKE_DATA\r\n".toByteArray()
+                    TtlHelper.setTtl(socket, config.fakeTtl)
+                    output.write(fake); output.flush()
+                    delay(config.delay1)
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, length); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_AUTH_RANDOM -> {
+                if (isProbableHttp(data, length)) {
+                    val header = "Authorization: Basic ${java.util.Base64.getEncoder().encodeToString(rnd.nextLong().toString().toByteArray())}\r\n"
+                    injectHeaderAfterFirstLine(data, length, header.toByteArray(), output)
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_HEADER_FUZZING -> {
+                if (isProbableHttp(data, length)) {
+                    val fuzz = "X-Fuzz-${rnd.nextInt(1000)}: ${rnd.nextLong()}\r\n"
+                    injectHeaderAfterFirstLine(data, length, fuzz.toByteArray(), output)
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_VERSION_SKEW -> {
+                if (isProbableHttp(data, length)) {
+                    val mod = data.copyOf(length)
+                    for (i in 0 until length - 8) {
+                        if (mod[i] == 'H'.code.toByte() && mod[i+1] == 'T'.code.toByte() && mod[i+2] == 'T'.code.toByte() && mod[i+3] == 'P'.code.toByte() && mod[i+4] == '/'.code.toByte() && mod[i+5] == '1'.code.toByte() && mod[i+6] == '.'.code.toByte() && mod[i+7] == '1'.code.toByte()) {
+                            mod[i+7] = '0'.code.toByte() // HTTP/1.1 -> HTTP/1.0
+                            break
+                        }
+                    }
+                    output.write(mod); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_RST_FAKE -> {
+                // Send some junk data with low TTL to poison DPI state
+                val ghost = FakePacketHelper.buildFakeUdpPacket(rnd.nextInt(10, 60))
+                TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                output.write(ghost); output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TCP_KEEP_ALIVE_FAKE -> {
+                // Send zero-length data segment with low TTL
+                TtlHelper.setTtl(socket, rnd.nextInt(2, 6))
+                output.write(ByteArray(0)); output.flush()
+                delay(2)
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP_USER_AGENT_SKEW -> {
                 if (!isProbableHttp(data, length)) {
