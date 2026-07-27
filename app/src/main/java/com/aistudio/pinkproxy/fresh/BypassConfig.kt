@@ -674,6 +674,91 @@ object BypassConfig {
         output.flush()
     }
 
+    private suspend fun writeUdpWithFake(socket: DatagramSocket, targetAddr: InetAddress, targetPort: Int, fake: ByteArray, real: DatagramPacket, config: SessionConfig) {
+        val isIpv6 = targetAddr is Inet6Address
+        TtlHelper.setUdpTtl(socket, config.fakeTtl, isIpv6)
+        socket.send(DatagramPacket(fake, fake.size, targetAddr, targetPort))
+        delay(config.delay1)
+        TtlHelper.setUdpTtl(socket, 64, isIpv6)
+        socket.send(real)
+    }
+
+    suspend fun applyUdpBypass(socket: DatagramSocket, packet: DatagramPacket, config: SessionConfig, host: String) {
+        val rnd = ThreadLocalRandom.current()
+        val strategy = config.strategy
+        val targetAddr = packet.address
+        val targetPort = packet.port
+        val data = packet.data
+        val length = packet.length
+
+        when (strategy) {
+            BypassStrategy.UDP_FAKE_DTLS -> {
+                val dtls = FakePacketHelper.buildFakeDtlsClientHello()
+                writeUdpWithFake(socket, targetAddr, targetPort, dtls, packet, config)
+            }
+            BypassStrategy.UDP_STUN_FAKE -> {
+                val stun = FakePacketHelper.buildStunBindingRequest()
+                writeUdpWithFake(socket, targetAddr, targetPort, stun, packet, config)
+            }
+            BypassStrategy.QUIC_INITIAL_FAKE -> {
+                val initial = FakePacketHelper.buildQuicInitial()
+                writeUdpWithFake(socket, targetAddr, targetPort, initial, packet, config)
+            }
+            BypassStrategy.UDP_WIREGUARD_FAKE -> {
+                val wg = FakePacketHelper.buildWireGuardHandshake()
+                writeUdpWithFake(socket, targetAddr, targetPort, wg, packet, config)
+            }
+            BypassStrategy.UDP_IKE_FAKE -> {
+                val ike = FakePacketHelper.buildIkeHandshake()
+                writeUdpWithFake(socket, targetAddr, targetPort, ike, packet, config)
+            }
+            BypassStrategy.UDP_DHCP_FAKE -> {
+                val dhcp = FakePacketHelper.buildDhcpRequest()
+                writeUdpWithFake(socket, targetAddr, targetPort, dhcp, packet, config)
+            }
+            BypassStrategy.UDP_NOISE_PAD -> {
+                val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(50, 200))
+                writeUdpWithFake(socket, targetAddr, targetPort, noise, packet, config)
+            }
+            BypassStrategy.UDP_GHOST_SKEW -> {
+                repeat(rnd.nextInt(1, 3)) {
+                    val ghost = FakePacketHelper.buildFakeUdpPacket(rnd.nextInt(10, 40))
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetAddr is Inet6Address)
+                    socket.send(DatagramPacket(ghost, ghost.size, targetAddr, targetPort))
+                    delay(rnd.nextLong(2, 5))
+                }
+                TtlHelper.setUdpTtl(socket, 64, targetAddr is Inet6Address)
+                socket.send(packet)
+            }
+            BypassStrategy.UDP_FRAGMENT_SKEW -> {
+                if (length > 20) {
+                    val split = length / 2
+                    val p1 = data.copyOfRange(0, split)
+                    TtlHelper.setUdpTtl(socket, config.fakeTtl, targetAddr is Inet6Address)
+                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
+                    delay(config.delay1)
+                }
+                TtlHelper.setUdpTtl(socket, 64, targetAddr is Inet6Address)
+                socket.send(packet)
+            }
+            BypassStrategy.UDP_STUTTER -> {
+                delay(rnd.nextLong(5, 30))
+                socket.send(packet)
+            }
+            BypassStrategy.DNS_NOISE -> {
+                if (targetPort == 53) {
+                    val noise = FakePacketHelper.buildFakeUdpPacket(rnd.nextInt(40, 80))
+                    writeUdpWithFake(socket, targetAddr, targetPort, noise, packet, config)
+                } else {
+                    socket.send(packet)
+                }
+            }
+            else -> {
+                socket.send(packet)
+            }
+        }
+    }
+
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) {
         val rnd = ThreadLocalRandom.current()
         val strategy = config.strategy

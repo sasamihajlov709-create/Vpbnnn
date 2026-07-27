@@ -206,10 +206,12 @@ object TcpTransportHandler {
                     val activeConns = ProxyStats.activeConnections.value
                     val useSmallBuf = activeConns > 30 || intensity > 85
                     val buffer = if (useSmallBuf) ProxyStats.obtain16k() else ProxyStats.obtain64k()
+                    val rnd = ThreadLocalRandom.current()
                     
                     try {
                         var n: Int
                         var firstPacket = true
+                        var totalWritten = 0L
                         while (isActive) {
                             n = clientIn.read(buffer)
                             if (n == -1) break
@@ -225,7 +227,18 @@ object TcpTransportHandler {
                                     }
                                 } else {
                                     val currentIntensity = ProxyStats.censorshipIntensity.value
-                                    if (currentIntensity > 65 && n > 1000) {
+                                    // Pacing: slow down if we just started or if censorship is high
+                                    if (totalWritten < 32768 && currentIntensity > 50) {
+                                        val pSize = if (currentIntensity > 80) 512 else 1024
+                                        var offset = 0
+                                        while (offset < n) {
+                                            val chunk = minOf(pSize, n - offset)
+                                            remoteOut.write(buffer, offset, chunk)
+                                            remoteOut.flush()
+                                            offset += chunk
+                                            if (offset < n) delay(rnd.nextLong(2, 8))
+                                        }
+                                    } else if (currentIntensity > 65 && n > 1000) {
                                         val fragCount = if (currentIntensity > 90) 3 else 2
                                         val partSize = n / fragCount
                                         for (i in 0 until fragCount) {
@@ -234,7 +247,7 @@ object TcpTransportHandler {
                                             remoteOut.write(buffer, offset, len)
                                             remoteOut.flush()
                                             if (i < fragCount - 1) {
-                                                val d = (BypassConfig.currentRttMs.value / 30 + 1).coerceAtMost(30)
+                                                val d = (BypassConfig.currentRttMs.value / 35 + 1).coerceAtMost(25)
                                                 delay(d)
                                             }
                                         }
@@ -243,6 +256,7 @@ object TcpTransportHandler {
                                         remoteOut.flush()
                                     }
                                 }
+                                totalWritten += n
                                 ProxyStats.updateBytes(n.toLong())
                             }
                         }

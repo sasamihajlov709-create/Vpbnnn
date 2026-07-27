@@ -44,6 +44,7 @@ object RobustResolver {
         if (DnsCacheManager.isIpAddress(host)) {
             return try { listOf(InetAddress.getByName(host)) } catch (e: Exception) { emptyList() }
         }
+        if (DnsCacheManager.isNegative(host)) return emptyList()
 
         val cached = DnsCacheManager.getCached(host)
         if (cached != null) return cached
@@ -140,6 +141,7 @@ object RobustResolver {
             } catch (e: Exception) {}
         }
 
+        DnsCacheManager.putNegative(host)
         throw java.net.UnknownHostException("Resolution failed for $host")
     }
 

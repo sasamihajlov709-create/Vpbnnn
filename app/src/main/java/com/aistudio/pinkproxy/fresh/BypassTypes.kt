@@ -128,6 +128,9 @@ enum class BypassStrategy(
     TLS_RECORD_FRAGMENTATION(StrategyFamily.TLS, 4, 3),
     QUIC_INITIAL_FAKE(StrategyFamily.UDP, 3, 4),
     HTTP_HOST_SMUGGLE(StrategyFamily.HTTP, 3, 3),
+    UDP_WIREGUARD_FAKE(StrategyFamily.UDP, 3, 3),
+    UDP_IKE_FAKE(StrategyFamily.UDP, 3, 3),
+    UDP_DHCP_FAKE(StrategyFamily.UDP, 3, 3),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 

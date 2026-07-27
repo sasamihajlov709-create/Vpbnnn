@@ -240,212 +240,22 @@ object UdpTransportHandler {
         val isQuic = targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0
         val outPacket = DatagramPacket(payload, payload.size, targetInet, targetPort)
         
-        // Adaptive Jitter & Fragmentation
+        // Basic filtering
+        if (BypassConfig.blockQuic && isQuic) return
+
+        val host = if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress
+        val strategy = BypassConfig.getBestStrategyForHost(host)
+        val config = BypassConfig.getSessionConfig(host, strategy, BypassConfig.currentRttMs.value)
+        
+        // Adaptive Jitter
         val intensity = ProxyStats.censorshipIntensity.value
         val rnd = ThreadLocalRandom.current()
         if (intensity > 40) {
-            val jitter = rnd.nextLong(0, (intensity / 5).toLong())
+            val jitter = rnd.nextLong(0, (intensity / 5).toLong() + 5)
             if (jitter > 0) delay(jitter)
         }
 
-        // UDP Fragmentation for large non-QUIC packets
-        if (!isQuic && payload.size > 1200 && intensity > 70) {
-            val mid = payload.size / 2
-            val p1 = payload.copyOfRange(0, mid)
-            val p2 = payload.copyOfRange(mid, payload.size)
-            socket.send(DatagramPacket(p1, p1.size, targetInet, targetPort))
-            delay(rnd.nextLong(2, 10))
-            socket.send(DatagramPacket(p2, p2.size, targetInet, targetPort))
-            return
-        }
-
-        val strategy = BypassConfig.getBestStrategyForHost(if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress)
-        
-        if (BypassConfig.blockQuic && isQuic) return
-
-        if (strategy == BypassStrategy.UDP_STUN_FAKE) {
-            val stun = FakePacketHelper.buildStunBindingRequest()
-            socket.send(DatagramPacket(stun, stun.size, targetInet, targetPort))
-            delay(rnd.nextLong(10, 50))
-            socket.send(outPacket)
-            return
-        }
-
-        if (strategy == BypassStrategy.UDP_FAKE_DTLS) {
-            val dtls = FakePacketHelper.buildFakeDtlsClientHello()
-            socket.send(DatagramPacket(dtls, dtls.size, targetInet, targetPort))
-            delay(rnd.nextLong(15, 60))
-            socket.send(outPacket)
-            return
-        }
-
-        if (strategy == BypassStrategy.UDP_NOISE_PAD) {
-            val noiseSize = if (isQuic) rnd.nextInt(1200, 1400) else rnd.nextInt(10, 100)
-            val noise = FakePacketHelper.buildUdpNoise(noiseSize)
-            socket.send(DatagramPacket(noise, noise.size, targetInet, targetPort))
-            delay(rnd.nextLong(5, 25))
-            socket.send(outPacket)
-            return
-        }
-
-        if (strategy == BypassStrategy.QUIC_INITIAL_FAKE) {
-            val initial = FakePacketHelper.buildQuicInitial()
-            socket.send(DatagramPacket(initial, initial.size, targetInet, targetPort))
-            delay(rnd.nextLong(10, 40))
-            socket.send(outPacket)
-            return
-        }
-
-        if (strategy == BypassStrategy.DIRECT) {
-            socket.send(outPacket)
-            return
-        }
-
-        if (isQuic) {
-            when (strategy) {
-                BypassStrategy.QUIC_INITIAL_FAKE -> {
-                    val fakeQuic = FakePacketHelper.buildQuicInitial()
-                    val fakeQuicPacket = DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
-                    socket.send(fakeQuicPacket)
-                    delay(3)
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.QUIC_RST_SKEW -> {
-                    val rstPayload = FakePacketHelper.buildQuicStatelessReset()
-                    val rstPacket = DatagramPacket(rstPayload, rstPayload.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, rnd.nextInt(3, 7), targetInet is java.net.Inet6Address)
-                    socket.send(rstPacket)
-                    delay(rnd.nextLong(1, 5))
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.QUIC_VERSION_NEGOTIATION_SKEW -> {
-                    val verPayload = ByteArray(100) { (it % 255).toByte() }
-                    verPayload[0] = 0x80.toByte() 
-                    verPayload[1] = 0; verPayload[2] = 0; verPayload[3] = 0; verPayload[4] = 0 
-                    val verPacket = DatagramPacket(verPayload, verPayload.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 3, targetInet is java.net.Inet6Address)
-                    socket.send(verPacket)
-                    delay(5)
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.UDP_DTLS_FAKE -> {
-                    val dtls = byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + ByteArray(20) { ThreadLocalRandom.current().nextInt(256).toByte() }
-                    val dtlsPacket = DatagramPacket(dtls, dtls.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
-                    socket.send(dtlsPacket)
-                    delay(3)
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.UDP_GHOST_SKEW -> {
-                    repeat(ThreadLocalRandom.current().nextInt(1, 3)) {
-                        val ghost = FakePacketHelper.buildFakeUdpPacket(ThreadLocalRandom.current().nextInt(10, 40))
-                        val ghostPacket = DatagramPacket(ghost, ghost.size, targetInet, targetPort)
-                        TtlHelper.setUdpTtl(socket, 2, targetInet is java.net.Inet6Address)
-                        socket.send(ghostPacket)
-                        delay(2)
-                    }
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.UDP_FRAGMENT_SKEW -> {
-                    if (payload.size > 20) {
-                        val p1 = payload.copyOfRange(0, 10)
-                        val fakePacket = DatagramPacket(p1, p1.size, targetInet, targetPort)
-                        TtlHelper.setUdpTtl(socket, 4, targetInet is java.net.Inet6Address)
-                        socket.send(fakePacket)
-                        delay(2)
-                    }
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.UDP_STUTTER -> {
-                    delay(ThreadLocalRandom.current().nextLong(1, 5))
-                    socket.send(outPacket)
-                }
-                BypassStrategy.UDP_STUN_FAKE -> {
-                    val stun = FakePacketHelper.buildFakeStunMessage()
-                    val stunPacket = DatagramPacket(stun, stun.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
-                    socket.send(stunPacket)
-                    delay(3)
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.QUIC_MTU_PROBE -> {
-                    socket.send(outPacket)
-                    val probe = ProxyStats.obtain8k()
-                    try {
-                        java.util.Arrays.fill(probe, 0.toByte())
-                        repeat(2) {
-                            delay(5)
-                            socket.send(DatagramPacket(probe, 1200, targetInet, targetPort))
-                        }
-                    } finally {
-                        ProxyStats.release8k(probe)
-                    }
-                }
-                else -> {
-                    val fakeQuic = FakePacketHelper.buildQuicInitial()
-                    val fakeQuicPacket = DatagramPacket(fakeQuic, fakeQuic.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
-                    socket.send(fakeQuicPacket)
-                    delay(3)
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-            }
-        } else if (targetPort == 53) {
-            when (strategy) {
-                BypassStrategy.DNS_NOISE -> {
-                    val noise = FakePacketHelper.buildFakeUdpPacket(50)
-                    val noisePacket = DatagramPacket(noise, noise.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 4, targetInet is java.net.Inet6Address)
-                    socket.send(noisePacket)
-                    delay(2)
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-                BypassStrategy.DNS_CASE_MANGLE -> {
-                    val query = DnsUtils.parseDnsQName(payload)
-                    if (query != null) {
-                        val mangled = payload.copyOf()
-                        // Find the domain name part and mangle case
-                        // (Rough implementation)
-                        for (i in 12 until payload.size - 4) {
-                            if (payload[i] in 65..90 || payload[i] in 97..122) {
-                                if (ThreadLocalRandom.current().nextBoolean()) {
-                                    mangled[i] = (payload[i].toInt() xor 32).toByte()
-                                }
-                            }
-                        }
-                        socket.send(DatagramPacket(mangled, mangled.size, targetInet, targetPort))
-                    } else {
-                        socket.send(outPacket)
-                    }
-                }
-                else -> {
-                    val noise = FakePacketHelper.buildQuicInitial()
-                    val noisePacket = DatagramPacket(noise, noise.size, targetInet, targetPort)
-                    TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
-                    socket.send(noisePacket)
-                    delay(3)
-                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-                    socket.send(outPacket)
-                }
-            }
-        } else {
-            val noise = FakePacketHelper.buildFakeUdpPacket(ThreadLocalRandom.current().nextInt(30, 150))
-            val noisePacket = DatagramPacket(noise, noise.size, targetInet, targetPort)
-            TtlHelper.setUdpTtl(socket, 5, targetInet is java.net.Inet6Address)
-            socket.send(noisePacket)
-            delay(3)
-            TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
-            socket.send(outPacket)
-        }
+        // Apply centralized UDP bypass
+        BypassConfig.applyUdpBypass(socket, outPacket, config, host)
     }
 }

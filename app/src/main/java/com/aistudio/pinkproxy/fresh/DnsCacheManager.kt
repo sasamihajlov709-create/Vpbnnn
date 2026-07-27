@@ -126,12 +126,31 @@ object DnsCacheManager {
         ipHeatmap[ip] = (current - 15).coerceAtLeast(0)
     }
 
+    private val negativeCache = ConcurrentHashMap<String, Long>()
+    private const val NEGATIVE_CACHE_TTL = 300000L // 5 minutes
+
+    fun putNegative(host: String) {
+        negativeCache[host] = System.currentTimeMillis()
+    }
+
+    fun isNegative(host: String): Boolean {
+        val time = negativeCache[host] ?: return false
+        if (System.currentTimeMillis() - time > NEGATIVE_CACHE_TTL) {
+            negativeCache.remove(host)
+            return false
+        }
+        return true
+    }
+
     fun getSortedIps(ips: List<InetAddress>): List<InetAddress> {
         val preferIpv6 = BypassConfig.preferIpv6
         return ips.sortedWith(compareByDescending<InetAddress> { 
             ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) 
         }.thenByDescending { 
             if (preferIpv6) it is Inet6Address else it !is Inet6Address
+        }.thenBy { 
+            // Prefer shorter addresses (IPv4) if all else is equal and not preferring IPv6
+            it.address.size
         })
     }
 

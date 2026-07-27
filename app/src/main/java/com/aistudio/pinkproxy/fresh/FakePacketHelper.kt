@@ -961,6 +961,70 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildWireGuardHandshake(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        
+        dos.writeByte(0x01) // Type: Initiation
+        dos.write(ByteArray(3) { 0 }) // Reserved
+        dos.writeInt(rnd.nextInt()) // Sender Index
+        dos.write(ByteArray(32) { rnd.nextInt(256).toByte() }) // Unencrypted Ephemeral
+        dos.write(ByteArray(48) { rnd.nextInt(256).toByte() }) // Encrypted Static
+        dos.write(ByteArray(28) { rnd.nextInt(256).toByte() }) // Encrypted Timestamp
+        dos.write(ByteArray(32) { rnd.nextInt(256).toByte() }) // MAC1
+        dos.write(ByteArray(16) { 0 }) // MAC2
+        
+        return baos.toByteArray()
+    }
+
+    fun buildIkeHandshake(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        
+        dos.writeLong(rnd.nextLong()) // Initiator SPI
+        dos.writeLong(0) // Responder SPI
+        dos.writeByte(0x21) // Next Payload: Security Association
+        dos.writeByte(0x20) // Version: 2.0
+        dos.writeByte(0x22) // Exchange Type: IKE_SA_INIT
+        dos.writeByte(0x08) // Flags: Initiator
+        dos.writeInt(0) // Message ID
+        
+        val payloadLen = 40 + rnd.nextInt(20, 60)
+        dos.writeInt(28 + payloadLen) // Total Length
+        
+        return baos.toByteArray() + ByteArray(payloadLen) { rnd.nextInt(256).toByte() }
+    }
+
+    fun buildDhcpRequest(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        
+        dos.writeByte(0x01) // OP: Boot Request
+        dos.writeByte(0x01) // HTYPE: Ethernet
+        dos.writeByte(0x06) // HLEN: 6
+        dos.writeByte(0x00) // HOPS: 0
+        dos.writeInt(rnd.nextInt()) // XID
+        dos.writeShort(0) // SECS
+        dos.writeShort(0x0000) // FLAGS
+        
+        dos.write(ByteArray(16) { 0 }) // CIADDR, YIADDR, SIADDR, GIADDR
+        val mac = ByteArray(6) { rnd.nextInt(256).toByte() }
+        dos.write(mac)
+        dos.write(ByteArray(10) { 0 }) // CHADDR Padding
+        dos.write(ByteArray(64) { 0 }) // SNAME
+        dos.write(ByteArray(128) { 0 }) // FILE
+        
+        dos.writeInt(0x63825363) // Magic Cookie
+        
+        dos.writeByte(53); dos.writeByte(1); dos.writeByte(3) // DHCP Request
+        dos.writeByte(255) // End
+        
+        return baos.toByteArray()
+    }
+
     fun addTlsGreaseExtensions(data: ByteArray, length: Int): ByteArray {
         if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)
         try {
