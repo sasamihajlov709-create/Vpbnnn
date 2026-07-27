@@ -20,6 +20,8 @@ object RobustResolver {
         resolverScope = scope
     }
 
+    private fun getScope(): CoroutineScope = resolverScope ?: GlobalScope
+
     fun loadDnsSettings(context: android.content.Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
         dnsMode = prefs.getString("dns_mode", "Smart DoH") ?: "Smart DoH"
@@ -51,7 +53,7 @@ object RobustResolver {
         if (cached != null) return cached
 
         val cacheKey = host.lowercase()
-        val scope = resolverScope ?: GlobalScope
+        val scope = getScope()
         val deferred = pendingResolutions.computeIfAbsent(cacheKey) {
             scope.async {
                 try {
@@ -67,6 +69,7 @@ object RobustResolver {
                 deferred.await()
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             pendingResolutions.remove(cacheKey)
             if (e is TimeoutCancellationException) {
                 // Return emergency fallback on timeout instead of failing
@@ -115,9 +118,16 @@ object RobustResolver {
                     
                     // Smart Prefetch common subdomains
                     if (!host.startsWith("www.") && host.split(".").size == 2) {
-                        (resolverScope ?: CoroutineScope(Dispatchers.IO)).launch {
+                        getScope().launch {
                             listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
-                                try { performParallelResolution(prefix + host, vpnService) } catch (e: Exception) { if (e is CancellationException) throw e }
+                                try { 
+                                    val preHost = prefix + host
+                                    if (DnsCacheManager.getCached(preHost) == null) {
+                                        performParallelResolution(preHost, vpnService) 
+                                    }
+                                } catch (e: Exception) { 
+                                    if (e is CancellationException) throw e 
+                                }
                             }
                         }
                     }

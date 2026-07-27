@@ -43,7 +43,7 @@ object UdpTransportHandler {
             val jobs = mutableListOf<Job>()
             
             // Outgoing UDP Workers
-            repeat(16) {
+            repeat(8) {
                 jobs += launch(Dispatchers.IO) {
                     try {
                         for (work in udpOutChannel) {
@@ -51,11 +51,13 @@ object UdpTransportHandler {
                             try {
                                 sendUdpPacket(outSocket, packet, targetHost)
                             } catch (e: Exception) {
-                                if (e !is CancellationException) Log.v("UdpTransport", "Send error: ${e.message}")
+                                if (e is CancellationException) throw e
+                                Log.v("UdpTransport", "Send error: ${e.message}")
                             }
                         }
                     } catch (e: Exception) {
-                        if (e !is CancellationException) Log.v("UdpTransport", "UDP Outbound worker error: ${e.message}")
+                        if (e is CancellationException) throw e
+                        Log.v("UdpTransport", "UDP Outbound worker error: ${e.message}")
                     }
                 }
             }
@@ -67,12 +69,16 @@ object UdpTransportHandler {
                 val packet = DatagramPacket(buffer, buffer.size)
                 val outPacket = DatagramPacket(respBuffer, respBuffer.size)
                 try {
+                    outSocket.soTimeout = 2000
                     while (isActive) {
                         packet.setData(buffer)
                         try {
                             outSocket.receive(packet)
                         } catch (e: java.net.SocketTimeoutException) {
                             continue
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            break
                         }
 
                         if (clientUdpAddress != null) {
@@ -104,12 +110,16 @@ object UdpTransportHandler {
                 val buffer = ProxyStats.obtain64k()
                 val packet = DatagramPacket(buffer, buffer.size)
                 try {
+                    udpSocket.soTimeout = 2000
                     while (isActive) {
                         packet.setData(buffer)
                         try {
                             udpSocket.receive(packet)
                         } catch (e: java.net.SocketTimeoutException) {
                             continue
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            break
                         }
                         val pktAddr = packet.address
                         val pktPort = packet.port

@@ -53,15 +53,16 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         continue
                     }
                     
-                    launch {
+                    val clientJob = scope.launch {
                         try {
-                            handleClient(client)
+                            handleClient(client, scope)
                         } finally {
                             activeConnectionSemaphore.release()
                         }
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 if (isActive) Log.e("PinkProxy", "Server error", e)
             } finally {
                 try { serverSocket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
@@ -86,7 +87,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.DelicateCoroutinesApi::class)
-    private suspend fun handleClient(client: Socket) {
+    private suspend fun handleClient(client: Socket, scope: CoroutineScope) {
         // UID Verification for Android 10+ (API 29+)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             try {
@@ -102,6 +103,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.v("PinkProxy", "UID check exception: ${e.message}")
             }
         }
@@ -173,7 +175,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             val atyp = input.read()
 
             if (cmd == 3) { // UDP ASSOCIATE
-                UdpTransportHandler.handleUdpAssociate(client, output, vpnService, PinkVpnService.instance?.getServiceScope() ?: GlobalScope)
+                UdpTransportHandler.handleUdpAssociate(client, output, vpnService, scope)
                 return
             }
             if (cmd != 1) { // CONNECT ONLY
@@ -215,9 +217,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             
             client.soTimeout = 0 // Remove timeout for the tunneled connection
             try { client.keepAlive = true } catch (e: Exception) {}
-            TcpTransportHandler.handleTcpSession(client, host ?: "", targetPort, vpnService, PinkVpnService.instance?.getServiceScope() ?: GlobalScope)
+            TcpTransportHandler.handleTcpSession(client, host ?: "", targetPort, vpnService, scope)
 
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.v("PinkProxy", "Client handling error: ${e.message}")
         } finally {
             try { client.close() } catch (ex: Exception) {}

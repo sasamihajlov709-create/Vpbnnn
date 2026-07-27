@@ -185,7 +185,14 @@ object TcpTransportHandler {
                         var n: Int
                         var firstResponse = true
                         while (isActive) {
-                            n = remoteIn.read(buffer)
+                            try {
+                                n = remoteIn.read(buffer)
+                            } catch (e: Exception) {
+                                if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
+                                    if (isActive) continue else break
+                                }
+                                throw e
+                            }
                             if (n == -1) break
                             if (n > 0) {
                                 if (firstResponse) {
@@ -220,6 +227,7 @@ object TcpTransportHandler {
                             }
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
                         if (System.currentTimeMillis() - start < 15000) {
                             BypassConfig.recordFailure(strategy, targetHost)
@@ -250,7 +258,14 @@ object TcpTransportHandler {
                         var n: Int
                         var firstPacket = true
                         while (isActive) {
-                            n = clientIn.read(buffer)
+                            try {
+                                n = clientIn.read(buffer)
+                            } catch (e: Exception) {
+                                if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
+                                    if (isActive) continue else break
+                                }
+                                throw e
+                            }
                             if (n == -1) break
                             if (n > 0) {
                                 lastActivity.set(System.currentTimeMillis())
@@ -259,6 +274,7 @@ object TcpTransportHandler {
                                     try {
                                         BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
                                     } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
                                         BypassConfig.recordFailure(strategy, targetHost)
                                         throw e
                                     }
@@ -269,7 +285,7 @@ object TcpTransportHandler {
                                     if (totalWrittenClient.get() < 32768 && currentIntensity > 50) {
                                         val pSize = if (currentIntensity > 80) minOf(512, mss) else minOf(1024, mss)
                                         var offset = 0
-                                        while (offset < n) {
+                                        while (offset < n && isActive) {
                                             val chunk = minOf(pSize, n - offset)
                                             remoteOut.write(buffer, offset, chunk)
                                             remoteOut.flush()
@@ -280,6 +296,7 @@ object TcpTransportHandler {
                                         val fragCount = if (currentIntensity > 90) 3 else 2
                                         val partSize = n / fragCount
                                         for (i in 0 until fragCount) {
+                                            if (!isActive) break
                                             val offset = i * partSize
                                             val len = if (i == fragCount - 1) n - offset else partSize
                                             remoteOut.write(buffer, offset, len)
@@ -308,6 +325,7 @@ object TcpTransportHandler {
                             }
                         }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         BypassConfig.TrafficShaper.recordError()
                         if (System.currentTimeMillis() - start < 15000) {
                             BypassConfig.recordFailure(strategy, targetHost)

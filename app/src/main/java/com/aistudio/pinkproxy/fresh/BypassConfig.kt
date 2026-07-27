@@ -761,7 +761,53 @@ object BypassConfig {
     }
 
     suspend fun applyUdpBypass(socket: DatagramSocket, packet: DatagramPacket, config: SessionConfig, host: String) {
-        socket.send(packet)
+        val rnd = ThreadLocalRandom.current()
+        val data = packet.data
+        val length = packet.length
+        val offset = packet.offset
+        val targetAddr = packet.address
+        val targetPort = packet.port ?: return
+
+        when (config.strategy) {
+            BypassStrategy.UDP_FAKE_DTLS -> {
+                val fake = byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + ByteArray(rnd.nextInt(10, 30)) { rnd.nextInt(256).toByte() }
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_WIREGUARD_FAKE -> {
+                val fake = byteArrayOf(0x01, 0x00, 0x00, 0x00) + ByteArray(28) { rnd.nextInt(256).toByte() }
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_STUN_FAKE -> {
+                val fake = byteArrayOf(0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xa4.toByte(), 0x42) + ByteArray(12) { rnd.nextInt(256).toByte() }
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_NOISE_PAD -> {
+                socket.send(packet)
+                if (rnd.nextInt(100) < 30) {
+                    val noise = ByteArray(rnd.nextInt(10, 50)) { rnd.nextInt(256).toByte() }
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch (e: Exception) {}
+                }
+            }
+            BypassStrategy.UDP_FRAGMENT_SKEW -> {
+                if (length > 100) {
+                    val split = length / 2
+                    val p1 = DatagramPacket(data, offset, split, targetAddr, targetPort)
+                    val p2 = DatagramPacket(data, offset + split, length - split, targetAddr, targetPort)
+                    socket.send(p1)
+                    delay(config.delay1)
+                    socket.send(p2)
+                } else {
+                    socket.send(packet)
+                }
+            }
+            BypassStrategy.UDP_STUTTER -> {
+                delay(rnd.nextLong(5, 25))
+                socket.send(packet)
+            }
+            else -> {
+                socket.send(packet)
+            }
+        }
     }
 
     private fun isProbableHttp(data: ByteArray, length: Int): Boolean {
