@@ -448,7 +448,7 @@ class PinkVpnService : VpnService() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+        if (level >= 60) { // TRIM_MEMORY_MODERATE
             ProxyStats.logRecovery("System memory low (level $level). Releasing pools.")
             ProxyStats.releaseAllPools()
             RobustResolver.clearCache()
