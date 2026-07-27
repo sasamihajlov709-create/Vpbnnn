@@ -711,27 +711,27 @@ object BypassConfig {
 
         when (strategy) {
             BypassStrategy.UDP_FAKE_DTLS -> {
-                val dtls = FakePacketHelper.buildFakeDtlsClientHello()
+                val dtls = FakePacketHelper.getCachedDtls()
                 writeUdpWithFake(socket, targetAddr, targetPort, dtls, packet, config)
             }
             BypassStrategy.UDP_STUN_FAKE -> {
-                val stun = FakePacketHelper.buildStunBindingRequest()
+                val stun = FakePacketHelper.getCachedStun()
                 writeUdpWithFake(socket, targetAddr, targetPort, stun, packet, config)
             }
             BypassStrategy.QUIC_INITIAL_FAKE -> {
-                val initial = FakePacketHelper.buildQuicInitial()
+                val initial = FakePacketHelper.getCachedQuicInitial()
                 writeUdpWithFake(socket, targetAddr, targetPort, initial, packet, config)
             }
             BypassStrategy.UDP_WIREGUARD_FAKE -> {
-                val wg = FakePacketHelper.buildWireGuardHandshake()
+                val wg = FakePacketHelper.getCachedWg()
                 writeUdpWithFake(socket, targetAddr, targetPort, wg, packet, config)
             }
             BypassStrategy.UDP_IKE_FAKE -> {
-                val ike = FakePacketHelper.buildIkeHandshake()
+                val ike = FakePacketHelper.getCachedIke()
                 writeUdpWithFake(socket, targetAddr, targetPort, ike, packet, config)
             }
             BypassStrategy.UDP_DHCP_FAKE -> {
-                val dhcp = FakePacketHelper.buildDhcpRequest()
+                val dhcp = FakePacketHelper.getCachedDhcp()
                 writeUdpWithFake(socket, targetAddr, targetPort, dhcp, packet, config)
             }
             BypassStrategy.UDP_TELEGRAM_FAKE -> {

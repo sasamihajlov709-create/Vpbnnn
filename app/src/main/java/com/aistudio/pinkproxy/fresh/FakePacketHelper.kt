@@ -7,14 +7,54 @@ import java.util.concurrent.ThreadLocalRandom
 
 object FakePacketHelper {
     private var cachedQuicInitial = buildQuicInitial()
+    private var cachedStun = buildStunBindingRequest()
+    private var cachedDtls = buildFakeDtlsClientHello()
+    private var cachedWg = buildWireGuardHandshake()
+    private var cachedIke = buildIkeHandshake()
+    private var cachedDhcp = buildDhcpRequest()
+    
     private var cacheTime = System.currentTimeMillis()
     
-    fun getCachedQuicInitial(): ByteArray {
+    private fun checkCacheRefresh() {
         if (System.currentTimeMillis() - cacheTime > 30000) {
             cachedQuicInitial = buildQuicInitial()
+            cachedStun = buildStunBindingRequest()
+            cachedDtls = buildFakeDtlsClientHello()
+            cachedWg = buildWireGuardHandshake()
+            cachedIke = buildIkeHandshake()
+            cachedDhcp = buildDhcpRequest()
             cacheTime = System.currentTimeMillis()
         }
+    }
+    
+    fun getCachedQuicInitial(): ByteArray {
+        checkCacheRefresh()
         return cachedQuicInitial
+    }
+    
+    fun getCachedStun(): ByteArray {
+        checkCacheRefresh()
+        return cachedStun
+    }
+    
+    fun getCachedDtls(): ByteArray {
+        checkCacheRefresh()
+        return cachedDtls
+    }
+    
+    fun getCachedWg(): ByteArray {
+        checkCacheRefresh()
+        return cachedWg
+    }
+    
+    fun getCachedIke(): ByteArray {
+        checkCacheRefresh()
+        return cachedIke
+    }
+    
+    fun getCachedDhcp(): ByteArray {
+        checkCacheRefresh()
+        return cachedDhcp
     }
     fun buildExtension(type: Int, data: ByteArray): ByteArray {
         val baos = ByteArrayOutputStream()

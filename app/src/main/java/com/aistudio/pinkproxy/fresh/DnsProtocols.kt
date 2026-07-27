@@ -37,18 +37,19 @@ object DnsProtocols {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         val socket = DatagramSocket()
+        val buffer = ProxyStats.obtain8k()
         try {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
             val packet = DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
             socket.send(packet)
             
-            val buffer = ByteArray(1024)
             val respPacket = DatagramPacket(buffer, buffer.size)
             socket.receive(respPacket)
             val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } finally {
+            ProxyStats.release8k(buffer)
             try { socket.close() } catch (e: Exception) {}
         }
     }
@@ -66,6 +67,7 @@ object DnsProtocols {
         val queryFake = DnsPacketEngine.buildDnsQuery(fakeDomain, 1, idFake, mangle)
         
         val socket = DatagramSocket()
+        val buffer = ProxyStats.obtain8k()
         try {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
@@ -76,7 +78,6 @@ object DnsProtocols {
             delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 25)) // Random interval
             socket.send(DatagramPacket(queryReal, queryReal.size, dnsAddr, 53))
             
-            val buffer = ByteArray(1024)
             val start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < 3000) {
                 val respPacket = DatagramPacket(buffer, buffer.size)
@@ -88,6 +89,7 @@ object DnsProtocols {
                 if (clean.isNotEmpty()) return clean
             }
         } catch (e: Exception) {} finally {
+            ProxyStats.release8k(buffer)
             try { socket.close() } catch (e: Exception) {}
         }
         return emptyList()
