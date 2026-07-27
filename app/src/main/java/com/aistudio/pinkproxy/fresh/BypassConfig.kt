@@ -507,6 +507,7 @@ object BypassConfig {
     fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long): SessionConfig {
         val rnd = ThreadLocalRandom.current()
         val cat = HostClassifier.classify(host)
+        val intensity = ProxyStats.censorshipIntensity.value
         
         // Adaptive configuration with jitter to avoid fingerprints
         var f1 = (frag1 + rnd.nextInt(0, 3)).coerceAtLeast(1)
@@ -514,8 +515,14 @@ object BypassConfig {
         var f3 = (frag3 + rnd.nextInt(0, 10)).coerceAtLeast(1)
         var d1 = (delay1 + rnd.nextLong(0, 15)).coerceAtLeast(5)
         
+        // Adjust based on censorship intensity
+        if (intensity > 70) {
+            f1 = (f1 / 2).coerceAtLeast(1)
+            d1 = (d1 * 1.5).toLong()
+        }
+        
         if (rtt > 250) {
-            d1 = (d1 * 1.4).toLong()
+            d1 = (d1 * 1.3).toLong()
         }
         
         when (cat) {
@@ -838,10 +845,15 @@ object BypassConfig {
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_MSS_CLAMP -> {
-                val clampSize = 536; var offset = 0
+                val intensity = ProxyStats.censorshipIntensity.value
+                val clampSize = if (intensity > 80) 128 else if (intensity > 50) 384 else 536
+                var offset = 0
                 while (offset < length) {
                     val chunk = minOf(clampSize, length - offset)
-                    output.write(data, offset, chunk); output.flush(); offset += chunk; delay(2)
+                    output.write(data, offset, chunk)
+                    output.flush()
+                    offset += chunk
+                    if (offset < length) delay(rnd.nextLong(2, 10))
                 }
             }
             BypassStrategy.HTTP_AUTH_RANDOM -> {

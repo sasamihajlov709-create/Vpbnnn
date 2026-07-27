@@ -16,7 +16,13 @@ object DnsOptimizer {
         "https://dns.nextdns.io/dns-query",
         "https://dns.controld.com/dns-query",
         "https://dns.google/dns-query?source=pink",
-        "https://1.1.1.1/dns-query"
+        "https://1.1.1.1/dns-query",
+        "https://doh.libredns.gr/dns-query",
+        "https://doh.tiar.app/dns-query",
+        "https://dns.switch.ch/dns-query",
+        "https://doh.cleanbrowsing.org/doh/family-filter/",
+        "https://doh.pub/dns-query",
+        "https://dns.alidns.com/dns-query"
     )
     
     private val dotServers = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "94.140.14.14", "45.90.28.0")

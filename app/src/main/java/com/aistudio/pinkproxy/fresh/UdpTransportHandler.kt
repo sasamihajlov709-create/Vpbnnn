@@ -43,12 +43,20 @@ object UdpTransportHandler {
             val jobs = mutableListOf<Job>()
             
             // Outgoing UDP Workers
-            repeat(4) {
+            repeat(6) {
                 jobs += launch(Dispatchers.IO) {
                     try {
                         for (work in udpOutChannel) {
                             val (packet, targetHost) = work
-                            sendUdpPacket(outSocket, packet.data.copyOfRange(packet.offset, packet.offset + packet.length), packet.address, packet.port, targetHost)
+                            // Use async launch for packets that might need delays/bypass strategies
+                            // to avoid blocking the main UDP worker loop
+                            launch {
+                                try {
+                                    sendUdpPacket(outSocket, packet.data.copyOfRange(packet.offset, packet.offset + packet.length), packet.address, packet.port, targetHost)
+                                } catch (e: Exception) {
+                                    Log.v("UdpTransport", "Send error: ${e.message}")
+                                }
+                            }
                         }
                     } catch (e: Exception) {
                         if (e !is CancellationException) Log.v("UdpTransport", "UDP Outbound worker error: ${e.message}")

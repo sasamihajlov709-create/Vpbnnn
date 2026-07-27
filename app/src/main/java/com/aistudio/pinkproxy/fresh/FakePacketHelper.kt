@@ -450,16 +450,27 @@ object FakePacketHelper {
         val sid = ByteArray(32)
         java.util.concurrent.ThreadLocalRandom.current().nextBytes(sid)
         bd.write(sid)
+        
+        // Ciphers (Modern Chrome set)
         val ciphers = byteArrayOf(
             0x13.toByte(), 0x01.toByte(), 0x13.toByte(), 0x02.toByte(), 0x13.toByte(), 0x03.toByte(),
-            0xc0.toByte(), 0x2b.toByte(), 0xc0.toByte(), 0x2f.toByte(), 0xc0.toByte(), 0x2c.toByte(), 0xc0.toByte(), 0x30.toByte()
+            0xc0.toByte(), 0x2b.toByte(), 0xc0.toByte(), 0x2f.toByte(), 0xc0.toByte(), 0x2c.toByte(), 0xc0.toByte(), 0x30.toByte(),
+            0xcc.toByte(), 0xa9.toByte(), 0xcc.toByte(), 0xa8.toByte()
         )
         bd.writeShort(ciphers.size)
         bd.write(ciphers)
         bd.writeByte(1)
         bd.writeByte(0)
+        
         val ext = ByteArrayOutputStream()
         val ed = DataOutputStream(ext)
+        
+        // GREASE
+        val grease1 = (ThreadLocalRandom.current().nextInt(16) shl 12) or 0x0A0A
+        ed.writeShort(grease1)
+        ed.writeShort(0)
+        
+        // SNI
         ed.writeShort(0x0000)
         val sniBaos = ByteArrayOutputStream()
         sniBaos.write(0x00); sniBaos.write(0x00); sniBaos.write((sni.length + 3) shr 8); sniBaos.write(sni.length + 3)
@@ -467,9 +478,107 @@ object FakePacketHelper {
         sniBaos.write(sni.toByteArray())
         ed.writeShort(sniBaos.size())
         ed.write(sniBaos.toByteArray())
+        
+        // Extended Master Secret
+        ed.writeShort(0x0017)
+        ed.writeShort(0)
+        
+        // Renegotiation Info
+        ed.writeShort(0xff01)
+        ed.writeShort(1)
+        ed.writeByte(0)
+        
+        // Supported Groups
+        ed.writeShort(0x000a)
+        val groups = byteArrayOf(0x00, 0x1d, 0x00, 0x17, 0x00, 0x18)
+        ed.writeShort(groups.size + 2)
+        ed.writeShort(groups.size)
+        ed.write(groups)
+        
+        // EC Point Formats
+        ed.writeShort(0x000b)
+        ed.writeShort(2)
+        ed.writeByte(1)
+        ed.writeByte(0)
+        
+        // ALPN (Chrome-like)
+        ed.writeShort(0x0010)
+        val alpn = byteArrayOf(2, 'h'.code.toByte(), '2'.code.toByte(), 8, 'h'.code.toByte(), 't'.code.toByte(), 't'.code.toByte(), 'p'.code.toByte(), '/'.code.toByte(), '1'.code.toByte(), '.'.code.toByte(), '1'.code.toByte())
+        ed.writeShort(alpn.size + 2)
+        ed.writeShort(alpn.size)
+        ed.write(alpn)
+        
+        // Supported Versions
+        ed.writeShort(0x002b)
+        ed.writeShort(7)
+        ed.writeByte(6)
+        ed.writeShort(0x0304); ed.writeShort(0x0303); ed.writeShort(0x0302)
+        
         val extData = ext.toByteArray()
         bd.writeShort(extData.size)
         bd.write(extData)
+        
+        val fullBody = body.toByteArray()
+        val len = fullBody.size - 4
+        fullBody[1] = ((len shr 16) and 0xFF).toByte()
+        fullBody[2] = ((len shr 8) and 0xFF).toByte()
+        fullBody[3] = (len and 0xFF).toByte()
+        dos.writeShort(fullBody.size)
+        dos.write(fullBody)
+        return baos.toByteArray()
+    }
+
+    fun buildSafariHello(sni: String): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        dos.writeByte(0x16)
+        dos.writeShort(0x0301)
+        val body = ByteArrayOutputStream()
+        val bd = DataOutputStream(body)
+        bd.writeByte(0x01)
+        bd.write(byteArrayOf(0, 0, 0))
+        bd.writeShort(0x0303)
+        val random = ByteArray(32)
+        ThreadLocalRandom.current().nextBytes(random)
+        bd.write(random)
+        bd.writeByte(0) // Safari often has 0 SID
+        
+        val ciphers = byteArrayOf(
+            0xc0.toByte(), 0x2b.toByte(), 0xc0.toByte(), 0x2f.toByte(), 0xc0.toByte(), 0x2c.toByte(), 0xc0.toByte(), 0x30.toByte(),
+            0x13.toByte(), 0x01.toByte(), 0x13.toByte(), 0x02.toByte(), 0x13.toByte(), 0x03.toByte()
+        )
+        bd.writeShort(ciphers.size)
+        bd.write(ciphers)
+        bd.writeByte(1)
+        bd.writeByte(0)
+        
+        val ext = ByteArrayOutputStream()
+        val ed = DataOutputStream(ext)
+        
+        // SNI
+        ed.writeShort(0x0000)
+        val sniBaos = ByteArrayOutputStream()
+        sniBaos.write(0x00); sniBaos.write(0x00); sniBaos.write((sni.length + 3) shr 8); sniBaos.write(sni.length + 3)
+        sniBaos.write(0x00); sniBaos.write(sni.length shr 8); sniBaos.write(sni.length)
+        sniBaos.write(sni.toByteArray())
+        ed.writeShort(sniBaos.size())
+        ed.write(sniBaos.toByteArray())
+        
+        // Status Request
+        ed.writeShort(0x0005)
+        ed.writeShort(5)
+        ed.writeByte(1); ed.writeShort(0); ed.writeShort(0)
+        
+        // Supported Groups
+        ed.writeShort(0x000a)
+        ed.writeShort(4)
+        ed.writeShort(2)
+        ed.writeShort(0x001d) // x25519
+        
+        val extData = ext.toByteArray()
+        bd.writeShort(extData.size)
+        bd.write(extData)
+        
         val fullBody = body.toByteArray()
         val len = fullBody.size - 4
         fullBody[1] = ((len shr 16) and 0xFF).toByte()

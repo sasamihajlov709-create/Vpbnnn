@@ -155,10 +155,28 @@ object TcpTransportHandler {
                     
                     try {
                         var n: Int
+                        var firstResponse = true
                         while (isActive) {
                             n = remoteIn.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
+                                if (firstResponse) {
+                                    firstResponse = false
+                                    val rtt = System.currentTimeMillis() - start
+                                    BypassConfig.recordSuccess(strategy, rtt, targetHost)
+                                    
+                                    // Detect DPI blocks in payload
+                                    if (n > 10) {
+                                        val content = String(buffer, 0, n.coerceAtMost(200), Charsets.US_ASCII)
+                                        if (content.contains("HTTP/1.1 403") || content.contains("Access Denied") || content.contains("Forbidden")) {
+                                            ProxyStats.recordDpiEvent(DpiType.HTTP_BLOCK)
+                                        }
+                                        if (buffer[0] == 0x15.toByte()) { // TLS Alert
+                                            ProxyStats.recordDpiEvent(DpiType.TLS_SNI_BLOCK)
+                                        }
+                                    }
+                                }
+                                
                                 lastActivity = System.currentTimeMillis()
                                 clientOut.write(buffer, 0, n)
                                 clientOut.flush()
@@ -199,10 +217,8 @@ object TcpTransportHandler {
                                 lastActivity = System.currentTimeMillis()
                                 if (firstPacket) {
                                     firstPacket = false
-                                    val startBypass = System.currentTimeMillis()
                                     try {
                                         BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
-                                        BypassConfig.recordSuccess(strategy, System.currentTimeMillis() - startBypass, targetHost)
                                     } catch (e: Exception) {
                                         BypassConfig.recordFailure(strategy, targetHost)
                                         throw e
