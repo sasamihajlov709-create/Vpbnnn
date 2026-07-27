@@ -1196,6 +1196,27 @@ object BypassConfig {
                 output.write(data, 0, length)
                 output.flush()
             }
+            BypassStrategy.TCP_WINDOW_SIZE_CHAOS -> {
+                try {
+                    socket.receiveBufferSize = rnd.nextInt(512, 16384)
+                    socket.sendBufferSize = rnd.nextInt(512, 16384)
+                } catch (e: Exception) {}
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TCP_MSS_CLUMPING -> {
+                val mss = ProxyStats.maxMss.value
+                var pos = 0
+                while (pos < length) {
+                    // Create chunks that often cross or stay just below the MSS
+                    val targetSize = if (rnd.nextBoolean()) mss - rnd.nextInt(1, 100) else mss + rnd.nextInt(1, 100)
+                    val size = minOf(targetSize, length - pos)
+                    output.write(data, pos, size)
+                    output.flush()
+                    pos += size
+                    if (pos < length) delay(rnd.nextLong(1, 10))
+                }
+            }
             BypassStrategy.HTTP_AUTH_RANDOM -> {
                 if (!isProbableHttp(data, length)) {
                     output.write(data, 0, length); output.flush()
@@ -1273,14 +1294,6 @@ object BypassConfig {
                 val junk = ByteArray(rnd.nextInt(10, 40)) { rnd.nextInt(0, 256).toByte() }
                 output.write(junk); output.flush(); delay(config.delay1)
                 output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.TCP_WINDOW_SIZE_CHAOS -> {
-                var pos = 0
-                while (pos < length) {
-                    val chunkSize = rnd.nextInt(1, 15)
-                    val size = chunkSize.coerceAtMost(length - pos)
-                    output.write(data, pos, size); output.flush(); pos += size; delay(rnd.nextLong(1, 10))
-                }
             }
             BypassStrategy.TCP_URG_SKEW -> {
                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
@@ -1376,10 +1389,16 @@ object BypassConfig {
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TCP_REORDER_CHAOS -> {
-                val p1 = length / 3; val p2 = 2 * length / 3
-                output.write(data, 0, p1); output.flush(); delay(rnd.nextLong(20, 50))
-                output.write(data, p1, p2 - p1); output.flush(); delay(rnd.nextLong(20, 50))
-                output.write(data, p2, length - p2); output.flush()
+                if (length > 10) {
+                    val p1 = length / 3
+                    val p2 = 2 * length / 3
+                    // Send segments out of order: 2, 1, 3
+                    output.write(data, p1, p2 - p1); output.flush(); delay(rnd.nextLong(10, 30))
+                    output.write(data, 0, p1); output.flush(); delay(rnd.nextLong(10, 30))
+                    output.write(data, p2, length - p2); output.flush()
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
             }
             BypassStrategy.TLS_LEGACY_HELLOS -> {
                 val hello = FakePacketHelper.buildFakeClientHello(host, 60)

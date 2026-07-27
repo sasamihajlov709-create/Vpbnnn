@@ -43,6 +43,7 @@ object DnsProtocols {
         
         val builder = baseOkHttpClient.newBuilder()
             .socketFactory(ProtectedSocketFactory(vpnService))
+            .dns(BootstrapDns())
         
         try {
             val sc = SSLContext.getInstance("TLS")
@@ -323,5 +324,24 @@ class ProtectedSSLSocketFactory(private val base: SSLSocketFactory, private val 
         val s = base.createSocket(address, port, localAddress, localPort)
         vpnService?.protect(s)
         return s
+    }
+}
+
+class BootstrapDns : Dns {
+    override fun lookup(hostname: String): List<InetAddress> {
+        // 1. Check Static/Hardcoded IPs for DoH/DoT providers to avoid recursion
+        val static = DnsCacheManager.getStaticIps(hostname)
+        if (static != null && static.isNotEmpty()) return static
+
+        // 2. Fallback to emergency list for common domains
+        val emergency = DnsCacheManager.getEmergencyFallback(hostname)
+        if (emergency != null && emergency.isNotEmpty()) return emergency
+
+        // 3. Last resort: standard resolution (might recurse, but we handled the most common ones)
+        return try {
+            Dns.SYSTEM.lookup(hostname)
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 }
