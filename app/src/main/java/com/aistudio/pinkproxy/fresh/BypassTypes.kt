@@ -340,6 +340,15 @@ object ProxyStats {
                 val speed = (currentBytes - lastBytes).coerceAtLeast(0)
                 _speedBytesPerSecond.value = speed
                 
+                // Adaptive Signal Quality calculation
+                val baseQual = _successRate.value.coerceIn(0, 100)
+                val stabPenalty = (100 - _stabilityScore.value) / 2
+                val panicPenalty = if (BypassConfig.isPanicModeFlow.value) 15 else 0
+                val intensityPenalty = (ProxyStats.censorshipIntensity.value / 10).coerceAtMost(10)
+                
+                val finalQual = (baseQual - stabPenalty - panicPenalty - intensityPenalty).coerceIn(0, 100)
+                _signalQuality.value = finalQual
+
                 _speedHistory.update { current ->
                     val newList = ArrayList<Long>(60)
                     newList.add(speed)

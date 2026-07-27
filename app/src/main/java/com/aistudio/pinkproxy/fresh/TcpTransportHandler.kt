@@ -262,6 +262,8 @@ object TcpTransportHandler {
                                     firstPacket = false
                                     try {
                                         BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
+                                        totalWrittenClient.addAndGet(n.toLong())
+                                        ProxyStats.updateBytes(n.toLong())
                                     } catch (e: Exception) {
                                         BypassConfig.recordFailure(strategy, targetHost)
                                         throw e
