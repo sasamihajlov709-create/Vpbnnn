@@ -29,6 +29,34 @@ object DnsPacketEngine {
         dos.writeShort(type) // Type
         dos.writeShort(1)    // Class IN
         
+        // Add EDNS0 with ECS (Client Subnet) for better CDN routing
+        dos.writeShort(0) // Name: root
+        dos.writeShort(41) // Type: OPT
+        dos.writeShort(4096) // UDP payload size
+        dos.writeByte(0) // Higher bits of extended RCODE
+        dos.writeByte(0) // EDNS version
+        dos.writeShort(0) // Z (flags)
+        
+        // RDLEN
+        val ecsOption = buildEcsOption()
+        dos.writeShort(ecsOption.size)
+        dos.write(ecsOption)
+        
+        // Update Additional RRs count (line 19)
+        val query = bos.toByteArray()
+        query[11] = 1 // ARCOUNT = 1
+        return query
+    }
+
+    private fun buildEcsOption(): ByteArray {
+        val bos = ByteArrayOutputStream()
+        val dos = java.io.DataOutputStream(bos)
+        dos.writeShort(8) // Option Code: ECS
+        dos.writeShort(8) // Option Length
+        dos.writeShort(1) // Family: IPv4
+        dos.writeByte(24) // Source Mask
+        dos.writeByte(0) // Scope Mask
+        dos.write(byteArrayOf(1, 1, 1, 0)) // 1.1.1.0/24 as a generic "good" source
         return bos.toByteArray()
     }
 

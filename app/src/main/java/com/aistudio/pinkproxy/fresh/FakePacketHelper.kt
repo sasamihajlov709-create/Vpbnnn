@@ -1046,6 +1046,32 @@ object FakePacketHelper {
     fun buildHttpHandshake(): ByteArray {
         return "GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray()
     }
+    
+    fun buildTelegramFake(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        
+        // Telegram Obfuscated2-like start
+        val head = ByteArray(64)
+        rnd.nextBytes(head)
+        head[56] = 0xef.toByte(); head[57] = 0xef.toByte(); head[58] = 0xef.toByte(); head[59] = 0xef.toByte()
+        return head
+    }
+
+    fun buildDiscordFake(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        
+        // Discord Voice UDP Handshake
+        dos.writeShort(1) // Type
+        dos.writeShort(70) // Length
+        dos.writeInt(rnd.nextInt()) // SSRC
+        dos.write(ByteArray(64) { 0 }) // IP/Port info
+        
+        return baos.toByteArray()
+    }
 
     fun addTlsGreaseExtensions(data: ByteArray, length: Int): ByteArray {
         if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)

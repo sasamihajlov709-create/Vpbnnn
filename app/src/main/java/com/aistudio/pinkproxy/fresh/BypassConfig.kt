@@ -734,6 +734,14 @@ object BypassConfig {
                 val dhcp = FakePacketHelper.buildDhcpRequest()
                 writeUdpWithFake(socket, targetAddr, targetPort, dhcp, packet, config)
             }
+            BypassStrategy.UDP_TELEGRAM_FAKE -> {
+                val tg = FakePacketHelper.buildTelegramFake()
+                writeUdpWithFake(socket, targetAddr, targetPort, tg, packet, config)
+            }
+            BypassStrategy.UDP_DISCORD_FAKE -> {
+                val dc = FakePacketHelper.buildDiscordFake()
+                writeUdpWithFake(socket, targetAddr, targetPort, dc, packet, config)
+            }
             BypassStrategy.UDP_NOISE_PAD -> {
                 val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(50, 200))
                 writeUdpWithFake(socket, targetAddr, targetPort, noise, packet, config)
@@ -1554,14 +1562,6 @@ object BypassConfig {
                     output.write(mangled); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
             }
-            BypassStrategy.TCP_ACK_DELAY -> {
-                var pos = 0
-                while (pos < length) {
-                    val size = rnd.nextInt(1, 10).coerceAtMost(length - pos)
-                    output.write(data, pos, size); output.flush(); pos += size
-                    if (pos < length) delay(rnd.nextLong(10, 50))
-                }
-            }
             BypassStrategy.TLS_GREASE_SKEW -> {
                 val grease = byteArrayOf(0x16, 0x03, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00)
                 TtlHelper.setTtl(socket, config.fakeTtl); output.write(grease); output.flush()
@@ -1626,6 +1626,30 @@ object BypassConfig {
             BypassStrategy.PROTOCOL_CONFUSION_HTTP -> {
                 val fake = FakePacketHelper.buildHttpHandshake()
                 writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.TCP_SMALL_CHUNKS -> {
+                var offset = 0
+                while (offset < length) {
+                    val size = rnd.nextInt(1, 15)
+                    val chunk = minOf(size, length - offset)
+                    output.write(data, offset, chunk)
+                    output.flush()
+                    offset += chunk
+                    if (offset < length) delay(rnd.nextLong(1, 4))
+                }
+            }
+            BypassStrategy.TCP_ACK_DELAY -> {
+                delay(rnd.nextLong(150, 400))
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TCP_RANDOM_PADDING -> {
+                output.write(data, 0, length)
+                val padSize = rnd.nextInt(1, 100)
+                val pad = ByteArray(padSize)
+                rnd.nextBytes(pad)
+                output.write(pad)
+                output.flush()
             }
             BypassStrategy.TCP_TOS_MANGLE -> {
                 try { socket.trafficClass = 0x08 } catch (e: Exception) {}
