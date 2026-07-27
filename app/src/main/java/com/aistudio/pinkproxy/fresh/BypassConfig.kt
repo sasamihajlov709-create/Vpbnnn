@@ -14,6 +14,18 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.io.*
 object BypassConfig {
+    private val HTTP_1_1_CRLF = byteArrayOf('H'.code.toByte(), 'T'.code.toByte(), 'T'.code.toByte(), 'P'.code.toByte(), '/'.code.toByte(), '1'.code.toByte(), '.'.code.toByte(), '1'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
+    private val RST_PAYLOAD = byteArrayOf(0x52, 0x53, 0x54, 0x00, 0x00, 0x00)
+    private val TLS_SESSION_TICKET = byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x20) + ByteArray(32) { 0x00.toByte() }
+    private val GREASE_BYTES = byteArrayOf(0x16, 0x03, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00)
+    private val TLS_HELLO_REQ = byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00)
+    private val USER_AGENT_REGEX = Regex("User-Agent:.*?\r\n", RegexOption.IGNORE_CASE)
+    private val CRLF_BYTES = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte())
+    private val END_CHUNK_BYTES = byteArrayOf('0'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
+    private val CHUNK_HEADERS = Array(10) { "${it.toString(16)}\r\n".toByteArray() }
+
+    private val HTTP2_PREAMBLE = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
+
     private val _strategy = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
     
@@ -1023,7 +1035,7 @@ object BypassConfig {
                 } else {
                     val s = String(data, 0, length)
                     if (s.contains("HTTP/")) {
-                        val fakeAuth = "Authorization: Basic " + java.util.Base64.getEncoder().encodeToString("fake:fake".toByteArray()) + "\r\n"
+                        val fakeAuth = "Authorization: Basic ZmFrZTpmYWtl\r\n"
                         val modified = s.replaceFirst("\r\n", "\r\n$fakeAuth")
                         output.write(modified.toByteArray()); output.flush()
                     } else { output.write(data, 0, length); output.flush() }
@@ -1060,7 +1072,7 @@ object BypassConfig {
                 } else {
                     val s = String(data, 0, length)
                     if (s.contains("User-Agent:", ignoreCase = true)) {
-                        val modified = s.replace(Regex("User-Agent:.*?\r\n", RegexOption.IGNORE_CASE), "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n")
+                        val modified = s.replace(USER_AGENT_REGEX, "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n")
                         output.write(modified.toByteArray()); output.flush()
                     } else { output.write(data, 0, length); output.flush() }
                 }
@@ -1092,8 +1104,7 @@ object BypassConfig {
             }
             BypassStrategy.TLS_REHANDSHAKE_FAKE -> {
                 output.write(data, 0, length); output.flush(); delay(config.delay1)
-                val helloReq = byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00)
-                output.write(helloReq); output.flush()
+                output.write(TLS_HELLO_REQ); output.flush()
             }
             BypassStrategy.TLS_HELLO_JUNK -> {
                 val junk = ByteArray(rnd.nextInt(10, 40)) { rnd.nextInt(0, 256).toByte() }
@@ -1171,8 +1182,7 @@ object BypassConfig {
                 output.write(pad); output.flush()
             }
             BypassStrategy.TCP_RST_FAKE -> {
-                val rstPayload = byteArrayOf(0x52, 0x53, 0x54, 0x00, 0x00, 0x00)
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(rstPayload); output.flush()
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(RST_PAYLOAD); output.flush()
                 delay(2); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TCP_TIMESTAMP_MANGLE -> {
@@ -1226,7 +1236,7 @@ object BypassConfig {
             BypassStrategy.TLS_SESSION_TICKET_SKEW -> {
                 val hello = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(100, 200))
                 TtlHelper.setTtl(socket, config.fakeTtl); output.write(hello); output.flush(); delay(config.delay1)
-                output.write(byteArrayOf(0x16, 0x03, 0x03, 0x00, 0x20) + ByteArray(32) { 0x00.toByte() }); output.flush()
+                output.write(TLS_SESSION_TICKET); output.flush()
                 delay(config.delay2); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_MULTI_SNI -> {
@@ -1235,18 +1245,16 @@ object BypassConfig {
                 TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP2_PREAMBLE_FAKE -> {
-                val preamble = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(preamble.toByteArray()); output.flush(); delay(10)
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(HTTP2_PREAMBLE); output.flush(); delay(10)
                 TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP_CHUNKED_FAKE -> {
                 // Optimization: Search for "HTTP/1.1\r\n" without allocating a String
-                val targetSeq = byteArrayOf('H'.code.toByte(), 'T'.code.toByte(), 'T'.code.toByte(), 'P'.code.toByte(), '/'.code.toByte(), '1'.code.toByte(), '.'.code.toByte(), '1'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
                 var foundHttp = -1
-                for (i in 0..length - targetSeq.size) {
+                for (i in 0..length - HTTP_1_1_CRLF.size) {
                     var match = true
-                    for (j in targetSeq.indices) {
-                        if (data[i + j] != targetSeq[j]) { match = false; break }
+                    for (j in HTTP_1_1_CRLF.indices) {
+                        if (data[i + j] != HTTP_1_1_CRLF[j]) { match = false; break }
                     }
                     if (match) { foundHttp = i; break }
                 }
@@ -1264,16 +1272,16 @@ object BypassConfig {
                         var pos = 0
                         while (pos < body.size) {
                             val chunkSize = rnd.nextInt(1, 10).coerceAtMost(body.size - pos)
-                            output.write("${Integer.toHexString(chunkSize)}\r\n".toByteArray())
+                            output.write(CHUNK_HEADERS[chunkSize])
                             output.write(body, pos, chunkSize)
-                            output.write("\r\n".toByteArray())
+                            output.write(CRLF_BYTES)
                             output.flush()
                             pos += chunkSize
                             delay(rnd.nextLong(1, 5))
                         }
-                        output.write("0\r\n\r\n".toByteArray()); output.flush()
+                        output.write(END_CHUNK_BYTES); output.flush()
                     } else {
-                        output.write(mod.toByteArray()); output.flush(); delay(10); output.write("0\r\n\r\n".toByteArray()); output.flush()
+                        output.write(mod.toByteArray()); output.flush(); delay(10); output.write(END_CHUNK_BYTES); output.flush()
                     }
                 } else { output.write(data, 0, length); output.flush() }
             }
@@ -1652,8 +1660,7 @@ object BypassConfig {
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TLS_GREASE_SKEW -> {
-                val grease = byteArrayOf(0x16, 0x03, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00)
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(grease); output.flush()
+                TtlHelper.setTtl(socket, config.fakeTtl); output.write(GREASE_BYTES); output.flush()
                 delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
             }
             BypassStrategy.ADAPTIVE_CHUNK -> {

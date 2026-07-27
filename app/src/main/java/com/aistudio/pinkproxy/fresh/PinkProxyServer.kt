@@ -15,7 +15,12 @@ import java.io.*
 class PinkProxyServer(private val vpnService: VpnService, private val port: Int) {
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
-    
+
+    companion object {
+        private val SOCKS5_AUTH_SUCCESS = byteArrayOf(5, 0)
+        private val SOCKS5_CONNECT_SUCCESS = byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0)
+    }
+
     fun start() {
         if (serverJob?.isActive == true) return
         
@@ -88,7 +93,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             readExactly(input, methods, 0, nMethods)
 
             // No authentication required
-            output.write(byteArrayOf(5, 0))
+            output.write(SOCKS5_AUTH_SUCCESS)
             output.flush()
 
             // 2. Request details
@@ -136,7 +141,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int)
             
             // SOCKS5 success response
             if (ProxyStats.censorshipIntensity.value > 85) delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(10, 50))
-            output.write(byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+            output.write(SOCKS5_CONNECT_SUCCESS)
             output.flush()
             
             client.soTimeout = 0 // Remove timeout for the tunneled connection

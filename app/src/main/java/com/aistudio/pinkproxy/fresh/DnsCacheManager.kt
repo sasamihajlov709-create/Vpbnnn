@@ -203,8 +203,10 @@ object DnsCacheManager {
         return false
     }
 
+    private val ipv4Regex = Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")
+
     fun isIpAddress(host: String): Boolean {
-        return host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$""")) || host.contains(":")
+        return ipv4Regex.matches(host) || host.contains(":")
     }
 
     fun save(context: android.content.Context) {
