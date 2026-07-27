@@ -262,48 +262,11 @@ object DnsCacheManager {
     }
 
     fun save(context: android.content.Context) {
-        try {
-            val prefs = context.getSharedPreferences("dns_metrics", android.content.Context.MODE_PRIVATE)
-            
-            // Serialize heatmap: ip|score;ip|score
-            // Sort by score descending to keep most relevant entries
-            val heatmapStr = ipHeatmap.entries
-                .sortedByDescending { it.value }
-                .take(800)
-                .joinToString(";") { "${it.key}|${it.value}" }
-            
-            // Serialize RTT: ip|rtt;ip|rtt
-            // Sort by RTT ascending (lower is better) to keep best performing IPs
-            val rttStr = ipRtt.entries
-                .sortedBy { it.value }
-                .take(400)
-                .joinToString(";") { "${it.key}|${it.value}" }
-            
-            prefs.edit {
-                putString("ip_heatmap", heatmapStr)
-                putString("ip_rtt", rttStr)
-            }
-        } catch (e: Exception) {}
+        // Kept in-memory only for user privacy
     }
 
     fun load(context: android.content.Context) {
-        try {
-            val prefs = context.getSharedPreferences("dns_metrics", android.content.Context.MODE_PRIVATE)
-            
-            prefs.getString("ip_heatmap", "")?.split(";")?.forEach {
-                val parts = it.split("|")
-                if (parts.size == 2) {
-                    ipHeatmap[parts[0]] = parts[1].toIntOrNull() ?: 50
-                }
-            }
-            
-            prefs.getString("ip_rtt", "")?.split(";")?.forEach {
-                val parts = it.split("|")
-                if (parts.size == 2) {
-                    ipRtt[parts[0]] = parts[1].toLongOrNull() ?: 200L
-                }
-            }
-        } catch (e: Exception) {}
+        // Kept in-memory only for user privacy
     }
 
     fun clear() {

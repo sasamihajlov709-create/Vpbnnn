@@ -1,6 +1,6 @@
 {
   "name": "PinkProxy",
-  "description": "High-performance secure VPN client & DPI bypass proxy server with an elegant muted dark pink and solid black UI.",
+  "description": "High-performance local DPI bypass engine & smart proxy client (ByeByeDPI / Zapret equivalent) with SNI splitting, DoH/DoT, and automated censorship evasion.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

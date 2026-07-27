@@ -74,11 +74,11 @@ object RecoveryManager {
                 val type = ProxyStats.currentDpiType.value
                 when (type) {
                     DpiType.TCP_RESET -> {
-                        BypassConfig.setGlobalStrategy(BypassStrategy.TLS_CLIENT_HELLO_CHOP)
+                        BypassConfig.setGlobalStrategy(BypassStrategy.SNI_SPLIT)
                         triggerPanic("Active TCP Reset DPI detected")
                     }
                     DpiType.CONNECTION_TIMEOUT -> {
-                        BypassConfig.setGlobalStrategy(BypassStrategy.TLS_CLIENT_HELLO_PAD)
+                        BypassConfig.setGlobalStrategy(BypassStrategy.TLS_REC_SPLIT)
                     }
                     else -> {
                         BypassConfig.rotateGlobalStrategy()

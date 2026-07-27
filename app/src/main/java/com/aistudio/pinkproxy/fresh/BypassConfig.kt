@@ -77,7 +77,7 @@ object BypassConfig {
     @Volatile var delay2 = 100L
     @Volatile var fakeTtl = 3
     @Volatile var isDiagnosticMode = false
-    @Volatile var blockQuic = true
+    @Volatile var blockQuic = false
     @Volatile var isCharging = true
     @Volatile var preferIpv6 = false
 
@@ -147,7 +147,7 @@ object BypassConfig {
     fun loadTuningSettings(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
         isAutoTuning = prefs.getBoolean("is_auto_tuning", true)
-        blockQuic = prefs.getBoolean("block_quic", true)
+        blockQuic = prefs.getBoolean("block_quic", false)
         isDiagnosticMode = prefs.getBoolean("is_diagnostic_mode", false)
         frag1 = prefs.getInt("frag1", 1)
         frag2 = prefs.getInt("frag2", 5)
@@ -289,7 +289,7 @@ object BypassConfig {
                 weight = weight.coerceAtLeast(80.0)
             }
 
-            val group = strategyGrouping.entries.find { it.value.contains(entry.key) }?.key
+            val group = entry.key.group
             if (group == preferredGroup) weight *= 2.5
             else if (group == StrategyGroup.EXTREME && level < 30) weight *= 0.2 // Don't over-engineer simple cases
 
@@ -514,8 +514,6 @@ object BypassConfig {
         }
         
         strategyStats[strat]?.let { stats ->
-            stats.failures.incrementAndGet()
-            
             // Trip Circuit Breaker if failure rate is too high globally for this strategy
             val s = stats.successes.get()
             val f = stats.failures.get()

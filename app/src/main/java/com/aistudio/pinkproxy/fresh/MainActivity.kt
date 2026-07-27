@@ -120,9 +120,7 @@ class MainActivity : ComponentActivity() {
         }
         
         val prefs = getSharedPreferences("pink_proxy_settings", MODE_PRIVATE)
-        val autoConnect = prefs.getBoolean("auto_connect_on_launch", true)
-        
-        requestIgnoreBatteryOptimizations()
+        val autoConnect = prefs.getBoolean("auto_connect_on_launch", false)
         
         setContent {
             val isVpnActive by PinkVpnService.isRunning.collectAsStateWithLifecycle(initialValue = false)
@@ -1433,7 +1431,7 @@ fun ExpertSettingsCard(
 
     var dnsMode by remember { mutableStateOf(RobustResolver.dnsMode) }
     var customDnsIp by remember { mutableStateOf(RobustResolver.customDnsIp) }
-    var autoConnect by remember { mutableStateOf(context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).getBoolean("auto_connect_on_launch", true)) }
+    var autoConnect by remember { mutableStateOf(context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).getBoolean("auto_connect_on_launch", false)) }
     var isDiagnosticModeState by remember { mutableStateOf(BypassConfig.isDiagnosticMode) }
 
     val customServices by ServiceChecker.customServices.collectAsStateWithLifecycle(initialValue = emptyList())

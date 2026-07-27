@@ -8,6 +8,7 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ThreadLocalRandom
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.selects.select
 
 object TcpTransportHandler {
@@ -137,14 +138,14 @@ object TcpTransportHandler {
             val remoteIn = remoteSocket.getInputStream()
             val remoteOut = remoteSocket.getOutputStream()
 
-            var lastActivity = System.currentTimeMillis()
+            val lastActivity = AtomicLong(System.currentTimeMillis())
 
             coroutineScope {
                 val inactivityJob = launch {
                     while (isActive) {
                         delay(30000)
                         val now = System.currentTimeMillis()
-                        val idleTime = now - lastActivity
+                        val idleTime = now - lastActivity.get()
                         // Adaptive idle timeout: tighter when system is under load or high censorship
                         val maxIdle = when {
                             ProxyStats.activeConnections.value > 50 -> 60000L
@@ -164,7 +165,7 @@ object TcpTransportHandler {
                     val rnd = ThreadLocalRandom.current()
                     while (isActive) {
                         delay(rnd.nextLong(45000, 90000))
-                        if (System.currentTimeMillis() - lastActivity > 60000) {
+                        if (System.currentTimeMillis() - lastActivity.get() > 60000) {
                             try { 
                                 remoteSocket?.keepAlive = true
                                 remoteSocket?.sendUrgentData(0) 
@@ -211,7 +212,7 @@ object TcpTransportHandler {
                                     }
                                 }
                                 
-                                lastActivity = System.currentTimeMillis()
+                                lastActivity.set(System.currentTimeMillis())
                                 clientOut.write(buffer, 0, n)
                                 clientOut.flush()
                                 ProxyStats.updateBytes(n.toLong())
@@ -252,7 +253,7 @@ object TcpTransportHandler {
                             n = clientIn.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
-                                lastActivity = System.currentTimeMillis()
+                                lastActivity.set(System.currentTimeMillis())
                                 if (firstPacket) {
                                     firstPacket = false
                                     try {
@@ -331,6 +332,7 @@ object TcpTransportHandler {
                 try { clientSocket.close() } catch(e: Exception) {}
                 try { remoteSocket?.close() } catch(e: Exception) {}
                 
+                inactivityJob.cancel()
                 keepAliveJob.cancel()
                 remoteToClient.cancel()
                 clientToRemote.cancel()

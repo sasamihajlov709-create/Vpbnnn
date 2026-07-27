@@ -155,11 +155,13 @@ class PinkVpnService : VpnService() {
             networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
                     Log.i("PinkVpnService", "Network available: $network")
+                    try { setUnderlyingNetworks(arrayOf(network)) } catch (e: Exception) {}
                     RobustResolver.clearCache()
                 }
 
                 override fun onLost(network: android.net.Network) {
                     Log.i("PinkVpnService", "Network lost: $network")
+                    try { setUnderlyingNetworks(null) } catch (e: Exception) {}
                     RobustResolver.clearCache()
                 }
 
@@ -362,8 +364,8 @@ class PinkVpnService : VpnService() {
         val stopPendingIntent = PendingIntent.getService(this, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val notification = NotificationCompat.Builder(this, "pink_proxy_channel")
-            .setContentTitle("PinkProxy is Active")
-            .setContentText("Routing traffic via tun2socks")
+            .setContentTitle("PinkProxy DPI Engine Active")
+            .setContentText("Automated DPI Evasion & Smart Proxy active")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "STOP", stopPendingIntent)
