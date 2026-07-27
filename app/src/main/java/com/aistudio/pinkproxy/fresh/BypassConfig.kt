@@ -1488,13 +1488,14 @@ object BypassConfig {
             BypassStrategy.HTTP_HOST_MANGLE -> {
                 // Efficient byte-level replacement of "Host:" to "hOsT:"
                 var modified = false
-                val newData = data.copyOf(length)
+                var newData: ByteArray? = null
                 for (i in 0 until length - 4) {
-                    if ((newData[i] == 'H'.toByte() || newData[i] == 'h'.toByte()) &&
-                        (newData[i+1] == 'o'.toByte() || newData[i+1] == 'O'.toByte()) &&
-                        (newData[i+2] == 's'.toByte() || newData[i+2] == 'S'.toByte()) &&
-                        (newData[i+3] == 't'.toByte() || newData[i+3] == 'T'.toByte()) &&
-                        newData[i+4] == ':'.toByte()) {
+                    if ((data[i] == 'H'.toByte() || data[i] == 'h'.toByte()) &&
+                        (data[i+1] == 'o'.toByte() || data[i+1] == 'O'.toByte()) &&
+                        (data[i+2] == 's'.toByte() || data[i+2] == 'S'.toByte()) &&
+                        (data[i+3] == 't'.toByte() || data[i+3] == 'T'.toByte()) &&
+                        data[i+4] == ':'.toByte()) {
+                        newData = data.copyOf(length)
                         newData[i] = 'h'.toByte()
                         newData[i+1] = 'O'.toByte()
                         newData[i+2] = 's'.toByte()
@@ -1503,7 +1504,7 @@ object BypassConfig {
                         break
                     }
                 }
-                output.write(if (modified) newData else data, 0, length)
+                output.write(if (modified) newData!! else data, 0, length)
                 output.flush()
             }
             BypassStrategy.HTTP_FRAGMENT -> {
