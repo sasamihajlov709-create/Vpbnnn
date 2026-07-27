@@ -248,7 +248,7 @@ object BypassConfig {
                         }
                         DpiType.CONNECTION_TIMEOUT -> {
                             if (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP || remembered == BypassStrategy.FRAGMENT_MULTI) boostedScore += 40
-                            if (remembered == BypassStrategy.TCP_ZERO_WINDOW) boostedScore += 30
+                            if (remembered == BypassStrategy.TCP_ZERO_WINDOW_STALL) boostedScore += 30
                         }
                         DpiType.TLS_SNI_BLOCK -> {
                             if (remembered.family == StrategyFamily.TLS || remembered.family == StrategyFamily.FRAGMENTATION) boostedScore += 50
@@ -299,7 +299,7 @@ object BypassConfig {
             when (cat) {
                 HostCategory.STREAMING -> {
                     if (entry.key.family == StrategyFamily.FRAGMENTATION) weight *= 1.5
-                    if (entry.key == BypassStrategy.WINDOW_SIZE) weight *= 2.0
+                    if (entry.key == BypassStrategy.WINDOW_SIZE_MANGLE) weight *= 2.0
                 }
                 HostCategory.MESSENGER -> {
                     if (entry.key.family == StrategyFamily.UDP || entry.key == BypassStrategy.QUIC_INITIAL_FAKE || entry.key == BypassStrategy.UDP_HIGH_VOL_PACING) weight *= 2.0
@@ -608,11 +608,11 @@ object BypassConfig {
             }
             HostCategory.AI -> {
                 f1 = 1
-                d1 = (d1 * 1.2).toLong()
+                d1 = (d1 * 1.5).toLong() // More delay for AI to avoid handshake detection
             }
             HostCategory.FINANCE -> {
-                f1 = (f1 * 2).coerceAtLeast(10)
-                d1 = (d1 * 0.8).toLong().coerceAtLeast(5)
+                f1 = (f1 * 3).coerceAtLeast(15) // Larger initial fragments for finance (speed)
+                d1 = (d1 * 0.6).toLong().coerceAtLeast(3)
             }
             HostCategory.AD -> {
                 // For ads, use a very heavy/slow strategy or just return a "cheap" one if we don't want to block
@@ -828,8 +828,8 @@ object BypassConfig {
                 socket.send(packet)
             }
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
-                if (length > 20) {
-                    val split = length / 2
+                if (length > 40) {
+                    val split = rnd.nextInt(10, length - 10)
                     val p1 = data.copyOfRange(offset, offset + split)
                     TtlHelper.setUdpTtl(socket, config.fakeTtl, targetAddr is Inet6Address)
                     socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
@@ -838,8 +838,16 @@ object BypassConfig {
                 TtlHelper.setUdpTtl(socket, 64, targetAddr is Inet6Address)
                 socket.send(packet)
             }
+            BypassStrategy.UDP_ZERO_LEN_SKEW -> {
+                if (rnd.nextBoolean()) {
+                    val zero = ByteArray(0)
+                    socket.send(DatagramPacket(zero, 0, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 5))
+                }
+                socket.send(packet)
+            }
             BypassStrategy.UDP_STUTTER -> {
-                delay(rnd.nextLong(5, 30))
+                delay(rnd.nextLong(2, 20))
                 socket.send(packet)
             }
             BypassStrategy.DNS_NOISE -> {
@@ -1157,13 +1165,36 @@ object BypassConfig {
             }
             BypassStrategy.TCP_SMALL_CHUNKS -> {
                 var pos = 0
+                val intensity = ProxyStats.censorshipIntensity.value
+                val isInitial = length < 1000 // Small chunks only for handshake
                 while (pos < length) {
-                    val size = rnd.nextInt(1, 4).coerceAtMost(length - pos)
+                    val maxSize = if (isInitial) 3 else 32
+                    val size = rnd.nextInt(1, maxSize).coerceAtMost(length - pos)
                     output.write(data, pos, size)
                     output.flush()
                     pos += size
-                    if (pos < length) delay(rnd.nextLong(1, 5))
+                    if (pos < length) {
+                        val d = if (isInitial) rnd.nextLong(1, 5) else rnd.nextLong(0, 2)
+                        if (d > 0) delay(d)
+                    }
                 }
+            }
+            BypassStrategy.WINDOW_SIZE_MANGLE -> {
+                // Simulate window size mangle by writing in very small steps and delaying
+                var offset = 0
+                while (offset < length) {
+                    val chunk = minOf(rnd.nextInt(1, 64), length - offset)
+                    output.write(data, offset, chunk)
+                    output.flush()
+                    offset += chunk
+                    if (offset < length) delay(rnd.nextLong(1, 3))
+                }
+            }
+            BypassStrategy.TCP_ZERO_WINDOW_STALL -> {
+                // Stall the first write to trick some stateful firewalls
+                delay(rnd.nextLong(50, 200))
+                output.write(data, 0, length)
+                output.flush()
             }
             BypassStrategy.HTTP_AUTH_RANDOM -> {
                 if (!isProbableHttp(data, length)) {
@@ -1226,13 +1257,6 @@ object BypassConfig {
                 output.write(data, 0, split); output.flush()
                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 delay(config.delay1); output.write(data, split, length - split); output.flush()
-            }
-            BypassStrategy.TCP_ZERO_WINDOW -> {
-                var pos = 0
-                while (pos < length) {
-                    val size = rnd.nextInt(1, 15).coerceAtMost(length - pos)
-                    output.write(data, pos, size); output.flush(); pos += size; if (pos < length) delay(rnd.nextLong(10, 80))
-                }
             }
             BypassStrategy.HTTP_RANGE_SKEW -> {
                 if (!isProbableHttp(data, length)) {
@@ -1901,17 +1925,6 @@ object BypassConfig {
                 val fake = FakePacketHelper.buildHttpHandshake()
                 writeWithFake(socket, output, fake, data, length, config)
             }
-            BypassStrategy.TCP_SMALL_CHUNKS -> {
-                var offset = 0
-                while (offset < length) {
-                    val size = rnd.nextInt(1, 15)
-                    val chunk = minOf(size, length - offset)
-                    output.write(data, offset, chunk)
-                    output.flush()
-                    offset += chunk
-                    if (offset < length) delay(rnd.nextLong(1, 4))
-                }
-            }
             BypassStrategy.TCP_ACK_DELAY -> {
                 delay(rnd.nextLong(150, 400))
                 output.write(data, 0, length)
@@ -1924,13 +1937,6 @@ object BypassConfig {
                 rnd.nextBytes(pad)
                 output.write(pad)
                 output.flush()
-            }
-            BypassStrategy.WINDOW_SIZE -> {
-                try {
-                    socket.receiveBufferSize = rnd.nextInt(1024, 4096)
-                    socket.sendBufferSize = rnd.nextInt(1024, 4096)
-                } catch (e: Exception) {}
-                output.write(data, 0, length); output.flush()
             }
 
             BypassStrategy.TCP_TOS_MANGLE -> {

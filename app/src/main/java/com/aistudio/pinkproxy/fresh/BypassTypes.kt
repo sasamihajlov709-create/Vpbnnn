@@ -30,8 +30,8 @@ enum class BypassStrategy(
     TCP_OOB_DESYNC(StrategyFamily.TCP, 4, 4),
     OOB_DESYNC(StrategyFamily.TCP, 4, 4),
     GHOST_PACKETS(StrategyFamily.TCP, 3, 4),
-    WINDOW_SIZE(StrategyFamily.TCP, 2, 2),
-    TCP_ZERO_WINDOW(StrategyFamily.TCP, 3, 3),
+    WINDOW_SIZE_MANGLE(StrategyFamily.TCP, 2, 2),
+    TCP_ZERO_WINDOW_STALL(StrategyFamily.TCP, 3, 3),
     SLOW_SEND(StrategyFamily.TIMING, 4, 2),
     FRAGMENT_MULTI(StrategyFamily.FRAGMENTATION, 4, 3),
     TLS_REC_SPLIT(StrategyFamily.FRAGMENTATION, 4, 3),
@@ -138,6 +138,7 @@ enum class BypassStrategy(
     TCP_RANDOM_PADDING(StrategyFamily.TCP, 2, 1),
     TLS_RECORD_PADDING(StrategyFamily.TLS, 2, 2),
     UDP_HIGH_VOL_PACING(StrategyFamily.UDP, 2, 1),
+    UDP_ZERO_LEN_SKEW(StrategyFamily.UDP, 2, 1),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 

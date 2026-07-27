@@ -160,6 +160,7 @@ object RobustResolver {
         val queries = listOf<suspend () -> List<InetAddress>>(
             { DnsProtocols.queryDohRacing(host, vpnService) },
             { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },
+            { DnsProtocols.queryDnsOverTcp(host, "8.8.8.8", vpnService) },
             { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },
             { DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService) },
             { 

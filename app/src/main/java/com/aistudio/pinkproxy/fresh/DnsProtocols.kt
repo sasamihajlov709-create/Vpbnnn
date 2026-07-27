@@ -166,6 +166,34 @@ object DnsProtocols {
             
             val dis = DataInputStream(socket.getInputStream())
             val len = dis.readUnsignedShort()
+            if (len > 8192) return emptyList()
+            val resp = ByteArray(len)
+            dis.readFully(resp)
+            val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
+            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+        } catch (e: Exception) {
+        } finally {
+            try { socket.close() } catch (e: Exception) {}
+        }
+        return emptyList()
+    }
+
+    suspend fun queryDnsOverTcp(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val socket = Socket()
+        try {
+            vpnService?.protect(socket)
+            socket.connect(InetSocketAddress(dnsIp, 53), 3000)
+            socket.soTimeout = 3000
+            val dos = DataOutputStream(socket.getOutputStream())
+            dos.writeShort(query.size)
+            dos.write(query)
+            dos.flush()
+            
+            val dis = DataInputStream(socket.getInputStream())
+            val len = dis.readUnsignedShort()
+            if (len > 8192) return emptyList()
             val resp = ByteArray(len)
             dis.readFully(resp)
             val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
