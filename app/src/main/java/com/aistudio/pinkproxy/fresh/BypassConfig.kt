@@ -402,6 +402,10 @@ object BypassConfig {
 
         host?.let { 
             hostStrategyMemory[it] = strat to (System.currentTimeMillis() + SESSION_TTL)
+            if (hostStrategyMemory.size > 2000) {
+                val oldest = hostStrategyMemory.entries.minByOrNull { it.value.second }
+                if (oldest != null) hostStrategyMemory.remove(oldest.key)
+            }
             hostBlacklist[it]?.remove(strat)
         }
         
@@ -473,6 +477,11 @@ object BypassConfig {
             
             val blacklist = hostBlacklist.getOrPut(it) { ConcurrentHashMap() }
             blacklist[strat] = System.currentTimeMillis() + 600000 // 10 min
+            
+            if (hostBlacklist.size > 1000) {
+                val oldest = hostBlacklist.entries.minByOrNull { it.value.values.maxOrNull() ?: 0L }
+                if (oldest != null) hostBlacklist.remove(oldest.key)
+            }
         }
         
         strategyStats[strat]?.let { stats ->
@@ -722,6 +731,7 @@ object BypassConfig {
         val targetAddr = packet.address
         val targetPort = packet.port
         val data = packet.data
+        val offset = packet.offset
         val length = packet.length
 
         when (strategy) {
@@ -781,7 +791,7 @@ object BypassConfig {
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
                 if (length > 20) {
                     val split = length / 2
-                    val p1 = data.copyOfRange(0, split)
+                    val p1 = data.copyOfRange(offset, offset + split)
                     TtlHelper.setUdpTtl(socket, config.fakeTtl, targetAddr is Inet6Address)
                     socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
                     delay(config.delay1)

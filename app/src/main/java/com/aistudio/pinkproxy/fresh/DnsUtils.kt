@@ -5,23 +5,24 @@ import java.net.InetAddress
 object DnsUtils {
     data class ParsedDnsQuery(val qname: String, val qtype: Int)
 
-    fun parseDnsQName(payload: ByteArray): ParsedDnsQuery? {
+    fun parseDnsQName(payload: ByteArray, offset: Int = 0, length: Int = payload.size): ParsedDnsQuery? {
         try {
-            if (payload.size < 13) return null
-            val qcount = ((payload[4].toInt() and 0xFF) shl 8) or (payload[5].toInt() and 0xFF)
+            if (length < 13) return null
+            val qcount = ((payload[offset + 4].toInt() and 0xFF) shl 8) or (payload[offset + 5].toInt() and 0xFF)
             if (qcount <= 0) return null
             
             val sb = StringBuilder()
-            var pos = 12
-            while (pos < payload.size) {
+            var pos = offset + 12
+            val limit = offset + length
+            while (pos < limit) {
                 val len = payload[pos].toInt() and 0xFF
                 if (len == 0) break
                 if (sb.isNotEmpty()) sb.append(".")
-                if (pos + 1 + len > payload.size) return null
+                if (pos + 1 + len > limit) return null
                 sb.append(String(payload, pos + 1, len))
                 pos += (len + 1)
             }
-            if (pos + 2 < payload.size) {
+            if (pos + 2 < limit) {
                 val qtype = ((payload[pos + 1].toInt() and 0xFF) shl 8) or (payload[pos + 2].toInt() and 0xFF)
                 return ParsedDnsQuery(sb.toString(), qtype)
             }
@@ -29,7 +30,7 @@ object DnsUtils {
         } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}"); return null }
     }
 
-    fun buildDnsReply(query: ByteArray, ips: List<String>, isIpv6: Boolean): ByteArray {
+    fun buildDnsReply(query: ByteArray, queryOffset: Int, queryLength: Int, ips: List<String>, isIpv6: Boolean): ByteArray {
         val parsedAddrs = ips.mapNotNull { ip ->
             try {
                 val addr = InetAddress.getByName(ip)
@@ -40,9 +41,10 @@ object DnsUtils {
         }
 
         val bos = java.io.ByteArrayOutputStream()
+        val limit = queryOffset + queryLength
         // ID
-        bos.write(query.getOrNull(0)?.toInt() ?: 0)
-        bos.write(query.getOrNull(1)?.toInt() ?: 0)
+        bos.write(if (queryOffset < limit) query[queryOffset].toInt() else 0)
+        bos.write(if (queryOffset + 1 < limit) query[queryOffset + 1].toInt() else 0)
         // Flags: Standard query response, No error
         bos.write(0x81)
         bos.write(0x80)
@@ -57,29 +59,30 @@ object DnsUtils {
         bos.write(0); bos.write(0)
         
         // Copy Question section
-        var pos = 12
-        while (pos < query.size) {
+        var pos = queryOffset + 12
+        while (pos < limit) {
             val len = query[pos].toInt() and 0xFF
             if (len == 0) {
                 bos.write(0)
                 // Type (A = 1, AAAA = 28) and Class IN (0x0001)
-                bos.write(query.getOrNull(pos + 1)?.toInt() ?: 0)
-                bos.write(query.getOrNull(pos + 2)?.toInt() ?: 0)
-                bos.write(query.getOrNull(pos + 3)?.toInt() ?: 0)
-                bos.write(query.getOrNull(pos + 4)?.toInt() ?: 0)
+                bos.write(if (pos + 1 < limit) query[pos + 1].toInt() else 0)
+                bos.write(if (pos + 2 < limit) query[pos + 2].toInt() else 0)
+                bos.write(if (pos + 3 < limit) query[pos + 3].toInt() else 0)
+                bos.write(if (pos + 4 < limit) query[pos + 4].toInt() else 0)
                 break
             }
             bos.write(len)
-            if (pos + 1 + len <= query.size) {
+            if (pos + 1 + len <= limit) {
                 bos.write(query, pos + 1, len)
             } else {
-                val available = (query.size - (pos + 1)).coerceAtLeast(0)
+                val available = (limit - (pos + 1)).coerceAtLeast(0)
                 if (available > 0) {
                     bos.write(query, pos + 1, available)
                 }
             }
             pos += (len + 1)
         }
+
         
         // Answers
         for (addr in parsedAddrs) {

@@ -23,14 +23,46 @@ import java.util.concurrent.TimeUnit
 
 object DnsProtocols {
 
-    private val okHttpClient by lazy {
+    private val baseOkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(5, TimeUnit.SECONDS)
             .writeTimeout(5, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
-            .connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
+            .connectionPool(ConnectionPool(15, 5, TimeUnit.MINUTES))
             .build()
+    }
+
+    private var cachedProtectedClient: OkHttpClient? = null
+    private var lastVpnService: VpnService? = null
+
+    private fun getProtectedClient(vpnService: VpnService?): OkHttpClient {
+        if (cachedProtectedClient != null && lastVpnService == vpnService) {
+            return cachedProtectedClient!!
+        }
+        
+        val builder = baseOkHttpClient.newBuilder()
+            .socketFactory(ProtectedSocketFactory(vpnService))
+        
+        try {
+            val sc = SSLContext.getInstance("TLS")
+            sc.init(null, null, null)
+            builder.sslSocketFactory(ProtectedSSLSocketFactory(sc.socketFactory, vpnService), 
+                object : javax.net.ssl.X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+                })
+        } catch (e: Exception) {
+            Log.e("DnsProtocols", "Failed to setup protected SSL", e)
+        }
+        
+        builder.hostnameVerifier { _, _ -> true }
+        
+        val client = builder.build()
+        cachedProtectedClient = client
+        lastVpnService = vpnService
+        return client
     }
 
     suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
@@ -151,22 +183,13 @@ object DnsProtocols {
             val url = java.net.URL(dohUrl)
             val dohHost = url.host
             
-            val client = okHttpClient.newBuilder()
-                .socketFactory(ProtectedSocketFactory(vpnService))
-                .sslSocketFactory(ProtectedSSLSocketFactory(SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory, vpnService), 
-                    object : javax.net.ssl.X509TrustManager {
-                        override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                        override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-                    })
-                .hostnameVerifier { hostname, _ -> hostname == dohHost }
-                .build()
+            val client = getProtectedClient(vpnService)
 
             val request = Request.Builder()
                 .url(dohUrl)
                 .post(query.toRequestBody("application/dns-message".toMediaType()))
                 .header("Accept", "application/dns-message")
-                .header("Host", dohHost)
+                .header("User-Agent", "PinkProxy/2.0")
                 .build()
 
             client.newCall(request).execute().use { response ->

@@ -52,7 +52,7 @@ object UdpTransportHandler {
                             // to avoid blocking the main UDP worker loop
                             launch {
                                 try {
-                                    sendUdpPacket(outSocket, packet.data.copyOfRange(packet.offset, packet.offset + packet.length), packet.address, packet.port, targetHost)
+                                    sendUdpPacket(outSocket, packet, targetHost)
                                 } catch (e: Exception) {
                                     Log.v("UdpTransport", "Send error: ${e.message}")
                                 }
@@ -147,11 +147,11 @@ object UdpTransportHandler {
                         val targetPortNum = ((data[headerLen].toInt() and 0xFF) shl 8) or (data[headerLen + 1].toInt() and 0xFF)
                         headerLen += 2
                         
-                        val payload = data.copyOfRange(headerLen, len)
-                        ProxyStats.updateBytes(payload.size.toLong())
+                        val payloadLen = len - headerLen
+                        ProxyStats.updateBytes(payloadLen.toLong())
                         
                         if (targetPortNum == 53) {
-                            val query = DnsUtils.parseDnsQName(payload)
+                            val query = DnsUtils.parseDnsQName(data, headerLen, payloadLen)
                             if (query != null) {
                                 val host = query.qname
                                 val clientAddr = packet.address
@@ -160,7 +160,7 @@ object UdpTransportHandler {
                                 if (cached != null) {
                                     val ipStrs = cached.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
                                     if (ipStrs.isNotEmpty()) {
-                                        val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
+                                        val dnsReply = DnsUtils.buildDnsReply(data, headerLen, payloadLen, ipStrs, query.qtype == 28)
                                         val headerSize = if (pAtyp == 1) 10 else if (pAtyp == 4) 22 else 7 + (data[4].toInt() and 0xFF)
                                         val responseBytes = ProxyStats.obtain8k()
                                         try {
@@ -182,7 +182,7 @@ object UdpTransportHandler {
                                             val res = RobustResolver.resolve(host, vpnService)
                                             if (res.isNotEmpty()) {
                                                 val ipStrs = res.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
-                                                val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
+                                                val dnsReply = DnsUtils.buildDnsReply(data, headerLen, payloadLen, ipStrs, query.qtype == 28)
                                                 val headerSize = if (pAtyp == 1) 10 else if (pAtyp == 4) 22 else 7 + (data[4].toInt() and 0xFF)
                                                 val responseBytes = ProxyStats.obtain8k()
                                                 try {
@@ -203,6 +203,7 @@ object UdpTransportHandler {
                                 }
                             }
                         } else {
+                            val payload = data.copyOfRange(headerLen, len)
                             val cached = RobustResolver.getCached(targetHost)
                             if (cached != null && cached.isNotEmpty()) {
                                 udpOutChannel.trySend(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
@@ -245,9 +246,14 @@ object UdpTransportHandler {
         try { udpSocket.close() } catch (e: Exception) {}
     }
 
-    private suspend fun sendUdpPacket(socket: DatagramSocket, payload: ByteArray, targetInet: InetAddress, targetPort: Int, targetHost: String = "") {
-        val isQuic = targetPort == 443 && payload.isNotEmpty() && (payload[0].toInt() and 0xC0) == 0xC0
-        val outPacket = DatagramPacket(payload, payload.size, targetInet, targetPort)
+    private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
+        val payload = packet.data
+        val offset = packet.offset
+        val length = packet.length
+        val targetInet = packet.address
+        val targetPort = packet.port
+        
+        val isQuic = targetPort == 443 && length > 0 && (payload[offset].toInt() and 0xC0) == 0xC0
         
         // Basic filtering
         if (BypassConfig.blockQuic && isQuic) return
@@ -265,6 +271,6 @@ object UdpTransportHandler {
         }
 
         // Apply centralized UDP bypass
-        BypassConfig.applyUdpBypass(socket, outPacket, config, host)
+        BypassConfig.applyUdpBypass(socket, packet, config, host)
     }
 }

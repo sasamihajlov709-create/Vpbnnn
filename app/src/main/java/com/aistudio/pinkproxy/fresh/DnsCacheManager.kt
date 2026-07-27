@@ -147,10 +147,29 @@ object DnsCacheManager {
         }
     }
 
+    private val suspectedPoisonedIps = ConcurrentHashMap<String, Int>()
+
     fun recordIpFailure(ip: String) {
         val current = ipHeatmap.getOrDefault(ip, 50)
-        ipHeatmap[ip] = (current - 15).coerceAtLeast(0)
+        val newVal = (current - 15).coerceAtLeast(0)
+        ipHeatmap[ip] = newVal
         ipRtt[ip] = 5000L
+        
+        if (newVal == 0 && isPoisonable(ip)) {
+            val count = suspectedPoisonedIps.getOrDefault(ip, 0) + 1
+            suspectedPoisonedIps[ip] = count
+            if (count >= 5) {
+                poisonedIps.add(ip)
+                ProxyStats.logRecovery("Dynamic Detection: Marked $ip as poisoned")
+            }
+        }
+    }
+
+    private fun isPoisonable(ip: String): Boolean {
+        // Don't mark local or trusted IPs as poisoned
+        if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) return false
+        if (ip == "8.8.8.8" || ip == "1.1.1.1" || ip == "9.9.9.9") return false
+        return true
     }
 
     private val negativeCache = ConcurrentHashMap<String, Long>()

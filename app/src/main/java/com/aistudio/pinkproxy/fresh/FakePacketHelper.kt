@@ -1072,19 +1072,19 @@ object FakePacketHelper {
     }
 
     private val BITTORRENT_HEADER = "BitTorrent protocol".toByteArray()
+    private val BITTORRENT_TEMPLATE = ByteArray(68).apply {
+        this[0] = 19
+        System.arraycopy(BITTORRENT_HEADER, 0, this, 1, BITTORRENT_HEADER.size)
+    }
 
     fun buildBitTorrentHandshake(): ByteArray {
-        val baos = ByteArrayOutputStream()
-        baos.write(19) // pstrlen
-        baos.write(BITTORRENT_HEADER)
-        baos.write(ByteArray(8) { 0 }) // reserved
-        val peerId = ByteArray(20)
-        ThreadLocalRandom.current().nextBytes(peerId)
-        baos.write(peerId) // peer_id
-        val infoHash = ByteArray(20)
-        ThreadLocalRandom.current().nextBytes(infoHash)
-        baos.write(infoHash) // info_hash
-        return baos.toByteArray()
+        val result = BITTORRENT_TEMPLATE.copyOf()
+        val rnd = ThreadLocalRandom.current()
+        // info_hash at offset 28, peer_id at offset 48
+        val randomBytes = ByteArray(40)
+        rnd.nextBytes(randomBytes)
+        System.arraycopy(randomBytes, 0, result, 28, 40)
+        return result
     }
 
     private val CACHED_HTTP_HANDSHAKE = "GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray()
