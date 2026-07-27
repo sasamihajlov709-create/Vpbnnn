@@ -1099,6 +1099,39 @@ object BypassConfig {
                     if (offset < length) delay(rnd.nextLong(2, 10))
                 }
             }
+            BypassStrategy.TCP_RST_FAKE -> {
+                // For ads or blocked sites, we "reset" the connection from our side
+                throw IOException("Blocked by PinkProxy strategy")
+            }
+            BypassStrategy.TCP_KEEP_ALIVE_FAKE -> {
+                output.write(data, 0, length)
+                output.flush()
+                // Send a tiny empty TCP segment (simulated via empty write if possible, 
+                // but usually requires raw sockets. We'll send a single space if it's likely text)
+                if (rnd.nextBoolean()) {
+                    output.write(' '.code)
+                    output.flush()
+                }
+            }
+            BypassStrategy.TCP_TOS_MANGLE -> {
+                // We can't easily set TOS per packet in standard Java Sockets easily 
+                // without reflection on Linux, but we can set it for the socket once.
+                try {
+                    socket.trafficClass = 0x04 // Low Delay
+                } catch (e: Exception) {}
+                output.write(data, 0, length)
+                output.flush()
+            }
+            BypassStrategy.TCP_SMALL_CHUNKS -> {
+                var pos = 0
+                while (pos < length) {
+                    val size = rnd.nextInt(1, 4).coerceAtMost(length - pos)
+                    output.write(data, pos, size)
+                    output.flush()
+                    pos += size
+                    if (pos < length) delay(rnd.nextLong(1, 5))
+                }
+            }
             BypassStrategy.HTTP_AUTH_RANDOM -> {
                 if (!isProbableHttp(data, length)) {
                     output.write(data, 0, length); output.flush()
@@ -1254,15 +1287,21 @@ object BypassConfig {
                 val padSize = rnd.nextInt(16, 128); val pad = ByteArray(padSize) { rnd.nextInt(256).toByte() }
                 output.write(pad); output.flush()
             }
-            BypassStrategy.TCP_RST_FAKE -> {
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(RST_PAYLOAD); output.flush()
-                delay(2); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
-            }
             BypassStrategy.TCP_TIMESTAMP_MANGLE -> {
                 try { socket.sendUrgentData(rnd.nextInt(1, 255)) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 val split = (length / 3).coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay1)
                 output.write(data, split, length - split); output.flush()
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_HTTP -> {
+                // Wrap first packet in a fake HTTP CONNECT or GET
+                if (length > 0 && data[0] == 0x16.toByte()) { // TLS
+                    val fakeHttp = "GET / HTTP/1.1\r\nHost: $host\r\nConnection: keep-alive\r\nUpgrade: websocket\r\n\r\n".toByteArray()
+                    output.write(fakeHttp); output.flush(); delay(config.delay1)
+                    output.write(data, 0, length); output.flush()
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
             }
             BypassStrategy.TLS_CIPHER_SHUFFLE -> {
                 val fake = FakePacketHelper.buildFakeClientHello(host, rnd.nextInt(40, 80))

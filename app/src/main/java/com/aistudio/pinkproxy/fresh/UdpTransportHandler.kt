@@ -247,9 +247,7 @@ object UdpTransportHandler {
         try { udpSocket.close() } catch (e: Exception) {}
     }
 
-    private var lastStrategy: BypassStrategy? = null
-    private var lastConfig: SessionConfig? = null
-    private var lastConfigTime = 0L
+    private val hostStrategyCache = java.util.concurrent.ConcurrentHashMap<String, Pair<SessionConfig, Long>>(100)
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
         val payload = packet.data
@@ -266,16 +264,19 @@ object UdpTransportHandler {
         val host = if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress ?: ""
         
         val now = System.currentTimeMillis()
-        if (lastStrategy == null || lastConfig == null || now - lastConfigTime > 5000L) {
+        val cached = hostStrategyCache[host]
+        
+        val config = if (cached == null || now - cached.second > 10000L) {
             val strat = BypassConfig.getBestStrategyForHost(host)
-            lastStrategy = strat
-            lastConfig = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
-            lastConfigTime = now
+            val cfg = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
+            // Limit cache size to prevent memory leaks
+            if (hostStrategyCache.size > 200) hostStrategyCache.clear() 
+            hostStrategyCache[host] = cfg to now
+            cfg
+        } else {
+            cached.first
         }
 
-        val strategy = lastStrategy!!
-        val config = lastConfig!!
-        
         // Adaptive Jitter
         val intensity = ProxyStats.censorshipIntensity.value
         if (intensity > 40) {

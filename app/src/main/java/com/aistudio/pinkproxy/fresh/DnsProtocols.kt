@@ -189,14 +189,15 @@ object DnsProtocols {
                 .url(dohUrl)
                 .post(query.toRequestBody("application/dns-message".toMediaType()))
                 .header("Accept", "application/dns-message")
-                .header("User-Agent", "PinkProxy/2.0")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .build()
 
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.bytes() ?: return emptyList()
                     val ips = DnsPacketEngine.parseDnsResponse(body, body.size)
-                    return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+                    val filtered = ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+                    if (filtered.isNotEmpty()) return filtered
                 }
             }
         } catch (e: Exception) {

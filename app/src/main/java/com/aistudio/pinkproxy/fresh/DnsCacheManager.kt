@@ -252,10 +252,18 @@ object DnsCacheManager {
             val prefs = context.getSharedPreferences("dns_metrics", android.content.Context.MODE_PRIVATE)
             
             // Serialize heatmap: ip|score;ip|score
-            val heatmapStr = ipHeatmap.entries.take(1000).joinToString(";") { "${it.key}|${it.value}" }
+            // Sort by score descending to keep most relevant entries
+            val heatmapStr = ipHeatmap.entries
+                .sortedByDescending { it.value }
+                .take(800)
+                .joinToString(";") { "${it.key}|${it.value}" }
             
             // Serialize RTT: ip|rtt;ip|rtt
-            val rttStr = ipRtt.entries.take(500).joinToString(";") { "${it.key}|${it.value}" }
+            // Sort by RTT ascending (lower is better) to keep best performing IPs
+            val rttStr = ipRtt.entries
+                .sortedBy { it.value }
+                .take(400)
+                .joinToString(";") { "${it.key}|${it.value}" }
             
             prefs.edit {
                 putString("ip_heatmap", heatmapStr)
