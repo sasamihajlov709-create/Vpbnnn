@@ -136,6 +136,8 @@ enum class BypassStrategy(
     UDP_TELEGRAM_FAKE(StrategyFamily.UDP, 3, 2),
     UDP_DISCORD_FAKE(StrategyFamily.UDP, 3, 2),
     TCP_RANDOM_PADDING(StrategyFamily.TCP, 2, 1),
+    TLS_RECORD_PADDING(StrategyFamily.TLS, 2, 2),
+    UDP_HIGH_VOL_PACING(StrategyFamily.UDP, 2, 1),
     DIRECT(StrategyFamily.DIRECT, 0, 0)
 }
 
@@ -197,6 +199,12 @@ object ProxyStats {
     fun release16k(buf: ByteArray) { bufferPool16k.offer(buf) }
     fun obtain64k(): ByteArray = bufferPool64k.poll() ?: ByteArray(65536)
     fun release64k(buf: ByteArray) { bufferPool64k.offer(buf) }
+
+    fun releaseAllPools() {
+        bufferPool8k.clear()
+        bufferPool16k.clear()
+        bufferPool64k.clear()
+    }
 
     private val _bytesTransferred = MutableStateFlow(0L)
     val bytesTransferred: StateFlow<Long> = _bytesTransferred.asStateFlow()
@@ -261,6 +269,14 @@ object ProxyStats {
 
     private val _successRate = MutableStateFlow(100)
     val successRate: StateFlow<Int> = _successRate.asStateFlow()
+
+    private val _maxMss = MutableStateFlow(1460)
+    val maxMss: StateFlow<Int> = _maxMss.asStateFlow()
+
+    fun recordMssFailure() {
+        _maxMss.update { (it - 64).coerceAtLeast(512) }
+        logRecovery("MTU auto-correction: reducing MSS to ${_maxMss.value}")
+    }
 
     fun recordDnsResult(success: Boolean) {
         if (success) {

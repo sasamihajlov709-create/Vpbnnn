@@ -29,6 +29,7 @@ object TcpTransportHandler {
                 return
             }
             ProxyStats.addTraffic(targetHost)
+            val totalWrittenClient = java.util.concurrent.atomic.AtomicLong(0)
 
             val strategy = BypassConfig.getBestStrategyForHost(targetHost)
             val config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
@@ -202,7 +203,10 @@ object TcpTransportHandler {
                             BypassConfig.recordFailure(strategy, targetHost)
                         }
                         when {
-                            msg.contains("reset") -> ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                            msg.contains("reset") -> {
+                                ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                                if (totalWrittenClient.get() > 0 && totalWrittenClient.get() < 5000) ProxyStats.recordMssFailure()
+                            }
                             msg.contains("timeout") -> ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
                             else -> ProxyStats.recordCensorshipEvent(true)
                         }
@@ -223,7 +227,6 @@ object TcpTransportHandler {
                     try {
                         var n: Int
                         var firstPacket = true
-                        var totalWritten = 0L
                         while (isActive) {
                             n = clientIn.read(buffer)
                             if (n == -1) break
@@ -240,8 +243,9 @@ object TcpTransportHandler {
                                 } else {
                                     val currentIntensity = ProxyStats.censorshipIntensity.value
                                     // Pacing: slow down if we just started or if censorship is high
-                                    if (totalWritten < 32768 && currentIntensity > 50) {
-                                        val pSize = if (currentIntensity > 80) 512 else 1024
+                                    val mss = ProxyStats.maxMss.value
+                                    if (totalWrittenClient.get() < 32768 && currentIntensity > 50) {
+                                        val pSize = if (currentIntensity > 80) minOf(512, mss) else minOf(1024, mss)
                                         var offset = 0
                                         while (offset < n) {
                                             val chunk = minOf(pSize, n - offset)
@@ -265,10 +269,19 @@ object TcpTransportHandler {
                                         }
                                     } else {
                                         remoteOut.write(buffer, 0, n)
+                                        
+                                        // Random Padding strategy
+                                        if (strategy == BypassStrategy.TCP_RANDOM_PADDING && rnd.nextInt(100) < 30) {
+                                            // Send out-of-band data instead of in-band random bytes to prevent protocol corruption
+                                            try {
+                                                remoteSocket?.sendUrgentData(rnd.nextInt(256))
+                                            } catch (e: Exception) {}
+                                        }
+                                        
                                         remoteOut.flush()
                                     }
                                 }
-                                totalWritten += n
+                                totalWrittenClient.addAndGet(n.toLong())
                                 ProxyStats.updateBytes(n.toLong())
                             }
                         }

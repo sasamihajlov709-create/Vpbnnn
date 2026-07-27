@@ -180,20 +180,21 @@ class PinkVpnService : VpnService() {
                 "discord.com", "slack.com", "trello.com", "notion.so", "figma.com", "bitbucket.org"
             )
             while (isActive) {
-                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(30000, 180000))
+                // Adaptive delay: more chaff when censorship is high
+                val intensity = ProxyStats.censorshipIntensity.value
+                val baseDelay = if (intensity > 80) 20000L else 60000L
+                delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(baseDelay, baseDelay * 3))
+                
                 if (!_isRunning.value) continue
                 
-                // Only send chaff if idle or under high censorship
-                val intensity = ProxyStats.censorshipIntensity.value
                 val speed = ProxyStats.speedBytesPerSecond.value
                 val activeConns = ProxyStats.activeConnections.value
                 
-                if (speed < 5000 || intensity > 80 || activeConns == 0) {
-                    repeat(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 3)) {
+                // Only send chaff if idle or under high censorship to blend in
+                if (speed < 10000 || intensity > 70 || activeConns == 0) {
+                    repeat(java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 4)) {
                         val domain = domains.random()
-                        Log.v("PinkVpnService", "Sending chaff probe to $domain")
                         try {
-                            // Alternate between DNS probe and fake HTTP probe
                             if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) {
                                 RobustResolver.resolve(domain, this@PinkVpnService)
                             } else {
@@ -204,12 +205,9 @@ class PinkVpnService : VpnService() {
                                     try {
                                         val ips = java.net.InetAddress.getAllByName(probeHost)
                                         if (ips.isNotEmpty()) {
-                                            socket.connect(java.net.InetSocketAddress(ips[0], 80), 5000)
+                                            socket.connect(java.net.InetSocketAddress(ips[0], 443), 5000)
                                             socket.tcpNoDelay = true
-                                            val out = socket.getOutputStream()
-                                            out.write("GET / HTTP/1.1\r\nHost: $probeHost\r\nUser-Agent: Mozilla/5.0\r\n\r\n".toByteArray())
-                                            out.flush()
-                                            delay(100)
+                                            // Send a fake TLS Client Hello if possible, or just connect/close
                                             socket.close()
                                         }
                                     } catch (e: Exception) {
@@ -218,19 +216,8 @@ class PinkVpnService : VpnService() {
                                 }
                             }
                         } catch (e: Exception) {}
-                        delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(2000, 10000))
+                        delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(1000, 5000))
                     }
-                }
-                
-                // Aggressive NAT keep-alive: pulse empty UDP packets if active
-                if (activeConns > 0) {
-                     try {
-                         val dummySocket = java.net.DatagramSocket()
-                         protect(dummySocket)
-                         val dummyPacket = java.net.DatagramPacket(ByteArray(0), 0, java.net.InetAddress.getByName("8.8.8.8"), 53)
-                         dummySocket.send(dummyPacket)
-                         dummySocket.close()
-                     } catch (e: Exception) {}
                 }
             }
         }
@@ -457,6 +444,15 @@ class PinkVpnService : VpnService() {
             stopForeground(true)
         }
         updateTile(this)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_MODERATE) {
+            ProxyStats.logRecovery("System memory low (level $level). Releasing pools.")
+            ProxyStats.releaseAllPools()
+            RobustResolver.clearCache()
+        }
     }
 
     override fun onRevoke() {

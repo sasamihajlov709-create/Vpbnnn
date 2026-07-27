@@ -16,7 +16,22 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.HostnameVerifier
 import kotlinx.coroutines.*
 
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
+
 object DnsProtocols {
+
+    private val okHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
+            .build()
+    }
 
     suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
@@ -39,13 +54,16 @@ object DnsProtocols {
     }
 
     suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+        val strategy = BypassConfig.getBestStrategyForHost(host)
+        val mangle = strategy == BypassStrategy.DNS_CASE_MANGLE
+        
         val idReal = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val idFake = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val queryReal = DnsPacketEngine.buildDnsQuery(host, 1, idReal)
+        val queryReal = DnsPacketEngine.buildDnsQuery(host, 1, idReal, mangle)
         
         val innocentDomains = listOf("google.com", "bing.com", "apple.com", "microsoft.com", "cloudflare.com")
         val fakeDomain = innocentDomains.random()
-        val queryFake = DnsPacketEngine.buildDnsQuery(fakeDomain, 1, idFake)
+        val queryFake = DnsPacketEngine.buildDnsQuery(fakeDomain, 1, idFake, mangle)
         
         val socket = DatagramSocket()
         try {
@@ -127,54 +145,36 @@ object DnsProtocols {
 
     suspend fun queryDoh(host: String, dohUrl: String, vpnService: VpnService?): List<InetAddress> {
         val query = DnsPacketEngine.buildDnsQuery(host, 1)
-        var conn: HttpURLConnection? = null
         try {
             val url = java.net.URL(dohUrl)
-            // Bootstrap: resolve DoH hostname manually to avoid recursion or block
             val dohHost = url.host
-            val dohIps = DnsCacheManager.getStaticIps(dohHost) ?: DnsCacheManager.getEmergencyFallback(dohHost)
             
-            val finalUrl = if (!dohIps.isNullOrEmpty()) {
-                val ipAddr = dohIps.random()
-                val ipStr = ipAddr.hostAddress ?: ""
-                val formattedIp = if (ipAddr is java.net.Inet6Address) "[$ipStr]" else ipStr
-                if (formattedIp.isNotEmpty()) {
-                    java.net.URL(dohUrl.replace(dohHost, formattedIp))
-                } else {
-                    url
-                }
-            } else {
-                url
-            }
+            val client = okHttpClient.newBuilder()
+                .socketFactory(ProtectedSocketFactory(vpnService))
+                .sslSocketFactory(ProtectedSSLSocketFactory(SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory, vpnService), 
+                    object : javax.net.ssl.X509TrustManager {
+                        override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                        override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+                        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+                    })
+                .hostnameVerifier { hostname, _ -> hostname == dohHost }
+                .build()
 
-            conn = finalUrl.openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
-            if (conn is HttpsURLConnection) {
-                val sslContext = SSLContext.getInstance("TLS")
-                sslContext.init(null, null, null)
-                conn.sslSocketFactory = ProtectedSSLSocketFactory(sslContext.socketFactory, vpnService)
-                // If we used IP, we MUST verify hostname
-                conn.hostnameVerifier = HostnameVerifier { hostname, _ -> 
-                    hostname == dohHost || hostname == finalUrl.host
+            val request = Request.Builder()
+                .url(dohUrl)
+                .post(query.toRequestBody("application/dns-message".toMediaType()))
+                .header("Accept", "application/dns-message")
+                .header("Host", dohHost)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.bytes() ?: return emptyList()
+                    val ips = DnsPacketEngine.parseDnsResponse(body, body.size)
+                    return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
                 }
             }
-            
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.setRequestProperty("Host", dohHost)
-            conn.setRequestProperty("Content-Type", "application/dns-message")
-            conn.setRequestProperty("Accept", "application/dns-message")
-            
-            conn.outputStream.use { it.write(query) }
-            
-            if (conn.responseCode == 200) {
-                val resp = conn.inputStream.use { it.readBytes() }
-                val ips = DnsPacketEngine.parseDnsResponse(resp, resp.size)
-                return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
-            }
-        } catch (e: Exception) {} finally {
-            try { conn?.disconnect() } catch (e: Exception) {}
+        } catch (e: Exception) {
         }
         return emptyList()
     }
@@ -217,6 +217,18 @@ object DnsProtocols {
             }
         } ?: emptyList()
     }
+}
+
+class ProtectedSocketFactory(private val vpnService: VpnService?) : javax.net.SocketFactory() {
+    override fun createSocket(): Socket {
+        val s = Socket()
+        vpnService?.protect(s)
+        return s
+    }
+    override fun createSocket(host: String?, port: Int) = createSocket().apply { connect(InetSocketAddress(host, port)) }
+    override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int) = createSocket()
+    override fun createSocket(host: InetAddress?, port: Int) = createSocket()
+    override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int) = createSocket()
 }
 
 class ProtectedSSLSocketFactory(private val base: SSLSocketFactory, private val vpnService: VpnService?) : SSLSocketFactory() {

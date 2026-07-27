@@ -94,7 +94,9 @@ object DnsCacheManager {
 
     fun put(host: String, ips: List<InetAddress>) {
         if (ips.isEmpty()) return
-        dnsCache[host] = ips to System.currentTimeMillis()
+        val filtered = ips.filter { ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) > 10 }
+        val finalIps = if (filtered.isEmpty()) ips else filtered
+        dnsCache[host] = finalIps to System.currentTimeMillis()
         if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
             val oldest = dnsCache.entries.minByOrNull { it.value.second }
             if (oldest != null) dnsCache.remove(oldest.key)
@@ -123,6 +125,16 @@ object DnsCacheManager {
         if (rtt > 0) {
             val oldRtt = ipRtt.getOrDefault(ip, rtt)
             ipRtt[ip] = (oldRtt * 0.7 + rtt * 0.3).toLong()
+        }
+        
+        // Propagate success to same-IP domains
+        if (ipHeatmap.getOrDefault(ip, 50) > 80) {
+             dnsCache.forEach { (host, entry) ->
+                 if (entry.first.any { it.hostAddress == ip }) {
+                     // Slightly boost TTL for these
+                     dnsCache[host] = entry.first to (entry.second + 60000L) 
+                 }
+             }
         }
     }
 

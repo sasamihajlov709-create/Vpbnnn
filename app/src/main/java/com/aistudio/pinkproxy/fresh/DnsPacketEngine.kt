@@ -7,7 +7,7 @@ import java.io.ByteArrayInputStream
 
 object DnsPacketEngine {
 
-    fun buildDnsQuery(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)): ByteArray {
+    fun buildDnsQuery(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000), mangleCase: Boolean = false): ByteArray {
         val bos = ByteArrayOutputStream()
         val dos = java.io.DataOutputStream(bos)
         
@@ -16,11 +16,27 @@ object DnsPacketEngine {
         dos.writeShort(1) // Questions
         dos.writeShort(0) // Answer RRs
         dos.writeShort(0) // Authority RRs
-        dos.writeShort(0) // Additional RRs
+        dos.writeShort(1) // Additional RRs (EDNS0)
         
         val labels = host.split(".")
         for (label in labels) {
-            val bytes = label.toByteArray(java.nio.charset.StandardCharsets.UTF_8)
+            var labelToUse = label
+            if (mangleCase) {
+                val sb = StringBuilder()
+                for (char in label) {
+                    if (char in 'a'..'z' || char in 'A'..'Z') {
+                        if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) {
+                            sb.append(char.uppercase())
+                        } else {
+                            sb.append(char.lowercase())
+                        }
+                    } else {
+                        sb.append(char)
+                    }
+                }
+                labelToUse = sb.toString()
+            }
+            val bytes = labelToUse.toByteArray(java.nio.charset.StandardCharsets.UTF_8)
             dos.writeByte(bytes.size)
             dos.write(bytes)
         }
@@ -42,10 +58,7 @@ object DnsPacketEngine {
         dos.writeShort(ecsOption.size)
         dos.write(ecsOption)
         
-        // Update Additional RRs count (line 19)
-        val query = bos.toByteArray()
-        query[11] = 1 // ARCOUNT = 1
-        return query
+        return bos.toByteArray()
     }
 
     private fun buildEcsOption(): ByteArray {

@@ -87,7 +87,7 @@ object RobustResolver {
         // 1. Try Direct if not censored
         if (isDirect && !isCensored) {
             try {
-                val res = InetAddress.getAllByName(host).toList()
+                val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService)
                 if (res.isNotEmpty() && !DnsCacheManager.isPoisoned(res.first(), host)) {
                     DnsCacheManager.put(host, res)
                     return res

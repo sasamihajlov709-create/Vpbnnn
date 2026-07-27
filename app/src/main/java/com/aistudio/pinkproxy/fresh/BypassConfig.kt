@@ -256,10 +256,10 @@ object BypassConfig {
                     if (entry.key == BypassStrategy.WINDOW_SIZE) weight *= 2.0
                 }
                 HostCategory.MESSENGER -> {
-                    if (entry.key.family == StrategyFamily.UDP || entry.key == BypassStrategy.QUIC_INITIAL_FAKE) weight *= 1.8
+                    if (entry.key.family == StrategyFamily.UDP || entry.key == BypassStrategy.QUIC_INITIAL_FAKE || entry.key == BypassStrategy.UDP_HIGH_VOL_PACING) weight *= 2.0
                 }
                 HostCategory.SOCIAL -> {
-                    if (entry.key.family == StrategyFamily.TLS || entry.key.family == StrategyFamily.FRAGMENTATION) weight *= 1.6
+                    if (entry.key.family == StrategyFamily.TLS || entry.key.family == StrategyFamily.FRAGMENTATION || entry.key == BypassStrategy.TLS_RECORD_PADDING) weight *= 1.8
                 }
                 HostCategory.AI -> {
                     if (entry.key.family == StrategyFamily.TLS || entry.key == BypassStrategy.TLS_SNI_SKEW) weight *= 1.7
@@ -742,6 +742,13 @@ object BypassConfig {
                 val dc = FakePacketHelper.buildDiscordFake()
                 writeUdpWithFake(socket, targetAddr, targetPort, dc, packet, config)
             }
+            BypassStrategy.UDP_HIGH_VOL_PACING -> {
+                val intensity = ProxyStats.censorshipIntensity.value
+                if (intensity > 30) {
+                    delay(rnd.nextLong(1, (intensity / 10).toLong().coerceAtLeast(2)))
+                }
+                socket.send(packet)
+            }
             BypassStrategy.UDP_NOISE_PAD -> {
                 val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(50, 200))
                 writeUdpWithFake(socket, targetAddr, targetPort, noise, packet, config)
@@ -856,7 +863,7 @@ object BypassConfig {
                 val fake = FakePacketHelper.buildSafariHello(host)
                 writeWithFake(socket, output, fake, data, length, config)
             }
-            BypassStrategy.WINDOW_SIZE, BypassStrategy.TCP_WINDOW_CLAMPING -> {
+            BypassStrategy.TCP_WINDOW_CLAMPING -> {
                 val intensity = ProxyStats.censorshipIntensity.value
                 val winSize = if (intensity > 85) rnd.nextInt(256, 512) else if (intensity > 60) rnd.nextInt(1024, 2048) else 4096
                 try {
@@ -865,6 +872,13 @@ object BypassConfig {
                 } catch (e: Exception) {}
                 output.write(data, 0, length)
                 output.flush()
+            }
+            BypassStrategy.WINDOW_SIZE -> {
+                var pos = 0; val chunkSize = rnd.nextInt(1, 5)
+                while (pos < length) {
+                    val size = chunkSize.coerceAtMost(length - pos)
+                    output.write(data, pos, size); output.flush(); pos += size; delay(1)
+                }
             }
             BypassStrategy.TLS_GREASE -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
@@ -878,13 +892,6 @@ object BypassConfig {
             BypassStrategy.TCP_OOB_DESYNC -> {
                 try { socket.sendUrgentData(0xFF) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.WINDOW_SIZE -> {
-                var pos = 0; val chunkSize = rnd.nextInt(1, 5)
-                while (pos < length) {
-                    val size = chunkSize.coerceAtMost(length - pos)
-                    output.write(data, pos, size); output.flush(); pos += size; delay(1)
-                }
             }
             BypassStrategy.FRAGMENT_MULTI -> {
                 var pos = 0
@@ -1479,12 +1486,25 @@ object BypassConfig {
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.HTTP_HOST_MANGLE -> {
-                val s = String(data, 0, length, Charsets.US_ASCII)
-                if (s.contains("Host:", ignoreCase = true)) {
-                    val mangled = s.replace("Host:", "hOsT:", ignoreCase = true)
-                    output.write(mangled.toByteArray(Charsets.US_ASCII))
-                    output.flush()
-                } else { output.write(data, 0, length); output.flush() }
+                // Efficient byte-level replacement of "Host:" to "hOsT:"
+                var modified = false
+                val newData = data.copyOf(length)
+                for (i in 0 until length - 4) {
+                    if ((newData[i] == 'H'.toByte() || newData[i] == 'h'.toByte()) &&
+                        (newData[i+1] == 'o'.toByte() || newData[i+1] == 'O'.toByte()) &&
+                        (newData[i+2] == 's'.toByte() || newData[i+2] == 'S'.toByte()) &&
+                        (newData[i+3] == 't'.toByte() || newData[i+3] == 'T'.toByte()) &&
+                        newData[i+4] == ':'.toByte()) {
+                        newData[i] = 'h'.toByte()
+                        newData[i+1] = 'O'.toByte()
+                        newData[i+2] = 's'.toByte()
+                        newData[i+3] = 'T'.toByte()
+                        modified = true
+                        break
+                    }
+                }
+                output.write(if (modified) newData else data, 0, length)
+                output.flush()
             }
             BypassStrategy.HTTP_FRAGMENT -> {
                 if (length > 20) {
@@ -1533,6 +1553,19 @@ object BypassConfig {
             BypassStrategy.UDP_NOISE_PAD -> {
                 // Handled in UdpTransportHandler mostly, but here for completeness if used over TCP (not recommended)
                 output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_RECORD_PADDING -> {
+                output.write(data, 0, length)
+                if (length > 0 && data[0] == 0x17.toByte()) { // Application Data
+                    val padSize = rnd.nextInt(1, 100)
+                    val padRecord = ByteArray(5 + padSize)
+                    padRecord[0] = 0x17.toByte() // Type
+                    padRecord[1] = 0x03.toByte(); padRecord[2] = 0x03.toByte() // Version
+                    padRecord[3] = (padSize shr 8).toByte(); padRecord[4] = (padSize and 0xFF).toByte()
+                    rnd.nextBytes(padRecord.copyOfRange(5, 5 + padSize))
+                    output.write(padRecord)
+                }
+                output.flush()
             }
             BypassStrategy.TLS_RECORD_FRAGMENTATION -> {
                 if (length > 5 && (data[0] == 0x16.toByte() || data[0] == 0x17.toByte())) {
@@ -1649,6 +1682,26 @@ object BypassConfig {
                 val pad = ByteArray(padSize)
                 rnd.nextBytes(pad)
                 output.write(pad)
+                output.flush()
+            }
+            BypassStrategy.WINDOW_SIZE -> {
+                try {
+                    socket.receiveBufferSize = rnd.nextInt(1024, 4096)
+                    socket.sendBufferSize = rnd.nextInt(1024, 4096)
+                } catch (e: Exception) {}
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_RECORD_PADDING -> {
+                output.write(data, 0, length)
+                if (length > 0 && data[0] == 0x17.toByte()) { // Application Data
+                    val padSize = rnd.nextInt(1, 100)
+                    val padRecord = ByteArray(5 + padSize)
+                    padRecord[0] = 0x17.toByte() // Type
+                    padRecord[1] = 0x03.toByte(); padRecord[2] = 0x03.toByte() // Version
+                    padRecord[3] = (padSize shr 8).toByte(); padRecord[4] = (padSize and 0xFF).toByte()
+                    rnd.nextBytes(padRecord.copyOfRange(5, 5 + padSize))
+                    output.write(padRecord)
+                }
                 output.flush()
             }
             BypassStrategy.TCP_TOS_MANGLE -> {

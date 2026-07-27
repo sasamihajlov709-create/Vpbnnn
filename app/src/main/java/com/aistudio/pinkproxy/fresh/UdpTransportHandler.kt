@@ -67,6 +67,7 @@ object UdpTransportHandler {
             // Receive from Target, forward to SOCKS5 Client
             jobs += launch(Dispatchers.IO) {
                 val buffer = ProxyStats.obtain64k()
+                val respBuffer = ProxyStats.obtain64k()
                 val packet = DatagramPacket(buffer, buffer.size)
                 try {
                     while (isActive) {
@@ -76,16 +77,16 @@ object UdpTransportHandler {
                         } catch (e: java.net.SocketTimeoutException) {
                             continue
                         }
+
                         if (clientUdpAddress != null) {
                             val addrBytes = packet.address.address
-                            val respBytes = ByteArray(packet.length + 22)
                             var offset = 0
-                            respBytes[offset++] = 0; respBytes[offset++] = 0; respBytes[offset++] = 0
-                            if (addrBytes.size == 4) { respBytes[offset++] = 1 } else { respBytes[offset++] = 4 }
-                            System.arraycopy(addrBytes, 0, respBytes, offset, addrBytes.size); offset += addrBytes.size
-                            respBytes[offset++] = (packet.port shr 8).toByte(); respBytes[offset++] = (packet.port and 0xFF).toByte()
-                            System.arraycopy(packet.data, packet.offset, respBytes, offset, packet.length); offset += packet.length
-                            udpSocket.send(DatagramPacket(respBytes, offset, clientUdpAddress, clientUdpPort))
+                            respBuffer[offset++] = 0; respBuffer[offset++] = 0; respBuffer[offset++] = 0
+                            if (addrBytes.size == 4) { respBuffer[offset++] = 1 } else { respBuffer[offset++] = 4 }
+                            System.arraycopy(addrBytes, 0, respBuffer, offset, addrBytes.size); offset += addrBytes.size
+                            respBuffer[offset++] = (packet.port shr 8).toByte(); respBuffer[offset++] = (packet.port and 0xFF).toByte()
+                            System.arraycopy(packet.data, packet.offset, respBuffer, offset, packet.length); offset += packet.length
+                            udpSocket.send(DatagramPacket(respBuffer, offset, clientUdpAddress, clientUdpPort))
                             ProxyStats.updateBytes(packet.length.toLong())
                         }
                     }
@@ -93,6 +94,7 @@ object UdpTransportHandler {
                     if (e !is CancellationException) Log.v("UdpTransport", "Target->Client error: ${e.message}")
                 } finally {
                     ProxyStats.release64k(buffer)
+                    ProxyStats.release64k(respBuffer)
                 }
             }
 
@@ -161,15 +163,19 @@ object UdpTransportHandler {
                                     if (ipStrs.isNotEmpty()) {
                                         val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
                                         val headerSize = if (pAtyp == 1) 10 else if (pAtyp == 4) 22 else 7 + (data[4].toInt() and 0xFF)
-                                        val responseBytes = ByteArray(headerSize + dnsReply.size)
-                                        var off = 0
-                                        responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = pAtyp.toByte()
-                                        if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, off, 4); off += 4 }
-                                        else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[off++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, off, dlen); off += dlen }
-                                        else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
-                                        responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
-                                        System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
-                                        udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, clientAddr, clientPort))
+                                        val responseBytes = ProxyStats.obtain8k()
+                                        try {
+                                            var off = 0
+                                            responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = pAtyp.toByte()
+                                            if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, off, 4); off += 4 }
+                                            else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[off++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, off, dlen); off += dlen }
+                                            else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
+                                            responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
+                                            System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
+                                            udpSocket.send(DatagramPacket(responseBytes, off + dnsReply.size, clientAddr, clientPort))
+                                        } finally {
+                                            ProxyStats.release8k(responseBytes)
+                                        }
                                     }
                                 } else {
                                     launch(Dispatchers.IO) {
@@ -179,15 +185,19 @@ object UdpTransportHandler {
                                                 val ipStrs = res.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
                                                 val dnsReply = DnsUtils.buildDnsReply(payload, ipStrs, query.qtype == 28)
                                                 val headerSize = if (pAtyp == 1) 10 else if (pAtyp == 4) 22 else 7 + (data[4].toInt() and 0xFF)
-                                                val responseBytes = ByteArray(headerSize + dnsReply.size)
-                                                var off = 0
-                                                responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = pAtyp.toByte()
-                                                if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, off, 4); off += 4 }
-                                                else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[off++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, off, dlen); off += dlen }
-                                                else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
-                                                responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
-                                                System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
-                                                udpSocket.send(DatagramPacket(responseBytes, responseBytes.size, clientAddr, clientPort))
+                                                val responseBytes = ProxyStats.obtain8k()
+                                                try {
+                                                    var off = 0
+                                                    responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = 0; responseBytes[off++] = pAtyp.toByte()
+                                                    if (pAtyp == 1) { System.arraycopy(data, 4, responseBytes, off, 4); off += 4 }
+                                                    else if (pAtyp == 3) { val dlen = data[4].toInt() and 0xFF; responseBytes[off++] = dlen.toByte(); System.arraycopy(data, 5, responseBytes, off, dlen); off += dlen }
+                                                    else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
+                                                    responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
+                                                    System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
+                                                    udpSocket.send(DatagramPacket(responseBytes, off + dnsReply.size, clientAddr, clientPort))
+                                                } finally {
+                                                    ProxyStats.release8k(responseBytes)
+                                                }
                                             }
                                         } catch (e: Exception) {}
                                     }
