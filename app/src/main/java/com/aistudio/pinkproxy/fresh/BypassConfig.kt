@@ -90,6 +90,9 @@ object BypassConfig {
     private val SESSION_TTL = 30 * 60 * 1000L // 30 minutes
 
     val isPanicMode: Boolean get() = _isPanicModeFlow.value
+    fun setPanicMode(enabled: Boolean) {
+        _isPanicModeFlow.value = enabled
+    }
 
     init {
         HostCategory.entries.forEach { cat ->

@@ -205,39 +205,43 @@ object DnsProtocols {
     }
 
     suspend fun queryDohRacing(host: String, vpnService: VpnService?): List<InetAddress> {
-        return kotlinx.coroutines.withTimeoutOrNull(6000) {
+        return kotlinx.coroutines.withTimeoutOrNull(7000) {
             kotlinx.coroutines.supervisorScope {
                 val allUrls = DnsOptimizer.getDohUrls()
-                val urls = allUrls.shuffled().take(6)
+                val urls = allUrls.shuffled().take(8) // More racing for better reliability
                 val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(urls.size)
                 val jobs = mutableListOf<Job>()
+                val completed = java.util.concurrent.atomic.AtomicInteger(0)
                 
                 urls.forEachIndexed { index, url ->
                     jobs += launch(Dispatchers.IO) {
-                        // Staggered racing: give top 2 providers a head start
-                        if (index >= 2) delay(150L * (index - 1))
-                        val res = queryDoh(host, url, vpnService)
-                        if (res.isNotEmpty()) {
-                            channel.trySend(res)
-                            DnsOptimizer.recordDohSuccess(url)
-                        } else {
-                            DnsOptimizer.recordDohFailure(url)
+                        try {
+                            // Staggered racing: give top 2 providers a head start
+                            if (index >= 2) delay(120L * (index - 1))
+                            val res = queryDoh(host, url, vpnService)
+                            if (res.isNotEmpty()) {
+                                channel.trySend(res)
+                                DnsOptimizer.recordDohSuccess(url)
+                            } else {
+                                DnsOptimizer.recordDohFailure(url)
+                            }
+                        } finally {
+                            if (completed.incrementAndGet() == urls.size) {
+                                channel.close()
+                            }
                         }
                     }
                 }
                 
-                var result = try {
-                    channel.receive()
+                var result = emptyList<InetAddress>()
+                try {
+                    result = channel.receive()
                 } catch (e: Exception) {
-                    emptyList<InetAddress>()
+                    // All failed or timeout
                 } finally {
                     jobs.forEach { it.cancel() }
                 }
                 
-                // If the winner is empty (unlikely with receive()), try one more time from channel
-                if (result.isEmpty()) {
-                    result = channel.tryReceive().getOrNull() ?: emptyList()
-                }
                 result
             }
         } ?: emptyList()

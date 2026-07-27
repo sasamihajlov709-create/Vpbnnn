@@ -22,11 +22,24 @@ object RecoveryManager {
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch(Dispatchers.IO) {
             var lastBytes = ProxyStats.bytesTransferred.value
+            var lastCoolDown = System.currentTimeMillis()
+            
             while (isActive) {
                 delay(30000)
                 
+                val now = System.currentTimeMillis()
                 val currentBytes = ProxyStats.bytesTransferred.value
                 val active = ProxyStats.activeConnections.value
+                
+                // Strategy Cooling: Periodically try to reduce escalation if things are stable
+                if (now - lastCoolDown > 300000) { // Every 5 minutes
+                    if (recoveryEscalation > 0 && ProxyStats.getSuccessRate() > 80) {
+                        recoveryEscalation--
+                        Log.i("RecoveryManager", "Strategy cooling: Escalation reduced to $recoveryEscalation")
+                        if (recoveryEscalation == 0) BypassConfig.setPanicMode(false)
+                    }
+                    lastCoolDown = now
+                }
                 
                 if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 30) {
                     handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop")

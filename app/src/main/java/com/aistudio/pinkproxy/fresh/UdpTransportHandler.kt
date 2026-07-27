@@ -37,25 +37,21 @@ object UdpTransportHandler {
         var clientUdpAddress: InetAddress? = null
         var clientUdpPort = 0
         
-        val udpOutChannel = kotlinx.coroutines.channels.Channel<Pair<DatagramPacket, String>>(100)
+        val udpOutChannel = kotlinx.coroutines.channels.Channel<Pair<DatagramPacket, String>>(500)
         
         coroutineScope {
             val jobs = mutableListOf<Job>()
             
             // Outgoing UDP Workers
-            repeat(6) {
+            repeat(16) {
                 jobs += launch(Dispatchers.IO) {
                     try {
                         for (work in udpOutChannel) {
                             val (packet, targetHost) = work
-                            // Use async launch for packets that might need delays/bypass strategies
-                            // to avoid blocking the main UDP worker loop
-                            launch {
-                                try {
-                                    sendUdpPacket(outSocket, packet, targetHost)
-                                } catch (e: Exception) {
-                                    Log.v("UdpTransport", "Send error: ${e.message}")
-                                }
+                            try {
+                                sendUdpPacket(outSocket, packet, targetHost)
+                            } catch (e: Exception) {
+                                if (e !is CancellationException) Log.v("UdpTransport", "Send error: ${e.message}")
                             }
                         }
                     } catch (e: Exception) {
@@ -69,6 +65,7 @@ object UdpTransportHandler {
                 val buffer = ProxyStats.obtain64k()
                 val respBuffer = ProxyStats.obtain64k()
                 val packet = DatagramPacket(buffer, buffer.size)
+                val outPacket = DatagramPacket(respBuffer, respBuffer.size)
                 try {
                     while (isActive) {
                         packet.setData(buffer)
@@ -86,7 +83,11 @@ object UdpTransportHandler {
                             System.arraycopy(addrBytes, 0, respBuffer, offset, addrBytes.size); offset += addrBytes.size
                             respBuffer[offset++] = (packet.port shr 8).toByte(); respBuffer[offset++] = (packet.port and 0xFF).toByte()
                             System.arraycopy(packet.data, packet.offset, respBuffer, offset, packet.length); offset += packet.length
-                            udpSocket.send(DatagramPacket(respBuffer, offset, clientUdpAddress, clientUdpPort))
+                            
+                            outPacket.address = clientUdpAddress
+                            outPacket.port = clientUdpPort
+                            outPacket.setData(respBuffer, 0, offset)
+                            udpSocket.send(outPacket)
                             ProxyStats.updateBytes(packet.length.toLong())
                         }
                     }
@@ -246,6 +247,10 @@ object UdpTransportHandler {
         try { udpSocket.close() } catch (e: Exception) {}
     }
 
+    private var lastStrategy: BypassStrategy? = null
+    private var lastConfig: SessionConfig? = null
+    private var lastConfigTime = 0L
+
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
         val payload = packet.data
         val offset = packet.offset
@@ -258,14 +263,23 @@ object UdpTransportHandler {
         // Basic filtering
         if (BypassConfig.blockQuic && isQuic) return
 
-        val host = if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress
-        val strategy = BypassConfig.getBestStrategyForHost(host)
-        val config = BypassConfig.getSessionConfig(host, strategy, BypassConfig.currentRttMs.value)
+        val host = if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress ?: ""
+        
+        val now = System.currentTimeMillis()
+        if (lastStrategy == null || lastConfig == null || now - lastConfigTime > 5000L) {
+            val strat = BypassConfig.getBestStrategyForHost(host)
+            lastStrategy = strat
+            lastConfig = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
+            lastConfigTime = now
+        }
+
+        val strategy = lastStrategy!!
+        val config = lastConfig!!
         
         // Adaptive Jitter
         val intensity = ProxyStats.censorshipIntensity.value
-        val rnd = ThreadLocalRandom.current()
         if (intensity > 40) {
+            val rnd = ThreadLocalRandom.current()
             val jitter = rnd.nextLong(0, (intensity / 5).toLong() + 5)
             if (jitter > 0) delay(jitter)
         }
