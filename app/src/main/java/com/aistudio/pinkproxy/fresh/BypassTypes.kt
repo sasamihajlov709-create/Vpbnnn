@@ -376,10 +376,11 @@ object ProxyStats {
     val currentJitterFactor: Double get() = if (censorshipIntensity.value > 50) 0.5 else 0.1
 
     fun formatBytes(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
         if (bytes < 1024) return "$bytes B"
         val exp = (Math.log(bytes.toDouble()) / Math.log(1024.0)).toInt()
         val pre = "KMGTPE"[exp - 1].toString()
-        return String.format("%.1f %sB", bytes / Math.pow(1024.0, exp.toDouble()), pre)
+        return String.format(Locale.ROOT, "%.1f %sB", bytes / Math.pow(1024.0, exp.toDouble()), pre)
     }
 
     fun recordGlobalSuccess(rtt: Long) {
