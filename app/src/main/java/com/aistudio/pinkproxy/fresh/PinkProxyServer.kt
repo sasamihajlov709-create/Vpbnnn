@@ -28,7 +28,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         if (serverJob?.isActive == true) return
         
         val parentJob = SupervisorJob()
-        val scope = CoroutineScope(Dispatchers.IO + parentJob)
+        val scope = CoroutineScope(ProxyDispatcher.io + parentJob)
         serverJob = parentJob
         
         ProxyStats.startSpeedMonitor(scope)

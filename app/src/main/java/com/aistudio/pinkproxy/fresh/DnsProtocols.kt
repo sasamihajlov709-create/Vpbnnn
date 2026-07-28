@@ -293,7 +293,7 @@ object DnsProtocols {
                 val completed = java.util.concurrent.atomic.AtomicInteger(0)
                 
                 urls.forEachIndexed { index, url ->
-                    jobs += launch(Dispatchers.IO) {
+                    jobs += launch(ProxyDispatcher.io) {
                         try {
                             // Staggered racing: give top 2 providers a head start
                             if (index >= 2) delay(120L * (index - 1))

@@ -50,7 +50,7 @@ object UdpTransportHandler {
                 // Outgoing UDP Workers (each with its own socket)
                 repeat(8) { i ->
                     val outSocket = outSockets[i]
-                    jobs += launch(Dispatchers.IO) {
+                    jobs += launch(ProxyDispatcher.io) {
                         try {
                             for (work in udpOutChannel) {
                                 val (packet, targetHost) = work
@@ -71,7 +71,7 @@ object UdpTransportHandler {
                 // Receive from Target workers (one per outbound socket)
                 repeat(8) { i ->
                     val outSocket = outSockets[i]
-                    jobs += launch(Dispatchers.IO) {
+                    jobs += launch(ProxyDispatcher.io) {
                         val buffer = ProxyStats.obtain64k()
                         val respBuffer = ProxyStats.obtain64k()
                         val packet = DatagramPacket(buffer, buffer.size)
@@ -115,7 +115,7 @@ object UdpTransportHandler {
                 }
 
                 // Receive from SOCKS5 Client, forward to Target
-                jobs += launch(Dispatchers.IO) {
+                jobs += launch(ProxyDispatcher.io) {
                     val buffer = ProxyStats.obtain64k()
                     val packet = DatagramPacket(buffer, buffer.size)
                     try {
@@ -209,7 +209,7 @@ object UdpTransportHandler {
                                             }
                                         }
                                     } else {
-                                        launch(Dispatchers.IO) {
+                                        launch(ProxyDispatcher.io) {
                                             try {
                                                 val res = RobustResolver.resolve(host, vpnService)
                                                 if (res.isNotEmpty()) {
@@ -239,7 +239,7 @@ object UdpTransportHandler {
                                 if (cached != null && cached.isNotEmpty()) {
                                     udpOutChannel.trySend(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
                                 } else {
-                                    launch(Dispatchers.IO) {
+                                    launch(ProxyDispatcher.io) {
                                         try {
                                             val res = RobustResolver.resolve(targetHost, vpnService)
                                             if (res.isNotEmpty()) {
@@ -259,7 +259,7 @@ object UdpTransportHandler {
                 }
                 
                 // Keep TCP connection alive, monitor for closure
-                launch(Dispatchers.IO) {
+                launch(ProxyDispatcher.io) {
                     try {
                         udpSocket.soTimeout = 5000
                         val inputStream = clientSocket.getInputStream()

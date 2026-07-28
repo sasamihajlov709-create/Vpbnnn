@@ -49,7 +49,7 @@ object TcpTransportHandler {
                     
                     for (i in 0 until attempted) {
                         val ip = resolved[i]
-                        activeJobs += scope.launch(Dispatchers.IO) {
+                        activeJobs += scope.launch(ProxyDispatcher.io) {
                             val s = Socket()
                             try {
                                 vpnService?.protect(s)
@@ -175,7 +175,7 @@ object TcpTransportHandler {
                 }
 
                 // Forward from Remote to Client (Direct)
-                val remoteToClient = launch(Dispatchers.IO) {
+                val remoteToClient = launch(ProxyDispatcher.io) {
                     val intensity = ProxyStats.censorshipIntensity.value
                     val activeConns = ProxyStats.activeConnections.value
                     val speed = ProxyStats.speedBytesPerSecond.value
@@ -269,7 +269,7 @@ object TcpTransportHandler {
                 }
 
                 // Forward from Client to Remote (with Bypass)
-                val clientToRemote = launch(Dispatchers.IO) {
+                val clientToRemote = launch(ProxyDispatcher.io) {
                     val intensity = ProxyStats.censorshipIntensity.value
                     val activeConns = ProxyStats.activeConnections.value
                     val useSmallBuf = activeConns > 30 || intensity > 85
