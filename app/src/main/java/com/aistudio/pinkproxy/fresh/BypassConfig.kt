@@ -980,12 +980,53 @@ object BypassConfig {
                 output.write(data, 0, safeSplit); output.flush(); delay(config.delay2)
                 output.write(data, safeSplit, length - safeSplit); output.flush()
             }
-            BypassStrategy.TLS_GREASE, BypassStrategy.TLS_DIRTY, BypassStrategy.TLS_PAD, BypassStrategy.SNI_MANGLE -> {
+            BypassStrategy.TLS_GREASE, BypassStrategy.TLS_EXTENSION_GREASE -> {
+                val mod = FakePacketHelper.addTlsGreaseExtensions(data, length)
+                val split = config.frag1.coerceIn(1, mod.size - 1)
+                output.write(mod, 0, split); output.flush(); delay(config.delay1)
+                output.write(mod, split, mod.size - split); output.flush()
+            }
+            BypassStrategy.TLS_CIPHER_SHUFFLE, BypassStrategy.TLS_EXT_SKEW -> {
+                val mod = FakePacketHelper.shuffleTlsExtensions(data, length)
+                val split = config.frag1.coerceIn(1, mod.size - 1)
+                output.write(mod, 0, split); output.flush(); delay(config.delay1)
+                output.write(mod, split, mod.size - split); output.flush()
+            }
+            BypassStrategy.SNI_MANGLE, BypassStrategy.TLS_MIXED_CASE_SNI -> {
                 val offset = TlsParser.findSniOffset(data, length, host)
-                val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, length - 1)
-                val safeSplit = split.coerceIn(1, length - 1)
-                output.write(data, 0, safeSplit); output.flush(); delay(config.delay1)
-                output.write(data, safeSplit, length - safeSplit); output.flush()
+                if (offset != -1 && host != null) {
+                    val mod = data.copyOf(length)
+                    // Mangle hostname case: example.com -> eXaMpLe.CoM
+                    for (i in 0 until host.length) {
+                        val c = host[i]
+                        if (c.isLetter() && rnd.nextBoolean()) {
+                            mod[offset + i] = if (c.isLowerCase()) c.uppercaseChar().code.toByte() else c.lowercaseChar().code.toByte()
+                        }
+                    }
+                    val split = offset + 1
+                    output.write(mod, 0, split); output.flush(); delay(config.delay1)
+                    output.write(mod, split, length - split); output.flush()
+                } else {
+                    val split = config.frag1.coerceIn(1, length - 1)
+                    output.write(data, 0, split); output.flush(); delay(config.delay1)
+                    output.write(data, split, length - split); output.flush()
+                }
+            }
+            BypassStrategy.HTTP_HOST_CASE_MANGLE -> {
+                if (isProbableHttp(data, length)) {
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val s = String(data, 0, headerEnd)
+                        val modified = s.replace("Host:", "hOSt:", ignoreCase = true)
+                        output.write(modified.toByteArray())
+                        output.write(data, headerEnd, length - headerEnd)
+                        output.flush()
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
             }
             BypassStrategy.TLS_REC_SPLIT -> {
                 if (length > 5 && data[0] == 0x16.toByte() && data[1] == 0x03.toByte()) {

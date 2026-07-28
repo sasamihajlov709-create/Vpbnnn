@@ -123,13 +123,33 @@ object TcpTransportHandler {
                 remoteSocket.soTimeout = 0
                 remoteSocket.tcpNoDelay = true
                 
+                // TCP Fast Open (TFO) support for API 30+
+                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                    try {
+                        // Use reflection or the constant if available. 
+                        // StandardSocketOptions.TCP_FAST_OPEN might not be visible in all environments.
+                        val tfo = java.net.StandardSocketOptions::class.java.getField("TCP_FAST_OPEN").get(null) as? java.net.SocketOption<Int>
+                        if (tfo != null) remoteSocket.setOption(tfo, 1)
+                    } catch (e: Throwable) {}
+                }
+
                 val intensity = ProxyStats.censorshipIntensity.value
-                val bufSize = if (intensity > 88) 16384 else if (intensity > 70) 32768 else 128 * 1024
+                val isWindowMangle = strategy == BypassStrategy.WINDOW_SIZE_MANGLE || strategy == BypassStrategy.TCP_ZERO_WINDOW_STALL
                 
-                remoteSocket.sendBufferSize = 128 * 1024
+                // Adaptive buffer sizes: small for DPI evasion, large for throughput
+                val bufSize = when {
+                    isWindowMangle -> 1460
+                    intensity > 90 -> 8192
+                    intensity > 75 -> 16384
+                    intensity > 50 -> 32768
+                    else -> 128 * 1024
+                }
+                
+                remoteSocket.sendBufferSize = if (isWindowMangle) 1460 else 128 * 1024
                 remoteSocket.receiveBufferSize = bufSize
                 clientSocket.sendBufferSize = bufSize
                 clientSocket.receiveBufferSize = 128 * 1024
+                
             } catch (e: Throwable) {}
 
             val connectTime = System.currentTimeMillis() - start
@@ -272,11 +292,9 @@ object TcpTransportHandler {
 
                 // Forward from Client to Remote (with Bypass)
                 val clientToRemote = launch(ProxyDispatcher.io) {
-                    val intensity = ProxyStats.censorshipIntensity.value
-                    val activeConns = ProxyStats.activeConnections.value
-                    val useSmallBuf = activeConns > 30 || intensity > 85
-                    val buffer = if (useSmallBuf) ProxyStats.obtain16k() else ProxyStats.obtain64k()
+                    val buffer = ProxyStats.obtain64k()
                     val rnd = ThreadLocalRandom.current()
+                    val isMssClamp = strategy == BypassStrategy.TCP_MSS_CLAMP
                     
                     try {
                         var n: Int
@@ -304,42 +322,30 @@ object TcpTransportHandler {
                                         BypassConfig.recordFailure(strategy, targetHost)
                                         throw e
                                     }
-                                } else if (currentIntensity > 65 && n > 2) {
-                                    // Opportunistic Fragmentation for DPI evasion
-                                    if (rnd.nextInt(100) < (currentIntensity - 50)) {
-                                        val split = rnd.nextInt(1, n)
-                                        remoteOut.write(buffer, 0, split)
-                                        remoteOut.flush()
-                                        delay(rnd.nextLong(1, 4))
-                                        remoteOut.write(buffer, split, n - split)
-                                        remoteOut.flush()
-                                    } else {
-                                        remoteOut.write(buffer, 0, n)
-                                        remoteOut.flush()
-                                    }
                                 } else {
-                                    // Pacing and standard fragmentation
-                                    val mss = ProxyStats.maxMss.value
-                                    if (totalWrittenClient.get() < 32768 && currentIntensity > 50) {
-                                        val pSize = if (currentIntensity > 80) minOf(512, mss) else minOf(1024, mss)
+                                    // Implementation of TCP_MSS_CLAMP and fragmentation
+                                    if ((isMssClamp || currentIntensity > 70) && n > 1200) {
                                         var offset = 0
-                                        while (offset < n && isActive) {
-                                            val chunk = minOf(pSize, n - offset)
-                                            remoteOut.write(buffer, offset, chunk)
+                                        val mss = if (isMssClamp) minOf(1100, ProxyStats.maxMss.value) else ProxyStats.maxMss.value
+                                        while (offset < n) {
+                                            val sz = minOf(mss, n - offset)
+                                            remoteOut.write(buffer, offset, sz)
                                             remoteOut.flush()
-                                            offset += chunk
-                                            if (offset < n) delay(rnd.nextLong(2, 8))
+                                            offset += sz
+                                            if (offset < n) delay(1)
                                         }
-                                    } else if (currentIntensity > 75 && n > 1000) {
-                                        val fragCount = if (currentIntensity > 90) 3 else 2
-                                        val partSize = n / fragCount
-                                        for (i in 0 until fragCount) {
-                                            if (!isActive) break
-                                            val offset = i * partSize
-                                            val len = if (i == fragCount - 1) n - offset else partSize
-                                            remoteOut.write(buffer, offset, len)
+                                    } else if (currentIntensity > 60 && n > 5) {
+                                        // Opportunistic fragmentation
+                                        if (rnd.nextInt(100) < (currentIntensity - 40)) {
+                                            val split = rnd.nextInt(1, n)
+                                            remoteOut.write(buffer, 0, split)
                                             remoteOut.flush()
-                                            if (i < fragCount - 1) delay(rnd.nextLong(5, 15))
+                                            if (currentIntensity > 80) delay(rnd.nextLong(1, 3))
+                                            remoteOut.write(buffer, split, n - split)
+                                            remoteOut.flush()
+                                        } else {
+                                            remoteOut.write(buffer, 0, n)
+                                            remoteOut.flush()
                                         }
                                     } else {
                                         remoteOut.write(buffer, 0, n)
@@ -361,7 +367,7 @@ object TcpTransportHandler {
                             }
                         }
                     } finally {
-                        if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
+                        ProxyStats.release64k(buffer)
                         try { remoteSocket?.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
