@@ -82,7 +82,6 @@ enum class BypassStrategy(
     TLS_FIREFOX_HELLO_FAKE(StrategyFamily.TLS, 2, 1, StrategyGroup.LIGHT),
     TLS_13_HELLO_FAKE(StrategyFamily.TLS, 2, 1, StrategyGroup.LIGHT),
     TCP_REORDER_DESYNC(StrategyFamily.TCP, 4, 4, StrategyGroup.EXTREME),
-    TLS_ECH_FAKE(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
     TLS_SESSION_ID_RAND(StrategyFamily.TLS, 2, 2, StrategyGroup.LIGHT),
     TCP_ACK_DELAY(StrategyFamily.TIMING, 4, 3, StrategyGroup.MEDIUM),
     TCP_URGENT_SKEW(StrategyFamily.TCP, 4, 4, StrategyGroup.HEAVY),
@@ -155,6 +154,9 @@ enum class BypassStrategy(
     HTTP_HOST_REORDER(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
     HTTP_KEEP_ALIVE_FAKE(StrategyFamily.HTTP, 2, 2, StrategyGroup.LIGHT),
     TLS_CLIENT_HELLO_REORDER(StrategyFamily.TLS, 4, 3, StrategyGroup.EXTREME),
+    TLS_ECH_FAKE(StrategyFamily.TLS, 3, 3, StrategyGroup.HEAVY),
+    TCP_SEGMENT_DESYNC(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
+    TCP_ACK_SKEW(StrategyFamily.TCP, 2, 2, StrategyGroup.MEDIUM),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -429,6 +431,12 @@ object ProxyStats {
         }
         _censorshipIntensity.update { (it - 2).coerceAtLeast(0) }
         _successRate.update { (it * 0.99 + 100 * 0.01).toInt().coerceIn(0, 100) }
+    }
+
+    fun recordGlobalFailure() {
+        _censorshipIntensity.update { (it + 5).coerceAtMost(100) }
+        _successRate.update { (it * 0.98).toInt().coerceIn(0, 100) }
+        _stabilityScore.update { (it - 3).coerceAtLeast(0) }
     }
 
     fun logRecovery(msg: String) {

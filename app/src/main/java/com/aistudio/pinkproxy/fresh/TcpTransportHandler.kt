@@ -121,10 +121,12 @@ object TcpTransportHandler {
                         retryCount++
                         // On retry, try to use a safer strategy
                         BypassConfig.recordFailure(strategy, targetHost)
+                        ProxyStats.recordGlobalFailure()
                         delay(500)
                         continue
                     }
                     Log.w("TcpTransport", "Connection failed to $targetHost: ${e.message}")
+                    ProxyStats.recordGlobalFailure()
                     clientSocket.close()
                     return
                 }

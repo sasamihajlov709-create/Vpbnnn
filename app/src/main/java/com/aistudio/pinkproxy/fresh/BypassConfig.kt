@@ -1564,10 +1564,6 @@ object BypassConfig {
                 TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, length); output.flush()
             }
-            BypassStrategy.TLS_ECH_FAKE -> {
-                val mod = FakePacketHelper.injectTlsEch(data, length)
-                output.write(mod); output.flush()
-            }
             BypassStrategy.TLS_REHANDSHAKE_FAKE, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TCP_FAST_RETRANSMIT_SIM, BypassStrategy.TCP_REORDER_SIM, BypassStrategy.TCP_REORDER_CHAOS, BypassStrategy.TLS_LEGACY_HELLOS, BypassStrategy.TLS_SESSION_TICKET_SKEW, BypassStrategy.TLS_MULTI_SNI, BypassStrategy.HTTP_CHUNKED_FAKE, BypassStrategy.TLS_0RTT_FAKE, BypassStrategy.TLS_COMPRESSION_FAKE, BypassStrategy.HTTP_PIPELINE_FAKE -> {
                 val split = (length / 2).coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay1)
@@ -1815,19 +1811,28 @@ object BypassConfig {
                     if (headerEnd != -1) {
                         val head = String(data, 0, headerEnd, Charsets.US_ASCII)
                         val lines = head.split("\r\n").toMutableList()
-                        if (lines.size > 2) {
+                        if (lines.size > 3) {
+                            val first = lines.removeAt(0) // Keep GET/POST line first
+                            // Remove empty line at end if exists
+                            if (lines.last().isEmpty()) lines.removeAt(lines.size - 1)
+                            
                             val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
-                            if (hostIdx != -1 && hostIdx < lines.size - 1) {
-                                val line = lines.removeAt(hostIdx)
-                                lines.add(line) // Move Host to end of headers
-                                val newHead = lines.joinToString("\r\n")
+                            if (hostIdx != -1) {
+                                val hostLine = lines.removeAt(hostIdx)
+                                lines.shuffle()
+                                // Place host line randomly but not first
+                                lines.add(rnd.nextInt(lines.size + 1), hostLine)
+                                lines.add(0, first)
+                                val newHead = lines.joinToString("\r\n") + "\r\n\r\n"
                                 output.write(newHead.toByteArray(Charsets.US_ASCII))
                                 output.write(data, headerEnd, length - headerEnd)
                                 output.flush()
-                            } else { output.write(data, 0, length); output.flush() }
-                        } else { output.write(data, 0, length); output.flush() }
-                    } else { output.write(data, 0, length); output.flush() }
-                } else { output.write(data, 0, length); output.flush() }
+                                return
+                            }
+                        }
+                    }
+                }
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.UDP_NOISE_PAD -> {
                 output.write(data, 0, length); output.flush()
@@ -1920,6 +1925,17 @@ object BypassConfig {
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP_KEEP_ALIVE_FAKE -> {
+                if (isProbableHttp(data, length)) {
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val request = String(data, 0, headerEnd, Charsets.US_ASCII)
+                        val modified = request.replace("\r\n\r\n", "\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5, max=1000\r\n\r\n")
+                        output.write(modified.toByteArray(Charsets.US_ASCII))
+                        output.write(data, headerEnd, length - headerEnd)
+                        output.flush()
+                        return
+                    }
+                }
                 val keepAlive = "OPTIONS * HTTP/1.1\r\nHost: $host\r\nConnection: keep-alive\r\n\r\n".toByteArray()
                 output.write(keepAlive); output.flush(); delay(config.delay1)
                 output.write(data, 0, length); output.flush()
@@ -2130,6 +2146,24 @@ object BypassConfig {
                     pos += len
                     if (pos < length) delay(rnd.nextLong(1, 3))
                 }
+            }
+            BypassStrategy.TLS_ECH_FAKE -> {
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val mod = FakePacketHelper.injectExtension(data, length, 0xfe0d, FakePacketHelper.buildUdpNoise(rnd.nextInt(128, 256)))
+                    output.write(mod); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_SEGMENT_DESYNC -> {
+                val split = rnd.nextInt(1, length.coerceAtMost(2).coerceAtLeast(1))
+                output.write(data, 0, split); output.flush()
+                delay(rnd.nextLong(1, 3))
+                output.write(data, split, length - split); output.flush()
+            }
+            BypassStrategy.TCP_ACK_SKEW -> {
+                // Sending a small packet with some data then the rest
+                output.write(data, 0, 1); output.flush()
+                delay(1)
+                output.write(data, 1, length - 1); output.flush()
             }
             BypassStrategy.DIRECT -> {
                 output.write(data, 0, length); output.flush()
