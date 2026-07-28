@@ -76,17 +76,32 @@ object RecoveryManager {
                 val type = ProxyStats.currentDpiType.value
                 when (type) {
                     DpiType.TCP_RESET -> {
-                        BypassConfig.setGlobalStrategy(BypassStrategy.SNI_SPLIT)
+                        val candidates = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TCP_REORDER_DESYNC, BypassStrategy.OOB_DESYNC)
+                        BypassConfig.setGlobalStrategy(candidates.random())
                         triggerPanic("Active TCP Reset DPI detected")
+                    }
+                    DpiType.TLS_SNI_BLOCK -> {
+                        val candidates = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_CLIENT_HELLO_CHOP, BypassStrategy.TLS_REC_SPLIT)
+                        BypassConfig.setGlobalStrategy(candidates.random())
+                    }
+                    DpiType.HTTP_BLOCK -> {
+                        val candidates = listOf(BypassStrategy.HTTP_HOST_SPACE, BypassStrategy.HTTP_HOST_CASE_MANGLE, BypassStrategy.HTTP_HOST_TAB_MANGLE)
+                        BypassConfig.setGlobalStrategy(candidates.random())
                     }
                     DpiType.CONNECTION_TIMEOUT -> {
                         BypassConfig.setGlobalStrategy(BypassStrategy.TLS_REC_SPLIT)
+                        if (recoveryEscalation >= 2) triggerPanic("DPI Timeout Escalation")
                     }
                     else -> {
                         BypassConfig.rotateGlobalStrategy()
                     }
                 }
                 recoveryEscalation = (recoveryEscalation + 1).coerceAtMost(3)
+                // Schedule an active probe to find better strategy soon
+                PinkVpnService.instance?.getServiceScope()?.launch {
+                    delay(3000)
+                    ServiceChecker.runActiveProbing(null)
+                }
             }
             RecoveryEvent.DNS_FAILURE -> {
                 if (recoveryEscalation < 2) {

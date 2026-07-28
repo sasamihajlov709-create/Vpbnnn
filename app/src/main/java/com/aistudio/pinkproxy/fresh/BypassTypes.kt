@@ -144,6 +144,10 @@ enum class BypassStrategy(
     TCP_WINDOW_SIZE_CHAOS(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_MSS_CLUMPING(StrategyFamily.TCP, 3, 2, StrategyGroup.HEAVY),
     TLS_CLIENT_HELLO_GREASE_RANDOM(StrategyFamily.TLS, 2, 2, StrategyGroup.LIGHT),
+    HTTP_HOST_TAB_MANGLE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
+    HTTP_METHOD_SPACE_MANGLE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
+    TLS_SNI_NULL_EXT(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
+    TLS_CLIENT_HELLO_PAD_EXTREME(StrategyFamily.TLS, 4, 2, StrategyGroup.EXTREME),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -435,16 +439,16 @@ object HostClassifier {
     fun classify(host: String): HostCategory {
         val h = host.lowercase()
         return when {
-            h.contains("youtube") || h.contains("netflix") || h.contains("twitch") || h.contains("googlevideo") || h.contains("vimeo") -> HostCategory.STREAMING
-            h.contains("facebook") || h.contains("instagram") || h.contains("twitter") || h.contains("tiktok") || h.contains("linkedin") || h.contains("reddit") -> HostCategory.SOCIAL
-            h.contains("whatsapp") || h.contains("telegram") || h.contains("discord") || h.contains("signal.org") || h.contains("slack") -> HostCategory.MESSENGER
-            h.contains("google") || h.contains("bing") || h.contains("duckduckgo") || h.contains("yahoo") || h.contains("baidu") || h.contains("yandex") -> HostCategory.SEARCH
-            h.contains("openai") || h.contains("anthropic") || h.contains("mistral") || h.contains("perplexity") || h.contains("gemini") || h.contains("chatgpt") || h.contains("claude") -> HostCategory.AI
-            h.contains("bank") || h.contains("crypto") || h.contains("binance") || h.contains("paypal") || h.contains("visa") || h.contains("stripe") || h.contains("wallet") || h.contains("coinbase") || h.contains("revolut") -> HostCategory.FINANCE
-            h.contains("github") || h.contains("gitlab") || h.contains("npm") || h.contains("docker") || h.contains("stackoverflow") || h.contains("jetbrains") || h.contains("android") -> HostCategory.DEV
-            h.contains("cloudflare") || h.contains("akamai") || h.contains("fastly") || h.contains("cloudfront") -> HostCategory.CDN
-            h.contains("steam") || h.contains("epicgames") || h.contains("roblox") || h.contains("playstation") || h.contains("xbox") -> HostCategory.GAMING
-            h.contains("amazon") || h.contains("ebay") || h.contains("aliexpress") || h.contains("shopify") -> HostCategory.SHOPPING
+            h.contains("youtube") || h.contains("netflix") || h.contains("twitch") || h.contains("googlevideo") || h.contains("vimeo") || h.contains("ytimg") || h.contains("ggpht") -> HostCategory.STREAMING
+            h.contains("facebook") || h.contains("instagram") || h.contains("twitter") || h.contains("tiktok") || h.contains("linkedin") || h.contains("reddit") || h.contains("fbcdn") || h.contains("twimg") -> HostCategory.SOCIAL
+            h.contains("whatsapp") || h.contains("telegram") || h.contains("discord") || h.contains("signal.org") || h.contains("slack") || h.contains("viber") || h.contains("skype") -> HostCategory.MESSENGER
+            h.contains("google") || h.contains("bing") || h.contains("duckduckgo") || h.contains("yahoo") || h.contains("baidu") || h.contains("yandex") || h.contains("ask.com") -> HostCategory.SEARCH
+            h.contains("openai") || h.contains("anthropic") || h.contains("mistral") || h.contains("perplexity") || h.contains("gemini") || h.contains("chatgpt") || h.contains("claude") || h.contains("deepseek") || h.contains("cohere") -> HostCategory.AI
+            h.contains("bank") || h.contains("crypto") || h.contains("binance") || h.contains("paypal") || h.contains("visa") || h.contains("stripe") || h.contains("wallet") || h.contains("coinbase") || h.contains("revolut") || h.contains("tinkoff") || h.contains("sber") -> HostCategory.FINANCE
+            h.contains("github") || h.contains("gitlab") || h.contains("npm") || h.contains("docker") || h.contains("stackoverflow") || h.contains("jetbrains") || h.contains("android") || h.contains("maven") || h.contains("gradle") || h.contains("kotlin") -> HostCategory.DEV
+            h.contains("cloudflare") || h.contains("akamai") || h.contains("fastly") || h.contains("cloudfront") || h.contains("bunny") || h.contains("gvt1") -> HostCategory.CDN
+            h.contains("steam") || h.contains("epicgames") || h.contains("roblox") || h.contains("playstation") || h.contains("xbox") || h.contains("nintendo") || h.contains("blizzard") -> HostCategory.GAMING
+            h.contains("amazon") || h.contains("ebay") || h.contains("aliexpress") || h.contains("shopify") || h.contains("ozon") || h.contains("wildberries") -> HostCategory.SHOPPING
             h.contains("ads.") || h.contains("doubleclick") || h.contains("adservice") || h.contains("analytics") || h.contains("telemetry") || h.contains("metrics") -> HostCategory.AD
             else -> HostCategory.OTHER
         }

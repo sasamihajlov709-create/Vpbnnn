@@ -177,6 +177,16 @@ object RobustResolver {
         val queries = listOf<suspend () -> List<InetAddress>>(
             { DnsProtocols.queryDohRacing(host, vpnService) },
             { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },
+            { 
+                val records = try { DnsProtocols.queryUdpDnsDetailed(host, "1.1.1.1", vpnService) } catch(e: Throwable) { emptyList() }
+                if (records.isNotEmpty()) DnsCacheManager.putDetailed(host, records)
+                records.map { it.address }
+            },
+            { 
+                val records = try { DnsProtocols.queryUdpDnsDetailed(host, "8.8.8.8", vpnService) } catch(e: Throwable) { emptyList() }
+                if (records.isNotEmpty()) DnsCacheManager.putDetailed(host, records)
+                records.map { it.address }
+            },
             { DnsProtocols.queryDnsOverTcp(host, "8.8.8.8", vpnService) },
             { DnsProtocols.queryDnsOverTcp(host, "9.9.9.9", vpnService) },
             { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },

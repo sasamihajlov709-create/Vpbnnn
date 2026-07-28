@@ -236,15 +236,30 @@ object TcpTransportHandler {
                                         if (buffer[0] == 0x15.toByte()) { // TLS Alert
                                             ProxyStats.recordDpiEvent(DpiType.TLS_SNI_BLOCK)
                                         } else {
-                                            // Fast byte-level scan for HTTP 403 / Forbidden
+                                            // Fast byte-level scan for block markers
                                             var foundBlock = false
-                                            val scanLen = n.coerceAtMost(200)
-                                            for (i in 0 until scanLen - 12) {
-                                                if (buffer[i] == 'H'.code.toByte() && buffer[i+1] == 'T'.code.toByte() && buffer[i+9] == '4'.code.toByte() && buffer[i+10] == '0'.code.toByte() && buffer[i+11] == '3'.code.toByte()) { foundBlock = true; break }
-                                                if (buffer[i] == 'F'.code.toByte() && buffer[i+1] == 'o'.code.toByte() && buffer[i+2] == 'r'.code.toByte() && buffer[i+3] == 'b'.code.toByte() && buffer[i+4] == 'i'.code.toByte() && buffer[i+5] == 'd'.code.toByte() && buffer[i+6] == 'd'.code.toByte() && buffer[i+7] == 'e'.code.toByte() && buffer[i+8] == 'n'.code.toByte()) { foundBlock = true; break }
+                                            val scanLen = n.coerceAtMost(500)
+                                            val lowBuffer = ByteArray(scanLen)
+                                            for (i in 0 until scanLen) {
+                                                val b = buffer[i].toInt()
+                                                lowBuffer[i] = if (b in 65..90) (b + 32).toByte() else buffer[i]
                                             }
+                                            val lowStr = String(lowBuffer, 0, scanLen, Charsets.US_ASCII)
+                                            
+                                            when {
+                                                lowStr.contains("403 forbidden") || lowStr.contains("403 access denied") -> foundBlock = true
+                                                lowStr.contains("url blocked") || lowStr.contains("censorship") -> foundBlock = true
+                                                lowStr.contains("connection reset by peer") -> foundBlock = true
+                                                lowStr.contains("<title>access denied") || lowStr.contains("<title>blocked") -> foundBlock = true
+                                                lowStr.contains("err_connection_reset") -> foundBlock = true
+                                                // Common ISP block pages patterns
+                                                lowStr.contains("content-filter") || lowStr.contains("legal-block") -> foundBlock = true
+                                            }
+                                            
                                             if (foundBlock) {
                                                 ProxyStats.recordDpiEvent(DpiType.HTTP_BLOCK)
+                                                BypassConfig.recordFailure(strategy, targetHost)
+                                                throw java.io.IOException("DPI block detected in payload")
                                             }
                                         }
                                     }

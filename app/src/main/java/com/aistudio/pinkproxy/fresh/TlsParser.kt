@@ -62,14 +62,17 @@ object TlsParser {
                             sniPos += 3 + nameLen
                         }
                     }
-                } else if (extType == 0xfe0d) {
-                    // ECH (Encrypted Client Hello) detected! 
-                    // We mark this but continue searching just in case SNI is also present (Outer CH)
+                } else if (extType == 0xfe0d || extType == 0xff0d || extType == 0x1102) {
+                    // ECH (Encrypted Client Hello) or related extensions detected
                 }
                 pos += extLen
             }
         } catch (e: Throwable) {
-            // Ignore structured parsing error and try brute force search
+            // Brute force search as last resort if structured parsing fails
+            if (host != null && host.isNotEmpty()) {
+                val offset = findHostInPayload(buffer, length, host)
+                if (offset != -1) return offset
+            }
         }
         
         return -1
@@ -95,7 +98,7 @@ object TlsParser {
             while (pos + 3 < extEnd) {
                 val extType = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
                 val extLen = ((buffer[pos + 2].toInt() and 0xFF) shl 8) or (buffer[pos + 3].toInt() and 0xFF)
-                if (extType == 0xfe0d) return true
+                if (extType == 0xfe0d || extType == 0xff0d || extType == 0x1102) return true
                 pos += 4 + extLen
             }
         } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
