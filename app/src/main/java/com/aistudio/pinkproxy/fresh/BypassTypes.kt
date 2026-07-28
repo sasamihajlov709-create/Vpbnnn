@@ -296,6 +296,10 @@ object ProxyStats {
     private val _maxMss = MutableStateFlow(1460)
     val maxMss: StateFlow<Int> = _maxMss.asStateFlow()
 
+    fun updateMaxMss(newMss: Int) {
+        _maxMss.value = newMss
+    }
+
     private val _mssFailureCount = AtomicInteger(0)
     val mssFailureCount: StateFlow<Int> = MutableStateFlow(0).apply {
         // This is a bit hacky because I'm using AtomicInteger for internal state

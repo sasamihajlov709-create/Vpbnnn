@@ -667,11 +667,14 @@ object BypassConfig {
                     }
                     
                     // Also probe MTU occasionally
-                    if (java.util.concurrent.ThreadLocalRandom.current().nextInt(100) < 25) {
+                    if (java.util.concurrent.ThreadLocalRandom.current().nextInt(100) < 35) {
                         val bestMtu = ServiceChecker.probeBestMtu(target)
-                        if (bestMtu < ProxyStats.maxMss.value + 40) {
-                            ProxyStats.logRecovery("Learning: Discovered optimal MTU for $target -> $bestMtu")
-                            // Update MSS if needed
+                        if (bestMtu > 500 && bestMtu < 1500) {
+                            val newMss = (bestMtu - 40).coerceAtLeast(512)
+                            if (newMss < ProxyStats.maxMss.value) {
+                                ProxyStats.logRecovery("Learning: Reducing Max MSS to $newMss based on probe of $target")
+                                ProxyStats.updateMaxMss(newMss)
+                            }
                         }
                     }
                 }

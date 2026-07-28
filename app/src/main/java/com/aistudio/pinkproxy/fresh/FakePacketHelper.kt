@@ -173,21 +173,46 @@ object FakePacketHelper {
 
     fun getRandomUserAgent(): String = userAgents.random()
 
+    fun buildFakeEchExtension(): ByteArray {
+        val data = ByteArray(java.util.concurrent.ThreadLocalRandom.current().nextInt(128, 300))
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(data)
+        // Extension type 0xfe0d (final spec) or experimental ones
+        val type = listOf(0xfe08, 0xfe0d).random()
+        return buildExtension(type, data)
+    }
+
     fun buildFakeHttpRequest(host: String, path: String = "/"): ByteArray {
         val sb = StringBuilder()
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
         sb.append("GET $path HTTP/1.1\r\n")
-        sb.append("Host: $host\r\n")
-        sb.append("User-Agent: ${getRandomUserAgent()}\r\n")
-        sb.append("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n")
-        sb.append("Accept-Language: en-US,en;q=0.5\r\n")
-        sb.append("Accept-Encoding: gzip, deflate, br\r\n")
-        sb.append("Connection: keep-alive\r\n")
-        sb.append("Upgrade-Insecure-Requests: 1\r\n")
-        sb.append("Sec-Fetch-Dest: document\r\n")
-        sb.append("Sec-Fetch-Mode: navigate\r\n")
-        sb.append("Sec-Fetch-Site: none\r\n")
-        sb.append("Sec-Fetch-User: ?1\r\n")
-        sb.append("Priority: u=1\r\n")
+        
+        val headers = mutableListOf(
+            "Host: $host",
+            "User-Agent: ${getRandomUserAgent()}",
+            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language: en-US,en;q=0.5",
+            "Accept-Encoding: gzip, deflate, br, zstd",
+            "Connection: keep-alive",
+            "Upgrade-Insecure-Requests: 1",
+            "Sec-Fetch-Dest: document",
+            "Sec-Fetch-Mode: navigate",
+            "Sec-Fetch-Site: none",
+            "Sec-Fetch-User: ?1",
+            "Priority: u=1"
+        )
+        
+        // Randomize header order slightly to avoid static fingerprinting
+        headers.shuffle(rnd)
+        
+        for (h in headers) {
+            sb.append(h).append("\r\n")
+        }
+        
+        // Random junk headers
+        if (rnd.nextInt(100) < 30) {
+            sb.append("X-Requested-With: XMLHttpRequest\r\n")
+        }
+        
         sb.append("\r\n")
         return sb.toString().toByteArray()
     }

@@ -361,7 +361,7 @@ object TcpTransportHandler {
                     
                     try {
                         var n: Int
-                        var firstPacket = true
+                        var packetsCount = 0
                         while (isActive) {
                             try {
                                 n = clientIn.read(buffer)
@@ -375,9 +375,10 @@ object TcpTransportHandler {
                             if (n > 0) {
                                 lastActivity.set(System.currentTimeMillis())
                                 val currentIntensity = ProxyStats.censorshipIntensity.value
+                                packetsCount++
                                 
-                                if (firstPacket) {
-                                    firstPacket = false
+                                if (packetsCount <= 3 || (currentIntensity > 85 && packetsCount <= 8)) {
+                                    // Apply full bypass to initial handshake/header packets
                                     try {
                                         BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
                                     } catch (e: Throwable) {
@@ -403,7 +404,7 @@ object TcpTransportHandler {
                                             val split = rnd.nextInt(1, n)
                                             remoteOut.write(buffer, 0, split)
                                             remoteOut.flush()
-                                            if (currentIntensity > 80) delay(rnd.nextLong(1, 3))
+                                            if (currentIntensity > 80) delay(rnd.nextLong(1, 4))
                                             remoteOut.write(buffer, split, n - split)
                                             remoteOut.flush()
                                             
