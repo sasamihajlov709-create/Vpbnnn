@@ -46,7 +46,7 @@ object RobustResolver {
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     suspend fun resolve(host: String, vpnService: VpnService? = null): List<InetAddress> {
         if (DnsCacheManager.isIpAddress(host)) {
-            return try { listOf(InetAddress.getByName(host)) } catch (e: Exception) { emptyList() }
+            return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { emptyList() }
         }
         if (DnsCacheManager.isNegative(host)) return emptyList()
 
@@ -69,7 +69,7 @@ object RobustResolver {
             withTimeout(12000) {
                 deferred.await()
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (e is CancellationException) throw e
             pendingResolutions.remove(cacheKey)
             if (e is TimeoutCancellationException) {
@@ -97,7 +97,7 @@ object RobustResolver {
                     DnsCacheManager.put(host, res)
                     return res
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (e is CancellationException) throw e
             }
         }
@@ -126,7 +126,7 @@ object RobustResolver {
                                     if (DnsCacheManager.getCached(preHost) == null) {
                                         performParallelResolution(preHost, vpnService) 
                                     }
-                                } catch (e: Exception) { 
+                                } catch (e: Throwable) { 
                                     if (e is CancellationException) throw e 
                                 }
                             }
@@ -135,7 +135,7 @@ object RobustResolver {
                     return sorted
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (e is CancellationException) throw e
         }
 
@@ -154,7 +154,7 @@ object RobustResolver {
                     DnsCacheManager.put(host, res)
                     return res
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (e is CancellationException) throw e
             }
         }
@@ -169,7 +169,7 @@ object RobustResolver {
             launch {
                 val shadows = listOf("google.com", "bing.com", "cloudflare.com", "apple.com")
                 shadows.shuffled().take(1).forEach { shadow ->
-                    try { DnsProtocols.queryUdpDnsShadow(shadow, "1.1.1.1", vpnService) } catch (e: Exception) {}
+                    try { DnsProtocols.queryUdpDnsShadow(shadow, "1.1.1.1", vpnService) } catch (e: Throwable) {}
                 }
             }
         }
@@ -193,15 +193,15 @@ object RobustResolver {
         
         queries.forEach { query ->
             activeJobs += launch {
-                val res = try { query() } catch (e: Exception) { emptyList() }
-                try { channel.send(res) } catch (e: Exception) {}
+                val res = try { query() } catch (e: Throwable) { emptyList() }
+                try { channel.send(res) } catch (e: Throwable) {}
             }
         }
         
         var result = emptyList<InetAddress>()
         var completed = 0
         while (completed < queries.size) {
-            val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Exception) { emptyList() }
+            val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { emptyList() }
             if (res.isNotEmpty()) {
                 result = res
                 break

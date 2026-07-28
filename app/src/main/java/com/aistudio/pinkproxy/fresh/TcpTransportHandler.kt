@@ -52,7 +52,7 @@ object TcpTransportHandler {
                         activeJobs += scope.launch(ProxyDispatcher.io) {
                             val s = Socket()
                             try {
-                                vpnService?.protect(s)
+                                try { vpnService?.protect(s) } catch (e: Throwable) {}
                                 s.tcpNoDelay = true
                                 try { s.sendBufferSize = 128 * 1024 } catch (e: Throwable) {}
                                 try { s.receiveBufferSize = 128 * 1024 } catch (e: Throwable) {}

@@ -88,7 +88,7 @@ object DnsCacheManager {
 
     fun getCached(host: String): List<InetAddress>? {
         if (isIpAddress(host)) {
-            return try { listOf(InetAddress.getByName(host)) } catch (e: Exception) { null }
+            return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { null }
         }
         val now = System.currentTimeMillis()
         dnsCache[host]?.let { (addresses, timestamp) ->
@@ -112,7 +112,7 @@ object DnsCacheManager {
 
     fun getStaticIps(host: String): List<InetAddress>? {
         return staticIps[host]?.mapNotNull { 
-            try { InetAddress.getByName(it) } catch (e: Exception) { null }
+            try { InetAddress.getByName(it) } catch (e: Throwable) { null }
         }
     }
 
@@ -120,7 +120,7 @@ object DnsCacheManager {
         val lHost = host.lowercase()
         for ((domain, ips) in emergencyFallback) {
             if (lHost == domain || lHost.endsWith(".$domain")) {
-                return ips.mapNotNull { try { InetAddress.getByName(it) } catch(e: Exception) { null } }
+                return ips.mapNotNull { try { InetAddress.getByName(it) } catch(e: Throwable) { null } }
             }
         }
         return null
