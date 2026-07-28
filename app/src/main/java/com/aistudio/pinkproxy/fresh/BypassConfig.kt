@@ -258,11 +258,11 @@ object BypassConfig {
                         }
                         DpiType.TLS_SNI_BLOCK -> {
                             if (remembered.family == StrategyFamily.TLS || remembered.family == StrategyFamily.FRAGMENTATION) boostedScore += 50
-                            if (remembered == BypassStrategy.SNI_SPLIT || remembered == BypassStrategy.TLS_SNI_SKEW) boostedScore += 60
+                            if (remembered == BypassStrategy.SNI_SPLIT || remembered == BypassStrategy.TLS_SNI_SKEW || remembered == BypassStrategy.TLS_SNI_NULL_EXT) boostedScore += 60
                         }
                         DpiType.HTTP_BLOCK -> {
                             if (remembered.family == StrategyFamily.HTTP) boostedScore += 50
-                            if (remembered == BypassStrategy.HTTP_HOST_MANGLE || remembered == BypassStrategy.HTTP_FRAGMENT) boostedScore += 60
+                            if (remembered == BypassStrategy.HTTP_HOST_MANGLE || remembered == BypassStrategy.HTTP_FRAGMENT || remembered == BypassStrategy.HTTP_HOST_REVERSE) boostedScore += 60
                         }
                         else -> {}
                     }
@@ -826,6 +826,27 @@ object BypassConfig {
             BypassStrategy.UDP_TELEGRAM_FAKE -> {
                 val fake = FakePacketHelper.buildUdpNoise(48)
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_QUIC_SKEW -> {
+                val fake = FakePacketHelper.buildQuicInitialFake()
+                val isIpv6 = targetAddr is java.net.Inet6Address
+                TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
+                socket.send(DatagramPacket(fake, fake.size, targetAddr, targetPort))
+                delay(config.delay1)
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                socket.send(packet)
+            }
+            BypassStrategy.UDP_DATA_FRAG -> {
+                if (length > 200) {
+                    val split = length / 2
+                    val p1 = DatagramPacket(data, offset, split, targetAddr, targetPort)
+                    val p2 = DatagramPacket(data, offset + split, length - split, targetAddr, targetPort)
+                    socket.send(p1)
+                    delay(rnd.nextLong(1, 5))
+                    socket.send(p2)
+                } else {
+                    socket.send(packet)
+                }
             }
             else -> {
                 socket.send(packet)
@@ -1863,6 +1884,34 @@ object BypassConfig {
                         output.write(data, headerEnd, length - headerEnd)
                         output.flush()
                     } else { output.write(data, 0, length); output.flush() }
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_HOST_REVERSE -> {
+                if (isProbableHttp(data, length)) {
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                        val head = String(data, 0, headerEnd, Charsets.US_ASCII)
+                        val lines = head.split("\r\n").toMutableList()
+                        val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                        if (hostIdx != -1) {
+                            val hostLine = lines.removeAt(hostIdx)
+                            lines.add(1, hostLine) // Move Host to be the second line (after Request-Line)
+                            val newHead = lines.joinToString("\r\n")
+                            output.write(newHead.toByteArray(Charsets.US_ASCII))
+                            output.write(data, headerEnd, length - headerEnd)
+                            output.flush()
+                        } else { output.write(data, 0, length); output.flush() }
+                    } else { output.write(data, 0, length); output.flush() }
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.HTTP_CONNECTION_CLOSE_SKEW -> {
+                if (isProbableHttp(data, length)) {
+                    val fakeHeader = "Connection: keep-alive\r\n".toByteArray()
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                    injectHeaderAfterFirstLine(data, length, fakeHeader, output)
+                    delay(config.delay1)
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, length); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_WINDOW_CLAMPING -> {

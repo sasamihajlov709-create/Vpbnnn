@@ -234,7 +234,8 @@ object TcpTransportHandler {
                                     // Detect DPI blocks in payload
                                     if (n > 10) {
                                         if (buffer[0] == 0x15.toByte()) { // TLS Alert
-                                            ProxyStats.recordDpiEvent(DpiType.TLS_SNI_BLOCK)
+                                            BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TLS_SNI_BLOCK)
+                                            throw java.io.IOException("TLS Alert (Possible DPI Block)")
                                         } else {
                                             // Fast byte-level scan for block markers
                                             var foundBlock = false
@@ -257,8 +258,7 @@ object TcpTransportHandler {
                                             }
                                             
                                             if (foundBlock) {
-                                                ProxyStats.recordDpiEvent(DpiType.HTTP_BLOCK)
-                                                BypassConfig.recordFailure(strategy, targetHost)
+                                                BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.HTTP_BLOCK)
                                                 throw java.io.IOException("DPI block detected in payload")
                                             }
                                         }

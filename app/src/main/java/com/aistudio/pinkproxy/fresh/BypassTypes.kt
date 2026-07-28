@@ -148,6 +148,10 @@ enum class BypassStrategy(
     HTTP_METHOD_SPACE_MANGLE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
     TLS_SNI_NULL_EXT(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
     TLS_CLIENT_HELLO_PAD_EXTREME(StrategyFamily.TLS, 4, 2, StrategyGroup.EXTREME),
+    UDP_QUIC_SKEW(StrategyFamily.UDP, 3, 3, StrategyGroup.MEDIUM),
+    UDP_DATA_FRAG(StrategyFamily.UDP, 2, 2, StrategyGroup.LIGHT),
+    HTTP_HOST_REVERSE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
+    HTTP_CONNECTION_CLOSE_SKEW(StrategyFamily.HTTP, 1, 2, StrategyGroup.LIGHT),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

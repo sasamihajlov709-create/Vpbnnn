@@ -1287,6 +1287,14 @@ object FakePacketHelper {
         return "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
     }
 
+    fun buildQuicInitialFake(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val data = ByteArray(rnd.nextInt(1200, 1280))
+        rnd.nextBytes(data)
+        data[0] = (0xC0 or (rnd.nextInt(4) shl 4)).toByte() // Long Header
+        return data
+    }
+
     fun buildUdpNoise(size: Int): ByteArray {
         val noise = ByteArray(size)
         ThreadLocalRandom.current().nextBytes(noise)
