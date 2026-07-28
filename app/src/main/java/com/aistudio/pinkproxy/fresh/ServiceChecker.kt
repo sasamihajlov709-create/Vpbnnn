@@ -298,7 +298,7 @@ object ServiceChecker {
                 if (ips.isEmpty()) return@withContext false
                 
                 socket = java.net.Socket()
-                try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Exception) {}
+                try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
                 socket.soTimeout = 2000
                 withTimeout(4000) {
                     socket.connect(java.net.InetSocketAddress(ips.first(), 443), 2000)
@@ -363,7 +363,7 @@ object ServiceChecker {
                             val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
                             if (ips.isNotEmpty()) {
                                 socket = java.net.Socket()
-                                try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Exception) {}
+                                try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
                                 socket.soTimeout = 1500
                                 withTimeout(2500) {
                                     socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)

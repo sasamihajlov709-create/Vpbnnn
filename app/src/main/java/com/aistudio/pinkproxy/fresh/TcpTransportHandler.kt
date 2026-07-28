@@ -54,6 +54,8 @@ object TcpTransportHandler {
                             try {
                                 vpnService?.protect(s)
                                 s.tcpNoDelay = true
+                                try { s.sendBufferSize = 128 * 1024 } catch (e: Throwable) {}
+                                try { s.receiveBufferSize = 128 * 1024 } catch (e: Throwable) {}
                                 val baseTimeout = (BypassConfig.currentRttMs.value * 3).coerceIn(1500, 7000)
                                 val jitter = ProxyStats.jitter.value
                                 val connectTimeout = (baseTimeout + jitter).toInt().coerceIn(2000, 10000)
@@ -104,7 +106,7 @@ object TcpTransportHandler {
                         activeJobs.forEach { it.cancel() }
                         while (true) {
                             val leftover = channel.tryReceive().getOrNull() ?: break
-                            try { leftover.close() } catch (e: Exception) {}
+                            try { leftover.close() } catch (e: Throwable) {}
                         }
                     }
                     winner
@@ -128,7 +130,7 @@ object TcpTransportHandler {
                 remoteSocket.receiveBufferSize = bufSize
                 clientSocket.sendBufferSize = bufSize
                 clientSocket.receiveBufferSize = 128 * 1024
-            } catch (e: Exception) {}
+            } catch (e: Throwable) {}
 
             val connectTime = System.currentTimeMillis() - start
             BypassConfig.TrafficShaper.updateRtt(connectTime)
@@ -168,8 +170,8 @@ object TcpTransportHandler {
                         if (System.currentTimeMillis() - lastActivity.get() > 60000) {
                             try { 
                                 remoteSocket?.keepAlive = true
-                                remoteSocket?.sendUrgentData(0) 
-                            } catch (e: Exception) {}
+                                 
+                            } catch (e: Throwable) {}
                         }
                     }
                 }
@@ -264,7 +266,7 @@ object TcpTransportHandler {
                             65536 -> ProxyStats.release64k(buffer)
                             else -> {}
                         }
-                        try { clientSocket.shutdownOutput() } catch (e: Exception) {}
+                        try { clientSocket.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
 
@@ -342,7 +344,7 @@ object TcpTransportHandler {
                                     } else {
                                         remoteOut.write(buffer, 0, n)
                                         if (strategy == BypassStrategy.TCP_RANDOM_PADDING && rnd.nextInt(100) < 30) {
-                                            try { remoteSocket?.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) {}
+                                            try { remoteSocket?.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                                         }
                                         remoteOut.flush()
                                     }
@@ -360,7 +362,7 @@ object TcpTransportHandler {
                         }
                     } finally {
                         if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
-                        try { remoteSocket?.shutdownOutput() } catch (e: Exception) {}
+                        try { remoteSocket?.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
 
@@ -375,8 +377,8 @@ object TcpTransportHandler {
                     if (clientToRemote.isActive) clientToRemote.join()
                 }
                 
-                try { clientSocket.close() } catch(e: Exception) {}
-                try { remoteSocket?.close() } catch(e: Exception) {}
+                try { clientSocket.close() } catch(e: Throwable) {}
+                try { remoteSocket?.close() } catch(e: Throwable) {}
                 
                 inactivityJob.cancel()
                 keepAliveJob.cancel()
@@ -386,8 +388,8 @@ object TcpTransportHandler {
         } catch (e: Exception) {
             Log.v("TcpTransport", "Session $targetHost:$targetPort failed: ${e.message}")
         } finally {
-            try { clientSocket.close() } catch (e: Exception) {}
-            try { remoteSocket?.close() } catch (e: Exception) {}
+            try { clientSocket.close() } catch (e: Throwable) {}
+            try { remoteSocket?.close() } catch (e: Throwable) {}
         }
     }
 }

@@ -26,7 +26,7 @@ object UdpTransportHandler {
         
         // Multiple outgoing sockets, one per worker, to avoid race conditions on socket options (like TTL)
         val outSockets = Array(8) { 
-            DatagramSocket().apply { try { vpnService.protect(this) } catch (e: Exception) {} }
+            DatagramSocket().apply { try { vpnService.protect(this) } catch (e: Throwable) {} }
         }
         
         try {
@@ -229,7 +229,7 @@ object UdpTransportHandler {
                                                         ProxyStats.release8k(responseBytes)
                                                     }
                                                 }
-                                            } catch (e: Exception) {}
+                                            } catch (e: Throwable) {}
                                         }
                                     }
                                 }
@@ -245,7 +245,7 @@ object UdpTransportHandler {
                                             if (res.isNotEmpty()) {
                                                 udpOutChannel.trySend(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
                                             }
-                                        } catch (e: Exception) {}
+                                        } catch (e: Throwable) {}
                                     }
                                 }
                             }
@@ -275,8 +275,8 @@ object UdpTransportHandler {
         } catch (e: Exception) {
             if (e !is CancellationException) Log.e("UdpTransport", "handleUdpAssociate error", e)
         } finally {
-            outSockets.forEach { try { it.close() } catch (e: Exception) {} }
-            try { udpSocket.close() } catch (e: Exception) {}
+            outSockets.forEach { try { it.close() } catch (e: Throwable) {} }
+            try { udpSocket.close() } catch (e: Throwable) {}
         }
     }
 

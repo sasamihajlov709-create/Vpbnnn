@@ -72,7 +72,7 @@ object DnsProtocols {
         val socket = DatagramSocket()
         val buffer = ProxyStats.obtain8k()
         try {
-            try { vpnService?.protect(socket) } catch(e: Exception) {}
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
             socket.soTimeout = 3000
             val targetAddr = InetAddress.getByName(dnsIp)
             socket.connect(targetAddr, 53)
@@ -105,7 +105,7 @@ object DnsProtocols {
         val socket = DatagramSocket()
         val buffer = ProxyStats.obtain8k()
         try {
-            try { vpnService?.protect(socket) } catch(e: Exception) {}
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
             socket.soTimeout = 3000
             val dnsAddr = InetAddress.getByName(dnsIp)
             socket.connect(dnsAddr, 53)
@@ -137,7 +137,7 @@ object DnsProtocols {
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         val socket = Socket()
         try {
-            try { vpnService?.protect(socket) } catch(e: Exception) {}
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
             socket.connect(InetSocketAddress(dnsIp, 53), 3000)
             socket.soTimeout = 3000
             val dos = DataOutputStream(socket.getOutputStream())
@@ -222,7 +222,7 @@ object DnsProtocols {
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         val socket = Socket()
         try {
-            try { vpnService?.protect(socket) } catch(e: Exception) {}
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
             socket.connect(InetSocketAddress(dnsIp, 53), 3000)
             socket.soTimeout = 3000
             val dos = DataOutputStream(socket.getOutputStream())
@@ -330,7 +330,7 @@ object DnsProtocols {
 class ProtectedSocketFactory(private val vpnService: VpnService?) : javax.net.SocketFactory() {
     override fun createSocket(): Socket {
         val s = Socket()
-        try { vpnService?.protect(s) } catch(e: Exception) {}
+        try { vpnService?.protect(s) } catch(e: Throwable) {}
         return s
     }
     override fun createSocket(host: String?, port: Int) = createSocket().apply { connect(InetSocketAddress(host, port)) }
@@ -344,33 +344,33 @@ class ProtectedSSLSocketFactory(private val base: SSLSocketFactory, private val 
     override fun getSupportedCipherSuites() = base.supportedCipherSuites
 
     override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket {
-        try { vpnService?.protect(s) } catch(e: Exception) {}
+        try { vpnService?.protect(s) } catch(e: Throwable) {}
         val sslSocket = base.createSocket(s, host, port, autoClose)
-        try { vpnService?.protect(sslSocket) } catch(e: Exception) {}
+        try { vpnService?.protect(sslSocket) } catch(e: Throwable) {}
         return sslSocket
     }
 
     override fun createSocket(host: String, port: Int): Socket {
         val s = base.createSocket(host, port)
-        try { vpnService?.protect(s) } catch(e: Exception) {}
+        try { vpnService?.protect(s) } catch(e: Throwable) {}
         return s
     }
 
     override fun createSocket(host: String, port: Int, localHost: java.net.InetAddress, localPort: Int): Socket {
         val s = base.createSocket(host, port, localHost, localPort)
-        try { vpnService?.protect(s) } catch(e: Exception) {}
+        try { vpnService?.protect(s) } catch(e: Throwable) {}
         return s
     }
 
     override fun createSocket(host: java.net.InetAddress, port: Int): Socket {
         val s = base.createSocket(host, port)
-        try { vpnService?.protect(s) } catch(e: Exception) {}
+        try { vpnService?.protect(s) } catch(e: Throwable) {}
         return s
     }
 
     override fun createSocket(address: java.net.InetAddress, port: Int, localAddress: java.net.InetAddress, localPort: Int): Socket {
         val s = base.createSocket(address, port, localAddress, localPort)
-        try { vpnService?.protect(s) } catch(e: Exception) {}
+        try { vpnService?.protect(s) } catch(e: Throwable) {}
         return s
     }
 }
