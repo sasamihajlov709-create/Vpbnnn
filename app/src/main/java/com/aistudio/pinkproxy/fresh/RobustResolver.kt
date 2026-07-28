@@ -209,14 +209,32 @@ object RobustResolver {
         }
         
         var result = emptyList<InetAddress>()
+        val allResults = mutableListOf<List<InetAddress>>()
         var completed = 0
         while (completed < queries.size) {
             val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { emptyList() }
             if (res.isNotEmpty()) {
-                result = res
-                break
+                allResults.add(res)
+                // If we have at least 2 results, cross-verify them
+                if (allResults.size >= 2) {
+                    val common = allResults[0].intersect(allResults[1].toSet()).toList()
+                    if (common.isNotEmpty()) {
+                        result = common
+                        break
+                    }
+                }
+                // If it's a known high-trust provider (DoH), trust it immediately
+                if (completed < 2) { // First 2 queries are DoH/DoT
+                    result = res
+                    break
+                }
             }
             completed++
+        }
+        
+        // Final fallback: use the first non-empty result if cross-verification failed
+        if (result.isEmpty() && allResults.isNotEmpty()) {
+            result = allResults.first()
         }
         
         activeJobs.forEach { it.cancel() }

@@ -351,7 +351,7 @@ object ServiceChecker {
             val originalStrategy = BypassConfig.strategy.value
             val strategiesToTest = BypassStrategy.entries.filter { 
                 it != BypassStrategy.DIRECT && 
-                (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING)
+                (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.UDP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING)
             }
             
             val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
@@ -362,42 +362,53 @@ object ServiceChecker {
                     var totalDuration = 0L
                     
                     for (host in testHosts) {
-                        var socket: java.net.Socket? = null
-                        var hostSuccess = false
-                        try {
-                            val start = System.currentTimeMillis()
-                            val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
-                            if (ips.isNotEmpty()) {
-                                socket = java.net.Socket()
-                                try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
-                                socket.soTimeout = 1500
-                                withTimeout(2500) {
-                                    socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
-                                    val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
-                                    BypassConfig.applyBypass(
-                                        socket, 
-                                        socket.getOutputStream(), 
-                                        hello, 
-                                        hello.size, 
-                                        BypassConfig.getSessionConfig(host, strategy, 150L), 
-                                        host
-                                    )
-                                    socket.getOutputStream().flush()
-                                    val response = ByteArray(5)
-                                    val readCount = socket.getInputStream().read(response)
-                                    if (readCount >= 1 && response[0] == 0x16.toByte()) {
-                                        successCount++
-                                        totalDuration += (System.currentTimeMillis() - start)
-                                        hostSuccess = true
+                        var success = false
+                        val start = System.currentTimeMillis()
+                        
+                        if (strategy.family == StrategyFamily.UDP) {
+                            // Test UDP strategy using a DNS query as a proxy for UDP connectivity
+                            val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", BypassConfig.activeVpnService)
+                            if (res.isNotEmpty()) {
+                                success = true
+                            }
+                        } else {
+                            var socket: java.net.Socket? = null
+                            try {
+                                val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
+                                if (ips.isNotEmpty()) {
+                                    socket = java.net.Socket()
+                                    try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
+                                    socket.soTimeout = 1500
+                                    withTimeout(2500) {
+                                        socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
+                                        val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
+                                        BypassConfig.applyBypass(
+                                            socket, 
+                                            socket.getOutputStream(), 
+                                            hello, 
+                                            hello.size, 
+                                            BypassConfig.getSessionConfig(host, strategy, 150L), 
+                                            host
+                                        )
+                                        socket.getOutputStream().flush()
+                                        val response = ByteArray(5)
+                                        val readCount = socket.getInputStream().read(response)
+                                        if (readCount >= 1 && response[0] == 0x16.toByte()) {
+                                            success = true
+                                        }
                                     }
                                 }
+                            } catch (e: Throwable) {
+                            } finally {
+                                try { socket?.close() } catch (e: Throwable) {}
                             }
-                        } catch (e: Throwable) {
-                            // Ignored failure for this host
-                        } finally {
-                            try { socket?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
-                        BypassConfig.recordStrategyResult(host, strategy, hostSuccess)
+                        
+                        if (success) {
+                            successCount++
+                            totalDuration += (System.currentTimeMillis() - start)
+                        }
+                        BypassConfig.recordStrategyResult(host, strategy, success)
                     }
                     
                     if (successCount > 0) {

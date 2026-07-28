@@ -108,6 +108,7 @@ class PinkVpnService : VpnService() {
         RobustResolver.initialize(serviceScope)
         RobustResolver.startDnsOptimizer(serviceScope, this)
         BypassConfig.startAutonomousOptimizer(serviceScope, this)
+        BypassConfig.startLearningTask(serviceScope)
         ServiceChecker.startChecking(serviceScope, this)
         RecoveryManager.startHealthCheck(serviceScope)
 

@@ -86,6 +86,7 @@ enum class BypassStrategy(
     TLS_ECH_FAKE(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
     TLS_SESSION_ID_RAND(StrategyFamily.TLS, 2, 2, StrategyGroup.LIGHT),
     TCP_ACK_DELAY(StrategyFamily.TIMING, 4, 3, StrategyGroup.MEDIUM),
+    TCP_URGENT_SKEW(StrategyFamily.TCP, 4, 4, StrategyGroup.HEAVY),
     TLS_MIXED_CASE_SNI(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
     TLS_0RTT_FAKE(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
     HTTP2_PREAMBLE_FAKE(StrategyFamily.HTTP, 3, 3, StrategyGroup.MEDIUM),
@@ -150,8 +151,15 @@ enum class BypassStrategy(
     TLS_CLIENT_HELLO_PAD_EXTREME(StrategyFamily.TLS, 4, 2, StrategyGroup.EXTREME),
     UDP_QUIC_SKEW(StrategyFamily.UDP, 3, 3, StrategyGroup.MEDIUM),
     UDP_DATA_FRAG(StrategyFamily.UDP, 2, 2, StrategyGroup.LIGHT),
+    UDP_FAKE_TRAFFIC(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
+    UDP_IP_FRAG(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
+    QUIC_INITIAL_PADDING_EXTREME(StrategyFamily.UDP, 4, 3, StrategyGroup.EXTREME),
+    TCP_HANDSHAKE_CHAOS(StrategyFamily.TCP, 5, 5, StrategyGroup.EXTREME),
+    TCP_MSS_CLAMPER(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
     HTTP_HOST_REVERSE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
     HTTP_CONNECTION_CLOSE_SKEW(StrategyFamily.HTTP, 1, 2, StrategyGroup.LIGHT),
+    HTTP_MULTI_LINE_MANGLE(StrategyFamily.HTTP, 3, 3, StrategyGroup.HEAVY),
+    HTTP_HOST_FOLDING(StrategyFamily.HTTP, 3, 2, StrategyGroup.MEDIUM),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -293,9 +301,28 @@ object ProxyStats {
     private val _maxMss = MutableStateFlow(1460)
     val maxMss: StateFlow<Int> = _maxMss.asStateFlow()
 
+    private val _mssFailureCount = AtomicInteger(0)
+    val mssFailureCount: StateFlow<Int> = MutableStateFlow(0).apply {
+        // This is a bit hacky because I'm using AtomicInteger for internal state
+        // and StateFlow for UI. I'll just update it manually.
+    }.asStateFlow()
+    
     fun recordMssFailure() {
-        _maxMss.update { (it - 64).coerceAtLeast(512) }
-        logRecovery("MTU auto-correction: reducing MSS to ${_maxMss.value}")
+        val newVal = _mssFailureCount.incrementAndGet()
+        logRecovery("MTU auto-correction: incrementing MSS failure count to $newVal")
+        if (newVal >= 3) {
+            val currentMss = _maxMss.value
+            if (currentMss > 512) {
+                val nextMss = (currentMss - 128).coerceAtLeast(512)
+                _maxMss.value = nextMss
+                logRecovery("MTU auto-correction: Reducing Max MSS to $nextMss")
+                _mssFailureCount.set(0)
+            }
+        }
+    }
+    
+    fun resetMssFailureCount() {
+        _mssFailureCount.set(0)
     }
 
     fun recordDnsResult(success: Boolean) {

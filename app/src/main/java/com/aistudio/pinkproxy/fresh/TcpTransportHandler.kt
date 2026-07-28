@@ -37,82 +37,101 @@ object TcpTransportHandler {
 
             val start = System.currentTimeMillis()
             val censorship = BypassConfig.censorshipLevel.value
-            remoteSocket = try {
-                withTimeout(12000) {
-                    val channel = kotlinx.coroutines.channels.Channel<Socket>(resolved.size)
-                    val activeJobs = mutableListOf<Job>()
-                    // Aggressive racing: attempt more IPs if censorship is high
-                    val attempted = if (censorship > 70) resolved.size else minOf(resolved.size, 3)
-                    val raceDelay = if (censorship > 70) 50L else 250L
-                    val failures = java.util.concurrent.atomic.AtomicInteger(0)
-                    val nextSignal = kotlinx.coroutines.channels.Channel<Unit>(1)
-                    
-                    for (i in 0 until attempted) {
-                        val ip = resolved[i]
-                        activeJobs += scope.launch(ProxyDispatcher.io) {
-                            val s = Socket()
-                            try {
-                                try { vpnService?.protect(s) } catch (e: Throwable) {}
-                                s.tcpNoDelay = true
-                                try { s.sendBufferSize = 128 * 1024 } catch (e: Throwable) {}
-                                try { s.receiveBufferSize = 128 * 1024 } catch (e: Throwable) {}
-                                val baseTimeout = (BypassConfig.currentRttMs.value * 3).coerceIn(1500, 7000)
-                                val jitter = ProxyStats.jitter.value
-                                val connectTimeout = (baseTimeout + jitter).toInt().coerceIn(2000, 10000)
-                                
-                                val startConnect = System.currentTimeMillis()
+            
+            var retryCount = 0
+            val maxRetries = if (censorship > 80) 2 else 1
+            
+            while (retryCount <= maxRetries) {
+                remoteSocket = try {
+                    withTimeout(if (retryCount > 0) 8000 else 12000) {
+                        val channel = kotlinx.coroutines.channels.Channel<Socket>(resolved.size)
+                        val activeJobs = mutableListOf<Job>()
+                        // Aggressive racing: attempt more IPs if censorship is high or it is a retry
+                        val attempted = if (censorship > 70 || retryCount > 0) resolved.size else minOf(resolved.size, 3)
+                        val raceDelay = if (censorship > 70) 50L else 250L
+                        val failures = java.util.concurrent.atomic.AtomicInteger(0)
+                        val nextSignal = kotlinx.coroutines.channels.Channel<Unit>(1)
+                        
+                        for (i in 0 until attempted) {
+                            val ip = resolved[i]
+                            activeJobs += scope.launch(ProxyDispatcher.io) {
+                                val s = Socket()
                                 try {
-                                    s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
-                                    val rtt = System.currentTimeMillis() - startConnect
-                                    ProxyStats.updateLatency(rtt)
-                                    DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "", rtt)
-                                } catch (e: Throwable) {
-                                    nextSignal.trySend(Unit) // Start next racer immediately
-                                    val elapsed = System.currentTimeMillis() - startConnect
-                                    val msg = e.message?.lowercase() ?: ""
-                                    DnsCacheManager.recordIpFailure(ip.hostAddress ?: "")
-                                    if (elapsed >= connectTimeout - 500) {
-                                        BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.CONNECTION_TIMEOUT)
-                                    } else if (msg.contains("reset")) {
-                                        BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TCP_RESET)
+                                    try { vpnService?.protect(s) } catch (e: Throwable) {}
+                                    s.tcpNoDelay = true
+                                    try { s.sendBufferSize = 128 * 1024 } catch (e: Throwable) {}
+                                    try { s.receiveBufferSize = 128 * 1024 } catch (e: Throwable) {}
+                                    val baseTimeout = (BypassConfig.currentRttMs.value * 3).coerceIn(1500, 7000)
+                                    val jitter = ProxyStats.jitter.value
+                                    val connectTimeout = (baseTimeout + jitter).toInt().coerceIn(2000, 10000)
+                                    
+                                    val startConnect = System.currentTimeMillis()
+                                    try {
+                                        s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
+                                        val rtt = System.currentTimeMillis() - startConnect
+                                        ProxyStats.updateLatency(rtt)
+                                        DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "", rtt)
+                                    } catch (e: Throwable) {
+                                        nextSignal.trySend(Unit) // Start next racer immediately
+                                        val elapsed = System.currentTimeMillis() - startConnect
+                                        val msg = e.message?.lowercase() ?: ""
+                                        DnsCacheManager.recordIpFailure(ip.hostAddress ?: "")
+                                        if (elapsed >= connectTimeout - 500) {
+                                            BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.CONNECTION_TIMEOUT)
+                                        } else if (msg.contains("reset")) {
+                                            BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TCP_RESET)
+                                        }
+                                        throw e
                                     }
-                                    throw e
+                                    if (!channel.isClosedForSend) {
+                                        channel.trySend(s)
+                                    } else {
+                                        s.close()
+                                    }
+                                } catch (e: Throwable) {
+                                    try { s.close() } catch (ex: Exception) {}
+                                    if (failures.incrementAndGet() == attempted) {
+                                        channel.close()
+                                    }
                                 }
-                                if (!channel.isClosedForSend) {
-                                    channel.trySend(s)
-                                } else {
-                                    s.close()
-                                }
-                            } catch (e: Throwable) {
-                                try { s.close() } catch (ex: Exception) {}
-                                if (failures.incrementAndGet() == attempted) {
-                                    channel.close()
+                            }
+                            if (i < attempted - 1) {
+                                val dynamicDelay = if (censorship > 85 || retryCount > 0) (raceDelay / 2) else (raceDelay + i * 100L)
+                                withTimeoutOrNull(dynamicDelay) {
+                                    nextSignal.receive()
                                 }
                             }
                         }
-                        if (i < attempted - 1) {
-                            val dynamicDelay = if (censorship > 85) (raceDelay / 2) else (raceDelay + i * 100L)
-                            withTimeoutOrNull(dynamicDelay) {
-                                nextSignal.receive()
+                        val winner = try {
+                            channel.receive()
+                        } catch (e: Throwable) {
+                            throw Exception("All TCP connection attempts failed for $targetHost")
+                        } finally {
+                            channel.close()
+                            activeJobs.forEach { it.cancel() }
+                            while (true) {
+                                val leftover = channel.tryReceive().getOrNull() ?: break
+                                try { leftover.close() } catch (e: Throwable) {}
                             }
                         }
+                        winner
                     }
-                    val winner = try {
-                        channel.receive()
-                    } catch (e: Throwable) {
-                        throw Exception("All TCP connection attempts failed for $targetHost")
-                    } finally {
-                        channel.close()
-                        activeJobs.forEach { it.cancel() }
-                        while (true) {
-                            val leftover = channel.tryReceive().getOrNull() ?: break
-                            try { leftover.close() } catch (e: Throwable) {}
-                        }
+                } catch (e: Throwable) {
+                    if (retryCount < maxRetries && (e is java.net.SocketException || e is java.io.IOException || e is TimeoutCancellationException)) {
+                        retryCount++
+                        // On retry, try to use a safer strategy
+                        BypassConfig.recordFailure(strategy, targetHost)
+                        delay(500)
+                        continue
                     }
-                    winner
+                    Log.w("TcpTransport", "Connection failed to $targetHost: ${e.message}")
+                    clientSocket.close()
+                    return
                 }
-            } catch (e: Throwable) {
-                Log.w("TcpTransport", "Connection failed to $targetHost: ${e.message}")
+                break // Success, exit retry loop
+            }
+            
+            if (remoteSocket == null) {
                 clientSocket.close()
                 return
             }
@@ -159,6 +178,35 @@ object TcpTransportHandler {
             val clientOut = clientSocket.getOutputStream()
             val remoteIn = remoteSocket.getInputStream()
             val remoteOut = remoteSocket.getOutputStream()
+            
+            // Start Throughput Monitor to detect stalled connections or blackholes
+            var lastTotalForStall = ProxyStats.bytesTransferred.value
+            var silentPeriods = 0
+            val throughputJob = scope.launch(ProxyDispatcher.io) {
+                while (isActive && remoteSocket.isConnected && !remoteSocket.isClosed) {
+                    delay(10000) // Check every 10s
+                    val total = ProxyStats.bytesTransferred.value
+                    val delta = total - lastTotalForStall
+                    
+                    if (delta < 32) { // Less than 32 bytes in 10s is very suspicious
+                        silentPeriods++
+                        if (silentPeriods >= 3) { // 30s of silence
+                             BypassConfig.recordFailure(strategy, targetHost)
+                             if (BypassConfig.isHostCensored(targetHost)) {
+                                 ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                             }
+                             // Proactive disconnect if it's a known blocked host
+                             if (BypassConfig.isHostCensored(targetHost)) {
+                                 try { remoteSocket.close(); clientSocket.close() } catch (e: Throwable) {}
+                                 break
+                             }
+                        }
+                    } else {
+                        silentPeriods = 0
+                    }
+                    lastTotalForStall = total
+                }
+            }
 
             val lastActivity = AtomicLong(System.currentTimeMillis())
 

@@ -1295,6 +1295,39 @@ object FakePacketHelper {
         return data
     }
 
+    fun buildWireguardFake(): ByteArray {
+        val data = ByteArray(148)
+        val rnd = ThreadLocalRandom.current()
+        rnd.nextBytes(data)
+        data[0] = 0x01 // Type: Handshake Initiation
+        data[1] = 0x00
+        data[2] = 0x00
+        data[3] = 0x00
+        return data
+    }
+
+    fun buildOpenVpnFake(): ByteArray {
+        val data = ByteArray(14)
+        val rnd = ThreadLocalRandom.current()
+        rnd.nextBytes(data)
+        data[0] = 0x38.toByte() // P_CONTROL_HARD_RESET_CLIENT_V2 << 3
+        return data
+    }
+
+    fun buildQuicInitialExtremePadding(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        // QUIC requires Initial packets to be at least 1200 bytes
+        val data = ByteArray(rnd.nextInt(1280, 1450))
+        rnd.nextBytes(data)
+        data[0] = (0xC0 or (rnd.nextInt(4) shl 4) or rnd.nextInt(16)).toByte() // Long Header with random type bits
+        // Inject some "fake" frame headers to make it look more valid
+        data[1] = 0x00 // Version
+        data[2] = 0x00
+        data[3] = 0x00
+        data[4] = 0x01
+        return data
+    }
+
     fun buildUdpNoise(size: Int): ByteArray {
         val noise = ByteArray(size)
         ThreadLocalRandom.current().nextBytes(noise)

@@ -285,6 +285,8 @@ object DnsProtocols {
                 .header("Accept", "application/dns-message")
                 .header("User-Agent", FakePacketHelper.getRandomUserAgent())
                 .apply {
+                    val paddingSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(32, 128)
+                    header("X-Dns-Padding", ByteArray(paddingSize) { 'X'.code.toByte() }.toString(Charsets.US_ASCII))
                     if (intensity > 60) {
                         header("X-Forwarded-For", "${java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 255)}.0.0.1")
                         header("Cache-Control", "no-cache")
