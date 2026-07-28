@@ -320,6 +320,11 @@ object TcpTransportHandler {
                                 clientOut.flush()
                                 ProxyStats.updateBytes(n.toLong())
                                 
+                                // Jittered reading to confuse timing analysis when under high intensity
+                                if (intensity > 80 && ThreadLocalRandom.current().nextInt(100) < 12) {
+                                    delay(ThreadLocalRandom.current().nextLong(1, 3))
+                                }
+                                
                                 // Traffic Shaping: if congestion window is low, throttle slightly
                                 val cwnd = ProxyStats.congestionWindow.value
                                 if (cwnd < 20 && intensity > 50) {

@@ -307,6 +307,39 @@ object DnsProtocols {
         return emptyList()
     }
 
+    suspend fun queryDohJson(host: String, vpnService: VpnService?): List<InetAddress> {
+        val urls = listOf(
+            "https://dns.google/resolve?name=$host&type=A",
+            "https://cloudflare-dns.com/dns-query?name=$host&type=A"
+        )
+        val url = urls.random()
+        try {
+            val client = getProtectedClient(vpnService).newBuilder()
+                .connectTimeout(5000, TimeUnit.MILLISECONDS)
+                .build()
+
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/dns-json")
+                .header("User-Agent", FakePacketHelper.getRandomUserAgent())
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return emptyList()
+                    // Simple regex based parsing for speed and to avoid adding a JSON library
+                    val regex = """"data":\s*"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"""".toRegex()
+                    val matches = regex.findAll(body)
+                    val ips = matches.mapNotNull { 
+                        try { InetAddress.getByName(it.groupValues[1]) } catch(e: Throwable) { null }
+                    }.toList()
+                    return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+                }
+            }
+        } catch (e: Throwable) {}
+        return emptyList()
+    }
+
     suspend fun queryDohRacing(host: String, vpnService: VpnService?): List<InetAddress> {
         return kotlinx.coroutines.withTimeoutOrNull(7000) {
             kotlinx.coroutines.supervisorScope {

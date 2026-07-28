@@ -836,6 +836,16 @@ object BypassConfig {
                     try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch (e: Throwable) {}
                 }
             }
+            BypassStrategy.UDP_QUIC_PAD -> {
+                // For QUIC, we pad the initial packet with noise to hide the version/SNI
+                if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(256, 512))
+                    val combined = data.copyOfRange(offset, offset + length) + padding
+                    socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
+                }
+            }
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
                 // Naive byte-level splitting breaks UDP because it's a datagram protocol.
                 // Instead, we inject a short fake packet with low TTL before the real packet to confuse DPI state.
@@ -2164,6 +2174,51 @@ object BypassConfig {
                 output.write(data, 0, 1); output.flush()
                 delay(1)
                 output.write(data, 1, length - 1); output.flush()
+            }
+            BypassStrategy.HTTP_METHOD_CASE_MANGLE -> {
+                if (isProbableHttp(data, length)) {
+                    val mod = FakePacketHelper.mangleHttpMethod(data, length)
+                    output.write(mod); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_ZERO_WINDOW_DESYNC -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    socket.receiveBufferSize = 0 // Simulate zero window
+                    output.write(data, 0, 1); output.flush()
+                    delay(config.delay1)
+                    socket.receiveBufferSize = originalSize
+                    output.write(data, 1, length - 1); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_WINDOW_SIZE_CHAOS -> {
+                try {
+                    val rndSize = rnd.nextInt(512, 16384)
+                    socket.receiveBufferSize = rndSize
+                    output.write(data, 0, length); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TLS_REC_CHOP -> {
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val mod = FakePacketHelper.splitTlsRecords(data, length, rnd.nextInt(5, length / 2))
+                    output.write(mod); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TLS_SNI_GREASE -> {
+                if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                    val mod = FakePacketHelper.injectLargeGrease(data, length)
+                    output.write(mod); output.flush()
+                } else { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.UDP_QUIC_PAD -> {
+                output.write(data, 0, length)
+                val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(128, 512))
+                output.write(padding)
+                output.flush()
             }
             BypassStrategy.DIRECT -> {
                 output.write(data, 0, length); output.flush()

@@ -176,6 +176,7 @@ object RobustResolver {
         
         val queries = listOf<suspend () -> List<InetAddress>>(
             { DnsProtocols.queryDohRacing(host, vpnService) },
+            { DnsProtocols.queryDohJson(host, vpnService) },
             { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },
             { 
                 val records = try { DnsProtocols.queryUdpDnsDetailed(host, "1.1.1.1", vpnService) } catch(e: Throwable) { emptyList() }
@@ -224,7 +225,7 @@ object RobustResolver {
                     }
                 }
                 // If it's a known high-trust provider (DoH), trust it immediately
-                if (completed < 2) { // First 2 queries are DoH/DoT
+                if (completed < 3) { // First 3 queries are DoH/DoT
                     result = res
                     break
                 }

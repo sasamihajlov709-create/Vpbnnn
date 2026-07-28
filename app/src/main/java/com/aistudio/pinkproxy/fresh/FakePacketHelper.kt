@@ -181,6 +181,60 @@ object FakePacketHelper {
         return buildExtension(type, data)
     }
 
+    fun mangleHttpMethod(data: ByteArray, length: Int): ByteArray {
+        try {
+            val s = String(data, 0, length.coerceAtMost(16), Charsets.US_ASCII)
+            val methods = listOf("GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "CONNECT ", "TRACE ")
+            for (m in methods) {
+                if (s.startsWith(m, ignoreCase = true)) {
+                    val result = data.copyOf(length)
+                    val rnd = java.util.concurrent.ThreadLocalRandom.current()
+                    for (i in 0 until m.length - 1) {
+                        if (rnd.nextBoolean()) {
+                            val char = result[i].toInt().toChar()
+                            if (char.isLowerCase()) result[i] = char.uppercaseChar().code.toByte()
+                            else if (char.isUpperCase()) result[i] = char.lowercaseChar().code.toByte()
+                        }
+                    }
+                    return result
+                }
+            }
+        } catch (e: Throwable) {}
+        return data.copyOf(length)
+    }
+
+    fun splitTlsRecords(data: ByteArray, length: Int, splitPos: Int): ByteArray {
+        if (length < 5 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        
+        // Original record: [Header 5b][Data L-5b]
+        // Split into: [Header 5b][Data 0..splitPos][Header 5b][Data splitPos..end]
+        val part1Len = splitPos.coerceIn(1, length - 6)
+        val part2Len = length - 5 - part1Len
+        
+        val result = ByteArray(5 + part1Len + 5 + part2Len)
+        
+        // Record 1
+        System.arraycopy(data, 0, result, 0, 5)
+        result[3] = ((part1Len shr 8) and 0xFF).toByte()
+        result[4] = (part1Len and 0xFF).toByte()
+        System.arraycopy(data, 5, result, 5, part1Len)
+        
+        // Record 2
+        System.arraycopy(data, 0, result, 5 + part1Len, 5)
+        result[5 + part1Len + 3] = ((part2Len shr 8) and 0xFF).toByte()
+        result[5 + part1Len + 4] = (part2Len and 0xFF).toByte()
+        System.arraycopy(data, 5 + part1Len, result, 5 + part1Len + 5, part2Len)
+        
+        return result
+    }
+
+    fun injectLargeGrease(data: ByteArray, length: Int): ByteArray {
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        val greaseType = 0xAAAA + rnd.nextInt(0x5555)
+        val greaseSize = rnd.nextInt(1024, 2500)
+        return injectExtension(data, length, greaseType, buildUdpNoise(greaseSize))
+    }
+
     fun buildFakeHttpRequest(host: String, path: String = "/"): ByteArray {
         val sb = StringBuilder()
         val rnd = java.util.concurrent.ThreadLocalRandom.current()

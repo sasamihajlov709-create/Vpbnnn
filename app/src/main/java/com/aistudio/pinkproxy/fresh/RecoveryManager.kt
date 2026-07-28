@@ -47,8 +47,14 @@ object RecoveryManager {
                     }
                     
                     if (activeConns > 0) {
-                        if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 25) {
+                        if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.successRate.value < 25) {
                             handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop during active session")
+                        }
+                        
+                        // Monitor RTT for suspicious spikes
+                        val currentRtt = ProxyStats.lastLatency.value
+                        if (currentRtt > 1500) {
+                            handleEvent(RecoveryEvent.HIGH_RTT, "Suspicious latency spike: $currentRtt ms")
                         }
                     }
                     
@@ -76,20 +82,38 @@ object RecoveryManager {
                 val type = ProxyStats.currentDpiType.value
                 when (type) {
                     DpiType.TCP_RESET -> {
-                        val candidates = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TCP_REORDER_DESYNC, BypassStrategy.OOB_DESYNC)
+                        val candidates = listOf(
+                            BypassStrategy.SNI_SPLIT, 
+                            BypassStrategy.TCP_REORDER_DESYNC, 
+                            BypassStrategy.OOB_DESYNC,
+                            BypassStrategy.TCP_SEGMENT_DESYNC,
+                            BypassStrategy.TCP_ZERO_WINDOW_DESYNC
+                        )
                         BypassConfig.setGlobalStrategy(candidates.random())
                         triggerPanic("Active TCP Reset DPI detected")
                     }
                     DpiType.TLS_SNI_BLOCK -> {
-                        val candidates = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_CLIENT_HELLO_CHOP, BypassStrategy.TLS_REC_SPLIT)
+                        val candidates = listOf(
+                            BypassStrategy.SNI_SPLIT, 
+                            BypassStrategy.TLS_CLIENT_HELLO_CHOP, 
+                            BypassStrategy.TLS_REC_SPLIT,
+                            BypassStrategy.TLS_ECH_FAKE
+                        )
                         BypassConfig.setGlobalStrategy(candidates.random())
                     }
                     DpiType.HTTP_BLOCK -> {
-                        val candidates = listOf(BypassStrategy.HTTP_HOST_SPACE, BypassStrategy.HTTP_HOST_CASE_MANGLE, BypassStrategy.HTTP_HOST_TAB_MANGLE)
+                        val candidates = listOf(
+                            BypassStrategy.HTTP_HOST_SPACE, 
+                            BypassStrategy.HTTP_HOST_CASE_MANGLE, 
+                            BypassStrategy.HTTP_HOST_TAB_MANGLE,
+                            BypassStrategy.HTTP_METHOD_CASE_MANGLE,
+                            BypassStrategy.HTTP_HOST_REORDER
+                        )
                         BypassConfig.setGlobalStrategy(candidates.random())
                     }
                     DpiType.CONNECTION_TIMEOUT -> {
-                        BypassConfig.setGlobalStrategy(BypassStrategy.TLS_REC_SPLIT)
+                        val candidates = listOf(BypassStrategy.TLS_REC_SPLIT, BypassStrategy.TCP_ACK_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS)
+                        BypassConfig.setGlobalStrategy(candidates.random())
                         if (recoveryEscalation >= 2) triggerPanic("DPI Timeout Escalation")
                     }
                     else -> {

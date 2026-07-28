@@ -116,7 +116,6 @@ enum class BypassStrategy(
     TLS_RECORD_PADDING(StrategyFamily.TLS, 2, 2, StrategyGroup.MEDIUM),
     UDP_HIGH_VOL_PACING(StrategyFamily.UDP, 2, 1, StrategyGroup.LIGHT),
     UDP_ZERO_LEN_SKEW(StrategyFamily.UDP, 2, 1, StrategyGroup.LIGHT),
-    TCP_WINDOW_SIZE_CHAOS(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_MSS_CLUMPING(StrategyFamily.TCP, 3, 2, StrategyGroup.HEAVY),
     TLS_CLIENT_HELLO_GREASE_RANDOM(StrategyFamily.TLS, 2, 2, StrategyGroup.LIGHT),
     HTTP_HOST_TAB_MANGLE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
@@ -157,6 +156,12 @@ enum class BypassStrategy(
     TLS_ECH_FAKE(StrategyFamily.TLS, 3, 3, StrategyGroup.HEAVY),
     TCP_SEGMENT_DESYNC(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_ACK_SKEW(StrategyFamily.TCP, 2, 2, StrategyGroup.MEDIUM),
+    HTTP_METHOD_CASE_MANGLE(StrategyFamily.HTTP, 2, 2, StrategyGroup.MEDIUM),
+    TCP_ZERO_WINDOW_DESYNC(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
+    TCP_WINDOW_SIZE_CHAOS(StrategyFamily.TCP, 2, 2, StrategyGroup.MEDIUM),
+    TLS_REC_CHOP(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
+    UDP_QUIC_PAD(StrategyFamily.UDP, 2, 2, StrategyGroup.LIGHT),
+    TLS_SNI_GREASE(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
