@@ -50,10 +50,6 @@ object RecoveryManager {
                         if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 25) {
                             handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop during active session")
                         }
-                        
-                        if (currentBytes == lastBytes && ProxyStats.censorshipIntensity.value > 60) {
-                            handleEvent(RecoveryEvent.TUNNEL_STALL, "Ghosting detected: $activeConns connections, 0 bytes in ${delayMs/1000}s")
-                        }
                     }
                     
                     lastBytes = currentBytes
