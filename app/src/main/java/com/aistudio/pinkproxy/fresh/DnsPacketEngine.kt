@@ -119,7 +119,7 @@ object DnsPacketEngine {
                     bb.position(bb.position() + rdLen)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // Ignore parse errors
         }
         return ips

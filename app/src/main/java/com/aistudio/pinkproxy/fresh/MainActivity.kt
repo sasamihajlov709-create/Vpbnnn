@@ -115,7 +115,7 @@ class MainActivity : ComponentActivity() {
             PinkVpnService.loadFilterSettings(this)
             BypassConfig.loadTuningSettings(this)
             RobustResolver.loadDnsSettings(this)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e("MainActivity", "Error loading initial settings", e)
         }
         
@@ -180,7 +180,7 @@ class MainActivity : ComponentActivity() {
                 }
                 startActivity(intent)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e("MainActivity", "Failed to request battery optimization exemption", e)
         }
     }
@@ -536,7 +536,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                         }
                         try {
                             context.startActivity(Intent.createChooser(shareIntent, "Share Diagnostics"))
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             android.widget.Toast.makeText(context, "Could not open share sheet", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -570,7 +570,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("tg://socks?server=127.0.0.1&port=18080&user=&pass="))
                             intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
                             context.startActivity(intent)
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             android.widget.Toast.makeText(context, "Telegram не установлен", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -1083,7 +1083,7 @@ fun BatteryOptimizationInfoCard(context: android.content.Context) {
                             data = "package:${context.packageName}".toUri()
                         }
                         context.startActivity(intent)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         try {
                             val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                                 data = "package:${context.packageName}".toUri()
@@ -1229,7 +1229,7 @@ fun AppIconImage(context: android.content.Context, appInfo: android.content.pm.A
         val drawable = withContext(ProxyDispatcher.io) {
             try {
                 context.packageManager.getApplicationIcon(appInfo)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 null
             }
         }

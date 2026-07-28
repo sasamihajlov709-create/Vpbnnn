@@ -921,7 +921,7 @@ object FakePacketHelper {
             dos.write(ByteArray(paddingSize) { 0 })
             
             return baos.toByteArray()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             return data.copyOf(length)
         }
     }
@@ -1166,7 +1166,7 @@ object FakePacketHelper {
             result[4] = (newRecordLen and 0xff).toByte()
             
             return result
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             return data.copyOf(length)
         }
     }
@@ -1225,7 +1225,7 @@ object FakePacketHelper {
             result[4] = (newRecordLen and 0xff).toByte()
             
             return result
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             return data.copyOf(length)
         }
     }

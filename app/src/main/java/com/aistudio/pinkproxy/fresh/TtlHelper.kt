@@ -21,7 +21,7 @@ object TtlHelper {
             getImplMethod?.isAccessible = true
             getDatagramImplMethod = java.net.DatagramSocket::class.java.getDeclaredMethod("getImpl")
             getDatagramImplMethod?.isAccessible = true
-        } catch (e: Exception) { Log.v("TtlHelper", "Reflection limited or unavailable") }
+        } catch (e: Throwable) { Log.v("TtlHelper", "Reflection limited or unavailable") }
     }
 
     private fun getFileDescriptor(socket: Any): java.io.FileDescriptor? {
@@ -32,7 +32,7 @@ object TtlHelper {
                 else -> null
             }
             if (impl != null) fdField?.get(impl) as? java.io.FileDescriptor else null
-        } catch (e: Exception) { null }
+        } catch (e: Throwable) { null }
     }
 
     fun setTtl(socket: Socket, ttl: Int): Boolean {
@@ -58,10 +58,10 @@ object TtlHelper {
                     }
                     true
                 } finally {
-                    try { pfd.close() } catch (e: Exception) {}
+                    try { pfd.close() } catch (e: Throwable) {}
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.v("TtlHelper", "Failed to set TTL: ${e.message}")
             false
         }
@@ -87,10 +87,10 @@ object TtlHelper {
                     }
                     true
                 } finally {
-                    try { pfd.close() } catch (e: Exception) {}
+                    try { pfd.close() } catch (e: Throwable) {}
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.v("TtlHelper", "Failed to set UDP TTL: ${e.message}")
             false
         }

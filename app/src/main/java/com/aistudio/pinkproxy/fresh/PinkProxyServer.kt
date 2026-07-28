@@ -49,26 +49,26 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     } ?: break
 
                     if (!activeConnectionSemaphore.tryAcquire()) {
-                        try { client.close() } catch (e: Exception) {}
+                        try { client.close() } catch (e: Throwable) {}
                         continue
                     }
                     
                     val clientJob = scope.launch {
                         try {
                             client.tcpNoDelay = true
-                            try { client.sendBufferSize = 64 * 1024 } catch (e: Exception) {}
-                            try { client.receiveBufferSize = 64 * 1024 } catch (e: Exception) {}
+                            try { client.sendBufferSize = 64 * 1024 } catch (e: Throwable) {}
+                            try { client.receiveBufferSize = 64 * 1024 } catch (e: Throwable) {}
                             handleClient(client, scope)
                         } finally {
                             activeConnectionSemaphore.release()
                         }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 if (isActive) Log.e("PinkProxy", "Server error", e)
             } finally {
-                try { serverSocket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                try { serverSocket?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 serverSocket = null
             }
         }
@@ -76,7 +76,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
 
     fun stop() {
         serverJob?.cancel()
-        try { serverSocket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        try { serverSocket?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         serverSocket = null
     }
 
@@ -105,7 +105,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         return
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.v("PinkProxy", "UID check exception: ${e.message}")
             }
@@ -219,14 +219,14 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             output.flush()
             
             client.soTimeout = 0 // Remove timeout for the tunneled connection
-            try { client.keepAlive = true } catch (e: Exception) {}
+            try { client.keepAlive = true } catch (e: Throwable) {}
             TcpTransportHandler.handleTcpSession(client, host ?: "", targetPort, vpnService, scope)
 
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.v("PinkProxy", "Client handling error: ${e.message}")
         } finally {
-            try { client.close() } catch (ex: Exception) {}
+            try { client.close() } catch (ex: Throwable) {}
             ProxyStats.updateConnections(-1)
         }
     }

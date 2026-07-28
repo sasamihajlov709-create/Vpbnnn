@@ -56,7 +56,7 @@ object DnsProtocols {
                 sc.init(null, arrayOf(defaultTrustManager), null)
                 builder.sslSocketFactory(ProtectedSSLSocketFactory(sc.socketFactory, vpnService), defaultTrustManager)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e("DnsProtocols", "Failed to setup protected SSL", e)
         }
         
@@ -86,7 +86,7 @@ object DnsProtocols {
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } finally {
             ProxyStats.release8k(buffer)
-            try { socket.close() } catch (e: Exception) {}
+            try { socket.close() } catch (e: Throwable) {}
         }
     }
 
@@ -120,14 +120,14 @@ object DnsProtocols {
                 val respPacket = DatagramPacket(buffer, buffer.size)
                 try {
                     socket.receive(respPacket)
-                } catch (e: Exception) { break }
+                } catch (e: Throwable) { break }
                 val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, idReal)
                 val clean = res.filter { !DnsCacheManager.isPoisoned(it, host) }
                 if (clean.isNotEmpty()) return clean
             }
-        } catch (e: Exception) {} finally {
+        } catch (e: Throwable) {} finally {
             ProxyStats.release8k(buffer)
-            try { socket.close() } catch (e: Exception) {}
+            try { socket.close() } catch (e: Throwable) {}
         }
         return emptyList()
     }
@@ -152,7 +152,7 @@ object DnsProtocols {
             val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
         } finally {
-            try { socket.close() } catch (e: Exception) {}
+            try { socket.close() } catch (e: Throwable) {}
         }
     }
 
@@ -210,9 +210,9 @@ object DnsProtocols {
             dis.readFully(resp)
             val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
         } finally {
-            try { sslSocket.close() } catch (e: Exception) {}
+            try { sslSocket.close() } catch (e: Throwable) {}
         }
         return emptyList()
     }
@@ -237,9 +237,9 @@ object DnsProtocols {
             dis.readFully(resp)
             val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
         } finally {
-            try { socket.close() } catch (e: Exception) {}
+            try { socket.close() } catch (e: Throwable) {}
         }
         return emptyList()
     }
@@ -277,7 +277,7 @@ object DnsProtocols {
                     if (filtered.isNotEmpty()) return filtered
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
         }
         return emptyList()
     }
@@ -315,7 +315,7 @@ object DnsProtocols {
                 var result = emptyList<InetAddress>()
                 try {
                     result = channel.receive()
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     // All failed or timeout
                 } finally {
                     jobs.forEach { it.cancel() }
@@ -388,7 +388,7 @@ class BootstrapDns : Dns {
         // 3. Last resort: standard resolution (might recurse, but we handled the most common ones)
         return try {
             Dns.SYSTEM.lookup(hostname)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             emptyList()
         }
     }

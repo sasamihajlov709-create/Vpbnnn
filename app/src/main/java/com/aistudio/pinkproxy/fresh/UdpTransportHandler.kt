@@ -56,12 +56,12 @@ object UdpTransportHandler {
                                 val (packet, targetHost) = work
                                 try {
                                     sendUdpPacket(outSocket, packet, targetHost)
-                                } catch (e: Exception) {
+                                } catch (e: Throwable) {
                                     if (e is CancellationException) throw e
                                     Log.v("UdpTransport", "Send error: ${e.message}")
                                 }
                             }
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             if (e is CancellationException) throw e
                             Log.v("UdpTransport", "UDP Outbound worker error: ${e.message}")
                         }
@@ -84,7 +84,7 @@ object UdpTransportHandler {
                                     outSocket.receive(packet)
                                 } catch (e: java.net.SocketTimeoutException) {
                                     continue
-                                } catch (e: Exception) {
+                                } catch (e: Throwable) {
                                     if (e is CancellationException) throw e
                                     break
                                 }
@@ -105,7 +105,7 @@ object UdpTransportHandler {
                                     ProxyStats.updateBytes(packet.length.toLong())
                                 }
                             }
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             if (e !is CancellationException) Log.v("UdpTransport", "Target->Client error: ${e.message}")
                         } finally {
                             ProxyStats.release64k(buffer)
@@ -126,7 +126,7 @@ object UdpTransportHandler {
                                 udpSocket.receive(packet)
                             } catch (e: java.net.SocketTimeoutException) {
                                 continue
-                            } catch (e: Exception) {
+                            } catch (e: Throwable) {
                                 if (e is CancellationException) throw e
                                 break
                             }
@@ -250,7 +250,7 @@ object UdpTransportHandler {
                                 }
                             }
                         }
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("UdpTransport", "Client->Target error: ${e.message}")
                     } finally {
                         ProxyStats.release64k(buffer)
@@ -266,13 +266,13 @@ object UdpTransportHandler {
                         while (isActive) {
                             if (inputStream.read() == -1) break
                         }
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                     } finally {
                         jobs.forEach { it.cancel() }
                     }
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (e !is CancellationException) Log.e("UdpTransport", "handleUdpAssociate error", e)
         } finally {
             outSockets.forEach { try { it.close() } catch (e: Throwable) {} }

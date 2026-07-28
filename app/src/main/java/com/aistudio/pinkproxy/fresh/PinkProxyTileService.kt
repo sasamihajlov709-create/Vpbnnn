@@ -38,7 +38,7 @@ class PinkProxyTileService : TileService() {
         try {
             listenJob?.cancel()
             scope.cancel()
-        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
     override fun onClick() {
@@ -50,7 +50,7 @@ class PinkProxyTileService : TileService() {
             }
             try {
                 androidx.core.content.ContextCompat.startForegroundService(this, intent)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 android.util.Log.e("PinkProxyTileService", "Failed to start service: ${e.message}")
             }
         } else {
@@ -59,7 +59,7 @@ class PinkProxyTileService : TileService() {
                 val intent = Intent(this, PinkVpnService::class.java)
                 try {
                     androidx.core.content.ContextCompat.startForegroundService(this, intent)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     android.util.Log.e("PinkProxyTileService", "Failed to start service: ${e.message}")
                     // Fallback to opening the app if we can't start the service in background
                     val appIntent = Intent(this, MainActivity::class.java).apply {

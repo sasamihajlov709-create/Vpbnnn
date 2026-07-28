@@ -84,8 +84,8 @@ object ServiceChecker {
                     internetUp = true
                     break
                 }
-            } catch (e: Exception) { android.util.Log.v("PinkProxy", "Baseline ignored: ${e.message}") } finally {
-                try { conn?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+            } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Baseline ignored: ${e.message}") } finally {
+                try { conn?.disconnect() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
             }
         }
         
@@ -99,7 +99,7 @@ object ServiceChecker {
             sock.connect(java.net.InetSocketAddress("127.0.0.1", proxyPort), 1000)
             sock.close()
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             false
         }
         _proxyHealth.value = relayResponsive
@@ -151,15 +151,15 @@ object ServiceChecker {
                             if (isUp && (name.contains("YouTube") || name.contains("Telegram")) && attemptDuration > latencyThreshold) {
                                 isUp = false 
                             }
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             isUp = false
                             if (e is java.net.ConnectException || e.message?.contains("127.0.0.1") == true || e.message?.contains("refused") == true) {
                                 proxyResponsive.set(false)
                             }
                         } finally {
-                            try { connection?.inputStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-                            try { connection?.errorStream?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
-                            try { connection?.disconnect() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                            try { connection?.inputStream?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                            try { connection?.errorStream?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                            try { connection?.disconnect() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                         if (!isUp && attempt < 2) delay(1000)
                     }
@@ -279,13 +279,19 @@ object ServiceChecker {
         job = scope.launch(ProxyDispatcher.io) {
             delay(2000)
             while (isActive) {
-                val currentServices = defaultServices + _customServices.value
-                checkServices(currentServices)
-                
-                // Interval: 20 minutes in background to conserve battery and data
-                val delayTime = 1200000L
-                val jitter = (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 5000).toLong()
-                delay(delayTime + jitter)
+                try {
+                    val currentServices = defaultServices + _customServices.value
+                    checkServices(currentServices)
+                    
+                    // Interval: 20 minutes in background to conserve battery and data
+                    val delayTime = 1200000L
+                    val jitter = (java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 5000).toLong()
+                    delay(delayTime + jitter)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    android.util.Log.e("ServiceChecker", "Checker error", e)
+                }
             }
         }
     }
@@ -315,10 +321,10 @@ object ServiceChecker {
                     val response = ByteArray(5)
                     socket.getInputStream().read(response) >= 1
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 false
             } finally {
-                try { socket?.close() } catch (e: Exception) { android.util.Log.v("ServiceChecker", "Ignored: ${e.message}") }
+                try { socket?.close() } catch (e: Throwable) { android.util.Log.v("ServiceChecker", "Ignored: ${e.message}") }
             }
         }
     }
@@ -386,10 +392,10 @@ object ServiceChecker {
                                     }
                                 }
                             }
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             // Ignored failure for this host
                         } finally {
-                            try { socket?.close() } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                            try { socket?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                         }
                         BypassConfig.recordStrategyResult(host, strategy, hostSuccess)
                     }

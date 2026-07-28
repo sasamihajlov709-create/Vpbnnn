@@ -26,7 +26,7 @@ class BootReceiver : BroadcastReceiver() {
                         Log.w("BootReceiver", "VPN permission was revoked, cannot auto-start.")
                         prefs.edit { putBoolean("vpn_was_active", false) }
                     }
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     if (e.javaClass.simpleName == "ForegroundServiceStartNotAllowedException") {
                         Log.e("BootReceiver", "Foreground service start not allowed on this Android version: ${e.message}")
                         prefs.edit { putBoolean("vpn_was_active", false) }

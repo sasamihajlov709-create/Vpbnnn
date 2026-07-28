@@ -166,7 +166,7 @@ object BypassConfig {
         val savedStrat = prefs.getString("global_strategy", BypassStrategy.SNI_SPLIT.name)
         try {
             _strategy.value = BypassStrategy.valueOf(savedStrat!!)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             _strategy.value = BypassStrategy.SNI_SPLIT
         }
         
@@ -363,6 +363,7 @@ object BypassConfig {
         optimizerJob = scope.launch {
             var saveCounter = 0
             while (isActive) {
+                try {
                 delay(30000) // Every 30 seconds
                 performSelfHealing()
                 
@@ -417,6 +418,7 @@ object BypassConfig {
                         }
                     }
                 }
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { android.util.Log.e("BypassConfig", "Optimizer error", e) }
             }
         }
     }
@@ -793,7 +795,7 @@ object BypassConfig {
                 socket.send(packet)
                 if (rnd.nextInt(100) < 30) {
                     val noise = ByteArray(rnd.nextInt(10, 50)) { rnd.nextInt(256).toByte() }
-                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch (e: Exception) {}
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch (e: Throwable) {}
                 }
             }
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
@@ -898,7 +900,7 @@ object BypassConfig {
 
         try {
             socket.tcpNoDelay = true
-        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
         when (strategy) {
             BypassStrategy.SNI_SPLIT -> {
@@ -1094,7 +1096,7 @@ object BypassConfig {
             BypassStrategy.OOB_DESYNC -> {
                 val split = rnd.nextInt(1, length.coerceAtMost(5))
                 output.write(data, 0, split); output.flush()
-                try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 delay(config.delay1); output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.HTTP_RANGE_SKEW -> {
@@ -1116,7 +1118,7 @@ object BypassConfig {
                     output.write(data, pos, sz); output.flush()
                     pos += sz
                     if (pos < length && rnd.nextInt(100) < 30) {
-                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) {}
+                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                         delay(rnd.nextLong(1, 10))
                     }
                 }
@@ -1126,7 +1128,7 @@ object BypassConfig {
                     val part = length / 2
                     output.write(data, 0, part); output.flush()
                     // Simulate SACK by sending a tiny piece with urgent data
-                    try { socket.sendUrgentData(0) } catch (e: Exception) {}
+                    try { socket.sendUrgentData(0) } catch (e: Throwable) {}
                     delay(rnd.nextLong(5, 15))
                     output.write(data, part, length - part); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
@@ -1438,7 +1440,7 @@ object BypassConfig {
                 output.flush()
             }
             BypassStrategy.TCP_TOS_MANGLE -> {
-                try { socket.trafficClass = 0x08 } catch (e: Exception) {}
+                try { socket.trafficClass = 0x08 } catch (e: Throwable) {}
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP_KEEP_ALIVE_FAKE -> {

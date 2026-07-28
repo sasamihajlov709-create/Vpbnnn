@@ -200,11 +200,11 @@ object ProxyStats {
     private val bufferPool64k = LinkedBlockingQueue<ByteArray>(64)
 
     fun obtain8k(): ByteArray = bufferPool8k.poll() ?: ByteArray(8192)
-    fun release8k(buf: ByteArray) { bufferPool8k.offer(buf) }
+    fun release8k(buf: ByteArray) { if (buf.size >= 8192) bufferPool8k.offer(buf) }
     fun obtain16k(): ByteArray = bufferPool16k.poll() ?: ByteArray(16384)
-    fun release16k(buf: ByteArray) { bufferPool16k.offer(buf) }
+    fun release16k(buf: ByteArray) { if (buf.size >= 16384) bufferPool16k.offer(buf) }
     fun obtain64k(): ByteArray = bufferPool64k.poll() ?: ByteArray(65536)
-    fun release64k(buf: ByteArray) { bufferPool64k.offer(buf) }
+    fun release64k(buf: ByteArray) { if (buf.size >= 65536) bufferPool64k.offer(buf) }
 
     fun releaseAllPools() {
         bufferPool8k.clear()

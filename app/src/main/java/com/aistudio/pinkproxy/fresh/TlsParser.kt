@@ -68,7 +68,7 @@ object TlsParser {
                 }
                 pos += extLen
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // Ignore structured parsing error and try brute force search
         }
         
@@ -98,7 +98,7 @@ object TlsParser {
                 if (extType == 0xfe0d) return true
                 pos += 4 + extLen
             }
-        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         return false
     }
 
@@ -152,7 +152,7 @@ object TlsParser {
                 }
                 pos += 4 + extLen
             }
-        } catch (e: Exception) {}
+        } catch (e: Throwable) {}
         return null
     }
 

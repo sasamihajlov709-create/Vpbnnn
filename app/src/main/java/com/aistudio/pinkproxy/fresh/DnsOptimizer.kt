@@ -73,7 +73,7 @@ object DnsOptimizer {
             val dohJobs = dohUrls.map { url ->
                 async {
                     val start = System.currentTimeMillis()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh("google.com", url, vpnService) } } catch (e: Exception) { emptyList() }
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh("google.com", url, vpnService) } } catch (e: Throwable) { emptyList() }
                     if (res.isNotEmpty()) {
                         providerLatencies[url] = System.currentTimeMillis() - start
                         providerFailures[url] = 0
@@ -86,7 +86,7 @@ object DnsOptimizer {
             val dotJobs = dotServers.map { server ->
                 async {
                     val start = System.currentTimeMillis()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDot("google.com", server, vpnService) } } catch (e: Exception) { emptyList() }
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDot("google.com", server, vpnService) } } catch (e: Throwable) { emptyList() }
                     if (res.isNotEmpty()) {
                         providerLatencies[server] = System.currentTimeMillis() - start
                         providerFailures[server] = 0
@@ -115,7 +115,7 @@ object DnsOptimizer {
                     try {
                         val ips = RobustResolver.resolve(domain, vpnService)
                         if (ips.isNotEmpty()) DnsCacheManager.put(domain, ips)
-                    } catch (e: Exception) {}
+                    } catch (e: Throwable) {}
                 }
             }.awaitAll()
             Log.i("DnsOptimizer", "DNS Warm-up completed.")
@@ -138,7 +138,7 @@ object DnsOptimizer {
                     async {
                         try {
                             RobustResolver.resolve(domain, vpnService)
-                        } catch (e: Exception) {}
+                        } catch (e: Throwable) {}
                     }
                 }.awaitAll()
             }

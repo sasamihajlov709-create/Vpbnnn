@@ -66,7 +66,7 @@ object TcpTransportHandler {
                                     val rtt = System.currentTimeMillis() - startConnect
                                     ProxyStats.updateLatency(rtt)
                                     DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "", rtt)
-                                } catch (e: Exception) {
+                                } catch (e: Throwable) {
                                     nextSignal.trySend(Unit) // Start next racer immediately
                                     val elapsed = System.currentTimeMillis() - startConnect
                                     val msg = e.message?.lowercase() ?: ""
@@ -83,7 +83,7 @@ object TcpTransportHandler {
                                 } else {
                                     s.close()
                                 }
-                            } catch (e: Exception) {
+                            } catch (e: Throwable) {
                                 try { s.close() } catch (ex: Exception) {}
                                 if (failures.incrementAndGet() == attempted) {
                                     channel.close()
@@ -99,7 +99,7 @@ object TcpTransportHandler {
                     }
                     val winner = try {
                         channel.receive()
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         throw Exception("All TCP connection attempts failed for $targetHost")
                     } finally {
                         channel.close()
@@ -111,7 +111,7 @@ object TcpTransportHandler {
                     }
                     winner
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w("TcpTransport", "Connection failed to $targetHost: ${e.message}")
                 clientSocket.close()
                 return
@@ -198,7 +198,7 @@ object TcpTransportHandler {
                             try {
                                 remoteSocket?.soTimeout = 15000
                                 n = remoteIn.read(buffer)
-                            } catch (e: Exception) {
+                            } catch (e: Throwable) {
                                 if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
                                     if (isActive) continue else break
                                 }
@@ -245,7 +245,7 @@ object TcpTransportHandler {
                                 }
                             }
                         }
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
                         if (System.currentTimeMillis() - start < 15000) {
@@ -284,7 +284,7 @@ object TcpTransportHandler {
                         while (isActive) {
                             try {
                                 n = clientIn.read(buffer)
-                            } catch (e: Exception) {
+                            } catch (e: Throwable) {
                                 if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
                                     if (isActive) continue else break
                                 }
@@ -299,7 +299,7 @@ object TcpTransportHandler {
                                     firstPacket = false
                                     try {
                                         BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
-                                    } catch (e: Exception) {
+                                    } catch (e: Throwable) {
                                         if (e is CancellationException) throw e
                                         BypassConfig.recordFailure(strategy, targetHost)
                                         throw e
@@ -353,7 +353,7 @@ object TcpTransportHandler {
                                 ProxyStats.updateBytes(n.toLong())
                             }
                         }
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         if (e !is CancellationException) {
                             BypassConfig.TrafficShaper.recordError()
                             if (System.currentTimeMillis() - start < 15000) {
@@ -385,7 +385,7 @@ object TcpTransportHandler {
                 remoteToClient.cancel()
                 clientToRemote.cancel()
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.v("TcpTransport", "Session $targetHost:$targetPort failed: ${e.message}")
         } finally {
             try { clientSocket.close() } catch (e: Throwable) {}

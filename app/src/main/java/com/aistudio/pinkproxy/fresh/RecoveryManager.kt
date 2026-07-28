@@ -25,41 +25,46 @@ object RecoveryManager {
             var lastCoolDown = System.currentTimeMillis()
             
             while (isActive) {
-                // Adaptive delay: 60s if active, 120s if idle
-                val activeConns = ProxyStats.activeConnections.value
-                val delayMs = if (activeConns > 0) 60000L else 120000L
-                delay(delayMs)
-                
-                val now = System.currentTimeMillis()
-                val currentBytes = ProxyStats.bytesTransferred.value
-                
-                // Strategy Cooling: Periodically try to reduce escalation if things are stable
-                if (now - lastCoolDown > 600000) { // Every 10 minutes
-                    val rate = ProxyStats.getSuccessRate()
-                    if (recoveryEscalation > 0 && rate > 80) {
-                        val reduction = if (rate > 95) 2 else 1
-                        recoveryEscalation = (recoveryEscalation - reduction).coerceAtLeast(0)
-                        Log.i("RecoveryManager", "Strategy cooling: Escalation reduced by $reduction to $recoveryEscalation")
-                        if (recoveryEscalation == 0) BypassConfig.setPanicMode(false)
-                    }
-                    lastCoolDown = now
-                }
-                
-                if (activeConns > 0) {
-                    if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 25) {
-                        handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop during active session")
+                try {
+                    // Adaptive delay: 60s if active, 120s if idle
+                    val activeConns = ProxyStats.activeConnections.value
+                    val delayMs = if (activeConns > 0) 60000L else 120000L
+                    delay(delayMs)
+                    
+                    val now = System.currentTimeMillis()
+                    val currentBytes = ProxyStats.bytesTransferred.value
+                    
+                    // Strategy Cooling: Periodically try to reduce escalation if things are stable
+                    if (now - lastCoolDown > 600000) { // Every 10 minutes
+                        val rate = ProxyStats.getSuccessRate()
+                        if (recoveryEscalation > 0 && rate > 80) {
+                            val reduction = if (rate > 95) 2 else 1
+                            recoveryEscalation = (recoveryEscalation - reduction).coerceAtLeast(0)
+                            Log.i("RecoveryManager", "Strategy cooling: Escalation reduced by $reduction to $recoveryEscalation")
+                            if (recoveryEscalation == 0) BypassConfig.setPanicMode(false)
+                        }
+                        lastCoolDown = now
                     }
                     
-                    if (currentBytes == lastBytes && ProxyStats.censorshipIntensity.value > 60) {
-                        handleEvent(RecoveryEvent.TUNNEL_STALL, "Ghosting detected: $activeConns connections, 0 bytes in ${delayMs/1000}s")
+                    if (activeConns > 0) {
+                        if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.getSuccessRate() < 25) {
+                            handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop during active session")
+                        }
+                        
+                        if (currentBytes == lastBytes && ProxyStats.censorshipIntensity.value > 60) {
+                            handleEvent(RecoveryEvent.TUNNEL_STALL, "Ghosting detected: $activeConns connections, 0 bytes in ${delayMs/1000}s")
+                        }
                     }
-                }
-                
-                lastBytes = currentBytes
-
-                if (ProxyStats.currentDpiType.value != DpiType.NONE) {
-                    handleEvent(RecoveryEvent.DPI_DETECTED, "DPI: ${ProxyStats.currentDpiType.value}")
-                    ProxyStats.clearDpiType()
+                    
+                    lastBytes = currentBytes
+                    if (ProxyStats.currentDpiType.value != DpiType.NONE) {
+                        handleEvent(RecoveryEvent.DPI_DETECTED, "DPI: ${ProxyStats.currentDpiType.value}")
+                        ProxyStats.clearDpiType()
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e("RecoveryManager", "Health check error", e)
                 }
             }
         }
