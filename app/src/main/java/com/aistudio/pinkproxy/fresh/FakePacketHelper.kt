@@ -542,14 +542,16 @@ object FakePacketHelper {
 
     fun buildTlsNoise(length: Int = 100): ByteArray {
         val baos = ByteArrayOutputStream()
-        // Content Type: Handshake (22)
-        baos.write(22)
+        // Content Type: Application Data (23) or Handshake (22)
+        val type = if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) 23 else 22
+        baos.write(type)
         // Version: TLS 1.2 (0x0303)
         baos.write(0x03); baos.write(0x03)
         // Length
-        baos.write((length shr 8) and 0xFF); baos.write(length and 0xFF)
-        // Garbage Handshake Data
-        val garbage = ByteArray(length)
+        val recordLen = length.coerceIn(0, 16384)
+        baos.write((recordLen shr 8) and 0xFF); baos.write(recordLen and 0xFF)
+        // Garbage Data
+        val garbage = ByteArray(recordLen)
         java.util.concurrent.ThreadLocalRandom.current().nextBytes(garbage)
         baos.write(garbage)
         return baos.toByteArray()

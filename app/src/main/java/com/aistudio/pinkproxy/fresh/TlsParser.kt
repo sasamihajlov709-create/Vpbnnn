@@ -78,6 +78,17 @@ object TlsParser {
         return -1
     }
 
+    fun extractHostname(buffer: ByteArray, length: Int, offset: Int): String? {
+        if (offset < 3 || offset >= length) return null
+        try {
+            val nameLen = ((buffer[offset - 2].toInt() and 0xFF) shl 8) or (buffer[offset - 1].toInt() and 0xFF)
+            if (offset + nameLen > length) return null
+            return String(buffer, offset, nameLen, java.nio.charset.StandardCharsets.US_ASCII)
+        } catch (e: Throwable) {
+            return null
+        }
+    }
+
     fun isEchDetected(buffer: ByteArray, length: Int): Boolean {
         if (length < 44) return false
         if (buffer[0] != 0x16.toByte() || buffer[5] != 0x01.toByte()) return false

@@ -384,6 +384,40 @@ object TcpTransportHandler {
                                 val currentIntensity = ProxyStats.censorshipIntensity.value
                                 packetsCount++
                                 
+                                if (packetsCount == 1) {
+                                    val sniOffset = TlsParser.findSniOffset(buffer, n)
+                                    if (sniOffset != -1) {
+                                        val realSni = TlsParser.extractHostname(buffer, n, sniOffset)
+                                        if (realSni != null) {
+                                            if (BypassConfig.isHostCensored(realSni)) {
+                                                // High censorship host! Use BYEBYEDPI_SIM for maximum effectiveness
+                                                ProxyStats.logRecovery("Censorship Detected: Auto-Upgrading to BYEBYEDPI_SIM for $realSni")
+                                                val forceStrategy = BypassStrategy.BYEBYEDPI_SIM
+                                                val forceConfig = BypassConfig.getSessionConfig(realSni, forceStrategy, BypassConfig.currentRttMs.value)
+                                                BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, forceConfig, realSni)
+                                                packetsCount++
+                                                totalWrittenClient.addAndGet(n.toLong())
+                                                ProxyStats.updateBytes(n.toLong())
+                                                continue
+                                            } else if (realSni != targetHost) {
+                                                ProxyStats.logRecovery("Deep Packet Analysis: Found real SNI -> $realSni")
+                                                // Real hostname found! Get specific strategy for it
+                                                val realStrategy = BypassConfig.getBestStrategyForHost(realSni)
+                                                if (realStrategy != strategy) {
+                                                    // Dynamic strategy upgrade for this session
+                                                    ProxyStats.logRecovery("Strategy Upgrade: Switching to ${realStrategy.name} for $realSni")
+                                                    val realConfig = BypassConfig.getSessionConfig(realSni, realStrategy, BypassConfig.currentRttMs.value)
+                                                    BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, realConfig, realSni)
+                                                    packetsCount++
+                                                    totalWrittenClient.addAndGet(n.toLong())
+                                                    ProxyStats.updateBytes(n.toLong())
+                                                    continue
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 if (packetsCount <= 3 || (currentIntensity > 85 && packetsCount <= 8)) {
                                     // Apply full bypass to initial handshake/header packets
                                     try {
@@ -412,6 +446,16 @@ object TcpTransportHandler {
                                             remoteOut.write(buffer, 0, split)
                                             remoteOut.flush()
                                             if (currentIntensity > 80) delay(rnd.nextLong(1, 4))
+                                            
+                                            // Fake retransmission/overlap trick
+                                            if (currentIntensity > 90 && rnd.nextInt(100) < 15) {
+                                                TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 5))
+                                                remoteOut.write(buffer, split, n - split)
+                                                remoteOut.flush()
+                                                delay(1)
+                                                TtlHelper.setTtl(remoteSocket!!, 64)
+                                            }
+
                                             remoteOut.write(buffer, split, n - split)
                                             remoteOut.flush()
                                             

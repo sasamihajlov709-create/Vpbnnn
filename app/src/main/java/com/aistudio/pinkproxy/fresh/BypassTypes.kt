@@ -162,6 +162,8 @@ enum class BypassStrategy(
     TLS_REC_CHOP(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
     UDP_QUIC_PAD(StrategyFamily.UDP, 2, 2, StrategyGroup.LIGHT),
     TLS_SNI_GREASE(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
+    BYEBYEDPI_SIM(StrategyFamily.ADAPTIVE, 5, 4, StrategyGroup.EXTREME),
+    TCP_OOB_SEGMENTATION(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -253,6 +255,10 @@ object ProxyStats {
 
     private val _censorshipIntensity = MutableStateFlow(0)
     val censorshipIntensity: StateFlow<Int> = _censorshipIntensity.asStateFlow()
+
+    fun updateCensorshipIntensity(newVal: Int) {
+        _censorshipIntensity.value = newVal.coerceIn(0, 100)
+    }
 
     fun recordCensorshipEvent(isFailure: Boolean) {
         if (isFailure) {

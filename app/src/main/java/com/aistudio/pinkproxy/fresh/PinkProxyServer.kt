@@ -89,6 +89,54 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         }
     }
 
+    private suspend fun handleHttpProxy(client: Socket, firstByte: Int, input: InputStream, output: OutputStream, scope: CoroutineScope) {
+        val line = StringBuilder()
+        line.append(firstByte.toChar())
+        var b: Int
+        while (true) {
+            b = input.read()
+            if (b == -1 || b == '\n'.code) break
+            line.append(b.toChar())
+        }
+        
+        val firstLine = line.toString().trim()
+        val parts = firstLine.split(" ")
+        if (parts.size < 2) { client.close(); return }
+        
+        val method = parts[0].uppercase()
+        val target = parts[1]
+        
+        var host: String
+        var port: Int
+        
+        if (method == "CONNECT") {
+            val hostPort = target.split(":")
+            host = hostPort[0]
+            port = if (hostPort.size > 1) hostPort[1].toInt() else 443
+            
+            // Consume remaining headers
+            while (true) {
+                line.clear()
+                while (true) {
+                    b = input.read()
+                    if (b == -1 || b == '\n'.code) break
+                    line.append(b.toChar())
+                }
+                if (line.toString().trim().isEmpty()) break
+            }
+            
+            output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+            output.flush()
+        } else {
+            // Simplified: only CONNECT for tunneling. For GET/POST we'd need full proxy logic.
+            client.close()
+            return
+        }
+        
+        client.soTimeout = 0
+        TcpTransportHandler.handleTcpSession(client, host, port, vpnService, scope)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.DelicateCoroutinesApi::class)
     private suspend fun handleClient(client: Socket, scope: CoroutineScope) {
         // UID Verification for Android 10+ (API 29+)
@@ -120,6 +168,12 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             // 1. Version identifier/method selection message
             val version = input.read()
             if (version == -1) return
+            
+            if (version == 'C'.code || version == 'G'.code || version == 'P'.code) {
+                handleHttpProxy(client, version, input, output, scope)
+                return
+            }
+
             if (version != 5) {
                 client.close()
                 return

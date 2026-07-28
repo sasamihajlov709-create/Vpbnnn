@@ -171,6 +171,9 @@ object ServiceChecker {
         
         // Weighted Score Calculation for RU users
         var totalWeightedScore = 0f
+        var controlUp = 0
+        var censoredDown = 0
+        
         val weights = mapOf(
             "YouTube" to 15,
             "YT Video Stream" to 20,
@@ -182,10 +185,22 @@ object ServiceChecker {
             "Instagram" to 5,
             "X (Twitter)" to 5
         )
+        
         results.forEach { status ->
             val weight = weights[status.name] ?: 0
             if (status.isUp) {
                 totalWeightedScore += weight
+                if (status.name.contains("(Control)")) controlUp++
+            } else {
+                if (status.name == "YouTube" || status.name == "Telegram" || status.name == "Instagram") censoredDown++
+            }
+        }
+        
+        // Intelligent Censorship Intensity logic
+        if (controlUp >= 2 && censoredDown >= 1) {
+            val newIntensity = (censoredDown * 30).coerceIn(0, 100)
+            if (newIntensity > ProxyStats.censorshipIntensity.value) {
+                ProxyStats.updateCensorshipIntensity(newIntensity)
             }
         }
         
