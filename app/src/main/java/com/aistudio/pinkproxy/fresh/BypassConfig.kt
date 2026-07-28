@@ -642,8 +642,59 @@ object BypassConfig {
 
     @Volatile var activeVpnService: VpnService? = null
     
+    private fun applyHttpSmuggling(data: ByteArray, length: Int): ByteArray {
+        val s = String(data, 0, length, Charsets.US_ASCII)
+        if (!s.contains("Host:", ignoreCase = true)) return data.copyOfRange(0, length)
+        
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        val innocent = listOf("google.com", "bing.com", "microsoft.com", "apple.com").random()
+        
+        // Smuggling technique: Add extra Host header with innocent domain but mangled case
+        // and inject custom X-Forwarded-For to hide real origin
+        val sb = StringBuilder()
+        val lines = s.split("\r\n")
+        for (line in lines) {
+            if (line.isBlank()) continue
+            if (line.startsWith("Host:", ignoreCase = true)) {
+                // Add fake host before real one
+                sb.append("hOsT: ").append(innocent).append("\r\n")
+                sb.append(line).append("\r\n")
+                // Inject X-Forwarded-For
+                sb.append("X-Forwarded-For: ").append(rnd.nextInt(1, 255)).append(".")
+                  .append(rnd.nextInt(1, 255)).append(".")
+                  .append(rnd.nextInt(1, 255)).append(".")
+                  .append(rnd.nextInt(1, 255)).append("\r\n")
+            } else {
+                sb.append(line).append("\r\n")
+            }
+        }
+        sb.append("\r\n")
+        return sb.toString().toByteArray(Charsets.US_ASCII)
+    }
+
+    private var weatherJob: Job? = null
+    fun startNetworkWeatherSensor(scope: CoroutineScope) {
+        if (weatherJob?.isActive == true) return
+        weatherJob = scope.launch(ProxyDispatcher.io) {
+            while (isActive) {
+                delay(15000)
+                val successRate = ProxyStats.getSuccessRate()
+                val jitter = ProxyStats.jitter.value
+                val latency = _currentRttMs.value
+                
+                // Nuclear Automation: If success rate is low and latency is high, 
+                // auto-boost censorship intensity to trigger heavier strategies.
+                if (successRate < 50 && (latency > 1000 || jitter > 300)) {
+                    ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value + 15).coerceAtMost(100))
+                    ProxyStats.logRecovery("Network Weather: SEVERE. Boosting censorship intensity to ${ProxyStats.censorshipIntensity.value}%")
+                } else if (successRate > 95 && latency < 300) {
+                    ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 5).coerceAtLeast(0))
+                }
+            }
+        }
+    }
+
     private var learningJob: Job? = null
-    
     fun startLearningTask(scope: CoroutineScope) {
         if (learningJob?.isActive == true) return
         learningJob = scope.launch(ProxyDispatcher.io) {
@@ -681,7 +732,6 @@ object BypassConfig {
             }
         }
     }
-    
     fun stopLearningTask() {
         learningJob?.cancel()
         learningJob = null
@@ -846,6 +896,28 @@ object BypassConfig {
                     val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(256, 512))
                     val combined = data.copyOfRange(offset, offset + length) + padding
                     socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
+                    // Occasional Version Negotiation noise
+                    if (rnd.nextInt(100) < 20) {
+                        val vn = FakePacketHelper.buildQuicVersionNegotiation()
+                        socket.send(DatagramPacket(vn, vn.size, targetAddr, targetPort))
+                    }
+                } else {
+                    socket.send(packet)
+                }
+            }
+            BypassStrategy.QUIC_INITIAL_PADDING_EXTREME -> {
+                if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    // Maximum allowed UDP size (to avoid fragmentation but maximize entropy)
+                    val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(800, 1100))
+                    val combined = data.copyOfRange(offset, offset + length) + padding
+                    socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
+                    
+                    // Force a Version Negotiation desync
+                    val vn = FakePacketHelper.buildQuicVersionNegotiation()
+                    socket.send(DatagramPacket(vn, vn.size, targetAddr, targetPort))
+                    
+                    // Delay slightly to confuse timing analysis
+                    delay(rnd.nextLong(2, 8))
                 } else {
                     socket.send(packet)
                 }
@@ -2274,19 +2346,67 @@ object BypassConfig {
             }
             BypassStrategy.BYEBYEDPI_SIM -> {
                 try {
+                    val rnd = java.util.concurrent.ThreadLocalRandom.current()
                     val split = rnd.nextInt(1, length.coerceAtMost(4).coerceAtLeast(1))
-                    // 1. OOB Desync
+                    
+                    // 1. Ghost Handshake Shadowing (poison DPI session state)
+                    if (rnd.nextBoolean()) {
+                        try { 
+                            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                            val ghostHandshake = FakePacketHelper.buildTlsNoise(rnd.nextInt(128, 256))
+                            output.write(ghostHandshake)
+                            output.flush()
+                            delay(1)
+                            TtlHelper.setTtl(socket, 64)
+                        } catch (e: Throwable) {}
+                    }
+
+                    // 2. OOB Desync
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
-                    // 2. Fragment 1
+                    
+                    // 3. Fragment 1 with Header Smuggling if HTTP
+                    if (length > 10 && data[0] == 'G'.code.toByte() || data[0] == 'P'.code.toByte() || data[0] == 'C'.code.toByte()) {
+                        // HTTP detected, apply smuggling
+                        val smuggled = applyHttpSmuggling(data, length)
+                        val smSplit = rnd.nextInt(1, 4)
+                        output.write(smuggled, 0, smSplit); output.flush()
+                        delay(config.delay1)
+                        output.write(smuggled, smSplit, smuggled.size - smSplit); output.flush()
+                    } else {
+                        output.write(data, 0, split); output.flush()
+                        delay(config.delay1)
+                        // 4. Fake packet with low TTL
+                        val fake = FakePacketHelper.buildTlsNoise(rnd.nextInt(128, 256))
+                        TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                        output.write(fake); output.flush()
+                        delay(config.delay2)
+                        TtlHelper.setTtl(socket, 64)
+                        // 5. Rest of data
+                        output.write(data, split, length - split); output.flush()
+                    }
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_OVERLAP -> {
+                try {
+                    val rnd = java.util.concurrent.ThreadLocalRandom.current()
+                    val split = rnd.nextInt(1, length.coerceAtMost(4).coerceAtLeast(1))
+                    
+                    // 1. Ghost Data with low TTL (DPI reassembles this, server drops it)
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                    val ghostSize = split + rnd.nextInt(5, 20)
+                    val ghost = FakePacketHelper.buildTlsNoise(ghostSize)
+                    output.write(ghost); output.flush()
+                    delay(rnd.nextLong(1, 5))
+                    
+                    // 2. Desync OOB
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                    
+                    // 3. Real data with normal TTL (Server reassembles this)
+                    TtlHelper.setTtl(socket, 64)
                     output.write(data, 0, split); output.flush()
                     delay(config.delay1)
-                    // 3. Fake packet with low TTL
-                    val fake = FakePacketHelper.buildTlsNoise(rnd.nextInt(128, 256))
-                    TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
-                    output.write(fake); output.flush()
-                    delay(config.delay2)
-                    TtlHelper.setTtl(socket, 64)
-                    // 4. Rest of data
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) {
                     output.write(data, 0, length); output.flush()

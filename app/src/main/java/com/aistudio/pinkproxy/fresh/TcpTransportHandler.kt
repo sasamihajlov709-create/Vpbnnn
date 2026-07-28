@@ -58,9 +58,7 @@ object TcpTransportHandler {
                                 val s = Socket()
                                 try {
                                     try { vpnService?.protect(s) } catch (e: Throwable) {}
-                                    s.tcpNoDelay = true
-                                    try { s.sendBufferSize = 128 * 1024 } catch (e: Throwable) {}
-                                    try { s.receiveBufferSize = 128 * 1024 } catch (e: Throwable) {}
+                                    TtlHelper.tuneSocket(s)
                                     val baseTimeout = (BypassConfig.currentRttMs.value * 3).coerceIn(1500, 7000)
                                     val jitter = ProxyStats.jitter.value
                                     val connectTimeout = (baseTimeout + jitter).toInt().coerceIn(2000, 10000)

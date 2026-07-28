@@ -164,6 +164,7 @@ enum class BypassStrategy(
     TLS_SNI_GREASE(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
     BYEBYEDPI_SIM(StrategyFamily.ADAPTIVE, 5, 4, StrategyGroup.EXTREME),
     TCP_OOB_SEGMENTATION(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
+    TCP_OVERLAP(StrategyFamily.TCP, 5, 5, StrategyGroup.EXTREME),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

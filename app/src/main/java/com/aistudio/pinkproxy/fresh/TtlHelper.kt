@@ -95,4 +95,28 @@ object TtlHelper {
             false
         }
     }
+
+    fun tuneSocket(socket: Socket) {
+        try {
+            val fd = getFileDescriptor(socket) ?: return
+            if (!fd.valid()) return
+            
+            socket.tcpNoDelay = true
+            
+            // Set TCP_USER_TIMEOUT (20s) - Option 18 in IPPROTO_TCP (6)
+            try { Os.setsockoptInt(fd, 6, 18, 20000) } catch (e: Throwable) {}
+            
+            // Set TCP_NOTSENT_LOWAT (16KB) - Option 25 in IPPROTO_TCP (6)
+            try { Os.setsockoptInt(fd, 6, 25, 16384) } catch (e: Throwable) {}
+            
+            socket.keepAlive = true
+            try {
+                Os.setsockoptInt(fd, 6, 4, 60) // TCP_KEEPIDLE
+                Os.setsockoptInt(fd, 6, 5, 20) // TCP_KEEPINTVL
+                Os.setsockoptInt(fd, 6, 6, 3)  // TCP_KEEPCNT
+            } catch (e: Throwable) {}
+        } catch (e: Throwable) {
+            Log.v("TtlHelper", "Socket tuning failed: ${e.message}")
+        }
+    }
 }

@@ -1007,6 +1007,28 @@ object FakePacketHelper {
         }
     }
 
+    fun buildQuicVersionNegotiation(): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val dos = java.io.DataOutputStream(baos)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        
+        dos.writeByte(0xC0 or rnd.nextInt(64)) // Header byte
+        dos.writeInt(0) // Version 0 indicates Negotiation
+        
+        val dcid = ByteArray(rnd.nextInt(8, 20)).apply { rnd.nextBytes(this) }
+        dos.writeByte(dcid.size); dos.write(dcid)
+        
+        val scid = ByteArray(rnd.nextInt(8, 20)).apply { rnd.nextBytes(this) }
+        dos.writeByte(scid.size); dos.write(scid)
+        
+        // Add several fake versions
+        repeat(rnd.nextInt(2, 5)) {
+            dos.writeInt(rnd.nextInt())
+        }
+        
+        return baos.toByteArray()
+    }
+
     fun buildStunBindingRequest(): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)

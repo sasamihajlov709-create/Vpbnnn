@@ -10,6 +10,7 @@ object DnsPacketEngine {
     fun buildDnsQuery(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000), mangleCase: Boolean = false): ByteArray {
         val bos = ByteArrayOutputStream()
         val dos = java.io.DataOutputStream(bos)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
         
         dos.writeShort(id) // ID
         dos.writeShort(0x0100) // Flags: Standard query, RD=1
@@ -25,7 +26,7 @@ object DnsPacketEngine {
                 val sb = StringBuilder()
                 for (char in label) {
                     if (char in 'a'..'z' || char in 'A'..'Z') {
-                        if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) {
+                        if (rnd.nextBoolean()) {
                             sb.append(char.uppercase())
                         } else {
                             sb.append(char.lowercase())
@@ -45,22 +46,36 @@ object DnsPacketEngine {
         dos.writeShort(type) // Type
         dos.writeShort(1)    // Class IN
         
-        // Add EDNS0 with ECS (Client Subnet) for better CDN routing
+        // Add EDNS0 with ECS (Client Subnet) and Random Padding
         dos.writeShort(0) // Name: root
         dos.writeShort(41) // Type: OPT
         dos.writeShort(4096) // UDP payload size
         dos.writeByte(0) // Higher bits of extended RCODE
         dos.writeByte(0) // EDNS version
-        dos.writeShort(0) // Z (flags)
+        dos.writeShort(if (rnd.nextBoolean()) 0x8000 else 0) // Z (flags) - occasionally set DO (DNSSEC OK)
         
-        // RDLEN calculation with padding
         val ecsOption = buildEcsOption()
-        val paddingSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(16, 64)
+        val paddingSize = rnd.nextInt(32, 128) // More aggressive padding
         val paddingOption = buildPaddingOption(paddingSize)
-        dos.writeShort(ecsOption.size + paddingOption.size)
+        val extraOptions = buildRandomOptions()
+        
+        dos.writeShort(ecsOption.size + paddingOption.size + extraOptions.size)
         dos.write(ecsOption)
         dos.write(paddingOption)
+        dos.write(extraOptions)
         
+        return bos.toByteArray()
+    }
+
+    private fun buildRandomOptions(): ByteArray {
+        val bos = ByteArrayOutputStream()
+        val dos = java.io.DataOutputStream(bos)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        if (rnd.nextBoolean()) {
+            dos.writeShort(65001) // Experimental code
+            dos.writeShort(4)
+            dos.writeInt(rnd.nextInt())
+        }
         return bos.toByteArray()
     }
 

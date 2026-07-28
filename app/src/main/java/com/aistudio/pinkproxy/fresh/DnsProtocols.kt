@@ -115,13 +115,14 @@ object DnsProtocols {
 
     suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
         val strategy = BypassConfig.getBestStrategyForHost(host)
-        val mangle = strategy == BypassStrategy.DNS_CASE_MANGLE
+        val mangle = strategy == BypassStrategy.DNS_CASE_MANGLE || ProxyStats.censorshipIntensity.value > 60
         
-        val idReal = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val idFake = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        val idReal = rnd.nextInt(0x10000)
+        val idFake = rnd.nextInt(0x10000)
         val queryReal = DnsPacketEngine.buildDnsQuery(host, 1, idReal, mangle)
         
-        val innocentDomains = listOf("google.com", "bing.com", "apple.com", "microsoft.com", "cloudflare.com")
+        val innocentDomains = listOf("google.com", "bing.com", "apple.com", "microsoft.com", "cloudflare.com", "aws.amazon.com", "wikipedia.org")
         val fakeDomain = innocentDomains.random()
         val queryFake = DnsPacketEngine.buildDnsQuery(fakeDomain, 1, idFake, mangle)
         
@@ -129,26 +130,61 @@ object DnsProtocols {
         val buffer = ProxyStats.obtain8k()
         try {
             try { vpnService?.protect(socket) } catch(e: Throwable) {}
-            socket.soTimeout = 3000
+            socket.soTimeout = 2500
             val dnsAddr = InetAddress.getByName(dnsIp)
             socket.connect(dnsAddr, 53)
             
-            // Send fake query to innocent host with different ID
+            val isIpv6 = dnsAddr is java.net.Inet6Address
+            
+            // 1. Ghost Query: send fake query with low TTL to poison DPI state
+            TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
             socket.send(DatagramPacket(queryFake, queryFake.size))
-            delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 25)) // Random interval
+            delay(rnd.nextLong(1, 5))
+            TtlHelper.setUdpTtl(socket, 64, isIpv6)
+            
+            // 2. Fragmented Real Query
+            if (queryReal.size > 10 && ProxyStats.censorshipIntensity.value > 40) {
+                val split = rnd.nextInt(2, queryReal.size - 2)
+                val p1 = queryReal.copyOfRange(0, split)
+                val p2 = queryReal.copyOfRange(split, queryReal.size)
+                
+                // This is a trick: some middleboxes reassemble UDP fragments if they have the same ID? 
+                // No, standard UDP has no reassembly. But we send them as separate packets.
+                // Middleboxes that only look at the first packet will miss the query.
+                socket.send(DatagramPacket(p1, p1.size))
+                delay(rnd.nextLong(1, 3))
+                socket.send(DatagramPacket(p2, p2.size))
+                
+                // Also send a "Noise" packet between them or after
+                val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
+                TtlHelper.setUdpTtl(socket, 1, isIpv6) // Extremely low TTL
+                socket.send(DatagramPacket(noise, noise.size))
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+            } else {
+                socket.send(DatagramPacket(queryReal, queryReal.size))
+            }
+            
+            // 3. Send full real query again just in case (race against censorship)
+            delay(rnd.nextLong(5, 15))
             socket.send(DatagramPacket(queryReal, queryReal.size))
             
             val start = System.currentTimeMillis()
-            while (System.currentTimeMillis() - start < 3000) {
+            while (System.currentTimeMillis() - start < 2500) {
                 val respPacket = DatagramPacket(buffer, buffer.size)
                 try {
                     socket.receive(respPacket)
                 } catch (e: Throwable) { break }
-                val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, idReal)
-                val clean = res.filter { !DnsCacheManager.isPoisoned(it, host) }
-                if (clean.isNotEmpty()) return clean
+                
+                // Deep validation of response ID
+                val resId = ((respPacket.data[0].toInt() and 0xFF) shl 8) or (respPacket.data[1].toInt() and 0xFF)
+                if (resId == idReal) {
+                    val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, idReal)
+                    val clean = res.filter { !DnsCacheManager.isPoisoned(it, host) }
+                    if (clean.isNotEmpty()) return clean
+                }
             }
-        } catch (e: Throwable) {} finally {
+        } catch (e: Throwable) {
+        } finally {
             ProxyStats.release8k(buffer)
             try { socket.close() } catch (e: Throwable) {}
         }
