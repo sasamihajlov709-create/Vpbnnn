@@ -132,6 +132,8 @@ enum class BypassStrategy(
     UDP_IKE_FAKE(StrategyFamily.UDP, 3, 3, StrategyGroup.MEDIUM),
     UDP_DHCP_FAKE(StrategyFamily.UDP, 3, 3, StrategyGroup.MEDIUM),
     PROTOCOL_CONFUSION_HTTP(StrategyFamily.TCP, 3, 3, StrategyGroup.HEAVY),
+    PROTOCOL_CONFUSION_QUIC(StrategyFamily.UDP, 3, 3, StrategyGroup.HEAVY),
+    PROTOCOL_CONFUSION_DTLS(StrategyFamily.UDP, 3, 3, StrategyGroup.HEAVY),
     TCP_SMALL_CHUNKS(StrategyFamily.FRAGMENTATION, 4, 3, StrategyGroup.HEAVY),
     UDP_TELEGRAM_FAKE(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
     UDP_DISCORD_FAKE(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),

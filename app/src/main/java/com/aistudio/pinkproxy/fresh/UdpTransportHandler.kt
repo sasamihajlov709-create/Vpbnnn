@@ -170,6 +170,7 @@ object UdpTransportHandler {
                         val targetPortNum = ((data[headerLen].toInt() and 0xFF) shl 8) or (data[headerLen + 1].toInt() and 0xFF)
                         headerLen += 2
                         
+                        ProxyStats.addTraffic(targetHost)
                         val payloadLen = len - headerLen
                         ProxyStats.updateBytes(payloadLen.toLong())
                         

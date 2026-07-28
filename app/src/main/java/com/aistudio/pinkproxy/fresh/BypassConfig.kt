@@ -789,16 +789,32 @@ object BypassConfig {
                 }
             }
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
-                if (length > 100) {
+                if (length > 150 && ProxyStats.censorshipIntensity.value > 70) {
+                    val p1Len = length / 3
+                    val p2Len = length / 3
+                    val p1 = DatagramPacket(data, offset, p1Len, targetAddr, targetPort)
+                    val p2 = DatagramPacket(data, offset + p1Len, p2Len, targetAddr, targetPort)
+                    val p3 = DatagramPacket(data, offset + p1Len + p2Len, length - p1Len - p2Len, targetAddr, targetPort)
+                    socket.send(p1); delay(config.delay1)
+                    socket.send(p2); delay(config.delay1 / 2)
+                    socket.send(p3)
+                } else if (length > 60) {
                     val split = length / 2
                     val p1 = DatagramPacket(data, offset, split, targetAddr, targetPort)
                     val p2 = DatagramPacket(data, offset + split, length - split, targetAddr, targetPort)
-                    socket.send(p1)
-                    delay(config.delay1)
+                    socket.send(p1); delay(config.delay1)
                     socket.send(p2)
                 } else {
                     socket.send(packet)
                 }
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_QUIC -> {
+                val fake = FakePacketHelper.buildProtocolConfusion("QUIC")
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_DTLS -> {
+                val fake = FakePacketHelper.buildProtocolConfusion("DTLS")
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
             }
             BypassStrategy.UDP_STUTTER -> {
                 delay(rnd.nextLong(5, 25))
@@ -979,8 +995,8 @@ object BypassConfig {
             }
             BypassStrategy.TCP_RST_FAKE -> {
                 // Send some junk data with low TTL to poison DPI state
-                val ghost = FakePacketHelper.buildFakeUdpPacket(rnd.nextInt(10, 60))
-                TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                val ghost = FakePacketHelper.buildFakeTcpRst()
+                TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
                 output.write(ghost); output.flush()
                 delay(config.delay1)
                 TtlHelper.setTtl(socket, 64)
@@ -988,11 +1004,32 @@ object BypassConfig {
             }
             BypassStrategy.TCP_KEEP_ALIVE_FAKE -> {
                 // Send zero-length data segment with low TTL
-                TtlHelper.setTtl(socket, rnd.nextInt(2, 6))
-                output.write(ByteArray(0)); output.flush()
+                val keep = FakePacketHelper.buildFakeTcpKeepAlive()
+                TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                output.write(keep); output.flush()
                 delay(2)
                 TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_SSH -> {
+                val fake = FakePacketHelper.buildProtocolConfusion("SSH")
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT -> {
+                val fake = FakePacketHelper.buildProtocolConfusion("BITTORRENT")
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_HTTP -> {
+                val fake = FakePacketHelper.buildProtocolConfusion("HTTP")
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.WS_HANDSHAKE_FAKE -> {
+                val fake = FakePacketHelper.buildFakeWebSocketHandshake(host)
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.SSH_HANDSHAKE_FAKE -> {
+                val fake = FakePacketHelper.buildSshHandshake()
+                writeWithFake(socket, output, fake, data, length, config)
             }
             BypassStrategy.HTTP_USER_AGENT_SKEW -> {
                 if (!isProbableHttp(data, length)) {

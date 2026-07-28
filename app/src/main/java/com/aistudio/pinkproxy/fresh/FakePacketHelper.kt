@@ -1232,4 +1232,30 @@ object FakePacketHelper {
         ThreadLocalRandom.current().nextBytes(noise)
         return noise
     }
+
+    fun buildFakeTcpRst(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        return byteArrayOf(0x52, 0x53, 0x54, 0x00, 0x00, 0x00) + ByteArray(rnd.nextInt(2, 10)) { rnd.nextInt(256).toByte() }
+    }
+
+    fun buildFakeTcpKeepAlive(): ByteArray {
+        return byteArrayOf(0x00)
+    }
+
+    fun buildProtocolConfusion(type: String): ByteArray {
+        return when (type) {
+            "SSH" -> buildSshHandshake()
+            "BITTORRENT" -> "BitTorrent protocol".toByteArray() + ByteArray(48) { ThreadLocalRandom.current().nextInt(256).toByte() }
+            "HTTP" -> buildFakeHttpRequest("google.com")
+            "QUIC" -> {
+                val rnd = ThreadLocalRandom.current()
+                byteArrayOf(0xc0.toByte(), 0x00, 0x00, 0x00, 0x01) + ByteArray(rnd.nextInt(20, 60)) { rnd.nextInt(256).toByte() }
+            }
+            "DTLS" -> {
+                val rnd = ThreadLocalRandom.current()
+                byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + ByteArray(24) { rnd.nextInt(256).toByte() }
+            }
+            else -> ByteArray(64) { ThreadLocalRandom.current().nextInt(256).toByte() }
+        }
+    }
 }

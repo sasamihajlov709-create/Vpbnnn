@@ -13,7 +13,7 @@ android {
   namespace = "com.aistudio.pinkproxy.fresh"
   compileSdk = 36
   defaultConfig {
-    applicationId = "com.aistudio.pinkproxy.fresh"
+    applicationId = "com.aistudio.pinkproxy.vnmqz"
     minSdk = 29
     targetSdk = 35
     versionCode = 1

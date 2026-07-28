@@ -72,9 +72,24 @@ class PinkVpnService : VpnService() {
 
     private var engineMonitorJob: Job? = null
 
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
+        
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PinkProxy:VpnLock").apply {
+            setReferenceCounted(false)
+            acquire(10 * 60 * 1000L)
+        }
+        
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "PinkProxy:WifiLock").apply {
+            setReferenceCounted(false)
+        }
+
         BypassConfig.activeVpnService = this
         DnsCacheManager.load(this)
         BypassConfig.loadTuningSettings(this)
@@ -260,6 +275,13 @@ class PinkVpnService : VpnService() {
                 return
             }
 
+            try {
+                wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24h max
+                if (BypassConfig.currentNetworkType.value == NetworkType.WIFI) {
+                    wifiLock?.acquire()
+                }
+            } catch (e: Exception) {}
+
             proxyServer?.start() // Ensure proxy is running
             _isRunning.value = true
             
@@ -386,6 +408,12 @@ class PinkVpnService : VpnService() {
         _isRunning.value = false
         VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
         DnsCacheManager.save(this)
+        
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (e: Exception) {}
+
         stopTun2Socks()
         proxyServer?.stop()
         
