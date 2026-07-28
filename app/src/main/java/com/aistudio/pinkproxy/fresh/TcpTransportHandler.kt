@@ -178,14 +178,23 @@ object TcpTransportHandler {
                 val remoteToClient = launch(Dispatchers.IO) {
                     val intensity = ProxyStats.censorshipIntensity.value
                     val activeConns = ProxyStats.activeConnections.value
-                    val useSmallBuf = activeConns > 30 || intensity > 85
-                    val buffer = if (useSmallBuf) ProxyStats.obtain16k() else ProxyStats.obtain64k()
+                    val speed = ProxyStats.speedBytesPerSecond.value
+                    
+                    // Adaptive buffer size: small for high intensity, large for high speed
+                    val buffer = when {
+                        intensity > 90 || activeConns > 100 -> ProxyStats.obtain8k()
+                        intensity > 70 || activeConns > 40 -> ProxyStats.obtain16k()
+                        speed > 512 * 1024 -> ProxyStats.obtain64k()
+                        else -> ProxyStats.obtain16k()
+                    }
+                    val bufSize = buffer.size
                     
                     try {
                         var n: Int
                         var firstResponse = true
                         while (isActive) {
                             try {
+                                remoteSocket?.soTimeout = 15000
                                 n = remoteIn.read(buffer)
                             } catch (e: Exception) {
                                 if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
@@ -223,7 +232,15 @@ object TcpTransportHandler {
                                 clientOut.write(buffer, 0, n)
                                 clientOut.flush()
                                 ProxyStats.updateBytes(n.toLong())
-                                if (ProxyStats.censorshipIntensity.value > 85) yield()
+                                
+                                // Traffic Shaping: if congestion window is low, throttle slightly
+                                val cwnd = ProxyStats.congestionWindow.value
+                                if (cwnd < 20 && intensity > 50) {
+                                    val delay = (1000L / cwnd).coerceAtMost(50)
+                                    delay(delay)
+                                } else if (intensity > 85) {
+                                    yield()
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -241,7 +258,12 @@ object TcpTransportHandler {
                             else -> ProxyStats.recordCensorshipEvent(true)
                         }
                     } finally {
-                        if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)
+                        when (bufSize) {
+                            8192 -> ProxyStats.release8k(buffer)
+                            16384 -> ProxyStats.release16k(buffer)
+                            65536 -> ProxyStats.release64k(buffer)
+                            else -> {}
+                        }
                         try { clientSocket.shutdownOutput() } catch (e: Exception) {}
                     }
                 }

@@ -98,11 +98,11 @@ class PinkVpnService : VpnService() {
         // Start proxy server with session secret
         proxyServer = PinkProxyServer(this, PROXY_PORT, proxySecret)
         proxyServer?.start()
-        
+
         RobustResolver.initialize(serviceScope)
         RobustResolver.startDnsOptimizer(serviceScope, this)
-        ServiceChecker.startChecking(serviceScope, this)
         BypassConfig.startAutonomousOptimizer(serviceScope, this)
+        ServiceChecker.startChecking(serviceScope, this)
         RecoveryManager.startHealthCheck(serviceScope)
 
         registerNetworkMonitor()

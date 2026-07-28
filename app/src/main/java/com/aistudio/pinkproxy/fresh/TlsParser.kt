@@ -101,4 +101,58 @@ object TlsParser {
         } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         return false
     }
+
+    fun findHostInPayload(buffer: ByteArray, length: Int, host: String): Int {
+        if (host.isEmpty()) return -1
+        val hostBytes = host.toByteArray(java.nio.charset.StandardCharsets.US_ASCII)
+        if (hostBytes.size > length) return -1
+        
+        for (i in 0..length - hostBytes.size) {
+            var found = true
+            for (j in hostBytes.indices) {
+                if (buffer[i + j] != hostBytes[j]) {
+                    found = false
+                    break
+                }
+            }
+            if (found) return i
+        }
+        return -1
+    }
+
+    fun getAlpn(buffer: ByteArray, length: Int): String? {
+        if (length < 44) return null
+        if (buffer[0] != 0x16.toByte() || buffer[5] != 0x01.toByte()) return null
+        
+        try {
+            val sessionIdLen = buffer[43].toInt() and 0xFF
+            var pos = 44 + sessionIdLen
+            if (pos + 1 >= length) return null
+            val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherSuitesLen
+            if (pos >= length) return null
+            pos += 1 + (buffer[pos].toInt() and 0xFF)
+            if (pos + 1 >= length) return null
+            val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+            pos += 2
+            val extEnd = minOf(pos + extensionsLen, length)
+            
+            while (pos + 3 < extEnd) {
+                val extType = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+                val extLen = ((buffer[pos + 2].toInt() and 0xFF) shl 8) or (buffer[pos + 3].toInt() and 0xFF)
+                
+                if (extType == 16) { // ALPN
+                    if (pos + 6 < extEnd) {
+                        val alpnListLen = ((buffer[pos + 4].toInt() and 0xFF) shl 8) or (buffer[pos + 5].toInt() and 0xFF)
+                        val protoLen = buffer[pos + 6].toInt() and 0xFF
+                        if (pos + 7 + protoLen <= extEnd) {
+                            return String(buffer, pos + 7, protoLen, java.nio.charset.StandardCharsets.US_ASCII)
+                        }
+                    }
+                }
+                pos += 4 + extLen
+            }
+        } catch (e: Exception) {}
+        return null
+    }
 }
