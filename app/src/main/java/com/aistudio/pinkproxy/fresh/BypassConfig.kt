@@ -33,6 +33,14 @@ object BypassConfig {
     private val _strategy = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
     
+    private val CHAOS_POOL by lazy {
+        BypassStrategy.entries.filter { 
+            it != BypassStrategy.CHAOS && 
+            it != BypassStrategy.DIRECT && 
+            it.family != StrategyFamily.DNS 
+        }
+    }
+    
     private val _censorshipLevel = ProxyStats.censorshipIntensity
     val censorshipLevel: StateFlow<Int> = _censorshipLevel
 
@@ -1439,13 +1447,8 @@ object BypassConfig {
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.CHAOS -> {
-                val pool = BypassStrategy.entries.filter { 
-                    it != BypassStrategy.CHAOS && 
-                    it != BypassStrategy.DIRECT && 
-                    it.family != StrategyFamily.DNS 
-                }
-                val s1 = pool.random()
-                val s2 = pool.random()
+                val s1 = CHAOS_POOL.random()
+                val s2 = CHAOS_POOL.random()
                 // Mix two strategies if length permits
                 if (length > 20 && s1.family == StrategyFamily.FRAGMENTATION && s2.family == StrategyFamily.TCP) {
                      applyBypass(socket, output, data.copyOfRange(0, 5), 5, config.copy(strategy = s1), host)

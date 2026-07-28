@@ -1226,7 +1226,7 @@ fun AppIconImage(context: android.content.Context, appInfo: android.content.pm.A
     var iconDrawable by remember(appInfo.packageName) { mutableStateOf<android.graphics.drawable.Drawable?>(null) }
     
     LaunchedEffect(appInfo.packageName) {
-        val drawable = withContext(Dispatchers.IO) {
+        val drawable = withContext(ProxyDispatcher.io) {
             try {
                 context.packageManager.getApplicationIcon(appInfo)
             } catch (e: Exception) {
@@ -1277,7 +1277,7 @@ fun AppSelectionDialog(
     val selectedSet = remember { androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(PinkVpnService.selectedPackages) } }
 
     LaunchedEffect(Unit) {
-        val installedApps = withContext(Dispatchers.IO) {
+        val installedApps = withContext(ProxyDispatcher.io) {
             pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
                 .filter { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName == "com.google.android.youtube" || it.packageName == "org.telegram.messenger" }
                 .map { app ->

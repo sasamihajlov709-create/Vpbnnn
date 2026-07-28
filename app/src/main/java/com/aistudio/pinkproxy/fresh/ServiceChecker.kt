@@ -276,7 +276,7 @@ object ServiceChecker {
         val initialServices = defaultServices + _customServices.value
         _statuses.value = initialServices.map { ServiceStatus(it.first, it.second, false, 0) }
 
-        job = scope.launch(Dispatchers.IO) {
+        job = scope.launch(ProxyDispatcher.io) {
             delay(2000)
             while (isActive) {
                 val currentServices = defaultServices + _customServices.value
@@ -291,14 +291,14 @@ object ServiceChecker {
     }
 
     suspend fun probeHostWithStrategy(host: String, strategy: BypassStrategy): Boolean {
-        return withContext(Dispatchers.IO) {
+        return withContext(ProxyDispatcher.io) {
             var socket: java.net.Socket? = null
             try {
                 val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
                 if (ips.isEmpty()) return@withContext false
                 
                 socket = java.net.Socket()
-                BypassConfig.activeVpnService?.protect(socket)
+                try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Exception) {}
                 socket.soTimeout = 2000
                 withTimeout(4000) {
                     socket.connect(java.net.InetSocketAddress(ips.first(), 443), 2000)
@@ -335,13 +335,13 @@ object ServiceChecker {
         val actualContext = context ?: appContext ?: return
         if (!isProbing.compareAndSet(false, true)) return
         _isProbingState.value = true
-        val scope = internalScope ?: CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val scope = internalScope ?: CoroutineScope(ProxyDispatcher.io + SupervisorJob())
         
         ProxyStats.logRecovery("Autopilot: Launching Parallel Strategy Tournament (Advanced Race)...")
         
         val testHosts = listOf("googlevideo.com", "api.telegram.org", "discord.com")
         
-        scope.launch(Dispatchers.IO) {
+        scope.launch(ProxyDispatcher.io) {
             val originalStrategy = BypassConfig.strategy.value
             val strategiesToTest = BypassStrategy.entries.filter { 
                 it != BypassStrategy.DIRECT && 
@@ -363,7 +363,7 @@ object ServiceChecker {
                             val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
                             if (ips.isNotEmpty()) {
                                 socket = java.net.Socket()
-                                BypassConfig.activeVpnService?.protect(socket)
+                                try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Exception) {}
                                 socket.soTimeout = 1500
                                 withTimeout(2500) {
                                     socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)

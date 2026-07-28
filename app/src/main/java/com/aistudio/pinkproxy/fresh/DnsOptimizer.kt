@@ -61,7 +61,7 @@ object DnsOptimizer {
 
     fun forceRefresh() {
         if (System.currentTimeMillis() - lastProbeTime < 30000) return
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
         scope.launch {
              probeNow(null)
         }
@@ -107,7 +107,7 @@ object DnsOptimizer {
 
     fun start(scope: CoroutineScope, vpnService: VpnService?) {
         // Immediate Warm-up phase
-        scope.launch(Dispatchers.IO) {
+        scope.launch(ProxyDispatcher.io) {
             Log.i("DnsOptimizer", "Starting DNS Warm-up...")
             probeNow(vpnService)
             criticalDomains.map { domain ->
@@ -122,7 +122,7 @@ object DnsOptimizer {
         }
 
         // Periodic Prober
-        scope.launch(Dispatchers.IO) {
+        scope.launch(ProxyDispatcher.io) {
             while (isActive) {
                 val interval = if (ProxyStats.dnsFailureCount.value > 10) 10 * 60 * 1000L else 30 * 60 * 1000L
                 delay(interval)
@@ -131,7 +131,7 @@ object DnsOptimizer {
         }
 
         // Prefetcher
-        scope.launch(Dispatchers.IO) {
+        scope.launch(ProxyDispatcher.io) {
             while (isActive) {
                 delay(15 * 60 * 1000L)
                 criticalDomains.map { domain ->
@@ -145,7 +145,7 @@ object DnsOptimizer {
         }
 
         // Self-Healing
-        scope.launch(Dispatchers.IO) {
+        scope.launch(ProxyDispatcher.io) {
             while (isActive) {
                 delay(5 * 60 * 1000L)
                 DnsCacheManager.clearExpired()

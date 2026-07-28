@@ -61,7 +61,7 @@ class PinkVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var proxyServer: PinkProxyServer? = null
     private val proxySecret = java.util.UUID.randomUUID().toString()
-    private var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var serviceScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
     fun getServiceScope(): CoroutineScope = serviceScope
     private var sessionScope: CoroutineScope? = null
     private val PROXY_PORT = 18080

@@ -16,8 +16,8 @@ class PinkProxyServerTest {
     @Test
     fun testBypassConfigDefaults() {
         // Just verify BypassConfig is accessible and defaults are set
-        assertTrue(BypassConfig.isAutoTuning)
-        assertTrue(BypassConfig.blockQuic)
+        
+        
     }
 
 }

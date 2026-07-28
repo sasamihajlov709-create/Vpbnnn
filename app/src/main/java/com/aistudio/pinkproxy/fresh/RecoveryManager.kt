@@ -20,7 +20,7 @@ object RecoveryManager {
 
     fun startHealthCheck(scope: CoroutineScope) {
         healthCheckJob?.cancel()
-        healthCheckJob = scope.launch(Dispatchers.IO) {
+        healthCheckJob = scope.launch(ProxyDispatcher.io) {
             var lastBytes = ProxyStats.bytesTransferred.value
             var lastCoolDown = System.currentTimeMillis()
             
