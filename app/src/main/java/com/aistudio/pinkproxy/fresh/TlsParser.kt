@@ -155,4 +155,14 @@ object TlsParser {
         } catch (e: Exception) {}
         return null
     }
+
+    fun getTlsRecordLength(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (length - offset < 5) return -1
+        // TLS record types: 20 (ChangeCipherSpec), 21 (Alert), 22 (Handshake), 23 (ApplicationData)
+        val type = buffer[offset].toInt() and 0xFF
+        if (type < 20 || type > 23) return -1
+        if (buffer[offset + 1].toInt() != 3) return -1 // Version major must be 3
+        
+        return (((buffer[offset + 3].toInt() and 0xFF) shl 8) or (buffer[offset + 4].toInt() and 0xFF)) + 5
+    }
 }

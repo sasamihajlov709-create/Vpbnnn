@@ -291,6 +291,8 @@ object TcpTransportHandler {
                             if (n == -1) break
                             if (n > 0) {
                                 lastActivity.set(System.currentTimeMillis())
+                                val currentIntensity = ProxyStats.censorshipIntensity.value
+                                
                                 if (firstPacket) {
                                     firstPacket = false
                                     try {
@@ -300,9 +302,21 @@ object TcpTransportHandler {
                                         BypassConfig.recordFailure(strategy, targetHost)
                                         throw e
                                     }
+                                } else if (currentIntensity > 65 && n > 2) {
+                                    // Opportunistic Fragmentation for DPI evasion
+                                    if (rnd.nextInt(100) < (currentIntensity - 50)) {
+                                        val split = rnd.nextInt(1, n)
+                                        remoteOut.write(buffer, 0, split)
+                                        remoteOut.flush()
+                                        delay(rnd.nextLong(1, 4))
+                                        remoteOut.write(buffer, split, n - split)
+                                        remoteOut.flush()
+                                    } else {
+                                        remoteOut.write(buffer, 0, n)
+                                        remoteOut.flush()
+                                    }
                                 } else {
-                                    val currentIntensity = ProxyStats.censorshipIntensity.value
-                                    // Pacing: slow down if we just started or if censorship is high
+                                    // Pacing and standard fragmentation
                                     val mss = ProxyStats.maxMss.value
                                     if (totalWrittenClient.get() < 32768 && currentIntensity > 50) {
                                         val pSize = if (currentIntensity > 80) minOf(512, mss) else minOf(1024, mss)
@@ -314,7 +328,7 @@ object TcpTransportHandler {
                                             offset += chunk
                                             if (offset < n) delay(rnd.nextLong(2, 8))
                                         }
-                                    } else if (currentIntensity > 65 && n > 1000) {
+                                    } else if (currentIntensity > 75 && n > 1000) {
                                         val fragCount = if (currentIntensity > 90) 3 else 2
                                         val partSize = n / fragCount
                                         for (i in 0 until fragCount) {
@@ -323,22 +337,13 @@ object TcpTransportHandler {
                                             val len = if (i == fragCount - 1) n - offset else partSize
                                             remoteOut.write(buffer, offset, len)
                                             remoteOut.flush()
-                                            if (i < fragCount - 1) {
-                                                val d = (BypassConfig.currentRttMs.value / 35 + 1).coerceAtMost(25)
-                                                delay(d)
-                                            }
+                                            if (i < fragCount - 1) delay(rnd.nextLong(5, 15))
                                         }
                                     } else {
                                         remoteOut.write(buffer, 0, n)
-                                        
-                                        // Random Padding strategy
                                         if (strategy == BypassStrategy.TCP_RANDOM_PADDING && rnd.nextInt(100) < 30) {
-                                            // Send out-of-band data instead of in-band random bytes to prevent protocol corruption
-                                            try {
-                                                remoteSocket?.sendUrgentData(rnd.nextInt(256))
-                                            } catch (e: Exception) {}
+                                            try { remoteSocket?.sendUrgentData(rnd.nextInt(256)) } catch (e: Exception) {}
                                         }
-                                        
                                         remoteOut.flush()
                                     }
                                 }
@@ -347,10 +352,11 @@ object TcpTransportHandler {
                             }
                         }
                     } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                        BypassConfig.TrafficShaper.recordError()
-                        if (System.currentTimeMillis() - start < 15000) {
-                            BypassConfig.recordFailure(strategy, targetHost)
+                        if (e !is CancellationException) {
+                            BypassConfig.TrafficShaper.recordError()
+                            if (System.currentTimeMillis() - start < 15000) {
+                                BypassConfig.recordFailure(strategy, targetHost)
+                            }
                         }
                     } finally {
                         if (useSmallBuf) ProxyStats.release16k(buffer) else ProxyStats.release64k(buffer)

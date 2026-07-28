@@ -81,7 +81,9 @@ object DnsCacheManager {
         "github.com" to listOf("140.82.112.4", "140.82.113.3", "140.82.114.4"),
         "docker.com" to listOf("104.18.121.25", "104.18.122.25"),
         "npmjs.com" to listOf("104.16.27.35", "104.16.20.35"),
-        "medium.com" to listOf("162.159.153.4", "162.159.152.4")
+        "medium.com" to listOf("162.159.153.4", "162.159.152.4"),
+        "youtube.com" to listOf("142.250.185.78", "172.217.16.110"),
+        "googlevideo.com" to listOf("172.217.16.10", "142.250.185.74")
     )
 
     fun getCached(host: String): List<InetAddress>? {

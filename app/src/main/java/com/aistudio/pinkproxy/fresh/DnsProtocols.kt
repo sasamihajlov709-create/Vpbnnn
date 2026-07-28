@@ -245,18 +245,28 @@ object DnsProtocols {
     }
 
     suspend fun queryDoh(host: String, dohUrl: String, vpnService: VpnService?): List<InetAddress> {
+        val intensity = ProxyStats.censorshipIntensity.value
+        val timeout = (if (intensity > 80) 6000L else 4000L) + java.util.concurrent.ThreadLocalRandom.current().nextLong(0, 500)
+        
         val query = DnsPacketEngine.buildDnsQuery(host, 1)
         try {
-            val url = java.net.URL(dohUrl)
-            val dohHost = url.host
-            
-            val client = getProtectedClient(vpnService)
+            val client = getProtectedClient(vpnService).newBuilder()
+                .connectTimeout(timeout, TimeUnit.MILLISECONDS)
+                .readTimeout(timeout, TimeUnit.MILLISECONDS)
+                .writeTimeout(timeout, TimeUnit.MILLISECONDS)
+                .build()
 
             val request = Request.Builder()
                 .url(dohUrl)
                 .post(query.toRequestBody("application/dns-message".toMediaType()))
                 .header("Accept", "application/dns-message")
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .header("User-Agent", FakePacketHelper.getRandomUserAgent())
+                .apply {
+                    if (intensity > 60) {
+                        header("X-Forwarded-For", "${java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 255)}.0.0.1")
+                        header("Cache-Control", "no-cache")
+                    }
+                }
                 .build()
 
             client.newCall(request).execute().use { response ->
