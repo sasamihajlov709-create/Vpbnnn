@@ -334,15 +334,20 @@ object TcpTransportHandler {
                                             offset += sz
                                             if (offset < n) delay(1)
                                         }
-                                    } else if (currentIntensity > 60 && n > 5) {
+                                    } else if (currentIntensity > 55 && n > 5) {
                                         // Opportunistic fragmentation
-                                        if (rnd.nextInt(100) < (currentIntensity - 40)) {
+                                        if (rnd.nextInt(100) < (currentIntensity - 35)) {
                                             val split = rnd.nextInt(1, n)
                                             remoteOut.write(buffer, 0, split)
                                             remoteOut.flush()
                                             if (currentIntensity > 80) delay(rnd.nextLong(1, 3))
                                             remoteOut.write(buffer, split, n - split)
                                             remoteOut.flush()
+                                            
+                                            // Occasionally send an urgent byte to confuse DPI state tracking
+                                            if (currentIntensity > 75 && rnd.nextInt(100) < 15) {
+                                                try { remoteSocket?.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                                            }
                                         } else {
                                             remoteOut.write(buffer, 0, n)
                                             remoteOut.flush()

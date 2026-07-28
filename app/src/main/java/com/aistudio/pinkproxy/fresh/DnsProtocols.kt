@@ -66,6 +66,29 @@ object DnsProtocols {
         return client
     }
 
+    suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val socket = DatagramSocket()
+        val buffer = ProxyStats.obtain8k()
+        try {
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.soTimeout = 3000
+            val targetAddr = InetAddress.getByName(dnsIp)
+            socket.connect(targetAddr, 53)
+            val packet = DatagramPacket(query, query.size)
+            socket.send(packet)
+            
+            val respPacket = DatagramPacket(buffer, buffer.size)
+            socket.receive(respPacket)
+            val records = DnsPacketEngine.parseDnsResponseDetailed(respPacket.data, respPacket.length, id)
+            return records.filter { !DnsCacheManager.isPoisoned(it.address, host) }
+        } finally {
+            ProxyStats.release8k(buffer)
+            try { socket.close() } catch (e: Throwable) {}
+        }
+    }
+
     suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)

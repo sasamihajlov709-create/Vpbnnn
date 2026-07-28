@@ -10,7 +10,7 @@ object DnsCacheManager {
     private const val CACHE_TTL_MS = 10 * 60 * 1000L // 10 minutes
     private const val MAX_DNS_CACHE_SIZE = 1000
     
-    private val dnsCache = ConcurrentHashMap<String, Pair<List<InetAddress>, Long>>()
+    private val dnsCache = ConcurrentHashMap<String, Pair<List<InetAddress>, Long>>() // Long is expiry time
     private val ipHeatmap = ConcurrentHashMap<String, Int>()
     private val ipRtt = ConcurrentHashMap<String, Long>()
     
@@ -91,23 +91,32 @@ object DnsCacheManager {
             return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { null }
         }
         val now = System.currentTimeMillis()
-        dnsCache[host]?.let { (addresses, timestamp) ->
-            if (now - timestamp < CACHE_TTL_MS) {
+        dnsCache[host]?.let { (addresses, expiry) ->
+            if (now < expiry) {
                 return getSortedIps(addresses)
+            } else {
+                dnsCache.remove(host)
             }
         }
         return null
     }
 
-    fun put(host: String, ips: List<InetAddress>) {
+    fun put(host: String, ips: List<InetAddress>, ttlMs: Long = CACHE_TTL_MS) {
         if (ips.isEmpty()) return
         val filtered = ips.filter { ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) > 10 }
         val finalIps = if (filtered.isEmpty()) ips else filtered
-        dnsCache[host] = finalIps to System.currentTimeMillis()
+        dnsCache[host] = finalIps to (System.currentTimeMillis() + ttlMs)
         if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
             val oldest = dnsCache.entries.minByOrNull { it.value.second }
             if (oldest != null) dnsCache.remove(oldest.key)
         }
+    }
+
+    fun putDetailed(host: String, records: List<DnsPacketEngine.DnsRecord>) {
+        if (records.isEmpty()) return
+        val addresses = records.map { it.address }
+        val minTtl = records.minOf { it.ttlSeconds }.coerceIn(30, 3600) * 1000L
+        put(host, addresses, minTtl)
     }
 
     fun getStaticIps(host: String): List<InetAddress>? {
@@ -282,6 +291,6 @@ object DnsCacheManager {
 
     fun clearExpired() {
         val now = System.currentTimeMillis()
-        dnsCache.entries.removeIf { now - it.value.second > CACHE_TTL_MS }
+        dnsCache.entries.removeIf { now > it.value.second }
     }
 }

@@ -16,7 +16,12 @@ object DnsOptimizer {
         "https://dns.controld.com/comss",
         "https://doh.pub/dns-query",
         "https://dns.alidns.com/dns-query",
-        "https://doh.360.cn/dns-query"
+        "https://doh.360.cn/dns-query",
+        "https://dns0.eu/dns-query",
+        "https://doh.libredns.gr/dns-query",
+        "https://dns.nextdns.io/dns-query",
+        "https://dns.tenta.com/dns-query",
+        "https://doh.ffmuc.net/dns-query"
     )
     
     private val dotServers = listOf(

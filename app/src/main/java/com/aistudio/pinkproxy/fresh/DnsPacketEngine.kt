@@ -125,6 +125,44 @@ object DnsPacketEngine {
         return ips
     }
 
+    data class DnsRecord(val address: InetAddress, val ttlSeconds: Long)
+
+    fun parseDnsResponseDetailed(data: ByteArray, length: Int, expectedId: Int = -1): List<DnsRecord> {
+        if (length < 12) return emptyList()
+        val records = mutableListOf<DnsRecord>()
+        try {
+            val bb = java.nio.ByteBuffer.wrap(data, 0, length)
+            val id = bb.short.toInt() and 0xFFFF
+            if (expectedId != -1 && id != expectedId) return emptyList()
+            val flags = bb.short.toInt() and 0xFFFF
+            val qCount = bb.short.toInt() and 0xFFFF
+            val aCount = bb.short.toInt() and 0xFFFF
+            bb.position(bb.position() + 4) // Skip Authority and Additional counts
+            
+            for (i in 0 until qCount) {
+                skipName(bb)
+                bb.position(bb.position() + 4)
+            }
+            
+            for (i in 0 until aCount) {
+                skipName(bb)
+                val type = bb.short.toInt() and 0xFFFF
+                bb.position(bb.position() + 2) // Class
+                val ttl = bb.int.toLong() and 0xFFFFFFFFL
+                val rdLen = bb.short.toInt() and 0xFFFF
+                
+                if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
+                    val rData = ByteArray(rdLen)
+                    bb.get(rData)
+                    records.add(DnsRecord(InetAddress.getByAddress(rData), ttl))
+                } else {
+                    bb.position(bb.position() + rdLen)
+                }
+            }
+        } catch (e: Throwable) {}
+        return records
+    }
+
     private fun skipName(bb: java.nio.ByteBuffer) {
         var b = bb.get().toInt() and 0xFF
         while (b != 0) {

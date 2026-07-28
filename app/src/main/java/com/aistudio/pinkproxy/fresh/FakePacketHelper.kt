@@ -1230,6 +1230,63 @@ object FakePacketHelper {
         }
     }
 
+    fun injectTlsEch(data: ByteArray, length: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)
+        val rnd = ThreadLocalRandom.current()
+        val echData = ByteArray(rnd.nextInt(64, 128))
+        rnd.nextBytes(echData)
+        return injectExtension(data, length, 0xfe08, echData)
+    }
+
+    fun injectExtension(data: ByteArray, length: Int, type: Int, extData: ByteArray): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) return data.copyOf(length)
+        try {
+            var pos = 9 
+            pos += 2 // Version
+            pos += 32 // Random
+            val sessionIdLen = data[pos].toInt() and 0xff
+            pos += 1 + sessionIdLen
+            val cipherSuiteLen = ((data[pos].toInt() and 0xff) shl 8) or (data[pos + 1].toInt() and 0xff)
+            pos += 2 + cipherSuiteLen
+            val compressionLen = data[pos].toInt() and 0xff
+            pos += 1 + compressionLen
+            
+            if (pos >= length - 2) return data.copyOf(length)
+            val extensionsLen = ((data[pos].toInt() and 0xff) shl 8) or (data[pos + 1].toInt() and 0xff)
+            pos += 2
+            
+            val baos = ByteArrayOutputStream()
+            val dos = DataOutputStream(baos)
+            baos.write(data, 0, pos)
+            dos.writeShort(type)
+            dos.writeShort(extData.size)
+            dos.write(extData)
+            baos.write(data, pos, length - pos)
+            
+            val result = baos.toByteArray()
+            val newHandshakeLen = result.size - 9
+            result[6] = ((newHandshakeLen shr 16) and 0xff).toByte()
+            result[7] = ((newHandshakeLen shr 8) and 0xff).toByte()
+            result[8] = (newHandshakeLen and 0xff).toByte()
+            
+            val newExtLen = result.size - pos
+            result[pos - 2] = ((newExtLen shr 8) and 0xff).toByte()
+            result[pos - 1] = (newExtLen and 0xff).toByte()
+            
+            val newRecordLen = result.size - 5
+            result[3] = ((newRecordLen shr 8) and 0xff).toByte()
+            result[4] = (newRecordLen and 0xff).toByte()
+            
+            return result
+        } catch (e: Throwable) {
+            return data.copyOf(length)
+        }
+    }
+
+    fun buildHttp2PreambleFake(): ByteArray {
+        return "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
+    }
+
     fun buildUdpNoise(size: Int): ByteArray {
         val noise = ByteArray(size)
         ThreadLocalRandom.current().nextBytes(noise)
