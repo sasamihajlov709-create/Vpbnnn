@@ -927,7 +927,39 @@ object BypassConfig {
                     output.write(data, s2, length - s2); output.flush()
                 }
             }
-            BypassStrategy.FAKE_PACKET, BypassStrategy.TLS_CHROME_HELLO_FAKE, BypassStrategy.TLS_FIREFOX_HELLO_FAKE, BypassStrategy.TLS_13_HELLO_FAKE, BypassStrategy.TLS_GREASE, BypassStrategy.TLS_DIRTY, BypassStrategy.TLS_PAD, BypassStrategy.SNI_MANGLE, BypassStrategy.GHOST_PACKETS -> {
+            BypassStrategy.TLS_CHROME_HELLO_FAKE -> {
+                val fake = FakePacketHelper.buildChromeHello("google.com")
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake); output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_FIREFOX_HELLO_FAKE -> {
+                val fake = FakePacketHelper.buildFirefoxHello("cloudflare.com")
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake); output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_13_HELLO_FAKE -> {
+                val fake = FakePacketHelper.buildTls13Hello("microsoft.com")
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake); output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.GHOST_PACKETS, BypassStrategy.FAKE_PACKET -> {
+                val fake = FakePacketHelper.buildFakeClientHello("bing.com", 80, 50, true)
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake); output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TLS_GREASE, BypassStrategy.TLS_DIRTY, BypassStrategy.TLS_PAD, BypassStrategy.SNI_MANGLE -> {
                 val offset = TlsParser.findSniOffset(data, length, host)
                 val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, length - 1)
                 val safeSplit = split.coerceIn(1, length - 1)
@@ -1384,18 +1416,6 @@ object BypassConfig {
                     ProxyStats.release8k(probe)
                 }
             }
-            BypassStrategy.PROTOCOL_CONFUSION_SSH -> {
-                val fake = FakePacketHelper.buildSshHandshake()
-                writeWithFake(socket, output, fake, data, length, config)
-            }
-            BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT -> {
-                val fake = FakePacketHelper.buildBitTorrentHandshake()
-                writeWithFake(socket, output, fake, data, length, config)
-            }
-            BypassStrategy.PROTOCOL_CONFUSION_HTTP -> {
-                val fake = FakePacketHelper.buildHttpHandshake()
-                writeWithFake(socket, output, fake, data, length, config)
-            }
             BypassStrategy.TCP_ACK_DELAY -> {
                 delay(rnd.nextLong(150, 400))
                 output.write(data, 0, length)
@@ -1409,24 +1429,8 @@ object BypassConfig {
                 output.write(pad)
                 output.flush()
             }
-
             BypassStrategy.TCP_TOS_MANGLE -> {
                 try { socket.trafficClass = 0x08 } catch (e: Exception) {}
-                output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.WS_HANDSHAKE_FAKE -> {
-                val ws = FakePacketHelper.buildFakeWebSocketHandshake(host)
-                TtlHelper.setTtl(socket, config.fakeTtl); output.write(ws); output.flush()
-                delay(config.delay1); TtlHelper.setTtl(socket, 64); output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.SSH_HANDSHAKE_FAKE -> {
-                val ssh = FakePacketHelper.buildFakeSshHandshake()
-                output.write(ssh); output.flush(); delay(config.delay1)
-                output.write(data, 0, length); output.flush()
-            }
-            BypassStrategy.UDP_DTLS_FAKE -> {
-                val dtls = byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + ByteArray(20) { rnd.nextInt(256).toByte() }
-                output.write(dtls); output.flush(); delay(config.delay1)
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.HTTP_KEEP_ALIVE_FAKE -> {

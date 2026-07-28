@@ -86,7 +86,13 @@ class PinkVpnService : VpnService() {
         }
         
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-        wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "PinkProxy:WifiLock").apply {
+        val wifiMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = wm.createWifiLock(wifiMode, "PinkProxy:WifiLock").apply {
             setReferenceCounted(false)
         }
 

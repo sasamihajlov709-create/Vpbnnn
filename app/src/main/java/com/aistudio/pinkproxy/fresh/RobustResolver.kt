@@ -20,6 +20,7 @@ object RobustResolver {
         resolverScope = scope
     }
 
+    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     private fun getScope(): CoroutineScope = resolverScope ?: GlobalScope
 
     fun loadDnsSettings(context: android.content.Context) {
