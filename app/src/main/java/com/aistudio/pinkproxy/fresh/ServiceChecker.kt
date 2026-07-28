@@ -442,4 +442,43 @@ object ServiceChecker {
             triggerCheck()
         }
     }
+
+    suspend fun probeBestMtu(host: String): Int {
+        val sizes = listOf(1460, 1400, 1300, 1200, 1100, 1000, 800, 512)
+        for (size in sizes) {
+            if (probeHostWithPacketSize(host, size)) return size
+        }
+        return 512
+    }
+
+    private suspend fun probeHostWithPacketSize(host: String, size: Int): Boolean {
+        var socket: java.net.Socket? = null
+        try {
+            val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
+            if (ips.isEmpty()) return false
+            
+            socket = java.net.Socket()
+            try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.soTimeout = 2000
+            return withTimeout(3000) {
+                socket.connect(java.net.InetSocketAddress(ips.first(), 443), 2000)
+                val baseHello = FakePacketHelper.buildFakeClientHello(host, 32)
+                val paddingNeeded = size - baseHello.size - 5 
+                val paddedHello = if (paddingNeeded > 0) {
+                    FakePacketHelper.addTlsPadding(baseHello, baseHello.size, paddingNeeded)
+                } else baseHello
+                
+                socket.getOutputStream().write(paddedHello)
+                socket.getOutputStream().flush()
+                
+                val response = ByteArray(5)
+                val readCount = socket.getInputStream().read(response)
+                readCount >= 1 && response[0] == 0x16.toByte()
+            }
+        } catch (e: Throwable) {
+            return false
+        } finally {
+            try { socket?.close() } catch (e: Throwable) {}
+        }
+    }
 }

@@ -665,6 +665,15 @@ object BypassConfig {
                             recordFailure(candidate, target)
                         }
                     }
+                    
+                    // Also probe MTU occasionally
+                    if (java.util.concurrent.ThreadLocalRandom.current().nextInt(100) < 25) {
+                        val bestMtu = ServiceChecker.probeBestMtu(target)
+                        if (bestMtu < ProxyStats.maxMss.value + 40) {
+                            ProxyStats.logRecovery("Learning: Discovered optimal MTU for $target -> $bestMtu")
+                            // Update MSS if needed
+                        }
+                    }
                 }
             }
         }
@@ -802,6 +811,7 @@ object BypassConfig {
         val offset = packet.offset
         val targetAddr = packet.address
         val targetPort = packet.port ?: return
+        val isIpv6 = targetAddr is java.net.Inet6Address
 
         when (config.strategy) {
             BypassStrategy.UDP_FAKE_DTLS -> {
@@ -885,8 +895,6 @@ object BypassConfig {
                 }
             }
             BypassStrategy.UDP_FAKE_TRAFFIC -> {
-                val rnd = ThreadLocalRandom.current()
-                val isIpv6 = targetAddr is java.net.Inet6Address
                 // Send some random UDP noise to various destinations if we were allowed, 
                 // but here we just send a fake to the target.
                 val fake1 = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 48))
@@ -895,9 +903,7 @@ object BypassConfig {
                 delay(config.delay1)
                 TtlHelper.setUdpTtl(socket, 64, isIpv6)
                 socket.send(packet)
-            }
-            BypassStrategy.UDP_FAKE_TRAFFIC -> {
-                socket.send(packet)
+
                 if (rnd.nextInt(100) < 25) {
                     val decoys = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "185.199.108.153", "149.154.167.99")
                     try {
@@ -1090,8 +1096,14 @@ object BypassConfig {
                 output.write(mod, 0, split); output.flush(); delay(config.delay1)
                 output.write(mod, split, mod.size - split); output.flush()
             }
-            BypassStrategy.TLS_CIPHER_SHUFFLE, BypassStrategy.TLS_EXT_SKEW -> {
+            BypassStrategy.TLS_CIPHER_SHUFFLE, BypassStrategy.TLS_EXT_SKEW, BypassStrategy.TLS_EXTENSION_SHUFFLE -> {
                 val mod = FakePacketHelper.shuffleTlsExtensions(data, length)
+                val split = config.frag1.coerceIn(1, mod.size - 1)
+                output.write(mod, 0, split); output.flush(); delay(config.delay1)
+                output.write(mod, split, mod.size - split); output.flush()
+            }
+            BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME -> {
+                val mod = FakePacketHelper.addTlsPadding(data, length, java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024))
                 val split = config.frag1.coerceIn(1, mod.size - 1)
                 output.write(mod, 0, split); output.flush(); delay(config.delay1)
                 output.write(mod, split, mod.size - split); output.flush()
@@ -1203,7 +1215,7 @@ object BypassConfig {
                 }
                 output.write(mod); output.flush()
             }
-            BypassStrategy.TCP_URG_SKEW, BypassStrategy.TCP_URGENT_RANDOM -> {
+            BypassStrategy.TCP_URGENT_RANDOM, BypassStrategy.TCP_URGENT_SKEW -> {
                 val split = config.frag1.coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush()
                 try {
@@ -1211,6 +1223,18 @@ object BypassConfig {
                 } catch (e: Throwable) {}
                 delay(config.delay1)
                 output.write(data, split, length - split); output.flush()
+            }
+            BypassStrategy.TCP_WINDOW_SIZE_SKEW -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    socket.receiveBufferSize = 32 // Set very small window
+                    val split = length / 2
+                    output.write(data, 0, split); output.flush(); delay(config.delay1)
+                    socket.receiveBufferSize = originalSize // Reset
+                    output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
             }
             BypassStrategy.TCP_FAST_OPEN_FAKE -> {
                 // TFO fake: send a fake packet that looks like TFO attempt

@@ -1256,20 +1256,24 @@ object FakePacketHelper {
             pos += 2
             
             val baos = ByteArrayOutputStream()
-            val dos = DataOutputStream(baos)
             baos.write(data, 0, pos)
-            dos.writeShort(type)
-            dos.writeShort(extData.size)
-            dos.write(extData)
-            baos.write(data, pos, length - pos)
+            baos.write((type shr 8) and 0xff)
+            baos.write(type and 0xff)
+            baos.write((extData.size shr 8) and 0xff)
+            baos.write(extData.size and 0xff)
+            baos.write(extData)
+            if (pos < length) {
+                baos.write(data, pos, length - pos)
+            }
             
             val result = baos.toByteArray()
+            // Fix lengths
             val newHandshakeLen = result.size - 9
             result[6] = ((newHandshakeLen shr 16) and 0xff).toByte()
             result[7] = ((newHandshakeLen shr 8) and 0xff).toByte()
             result[8] = (newHandshakeLen and 0xff).toByte()
             
-            val newExtLen = result.size - pos
+            val newExtLen = extensionsLen + 4 + extData.size
             result[pos - 2] = ((newExtLen shr 8) and 0xff).toByte()
             result[pos - 1] = (newExtLen and 0xff).toByte()
             
@@ -1281,6 +1285,12 @@ object FakePacketHelper {
         } catch (e: Throwable) {
             return data.copyOf(length)
         }
+    }
+
+    fun addTlsPadding(data: ByteArray, length: Int, padSize: Int): ByteArray {
+        val padding = ByteArray(padSize)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(padding)
+        return injectExtension(data, length, 21, padding)
     }
 
     fun buildHttp2PreambleFake(): ByteArray {
