@@ -130,4 +130,21 @@ object TtlHelper {
             Log.v("TtlHelper", "Socket tuning failed: ${e.message}")
         }
     }
+
+    fun setWindowSize(socket: Socket, size: Int): Boolean {
+        return try {
+            val fd = getFileDescriptor(socket) ?: return false
+            Os.setsockoptInt(fd, OsConstants.SOL_SOCKET, OsConstants.SO_SNDBUF, size)
+            Os.setsockoptInt(fd, OsConstants.SOL_SOCKET, OsConstants.SO_RCVBUF, size)
+            true
+        } catch (e: Throwable) { false }
+    }
+
+    fun setMss(socket: Socket, mss: Int): Boolean {
+        return try {
+            val fd = getFileDescriptor(socket) ?: return false
+            Os.setsockoptInt(fd, 6, 2, mss) // IPPROTO_TCP (6), TCP_MAXSEG (2)
+            true
+        } catch (e: Throwable) { false }
+    }
 }

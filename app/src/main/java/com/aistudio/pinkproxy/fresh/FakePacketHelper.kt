@@ -411,6 +411,80 @@ object FakePacketHelper {
     fun buildFakeWebSocketHandshake(host: String): ByteArray = buildFakeHttpRequest(host, "/chat")
     fun buildHttp2PreambleFake(): ByteArray = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
     fun buildMultiSniHello(sni: String): ByteArray = buildFakeClientHello(sni, 90, 800, false)
+    fun buildRealisticTlsHello(sni: String): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        
+        // Content Type: Handshake (22), Version: TLS 1.2 (0x0303)
+        dos.writeByte(22); dos.writeShort(0x0303)
+        
+        val handBaos = ByteArrayOutputStream(); val handDos = DataOutputStream(handBaos)
+        // Handshake Type: Client Hello (1)
+        handDos.writeByte(1)
+        // Length (3 bytes, placeholder)
+        handDos.write(byteArrayOf(0, 0, 0))
+        // Version: TLS 1.2 (0x0303)
+        handDos.writeShort(0x0303)
+        // Random (32 bytes)
+        handDos.write(ByteArray(32).apply { rnd.nextBytes(this) })
+        // Session ID Length (0)
+        handDos.writeByte(0)
+        // Cipher Suites
+        val ciphers = byteArrayOf(
+            0x13.toByte(), 0x01.toByte(), // TLS_AES_128_GCM_SHA256
+            0x13.toByte(), 0x02.toByte(), // TLS_AES_256_GCM_SHA384
+            0x13.toByte(), 0x03.toByte(), // TLS_CHACHA20_POLY1305_SHA256
+            0xc0.toByte(), 0x2b.toByte(), // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+            0xc0.toByte(), 0x2f.toByte()  // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        )
+        handDos.writeShort(ciphers.size); handDos.write(ciphers)
+        // Compression Methods (1: null)
+        handDos.writeShort(1); handDos.writeByte(0)
+        
+        // Extensions
+        val extBaos = ByteArrayOutputStream(); val extDos = DataOutputStream(extBaos)
+        extDos.write(buildSniExtension(sni))
+        // Supported Groups (10)
+        extDos.writeShort(10); extDos.writeShort(4); extDos.writeShort(2); extDos.writeShort(0x0017) // x25519
+        // Supported Versions (43)
+        extDos.writeShort(43); extDos.writeShort(3); extDos.writeByte(2); extDos.writeShort(0x0304) // TLS 1.3
+        
+        val exts = extBaos.toByteArray()
+        handDos.writeShort(exts.size); handDos.write(exts)
+        
+        val handshake = handBaos.toByteArray()
+        val hLen = handshake.size - 4
+        handshake[1] = ((hLen shr 16) and 0xFF).toByte()
+        handshake[2] = ((hLen shr 8) and 0xFF).toByte()
+        handshake[3] = (hLen and 0xFF).toByte()
+        
+        dos.writeShort(handshake.size)
+        dos.write(handshake)
+        return baos.toByteArray()
+    }
+
+    fun buildRealisticHttpReq(host: String): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val methods = listOf("GET", "POST", "HEAD", "OPTIONS")
+        val paths = listOf("/", "/index.html", "/api/v1/status", "/favicon.ico")
+        val method = methods.random()
+        val path = paths.random()
+        val ua = getRandomUserAgent()
+        
+        return ("$method $path HTTP/1.1\r\n" +
+                "Host: $host\r\n" +
+                "User-Agent: $ua\r\n" +
+                "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n" +
+                "Accept-Language: en-US,en;q=0.5\r\n" +
+                "Accept-Encoding: gzip, deflate, br\r\n" +
+                "Connection: keep-alive\r\n" +
+                "Upgrade-Insecure-Requests: 1\r\n" +
+                "Sec-Fetch-Dest: document\r\n" +
+                "Sec-Fetch-Mode: navigate\r\n" +
+                "Sec-Fetch-Site: none\r\n" +
+                "Sec-Fetch-User: ?1\r\n" +
+                "\r\n").toByteArray()
+    }
     fun buildFakeUdpPacket(size: Int): ByteArray = buildUdpNoise(size)
     fun mangleHttpMethod(data: ByteArray, length: Int): ByteArray {
         if (length < 8) return data.copyOf(length)

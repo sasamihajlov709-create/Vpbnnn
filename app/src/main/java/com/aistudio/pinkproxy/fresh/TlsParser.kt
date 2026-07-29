@@ -1,6 +1,11 @@
 package com.aistudio.pinkproxy.fresh
 
 object TlsParser {
+    fun isClientHello(buffer: ByteArray, length: Int): Boolean {
+        if (length < 44) return false
+        return buffer[0] == 0x16.toByte() && buffer[5] == 0x01.toByte()
+    }
+
     /**
      * Parses a TLS ClientHello packet and finds the exact offset of the SNI hostname string.
      * Returns the offset of the first character of the hostname, or -1 if not found.
