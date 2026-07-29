@@ -120,7 +120,6 @@ enum class BypassStrategy(
     TCP_MSS_CLUMPING(StrategyFamily.TCP, 3, 2, StrategyGroup.HEAVY),
     TLS_CLIENT_HELLO_GREASE_RANDOM(StrategyFamily.TLS, 2, 2, StrategyGroup.LIGHT),
     HTTP_HOST_TAB_MANGLE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
-    HTTP_METHOD_SPACE_MANGLE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
     TLS_SNI_NULL_EXT(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
     TLS_CLIENT_HELLO_PAD_EXTREME(StrategyFamily.TLS, 4, 2, StrategyGroup.EXTREME),
     TLS_EXTENSION_SHUFFLE(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
@@ -148,6 +147,8 @@ enum class BypassStrategy(
     TLS_CLIENT_HELLO_PAD(StrategyFamily.TLS, 3, 1, StrategyGroup.MEDIUM),
     PROTOCOL_CONFUSION_SSH(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
     PROTOCOL_CONFUSION_BITTORRENT(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
+    PROTOCOL_CONFUSION_REDIS(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
+    PROTOCOL_CONFUSION_MEMCACHED(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
     WS_HANDSHAKE_FAKE(StrategyFamily.HTTP, 3, 3, StrategyGroup.MEDIUM),
     SSH_HANDSHAKE_FAKE(StrategyFamily.TCP, 3, 3, StrategyGroup.MEDIUM),
     HTTP2_PREAMBLE_FAKE(StrategyFamily.HTTP, 3, 3, StrategyGroup.MEDIUM),
@@ -169,12 +170,24 @@ enum class BypassStrategy(
     BYEBYEDPI_SIM(StrategyFamily.ADAPTIVE, 5, 4, StrategyGroup.EXTREME),
     TCP_OOB_SEGMENTATION(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
     TCP_OVERLAP(StrategyFamily.TCP, 5, 5, StrategyGroup.EXTREME),
+    TCP_WINDOW_SHAKE(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
+    QUIC_VERSION_SKEW(StrategyFamily.QUIC, 3, 3, StrategyGroup.HEAVY),
+    UDP_HEARTBEAT(StrategyFamily.UDP, 2, 1, StrategyGroup.LIGHT),
+    TLS_SNI_REVERSE(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
+    TCP_OVERLAP_SKEW(StrategyFamily.TCP, 4, 4, StrategyGroup.EXTREME),
+    QUIC_INITIAL_FRAGMENT(StrategyFamily.QUIC, 4, 3, StrategyGroup.HEAVY),
+    TLS_SNI_OVERLAP_SKEW(StrategyFamily.TLS, 5, 5, StrategyGroup.EXTREME),
+    HTTP_METHOD_SPACE_MANGLE(StrategyFamily.HTTP, 2, 2, StrategyGroup.MEDIUM),
+    HTTP_HOST_DOT_MANGLE(StrategyFamily.HTTP, 2, 2, StrategyGroup.MEDIUM),
+    TCP_WINDOW_RESIZE_PACING(StrategyFamily.TCP, 3, 3, StrategyGroup.MEDIUM),
+    TCP_KEEPALIVE_SKEW(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
+    TCP_URGENT_DESYNC(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
 enum class NetworkType { WIFI, MOBILE, UNKNOWN }
 
-enum class HostCategory { STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN, NEWS, GAMING, SHOPPING, DEV, AD, OTHER }
+enum class HostCategory { STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN, NEWS, GAMING, SHOPPING, DEV, AD, GOVERNMENT, SECURITY, OTHER }
 
 enum class DpiType {
     NONE,
@@ -505,6 +518,8 @@ object HostClassifier {
             h.contains("amazon") || h.contains("ebay") || h.contains("aliexpress") || h.contains("shopify") || h.contains("ozon") || h.contains("wildberries") || h.contains("avito") || h.contains("etsy") || h.contains("walmart") -> HostCategory.SHOPPING
             h.contains("ads.") || h.contains("doubleclick") || h.contains("adservice") || h.contains("analytics") || h.contains("telemetry") || h.contains("metrics") || h.contains("crashlytics") || h.contains("segment") || h.contains("mixpanel") -> HostCategory.AD
             h.contains("bbc") || h.contains("cnn") || h.contains("reuters") || h.contains("bloomberg") || h.contains("nytimes") || h.contains("dw.com") || h.contains("rferl") || h.contains("aljazeera") || h.contains("guardian") || h.contains("forbes") -> HostCategory.NEWS
+            h.contains("gov") || h.contains("mil") || h.contains("gosuslugi") || h.contains("fsb") || h.contains("mvd") || h.contains("police") -> HostCategory.GOVERNMENT
+            h.contains("vpn") || h.contains("proxy") || h.contains("torproject") || h.contains("i2p") || h.contains("shadowsocks") || h.contains("v2ray") || h.contains("wireguard") || h.contains("openvpn") -> HostCategory.SECURITY
             else -> HostCategory.OTHER
         }
     }

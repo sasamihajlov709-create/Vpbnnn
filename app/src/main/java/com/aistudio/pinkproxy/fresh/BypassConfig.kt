@@ -319,6 +319,17 @@ object BypassConfig {
                 HostCategory.AI -> {
                     if (entry.key.family == StrategyFamily.TLS || entry.key == BypassStrategy.TLS_SNI_SKEW) weight *= 1.7
                 }
+                HostCategory.GAMING -> {
+                    if (entry.key.family == StrategyFamily.UDP || entry.key == BypassStrategy.UDP_HIGH_VOL_PACING) weight *= 2.5
+                    if (entry.key.cost > 3) weight *= 0.5 
+                }
+                HostCategory.FINANCE -> {
+                    if (entry.key.group == StrategyGroup.LIGHT) weight *= 1.8 
+                }
+                HostCategory.GOVERNMENT, HostCategory.SECURITY -> {
+                    if (entry.key.group == StrategyGroup.EXTREME) weight *= 2.0
+                    if (entry.key.family == StrategyFamily.TLS) weight *= 1.5
+                }
                 else -> {}
             }
             
@@ -488,7 +499,15 @@ object BypassConfig {
         }
     }
 
-    fun recordFailure(strat: BypassStrategy, host: String?) {
+    enum class FailureReason {
+        TIMEOUT,
+        TCP_RESET,
+        SSL_HANDSHAKE_ERROR,
+        CONNECTION_REFUSED,
+        UNKNOWN
+    }
+
+    fun recordFailure(strat: BypassStrategy, host: String?, reason: FailureReason = FailureReason.UNKNOWN) {
         ProxyStats.recordCensorshipEvent(true)
         
         val stats = strategyStats[strat]
@@ -497,10 +516,20 @@ object BypassConfig {
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
         
-        // Heavy penalty on failure
-        val penalty = if (ProxyStats.censorshipIntensity.value > 80) -50 else -30
+        // Dynamic penalty based on failure reason
+        val penalty = when (reason) {
+            FailureReason.TCP_RESET -> if (ProxyStats.censorshipIntensity.value > 80) -70 else -50
+            FailureReason.SSL_HANDSHAKE_ERROR -> -40
+            FailureReason.TIMEOUT -> -20
+            else -> if (ProxyStats.censorshipIntensity.value > 80) -50 else -30
+        }
+        
         scores[strat]?.addAndGet(penalty)?.let {
-            if (it < 10) scores[strat]?.set(10)
+            if (it < 5) scores[strat]?.set(5)
+        }
+
+        if (reason == FailureReason.TCP_RESET) {
+            ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
         }
 
         // Circuit Breaker: if strategy fails too much globally, disable it for a while
@@ -973,12 +1002,24 @@ object BypassConfig {
             }
             BypassStrategy.UDP_DATA_FRAG -> {
                 if (length > 200) {
-                    val split = length / 2
-                    val p1 = DatagramPacket(data, offset, split, targetAddr, targetPort)
-                    val p2 = DatagramPacket(data, offset + split, length - split, targetAddr, targetPort)
-                    socket.send(p1)
+                    val half = length / 2
+                    val p1 = data.copyOfRange(offset, offset + half)
+                    val p2 = data.copyOfRange(offset + half, offset + length)
+                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
                     delay(rnd.nextLong(1, 5))
-                    socket.send(p2)
+                    
+                    // Optional noise injection between fragments
+                    if (ProxyStats.censorshipIntensity.value > 70) {
+                         val randomNoise = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
+                         try {
+                             TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
+                             socket.send(DatagramPacket(randomNoise, randomNoise.size, targetAddr, targetPort))
+                             delay(rnd.nextLong(1, 3))
+                         } catch (e: Throwable) {}
+                         TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                    }
+                    
+                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
                 } else {
                     socket.send(packet)
                 }
@@ -1015,24 +1056,38 @@ object BypassConfig {
                 TtlHelper.setUdpTtl(socket, 64, isIpv6)
                 socket.send(packet)
             }
-            BypassStrategy.UDP_DATA_FRAG -> {
-                if (length > 100) {
-                    val half = length / 2
-                    val p1 = data.copyOfRange(offset, offset + half)
-                    val p2 = data.copyOfRange(offset + half, offset + length)
+            BypassStrategy.QUIC_INITIAL_FRAGMENT -> {
+                if (length > 1000 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    val p1 = data.copyOfRange(offset, offset + 150)
+                    val p2 = data.copyOfRange(offset + 150, offset + length)
                     socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
-                    delay(rnd.nextLong(1, 5))
-                    val randomNoise = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
-                    try {
-                        TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
-                        socket.send(DatagramPacket(randomNoise, randomNoise.size, targetAddr, targetPort))
-                    } catch (e: Throwable) {}
-                    delay(rnd.nextLong(1, 5))
-                    TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                    delay(rnd.nextLong(1, 4))
                     socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
                 } else {
                     socket.send(packet)
                 }
+            }
+            BypassStrategy.QUIC_VERSION_SKEW -> {
+                if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    val fakeVn = FakePacketHelper.buildQuicVersionNegotiation()
+                    TtlHelper.setUdpTtl(socket, 3, isIpv6)
+                    socket.send(DatagramPacket(fakeVn, fakeVn.size, targetAddr, targetPort))
+                    delay(config.delay1)
+                    TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                }
+                socket.send(packet)
+            }
+            BypassStrategy.UDP_ZERO_LEN_SKEW -> {
+                if (rnd.nextBoolean()) {
+                    val zero = ByteArray(0)
+                    socket.send(DatagramPacket(zero, 0, targetAddr, targetPort))
+                    delay(1)
+                }
+                socket.send(packet)
+            }
+            BypassStrategy.TLS_SNI_REVERSE -> {
+                // For UDP/DTLS we just send the packet
+                socket.send(packet)
             }
             BypassStrategy.QUIC_INITIAL_FRAGMENTATION -> {
                 if (length > 1000) {
@@ -1189,6 +1244,50 @@ object BypassConfig {
                     output.write(data, s2, length - s2); output.flush()
                 }
             }
+            BypassStrategy.TCP_WINDOW_SHAKE -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    socket.receiveBufferSize = rnd.nextInt(128, 512)
+                    output.write(data, 0, length / 2); output.flush()
+                    delay(rnd.nextLong(10, 50))
+                    socket.receiveBufferSize = originalSize + rnd.nextInt(1, 1024)
+                    output.write(data, length / 2, length - (length / 2)); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TLS_SNI_REVERSE -> {
+                val mod = FakePacketHelper.moveSniExtensionToEnd(data, length)
+                val split = config.frag1.coerceIn(1, mod.size - 1)
+                output.write(mod, 0, split); output.flush(); delay(config.delay1)
+                output.write(mod, split, mod.size - split); output.flush()
+            }
+            BypassStrategy.TCP_OVERLAP_SKEW -> {
+                val offset = TlsParser.findSniOffset(data, length, host)
+                val split = if (offset != -1) offset + 2 else config.frag1.coerceIn(1, length - 1)
+                
+                // 1. Part 1 (Real)
+                output.write(data, 0, split); output.flush()
+                
+                // 2. Overlap with Fake (Low TTL)
+                val overlapLen = minOf(length - split, 64)
+                if (overlapLen > 0) {
+                    val fake = FakePacketHelper.buildUdpNoise(overlapLen)
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    output.write(fake); output.flush()
+                    delay(1)
+                    TtlHelper.setTtl(socket, 64)
+                }
+                
+                // 3. Part 2 (Real)
+                delay(config.delay1)
+                output.write(data, split, length - split); output.flush()
+                
+                // 4. Occasional extra noise
+                if (rnd.nextInt(100) < 20) {
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                }
+            }
             BypassStrategy.TCP_OVERLAP -> {
                 val offset = TlsParser.findSniOffset(data, length, host)
                 val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, length - 1)
@@ -1319,7 +1418,7 @@ object BypassConfig {
                 output.write(mod, split, mod.size - split); output.flush()
             }
             BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME -> {
-                val mod = FakePacketHelper.addTlsPadding(data, length, java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024))
+                val mod = FakePacketHelper.injectTlsPadding(data, length, java.util.concurrent.ThreadLocalRandom.current().nextInt(512, 1024))
                 val split = config.frag1.coerceIn(1, mod.size - 1)
                 output.write(mod, 0, split); output.flush(); delay(config.delay1)
                 output.write(mod, split, mod.size - split); output.flush()
@@ -1462,6 +1561,24 @@ object BypassConfig {
                 delay(config.delay1)
                 TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, length); output.flush()
+            }
+            BypassStrategy.TCP_WINDOW_SIZE_CHAOS -> {
+                try {
+                    socket.sendBufferSize = rnd.nextInt(128, 4096)
+                    output.write(data, 0, length / 2); output.flush()
+                    delay(rnd.nextLong(1, 10))
+                    socket.sendBufferSize = rnd.nextInt(4096, 65536)
+                    output.write(data, length / 2, length - (length / 2)); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_ZERO_WINDOW_DESYNC -> {
+                val split = (length / 2).coerceIn(1, length - 1)
+                output.write(data, 0, split); output.flush()
+                // We can't set window to 0 via API, but we can delay massively
+                delay(rnd.nextLong(500, 1500))
+                output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.TCP_REORDER_DESYNC -> {
                 val split = (length / 2).coerceIn(1, length - 1)
@@ -1790,6 +1907,30 @@ object BypassConfig {
                 val multiSni = FakePacketHelper.buildMultiSniHello(host)
                 output.write(multiSni); output.flush()
             }
+            BypassStrategy.BYEBYEDPI_SIM -> {
+                val offset = TlsParser.findSniOffset(data, length, host)
+                val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, length - 1)
+                
+                // 1. Fake packet with low TTL (DPI sees fake data)
+                val fake = FakePacketHelper.buildTlsNoise(64)
+                TtlHelper.setTtl(socket, config.fakeTtl)
+                output.write(fake); output.flush()
+                delay(1)
+                TtlHelper.setTtl(socket, 64)
+                
+                // 2. Fragmented real data (DPI is already confused by fake)
+                output.write(data, 0, split); output.flush()
+                delay(config.delay1)
+                output.write(data, split, length - split); output.flush()
+            }
+            BypassStrategy.TCP_HANDSHAKE_CHAOS -> {
+                val split = (length / 3).coerceIn(1, length - 2)
+                output.write(data, 0, split); output.flush()
+                delay(rnd.nextLong(20, 100))
+                output.write(data, split, split); output.flush()
+                delay(rnd.nextLong(1, 10))
+                output.write(data, 2 * split, length - 2 * split); output.flush()
+            }
             BypassStrategy.TCP_OOB_SEGMENTATION -> {
                 val split = (length / 2).coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush()
@@ -1814,7 +1955,119 @@ object BypassConfig {
                 TtlHelper.setTtl(socket, 64)
                 output.write(data, split, length - split); output.flush()
             }
-            BypassStrategy.TLS_REHANDSHAKE_FAKE, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TCP_FAST_RETRANSMIT_SIM, BypassStrategy.TCP_REORDER_CHAOS, BypassStrategy.TLS_LEGACY_HELLOS, BypassStrategy.TLS_SESSION_TICKET_SKEW, BypassStrategy.HTTP_CHUNKED_FAKE, BypassStrategy.TLS_0RTT_FAKE, BypassStrategy.TLS_COMPRESSION_FAKE, BypassStrategy.HTTP_PIPELINE_FAKE -> {
+            BypassStrategy.HTTP_CHUNKED_FAKE -> {
+                if (isProbableHttp(data, length)) {
+                    val headerEnd = findHeaderEnd(data, length)
+                    if (headerEnd != -1) {
+                         output.write(data, 0, headerEnd); output.flush()
+                         val fakeChunk = "1\r\nX\r\n".toByteArray()
+                         TtlHelper.setTtl(socket, 3)
+                         output.write(fakeChunk); output.flush()
+                         delay(1)
+                         TtlHelper.setTtl(socket, 64)
+                         output.write(data, headerEnd, length - headerEnd); output.flush()
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TLS_SNI_OVERLAP_SKEW -> {
+                val offset = TlsParser.findSniOffset(data, length, host)
+                if (offset != -1) {
+                    val head = offset + 2
+                    output.write(data, 0, head); output.flush()
+                    
+                    val fakeSni = FakePacketHelper.buildUdpNoise(host.length)
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    output.write(fakeSni); output.flush()
+                    delay(1)
+                    TtlHelper.setTtl(socket, 64)
+                    
+                    delay(config.delay1)
+                    output.write(data, head, length - head); output.flush()
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TLS_ECH_FAKE -> {
+                val fakeEch = FakePacketHelper.buildFakeEchExtension()
+                val mod = FakePacketHelper.injectExtension(data, length, 0xfe0d, fakeEch)
+                output.write(mod); output.flush()
+            }
+            BypassStrategy.TLS_REC_CHOP -> {
+                if (length > 5 && data[0] == 0x16.toByte()) {
+                    val bodyLen = ((data[3].toInt() and 0xFF) shl 8) or (data[4].toInt() and 0xFF)
+                    if (bodyLen + 5 <= length) {
+                        var pos = 5
+                        while (pos < 5 + bodyLen) {
+                            val chunk = rnd.nextInt(1, 5).coerceAtMost(5 + bodyLen - pos)
+                            val header = data.copyOfRange(0, 5)
+                            header[3] = ((chunk shr 8) and 0xFF).toByte()
+                            header[4] = (chunk and 0xFF).toByte()
+                            output.write(header); output.write(data, pos, chunk); output.flush()
+                            pos += chunk
+                            delay(rnd.nextLong(1, 3))
+                        }
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
+                } else {
+                     output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.HTTP_METHOD_SPACE_MANGLE -> {
+                if (isProbableHttp(data, length)) {
+                    val mod = FakePacketHelper.addSpaceToHttpMethod(data, length)
+                    output.write(mod); output.flush()
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.HTTP_HOST_DOT_MANGLE -> {
+                if (isProbableHttp(data, length)) {
+                    val mod = FakePacketHelper.addDotToHost(data, length)
+                    output.write(mod); output.flush()
+                } else {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_WINDOW_RESIZE_PACING -> {
+                try {
+                    val p1 = length / 2
+                    socket.sendBufferSize = 128
+                    output.write(data, 0, p1); output.flush()
+                    delay(config.delay1.coerceAtLeast(5))
+                    socket.sendBufferSize = 65535
+                    output.write(data, p1, length - p1); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_KEEPALIVE_SKEW -> {
+                try {
+                    socket.keepAlive = true
+                    val fake = FakePacketHelper.buildUdpNoise(1)
+                    TtlHelper.setTtl(socket, 2)
+                    output.write(fake); output.flush()
+                    delay(1)
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, length); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_URGENT_DESYNC -> {
+                val split = (length / 2).coerceIn(1, length - 1)
+                output.write(data, 0, split); output.flush()
+                try {
+                    socket.sendUrgentData(rnd.nextInt(256))
+                    delay(1)
+                } catch (e: Throwable) {}
+                output.write(data, split, length - split); output.flush()
+            }
+            BypassStrategy.TLS_REHANDSHAKE_FAKE, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TCP_FAST_RETRANSMIT_SIM, BypassStrategy.TCP_REORDER_CHAOS, BypassStrategy.TLS_LEGACY_HELLOS, BypassStrategy.TLS_SESSION_TICKET_SKEW, BypassStrategy.TLS_0RTT_FAKE, BypassStrategy.TLS_COMPRESSION_FAKE, BypassStrategy.HTTP_PIPELINE_FAKE -> {
                 val split = (length / 2).coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay1)
                 output.write(data, split, length - split); output.flush()
@@ -2420,6 +2673,24 @@ object BypassConfig {
                 val split = rnd.nextInt(1, length.coerceAtMost(2).coerceAtLeast(1))
                 output.write(data, 0, split); output.flush()
                 delay(rnd.nextLong(1, 3))
+                output.write(data, split, length - split); output.flush()
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_REDIS -> {
+                val fake = FakePacketHelper.buildProtocolConfusion("REDIS")
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_MEMCACHED -> {
+                val fake = FakePacketHelper.buildProtocolConfusion("MEMCACHED")
+                writeWithFake(socket, output, fake, data, length, config)
+            }
+            BypassStrategy.TCP_SEGMENT_DESYNC -> {
+                val split = (length / 2).coerceIn(1, length - 1)
+                output.write(data, 0, split); output.flush()
+                // Overlap with junk
+                TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                output.write(FakePacketHelper.buildUdpNoise(split)); output.flush()
+                delay(1)
+                TtlHelper.setTtl(socket, 64)
                 output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.TCP_ACK_SKEW -> {

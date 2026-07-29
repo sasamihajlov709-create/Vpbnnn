@@ -480,7 +480,7 @@ object ServiceChecker {
                 val baseHello = FakePacketHelper.buildFakeClientHello(host, 32)
                 val paddingNeeded = size - baseHello.size - 5 
                 val paddedHello = if (paddingNeeded > 0) {
-                    FakePacketHelper.addTlsPadding(baseHello, baseHello.size, paddingNeeded)
+                    FakePacketHelper.injectTlsPadding(baseHello, baseHello.size, paddingNeeded)
                 } else baseHello
                 
                 socket.getOutputStream().write(paddedHello)

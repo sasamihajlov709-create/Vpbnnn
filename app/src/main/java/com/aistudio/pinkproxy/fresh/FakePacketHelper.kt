@@ -229,8 +229,108 @@ object FakePacketHelper {
     fun buildSafariHello(sni: String): ByteArray = buildFakeClientHello(sni, 50, 300, true)
 
     fun addTlsGreaseExtensions(data: ByteArray, length: Int): ByteArray = injectExtension(data, length, 0x1a1a, buildUdpNoise(2))
-    fun shuffleTlsExtensions(data: ByteArray, length: Int): ByteArray = data.copyOf(length) // Placeholder
-    fun addTlsPadding(data: ByteArray, length: Int, size: Int): ByteArray = injectExtension(data, length, 0x0015, ByteArray(size))
+
+    fun moveSniExtensionToEnd(data: ByteArray, length: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        try {
+            var pos = 5 + 4 + 2 + 32 
+            val sidLen = data[pos].toInt() and 0xFF; pos += 1 + sidLen
+            val cipherLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF); pos += 2 + cipherLen
+            val compLen = data[pos].toInt() and 0xFF; pos += 1 + compLen
+            if (pos >= length - 2) return data.copyOf(length)
+            
+            val extLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos+1].toInt() and 0xFF)
+            if (pos + 2 + extLen > length) return data.copyOf(length)
+            
+            val extensions = mutableListOf<Pair<Int, ByteArray>>()
+            var ePos = pos + 2
+            val end = ePos + extLen
+            
+            var sni: ByteArray? = null
+            while (ePos + 4 <= end) {
+                val type = ((data[ePos].toInt() and 0xFF) shl 8) or (data[ePos+1].toInt() and 0xFF)
+                val len = ((data[ePos+2].toInt() and 0xFF) shl 8) or (data[ePos+3].toInt() and 0xFF)
+                val body = data.copyOfRange(ePos + 4, minOf(ePos + 4 + len, end))
+                if (type == 0) sni = body else extensions.add(type to body)
+                ePos += 4 + len
+            }
+            
+            if (sni == null) return data.copyOf(length)
+            extensions.add(0 to sni) // Add SNI at the end
+            
+            val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+            dos.write(data, 0, pos)
+            val newExtsBaos = ByteArrayOutputStream(); val newExtsDos = DataOutputStream(newExtsBaos)
+            for (ext in extensions) {
+                newExtsDos.writeShort(ext.first); newExtsDos.writeShort(ext.second.size); newExtsDos.write(ext.second)
+            }
+            val newExts = newExtsBaos.toByteArray()
+            dos.writeShort(newExts.size); dos.write(newExts)
+            
+            val result = baos.toByteArray()
+            updateTlsLengths(result)
+            return result
+        } catch (e: Exception) { return data.copyOf(length) }
+    }
+
+    fun shuffleTlsExtensions(data: ByteArray, length: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        try {
+            var pos = 5 + 4 + 2 + 32 
+            val sidLen = data[pos].toInt() and 0xFF; pos += 1 + sidLen
+            val cipherLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF); pos += 2 + cipherLen
+            val compLen = data[pos].toInt() and 0xFF; pos += 1 + compLen
+            if (pos >= length - 2) return data.copyOf(length)
+            
+            val extLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos+1].toInt() and 0xFF)
+            if (pos + 2 + extLen > length) return data.copyOf(length)
+            
+            val extensions = mutableListOf<Pair<Int, ByteArray>>()
+            var ePos = pos + 2
+            val end = ePos + extLen
+            while (ePos + 4 <= end) {
+                val type = ((data[ePos].toInt() and 0xFF) shl 8) or (data[ePos+1].toInt() and 0xFF)
+                val len = ((data[ePos+2].toInt() and 0xFF) shl 8) or (data[ePos+3].toInt() and 0xFF)
+                extensions.add(type to data.copyOfRange(ePos + 4, minOf(ePos + 4 + len, end)))
+                ePos += 4 + len
+            }
+            
+            extensions.shuffle()
+            
+            val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+            dos.write(data, 0, pos)
+            val newExtsBaos = ByteArrayOutputStream(); val newExtsDos = DataOutputStream(newExtsBaos)
+            for (ext in extensions) {
+                newExtsDos.writeShort(ext.first); newExtsDos.writeShort(ext.second.size); newExtsDos.write(ext.second)
+            }
+            val newExts = newExtsBaos.toByteArray()
+            dos.writeShort(newExts.size); dos.write(newExts)
+            
+            val result = baos.toByteArray()
+            updateTlsLengths(result)
+            return result
+        } catch (e: Exception) { return data.copyOf(length) }
+    }
+
+    private fun updateTlsLengths(result: ByteArray) {
+        val recLen = result.size - 5
+        result[3] = ((recLen shr 8) and 0xFF).toByte(); result[4] = (recLen and 0xFF).toByte()
+        val handLen = result.size - 9
+        result[6] = ((handLen shr 16) and 0xFF).toByte(); result[7] = ((handLen shr 8) and 0xFF).toByte(); result[8] = (handLen and 0xFF).toByte()
+    }
+
+    fun buildEdgeHello(sni: String): ByteArray = buildFakeClientHello(sni, 110, 450, true)
+    fun buildOperaHello(sni: String): ByteArray = buildFakeClientHello(sni, 105, 420, true)
+
+    fun buildFakeEchExtension(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val b = ByteArray(rnd.nextInt(128, 256))
+        rnd.nextBytes(b)
+        // Simple ECH extension payload: version + config_id + enc + payload
+        b[0] = 0xfe.toByte(); b[1] = 0x0d.toByte() 
+        return b
+    }
+
     fun buildTlsNoise(size: Int): ByteArray {
         val baos = ByteArrayOutputStream()
         val dos = DataOutputStream(baos)
@@ -240,13 +340,61 @@ object FakePacketHelper {
         dos.write(buildUdpNoise(size))
         return baos.toByteArray()
     }
-    fun injectTlsPadding(data: ByteArray, length: Int, size: Int): ByteArray = addTlsPadding(data, length, size)
+    fun injectTlsPadding(data: ByteArray, length: Int, size: Int): ByteArray = injectExtension(data, length, 0x0015, ByteArray(size))
     fun injectTlsGrease(data: ByteArray, length: Int): ByteArray = addTlsGreaseExtensions(data, length)
     fun buildFakeWebSocketHandshake(host: String): ByteArray = buildFakeHttpRequest(host, "/chat")
     fun buildHttp2PreambleFake(): ByteArray = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
     fun buildMultiSniHello(sni: String): ByteArray = buildFakeClientHello(sni, 90, 800, false)
     fun buildFakeUdpPacket(size: Int): ByteArray = buildUdpNoise(size)
-    fun mangleHttpMethod(data: ByteArray, length: Int): ByteArray = data.copyOf(length) // Placeholder
+    fun mangleHttpMethod(data: ByteArray, length: Int): ByteArray {
+        if (length < 8) return data.copyOf(length)
+        val copy = data.copyOf(length)
+        val s = String(data, 0, minOf(length, 10), Charsets.US_ASCII)
+        val spaceIdx = s.indexOf(' ')
+        if (spaceIdx != -1) {
+            val method = s.substring(0, spaceIdx)
+            val rnd = ThreadLocalRandom.current()
+            if (rnd.nextBoolean()) {
+                // Change case: GET -> gEt
+                for (i in 0 until method.length) {
+                    if (rnd.nextBoolean()) {
+                        val c = method[i]
+                        copy[i] = if (c.isUpperCase()) c.lowercaseChar().code.toByte() else c.uppercaseChar().code.toByte()
+                    }
+                }
+            }
+        }
+        return copy
+    }
+
+    fun addSpaceToHttpMethod(data: ByteArray, length: Int): ByteArray {
+        if (length < 8) return data.copyOf(length)
+        val s = String(data, 0, minOf(length, 12), Charsets.US_ASCII)
+        val spaceIdx = s.indexOf(' ')
+        if (spaceIdx != -1) {
+            val baos = ByteArrayOutputStream()
+            baos.write(data, 0, spaceIdx + 1)
+            baos.write(' '.code) // Extra space
+            baos.write(data, spaceIdx + 1, length - (spaceIdx + 1))
+            return baos.toByteArray()
+        }
+        return data.copyOf(length)
+    }
+
+    fun addDotToHost(data: ByteArray, length: Int): ByteArray {
+        val s = String(data, 0, length, Charsets.US_ASCII)
+        val hostLine = s.lines().find { it.startsWith("Host:", true) }
+        if (hostLine != null) {
+            val start = s.indexOf(hostLine)
+            val end = start + hostLine.length
+            val baos = ByteArrayOutputStream()
+            baos.write(data, 0, end)
+            baos.write('.'.code) // Dot after host
+            baos.write(data, end, length - end)
+            return baos.toByteArray()
+        }
+        return data.copyOf(length)
+    }
     fun injectLargeGrease(data: ByteArray, length: Int): ByteArray = injectExtension(data, length, 0x4a4a, buildUdpNoise(1500))
     fun splitTlsRecords(data: ByteArray, length: Int, splitPos: Int): ByteArray {
         if (length < 10) return data.copyOf(length)

@@ -21,12 +21,18 @@ object DnsOptimizer {
         "https://doh.libredns.gr/dns-query",
         "https://dns.nextdns.io/dns-query",
         "https://dns.tenta.com/dns-query",
-        "https://doh.ffmuc.net/dns-query"
+        "https://doh.ffmuc.net/dns-query",
+        "https://doh.dns.sb/dns-query",
+        "https://dns.google.com/dns-query",
+        "https://common-buy.dns.google/dns-query",
+        "https://unfiltered.adguard-dns.com/dns-query",
+        "https://freedns.zone/dns-query"
     )
     
     private val dotServers = listOf(
         "8.8.8.8", "1.1.1.1", "9.9.9.9", "149.112.112.112",
-        "76.76.2.0", "94.140.14.14", "185.228.168.9", "76.223.122.150"
+        "76.76.2.0", "94.140.14.14", "185.228.168.9", "76.223.122.150",
+        "45.90.28.0", "8.8.4.4", "1.0.0.1", "185.222.222.222"
     )
 
     private val providerLatencies = ConcurrentHashMap<String, Long>()
@@ -74,11 +80,13 @@ object DnsOptimizer {
 
     private suspend fun probeNow(vpnService: VpnService?) {
         lastProbeTime = System.currentTimeMillis()
+        val testDomains = listOf("google.com", "bing.com", "cloudflare.com")
         coroutineScope {
             val dohJobs = dohUrls.map { url ->
                 async {
                     val start = System.currentTimeMillis()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh("google.com", url, vpnService) } } catch (e: Throwable) { emptyList() }
+                    val domain = testDomains.random()
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh(domain, url, vpnService) } } catch (e: Throwable) { emptyList() }
                     if (res.isNotEmpty()) {
                         providerLatencies[url] = System.currentTimeMillis() - start
                         providerFailures[url] = 0
@@ -91,7 +99,8 @@ object DnsOptimizer {
             val dotJobs = dotServers.map { server ->
                 async {
                     val start = System.currentTimeMillis()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDot("google.com", server, vpnService) } } catch (e: Throwable) { emptyList() }
+                    val domain = testDomains.random()
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDot(domain, server, vpnService) } } catch (e: Throwable) { emptyList() }
                     if (res.isNotEmpty()) {
                         providerLatencies[server] = System.currentTimeMillis() - start
                         providerFailures[server] = 0
@@ -104,8 +113,8 @@ object DnsOptimizer {
             dohJobs.awaitAll()
             dotJobs.awaitAll()
             
-            bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value }?.key ?: dohUrls[0]
-            bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") }.minByOrNull { it.value }?.key ?: dotServers[0]
+            bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dohUrls[0]
+            bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dotServers[0]
             Log.i("DnsOptimizer", "Probing completed. Best DoH: $bestDohUrl, Best DoT: $bestDotServer")
         }
     }

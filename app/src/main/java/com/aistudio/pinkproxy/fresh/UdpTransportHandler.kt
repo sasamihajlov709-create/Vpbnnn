@@ -51,9 +51,33 @@ object UdpTransportHandler {
                 repeat(8) { i ->
                     val outSocket = outSockets[i]
                     jobs += launch(ProxyDispatcher.io) {
+                        val activeSessions = ConcurrentHashMap<String, Long>()
+                        
+                        // Heartbeat job for this worker's sessions
+                        val hbJob = launch {
+                            while (isActive) {
+                                delay(20000)
+                                val now = System.currentTimeMillis()
+                                activeSessions.entries.removeIf { now - it.value > 60000 }
+                                
+                                for (session in activeSessions.keys) {
+                                    val parts = session.split(":")
+                                    if (parts.size == 2) {
+                                        try {
+                                            val addr = InetAddress.getByName(parts[0])
+                                            val port = parts[1].toInt()
+                                            // Send 1-byte heartbeat
+                                            outSocket.send(DatagramPacket(byteArrayOf(0x00), 1, addr, port))
+                                        } catch (e: Throwable) {}
+                                    }
+                                }
+                            }
+                        }
+                        
                         try {
                             for (work in udpOutChannel) {
                                 val (packet, targetHost) = work
+                                activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
                                 try {
                                     sendUdpPacket(outSocket, packet, targetHost)
                                 } catch (e: Throwable) {
@@ -64,6 +88,8 @@ object UdpTransportHandler {
                         } catch (e: Throwable) {
                             if (e is CancellationException) throw e
                             Log.v("UdpTransport", "UDP Outbound worker error: ${e.message}")
+                        } finally {
+                            hbJob.cancel()
                         }
                     }
                 }

@@ -74,10 +74,20 @@ object TcpTransportHandler {
                                         val elapsed = System.currentTimeMillis() - startConnect
                                         val msg = e.message?.lowercase() ?: ""
                                         DnsCacheManager.recordIpFailure(ip.hostAddress ?: "")
-                                        if (elapsed >= connectTimeout - 500) {
+                                        
+                                        val reason = when {
+                                            elapsed >= connectTimeout - 500 -> BypassConfig.FailureReason.TIMEOUT
+                                            msg.contains("reset") -> BypassConfig.FailureReason.TCP_RESET
+                                            msg.contains("refused") -> BypassConfig.FailureReason.CONNECTION_REFUSED
+                                            else -> BypassConfig.FailureReason.UNKNOWN
+                                        }
+                                        
+                                        if (reason == BypassConfig.FailureReason.TIMEOUT) {
                                             BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.CONNECTION_TIMEOUT)
-                                        } else if (msg.contains("reset")) {
+                                            BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.TIMEOUT)
+                                        } else if (reason == BypassConfig.FailureReason.TCP_RESET) {
                                             BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TCP_RESET)
+                                            BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.TCP_RESET)
                                         }
                                         throw e
                                     }
@@ -117,8 +127,14 @@ object TcpTransportHandler {
                 } catch (e: Throwable) {
                     if (retryCount < maxRetries && (e is java.net.SocketException || e is java.io.IOException || e is TimeoutCancellationException)) {
                         retryCount++
-                        // On retry, try to use a safer strategy
-                        BypassConfig.recordFailure(strategy, targetHost)
+                        val msg = e.message?.lowercase() ?: ""
+                        val reason = when {
+                            e is TimeoutCancellationException -> BypassConfig.FailureReason.TIMEOUT
+                            msg.contains("reset") -> BypassConfig.FailureReason.TCP_RESET
+                            msg.contains("refused") -> BypassConfig.FailureReason.CONNECTION_REFUSED
+                            else -> BypassConfig.FailureReason.UNKNOWN
+                        }
+                        BypassConfig.recordFailure(strategy, targetHost, reason)
                         ProxyStats.recordGlobalFailure()
                         delay(500)
                         continue
@@ -280,33 +296,28 @@ object TcpTransportHandler {
                                     BypassConfig.recordSuccess(strategy, rtt, targetHost)
                                     
                                     // Detect DPI blocks in payload
-                                    if (n > 10) {
+                                    if (n > 5) {
                                         if (buffer[0] == 0x15.toByte()) { // TLS Alert
                                             BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TLS_SNI_BLOCK)
+                                            BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.SSL_HANDSHAKE_ERROR)
                                             throw java.io.IOException("TLS Alert (Possible DPI Block)")
                                         } else {
                                             // Fast byte-level scan for block markers
                                             var foundBlock = false
-                                            val scanLen = n.coerceAtMost(500)
-                                            val lowBuffer = ByteArray(scanLen)
-                                            for (i in 0 until scanLen) {
-                                                val b = buffer[i].toInt()
-                                                lowBuffer[i] = if (b in 65..90) (b + 32).toByte() else buffer[i]
-                                            }
-                                            val lowStr = String(lowBuffer, 0, scanLen, Charsets.US_ASCII)
+                                            val scanLen = n.coerceAtMost(1024)
+                                            val lowStr = String(buffer, 0, scanLen, Charsets.US_ASCII).lowercase()
                                             
                                             when {
                                                 lowStr.contains("403 forbidden") || lowStr.contains("403 access denied") -> foundBlock = true
                                                 lowStr.contains("url blocked") || lowStr.contains("censorship") -> foundBlock = true
-                                                lowStr.contains("connection reset by peer") -> foundBlock = true
+                                                lowStr.contains("connection reset") || lowStr.contains("err_connection_reset") -> foundBlock = true
                                                 lowStr.contains("<title>access denied") || lowStr.contains("<title>blocked") -> foundBlock = true
-                                                lowStr.contains("err_connection_reset") -> foundBlock = true
-                                                // Common ISP block pages patterns
-                                                lowStr.contains("content-filter") || lowStr.contains("legal-block") -> foundBlock = true
+                                                lowStr.contains("content-filter") || lowStr.contains("legal-block") || lowStr.contains("isp-block") -> foundBlock = true
                                             }
                                             
                                             if (foundBlock) {
                                                 BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.HTTP_BLOCK)
+                                                BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.TCP_RESET)
                                                 throw java.io.IOException("DPI block detected in payload")
                                             }
                                         }

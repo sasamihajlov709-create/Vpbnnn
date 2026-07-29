@@ -46,7 +46,7 @@ object DnsPacketEngine {
         dos.writeShort(type) // Type
         dos.writeShort(1)    // Class IN
         
-        // Add EDNS0 with ECS (Client Subnet) and Random Padding
+        // Add EDNS0 with ECS (Client Subnet), Random Padding, and Cookie
         dos.writeShort(0) // Name: root
         dos.writeShort(41) // Type: OPT
         dos.writeShort(4096) // UDP payload size
@@ -55,15 +55,28 @@ object DnsPacketEngine {
         dos.writeShort(if (rnd.nextBoolean()) 0x8000 else 0) // Z (flags) - occasionally set DO (DNSSEC OK)
         
         val ecsOption = buildEcsOption()
-        val paddingSize = rnd.nextInt(32, 128) // More aggressive padding
+        val paddingSize = rnd.nextInt(64, 256) // Even more aggressive padding
         val paddingOption = buildPaddingOption(paddingSize)
+        val cookieOption = buildCookieOption()
         val extraOptions = buildRandomOptions()
         
-        dos.writeShort(ecsOption.size + paddingOption.size + extraOptions.size)
+        val totalOptionsLen = ecsOption.size + paddingOption.size + cookieOption.size + extraOptions.size
+        dos.writeShort(totalOptionsLen)
         dos.write(ecsOption)
         dos.write(paddingOption)
+        dos.write(cookieOption)
         dos.write(extraOptions)
         
+        return bos.toByteArray()
+    }
+
+    private fun buildCookieOption(): ByteArray {
+        val bos = ByteArrayOutputStream(); val dos = java.io.DataOutputStream(bos)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        dos.writeShort(10) // Option Code: Cookie
+        dos.writeShort(8) // Length
+        val cookie = ByteArray(8); rnd.nextBytes(cookie)
+        dos.write(cookie)
         return bos.toByteArray()
     }
 
