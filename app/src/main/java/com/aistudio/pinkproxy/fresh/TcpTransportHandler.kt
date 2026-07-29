@@ -202,12 +202,12 @@ object TcpTransportHandler {
             val remoteOut = remoteSocket.getOutputStream()
             
             // Start Throughput Monitor to detect stalled connections or blackholes
-            var lastTotalForStall = ProxyStats.bytesTransferred.value
+            var lastTotalForStall = totalWrittenClient.get()
             var silentPeriods = 0
             val throughputJob = scope.launch(ProxyDispatcher.io) {
                 while (isActive && remoteSocket.isConnected && !remoteSocket.isClosed) {
                     delay(10000) // Check every 10s
-                    val total = ProxyStats.bytesTransferred.value
+                    val total = totalWrittenClient.get()
                     val delta = total - lastTotalForStall
                     
                     if (delta < 32) { // Less than 32 bytes in 10s is very suspicious
