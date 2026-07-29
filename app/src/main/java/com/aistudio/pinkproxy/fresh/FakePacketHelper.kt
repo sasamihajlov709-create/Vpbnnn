@@ -439,7 +439,7 @@ object FakePacketHelper {
         )
         handDos.writeShort(ciphers.size); handDos.write(ciphers)
         // Compression Methods (1: null)
-        handDos.writeShort(1); handDos.writeByte(0)
+        handDos.writeByte(1); handDos.writeByte(0)
         
         // Extensions
         val extBaos = ByteArrayOutputStream(); val extDos = DataOutputStream(extBaos)

@@ -13,12 +13,15 @@ import org.robolectric.annotation.Config
 class TlsParserTest {
     @Test
     fun testFindSniOffset() {
-        // Build a fake ClientHello using our helper
-        val fakeHello = FakePacketHelper.buildFakeClientHello("example.com", 50, 0, true)
+        // Build a realistic ClientHello using our helper
+        val fakeHello = FakePacketHelper.buildRealisticTlsHello("example.com")
+        println("fakeHello length: ${fakeHello.size}")
+        println("Byte 0: ${fakeHello[0]}")
+        println("Byte 5: ${fakeHello[5]}")
         
         // Find SNI
         val offset = TlsParser.findSniOffset(fakeHello, fakeHello.size, "example.com")
-        assertTrue("SNI offset should be found and > 0", offset > 0)
+        assertTrue("SNI offset should be found and > 0, but got $offset", offset > 0)
         
         // Extract the string at offset
         val extracted = String(fakeHello, offset, "example.com".length)

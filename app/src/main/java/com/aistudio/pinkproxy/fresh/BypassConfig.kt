@@ -62,6 +62,14 @@ object BypassConfig {
     class StratStats(val successes: AtomicLong = AtomicLong(), val failures: AtomicLong = AtomicLong(), val totalRtt: AtomicLong = AtomicLong())
     private val strategyStats = ConcurrentHashMap<BypassStrategy, StratStats>()
 
+    init {
+        HostCategory.entries.forEach { cat ->
+            val map = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+            BypassStrategy.entries.forEach { map[it] = AtomicInteger(100) }
+            strategyScores[cat] = map
+        }
+    }
+
     private val _currentRttMs = MutableStateFlow(50L)
     val currentRttMs: StateFlow<Long> = _currentRttMs.asStateFlow()
 
@@ -3389,10 +3397,18 @@ object BypassConfig {
                         val p1 = data.copyOfRange(0, split)
                         val p2 = data.copyOfRange(split, length)
                         
-                        // Send part 2 first
-                        output.write(p2); output.flush()
-                        delay(rnd.nextLong(1, 5))
+                        // Fake p1 to DPI
+                        TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                        output.write(FakePacketHelper.buildTlsNoise(p1.size)); output.flush()
+                        delay(1)
+                        
+                        // Real p1
+                        TtlHelper.setTtl(socket, 64)
                         output.write(p1); output.flush()
+                        delay(rnd.nextLong(1, 5))
+                        
+                        // Real p2
+                        output.write(p2); output.flush()
                     } else {
                         output.write(data, 0, length); output.flush()
                     }
@@ -3443,11 +3459,24 @@ object BypassConfig {
                         val p2 = data.copyOfRange(s1, s2)
                         val p3 = data.copyOfRange(s2, length)
                         
-                        output.write(p3); output.flush()
-                        delay(tcpDelayValue)
+                        // Emulate reordering via TTL overlapping and OOB
+                        TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                        output.write(FakePacketHelper.buildTlsNoise(p1.size)); output.flush()
+                        delay(1)
+                        
+                        TtlHelper.setTtl(socket, 64)
                         output.write(p1); output.flush()
-                        delay(tcpDelayValue)
+                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                        
+                        TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                        output.write(FakePacketHelper.buildTlsNoise(p2.size)); output.flush()
+                        delay(1)
+                        
+                        TtlHelper.setTtl(socket, 64)
                         output.write(p2); output.flush()
+                        delay(tcpDelayValue)
+                        
+                        output.write(p3); output.flush()
                     } else {
                         output.write(data, 0, length); output.flush()
                     }
