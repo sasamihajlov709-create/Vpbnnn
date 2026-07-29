@@ -280,6 +280,8 @@ object UdpTransportHandler {
         }
     }
 
+    private val reorderBuffers = ConcurrentHashMap<String, MutableList<DatagramPacket>>()
+
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
         val payload = packet.data
         val offset = packet.offset
@@ -311,6 +313,38 @@ object UdpTransportHandler {
         // Adaptive Jitter and TTL randomization
         val intensity = ProxyStats.censorshipIntensity.value
         val rnd = ThreadLocalRandom.current()
+        
+        // 1. Shadowing: occasionally send a fake UDP handshake before real data
+        if (intensity > 60 && rnd.nextInt(100) < 5) {
+            val shadow = when(rnd.nextInt(3)) {
+                0 -> FakePacketHelper.buildWireguardFake()
+                1 -> FakePacketHelper.buildOpenVpnFake()
+                else -> FakePacketHelper.buildProtocolConfusion("DTLS")
+            }
+            socket.send(DatagramPacket(shadow, shadow.size, targetInet, targetPort))
+            if (intensity > 85) delay(rnd.nextLong(1, 3))
+        }
+
+        // 2. Reordering Logic for QUIC
+        if (isQuic && intensity > 75 && rnd.nextInt(100) < 15) {
+            val key = "${targetInet.hostAddress}:$targetPort"
+            val buffer = reorderBuffers.getOrPut(key) { mutableListOf() }
+            val swapped = synchronized(buffer) {
+                buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort))
+                if (buffer.size >= 2) {
+                    val p1 = buffer.removeAt(1)
+                    val p2 = buffer.removeAt(0)
+                    listOf(p1, p2)
+                } else null
+            }
+            swapped?.forEach { p ->
+                try {
+                    BypassConfig.applyUdpBypass(socket, p, config, host)
+                } catch (e: Throwable) {}
+            }
+            return
+        }
+
         if (intensity > 40) {
             val jitter = rnd.nextLong(0, (intensity / 5).toLong() + 5)
             if (jitter > 0) delay(jitter)

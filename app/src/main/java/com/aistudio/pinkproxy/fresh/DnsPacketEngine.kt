@@ -140,7 +140,7 @@ object DnsPacketEngine {
         return ips
     }
 
-    data class DnsRecord(val address: InetAddress, val ttlSeconds: Long)
+    data class DnsRecord(val address: InetAddress, val ttlSeconds: Long, val type: Int = 1)
 
     fun parseDnsResponseDetailed(data: ByteArray, length: Int, expectedId: Int = -1): List<DnsRecord> {
         if (length < 12) return emptyList()
@@ -169,7 +169,11 @@ object DnsPacketEngine {
                 if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
                     val rData = ByteArray(rdLen)
                     bb.get(rData)
-                    records.add(DnsRecord(InetAddress.getByAddress(rData), ttl))
+                    records.add(DnsRecord(InetAddress.getByAddress(rData), ttl, type))
+                } else if (type == 65) { // HTTPS Record
+                    // We don't parse full SvcParam yet, but we record the presence
+                    bb.position(bb.position() + rdLen)
+                    records.add(DnsRecord(InetAddress.getByName("0.0.0.0"), ttl, 65))
                 } else {
                     bb.position(bb.position() + rdLen)
                 }

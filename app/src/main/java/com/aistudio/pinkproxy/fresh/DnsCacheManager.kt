@@ -11,6 +11,7 @@ object DnsCacheManager {
     private const val MAX_DNS_CACHE_SIZE = 1000
     
     private val dnsCache = ConcurrentHashMap<String, Pair<List<InetAddress>, Long>>() // Long is expiry time
+    private val echSupportCache = ConcurrentHashMap<String, Boolean>()
     private val ipHeatmap = ConcurrentHashMap<String, Int>()
     private val ipRtt = ConcurrentHashMap<String, Long>()
     
@@ -213,6 +214,15 @@ object DnsCacheManager {
             if (oldest != null) negativeCache.remove(oldest.key)
         }
     }
+
+    fun putEchSupport(host: String, supported: Boolean) {
+        echSupportCache[host] = supported
+        if (echSupportCache.size > MAX_DNS_CACHE_SIZE) {
+            echSupportCache.clear()
+        }
+    }
+
+    fun isEchSupported(host: String): Boolean = echSupportCache[host] ?: false
 
     fun isNegative(host: String): Boolean {
         val time = negativeCache[host] ?: return false

@@ -303,11 +303,12 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryDoh(host: String, dohUrl: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDohDetailed(host: String, dohUrl: String, vpnService: VpnService?, type: Int = 1): List<DnsPacketEngine.DnsRecord> {
         val intensity = ProxyStats.censorshipIntensity.value
         val timeout = (if (intensity > 80) 6000L else 4000L) + java.util.concurrent.ThreadLocalRandom.current().nextLong(0, 500)
         
-        val query = DnsPacketEngine.buildDnsQuery(host, 1)
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         try {
             val client = getProtectedClient(vpnService).newBuilder()
                 .connectTimeout(timeout, TimeUnit.MILLISECONDS)
@@ -333,14 +334,21 @@ object DnsProtocols {
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.bytes() ?: return emptyList()
-                    val ips = DnsPacketEngine.parseDnsResponse(body, body.size)
-                    val filtered = ips.filter { !DnsCacheManager.isPoisoned(it, host) }
-                    if (filtered.isNotEmpty()) return filtered
+                    val records = DnsPacketEngine.parseDnsResponseDetailed(body, body.size, id)
+                    return records.filter { !DnsCacheManager.isPoisoned(it.address, host) }
                 }
             }
         } catch (e: Throwable) {
         }
         return emptyList()
+    }
+
+    suspend fun queryDoh(host: String, dohUrl: String, vpnService: VpnService?): List<InetAddress> {
+        return queryDohDetailed(host, dohUrl, vpnService).map { it.address }
+    }
+
+    suspend fun queryHttpsRecord(host: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> {
+        return queryDohDetailed(host, DnsOptimizer.bestDohUrl, vpnService, 65)
     }
 
     suspend fun queryDohJson(host: String, vpnService: VpnService?): List<InetAddress> {

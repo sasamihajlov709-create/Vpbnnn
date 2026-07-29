@@ -313,20 +313,20 @@ object TcpTransportHandler {
                                     }
                                 }
                                 
-                                lastActivity.set(System.currentTimeMillis())
+                                 lastActivity.set(System.currentTimeMillis())
                                 clientOut.write(buffer, 0, n)
                                 clientOut.flush()
                                 ProxyStats.updateBytes(n.toLong())
                                 
                                 // Jittered reading to confuse timing analysis when under high intensity
-                                if (intensity > 80 && ThreadLocalRandom.current().nextInt(100) < 12) {
-                                    delay(ThreadLocalRandom.current().nextLong(1, 3))
+                                if (intensity > 80 && ThreadLocalRandom.current().nextInt(100) < 15) {
+                                    delay(ThreadLocalRandom.current().nextLong(2, 10))
                                 }
                                 
                                 // Traffic Shaping: if congestion window is low, throttle slightly
                                 val cwnd = ProxyStats.congestionWindow.value
                                 if (cwnd < 20 && intensity > 50) {
-                                    val delay = (1000L / cwnd).coerceAtMost(50)
+                                    val delay = (1200L / cwnd).coerceAtMost(80)
                                     delay(delay)
                                 } else if (intensity > 85) {
                                     yield()
@@ -336,13 +336,16 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
-                        if (System.currentTimeMillis() - start < 15000) {
+                        if (System.currentTimeMillis() - start < 20000) {
                             BypassConfig.recordFailure(strategy, targetHost)
+                            // Proactive MTU/MSS reduction on early failure
+                            if (msg.contains("reset") || msg.contains("broken pipe")) {
+                                ProxyStats.recordMssFailure()
+                            }
                         }
                         when {
                             msg.contains("reset") -> {
                                 ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
-                                if (totalWrittenClient.get() > 0 && totalWrittenClient.get() < 5000) ProxyStats.recordMssFailure()
                             }
                             msg.contains("timeout") -> ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
                             else -> ProxyStats.recordCensorshipEvent(true)
