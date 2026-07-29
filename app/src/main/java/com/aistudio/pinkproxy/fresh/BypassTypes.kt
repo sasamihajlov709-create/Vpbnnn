@@ -188,10 +188,14 @@ enum class BypassStrategy(
     QUIC_HANDSHAKE_SKEW(StrategyFamily.QUIC, 4, 3, StrategyGroup.HEAVY),
     TCP_DATA_DESYNC(StrategyFamily.TCP, 5, 5, StrategyGroup.EXTREME),
     TCP_ACK_SKEW_ADVANCED(StrategyFamily.TCP, 3, 3, StrategyGroup.HEAVY),
+    BYEBYEDPI_HYBRID(StrategyFamily.ADAPTIVE, 6, 5, StrategyGroup.EXTREME),
+    UDP_QUIC_SMART_SHADOW(StrategyFamily.QUIC, 4, 3, StrategyGroup.HEAVY),
+    UDP_DNS_REORDER_HYBRID(StrategyFamily.DNS, 3, 2, StrategyGroup.MEDIUM),
     UDP_REORDER(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
     UDP_SKEW_ADVANCED(StrategyFamily.UDP, 4, 4, StrategyGroup.EXTREME),
     DNS_OVER_TCP_FORCE(StrategyFamily.DNS, 2, 1, StrategyGroup.LIGHT),
     UDP_IP_ID_MANGLE(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
+    TCP_FOOL_DPI(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

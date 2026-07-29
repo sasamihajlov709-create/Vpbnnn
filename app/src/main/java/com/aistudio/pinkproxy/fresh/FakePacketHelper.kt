@@ -319,6 +319,54 @@ object FakePacketHelper {
         result[6] = ((handLen shr 16) and 0xFF).toByte(); result[7] = ((handLen shr 8) and 0xFF).toByte(); result[8] = (handLen and 0xFF).toByte()
     }
 
+    fun buildHttp2SettingsFake(): ByteArray {
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        // HTTP/2 Frame Header: 24-bit length (6), 8-bit type (SETTINGS=0x04), 8-bit flags (0x00), 31-bit stream id (0)
+        dos.write(byteArrayOf(0x00, 0x00, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00))
+        // Settings: identifier (0x0001 = SETTINGS_HEADER_TABLE_SIZE), value (4096)
+        dos.writeShort(0x0001); dos.writeInt(4096)
+        return baos.toByteArray()
+    }
+
+    fun buildQuicCryptoFake(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        // QUIC Long Header Initial: Type (0xC0), Version (1)
+        dos.writeByte(0xC0); dos.writeInt(0x00000001)
+        // DCID, SCID len
+        dos.writeByte(0x08); dos.write(buildUdpNoise(8))
+        dos.writeByte(0x08); dos.write(buildUdpNoise(8))
+        // Token len (0)
+        dos.writeByte(0x00)
+        // Length (fake)
+        dos.writeShort(0x4400) 
+        // Crypto Frame: Type (0x06), Offset (0), Length (128)
+        dos.writeByte(0x06); dos.writeByte(0x00); dos.writeShort(128)
+        dos.write(buildUdpNoise(128))
+        return baos.toByteArray()
+    }
+
+    fun buildDnsFakeQuery(domain: String = "google.com"): ByteArray {
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        dos.writeShort(rnd.nextInt(65535)) // ID
+        dos.writeShort(0x0100) // Flags: Standard query
+        dos.writeShort(0x0001) // Questions: 1
+        dos.writeShort(0x0000) // Answer RRs: 0
+        dos.writeShort(0x0000) // Authority RRs: 0
+        dos.writeShort(0x0000) // Additional RRs: 0
+        
+        // Question
+        domain.split(".").forEach { part ->
+            dos.writeByte(part.length)
+            dos.write(part.toByteArray())
+        }
+        dos.writeByte(0)
+        dos.writeShort(0x0001) // Type: A
+        dos.writeShort(0x0001) // Class: IN
+        return baos.toByteArray()
+    }
+
     fun buildEdgeHello(sni: String): ByteArray = buildFakeClientHello(sni, 110, 450, true)
     fun buildOperaHello(sni: String): ByteArray = buildFakeClientHello(sni, 105, 420, true)
 
