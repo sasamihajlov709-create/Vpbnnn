@@ -1367,11 +1367,32 @@ object BypassConfig {
                     output.write(finalData, 0, finalLen); output.flush()
                 }
             }
-            BypassStrategy.TLS_SNI_REVERSE -> {
-                val mod = FakePacketHelper.moveSniExtensionToEnd(data, length)
-                val split = config.frag1.coerceIn(1, mod.size - 1)
-                output.write(mod, 0, split); output.flush(); delay(config.delay1)
-                output.write(mod, split, mod.size - split); output.flush()
+            BypassStrategy.TLS_SNI_NULL_EXT -> {
+                val mod = FakePacketHelper.injectExtension(data, length, 0x0000, ByteArray(0))
+                output.write(mod); output.flush()
+            }
+            BypassStrategy.TLS_SNI_OVERLAP_SKEW -> {
+                val sni = host.toByteArray()
+                val mod1 = FakePacketHelper.injectExtension(data, length, 0x0000, sni)
+                val mod2 = FakePacketHelper.injectExtension(mod1, mod1.size, 0x0000, "google.com".toByteArray())
+                output.write(mod2); output.flush()
+            }
+            BypassStrategy.TCP_DATA_REPETITION -> {
+                try {
+                    val split = (length / 2).coerceAtLeast(1)
+                    output.write(data, 0, split); output.flush()
+                    delay(config.delay1)
+                    
+                    // Duplicate part with low TTL
+                    TtlHelper.setTtl(socket, 2)
+                    output.write(data, 0, split); output.flush()
+                    delay(1)
+                    TtlHelper.setTtl(socket, 64)
+                    
+                    output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
             }
             BypassStrategy.TCP_OVERLAP_SKEW -> {
                 val offset = TlsParser.findSniOffset(data, length, host)

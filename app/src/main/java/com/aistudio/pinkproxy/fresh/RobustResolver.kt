@@ -214,6 +214,8 @@ object RobustResolver {
                 if (records.isNotEmpty()) DnsCacheManager.putDetailed(host, records)
                 records.map { it.address }
             },
+            { DnsProtocols.queryUdpDnsReorder(host, "1.1.1.1", vpnService) },
+            { DnsProtocols.queryUdpDnsReorder(host, "8.8.8.8", vpnService) },
             { DnsProtocols.queryDnsOverTcp(host, "8.8.8.8", vpnService) },
             { DnsProtocols.queryDnsOverTcp(host, "9.9.9.9", vpnService) },
             { DnsProtocols.queryTcpDnsShadow(host, "1.1.1.1", vpnService) },

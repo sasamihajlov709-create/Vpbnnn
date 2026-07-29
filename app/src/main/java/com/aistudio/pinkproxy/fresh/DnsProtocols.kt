@@ -89,6 +89,42 @@ object DnsProtocols {
         }
     }
 
+    suspend fun queryUdpDnsReorder(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val socket = DatagramSocket()
+        val buffer = ProxyStats.obtain8k()
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        try {
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.soTimeout = 3000
+            val targetAddr = InetAddress.getByName(dnsIp)
+            socket.connect(targetAddr, 53)
+            
+            // Fragment query into multiple parts and send out of order
+            if (query.size > 10) {
+                val split = query.size / 2
+                val p1 = query.copyOfRange(0, split)
+                val p2 = query.copyOfRange(split, query.size)
+                
+                // Send second part first (out of order reassembly challenge for DPI)
+                socket.send(DatagramPacket(p2, p2.size))
+                delay(rnd.nextLong(1, 3))
+                socket.send(DatagramPacket(p1, p1.size))
+            } else {
+                socket.send(DatagramPacket(query, query.size))
+            }
+            
+            val respPacket = DatagramPacket(buffer, buffer.size)
+            socket.receive(respPacket)
+            val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
+            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+        } finally {
+            ProxyStats.release8k(buffer)
+            try { socket.close() } catch (e: Throwable) {}
+        }
+    }
+
     suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)

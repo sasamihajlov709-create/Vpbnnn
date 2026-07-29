@@ -277,12 +277,13 @@ object TcpTransportHandler {
                     }
                     val bufSize = buffer.size
                     
+                    var firstResponse = true
+                    var totalRead = 0L
                     try {
                         var n: Int
-                        var firstResponse = true
                         while (isActive) {
                             try {
-                                remoteSocket?.soTimeout = 15000
+                                remoteSocket?.soTimeout = if (totalRead == 0L) 15000 else 60000
                                 n = remoteIn.read(buffer)
                             } catch (e: Throwable) {
                                 if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
@@ -292,20 +293,29 @@ object TcpTransportHandler {
                             }
                             if (n == -1) break
                             if (n > 0) {
+                                totalRead += n
                                 if (firstResponse) {
                                     firstResponse = false
                                     val rtt = System.currentTimeMillis() - start
                                     BypassConfig.recordSuccess(strategy, rtt, targetHost)
                                     
                                     // Deep Packet Inspection evasion: block marker detection
-                                    if (n > 5) {
-                                        if (buffer[0] == 0x15.toByte()) { // TLS Alert
+                                    if (n >= 5) {
+                                        val contentType = buffer[0].toInt() and 0xFF
+                                        if (contentType == 0x15) { // TLS Alert
+                                            val alertLevel = buffer[5].toInt() and 0xFF
+                                            val alertDesc = buffer[6].toInt() and 0xFF
+                                            ProxyStats.logRecovery("DPI Alert Detected: TLS $alertLevel/$alertDesc on $targetHost")
                                             BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TLS_SNI_BLOCK)
                                             throw java.io.IOException("TLS Alert (DPI Block)")
+                                        } else if (contentType == 0x16 || contentType == 0x17) {
+                                            // Valid TLS Handshake or App Data
                                         } else {
+                                            // Possible HTTP or other
                                             val scanLen = n.coerceAtMost(1024)
                                             val lowStr = String(buffer, 0, scanLen, Charsets.US_ASCII).lowercase()
-                                            if (lowStr.contains("forbidden") || lowStr.contains("access denied") || lowStr.contains("blocked")) {
+                                            if (lowStr.contains("forbidden") || lowStr.contains("access denied") || lowStr.contains("blocked") || lowStr.contains("content filter")) {
+                                                ProxyStats.logRecovery("DPI Block Page Detected on $targetHost")
                                                 BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.HTTP_BLOCK)
                                                 throw java.io.IOException("HTTP DPI Block")
                                             }
@@ -319,33 +329,39 @@ object TcpTransportHandler {
                                 ProxyStats.updateBytes(n.toLong())
                                 
                                 // Smart Throttling & Traffic Pattern Obfuscation
-                                if (intensity > 60) {
-                                    // Random micro-delays to break timing analysis
-                                    if (rnd.nextInt(100) < (intensity - 40)) {
-                                        delay(rnd.nextLong(1, (intensity / 10).toLong().coerceAtLeast(2)))
+                                if (intensity > 40) {
+                                    // Random micro-delays to break timing analysis (Side-channel protection)
+                                    if (rnd.nextInt(100) < (intensity - 20)) {
+                                        val d = rnd.nextLong(1, (intensity / 15).toLong().coerceAtLeast(2))
+                                        delay(d)
                                     }
                                     
                                     // Adaptive Shaping based on congestion and stability
                                     val cwnd = ProxyStats.congestionWindow.value
-                                    if (cwnd < 40 || stability < 75) {
-                                        val throttleDelay = (2000L / (cwnd.coerceAtLeast(1) + (stability / 5))).coerceAtMost(100)
-                                        if (throttleDelay > 2) delay(throttleDelay)
+                                    if (cwnd < 30 || stability < 80) {
+                                        val throttleDelay = (1500L / (cwnd.coerceAtLeast(1) + (stability / 4))).coerceAtMost(50)
+                                        if (throttleDelay > 1) delay(throttleDelay)
                                     }
-                                } else if (intensity > 85) {
-                                    yield()
+                                } else {
+                                    if (totalRead % (256 * 1024) == 0L) yield()
                                 }
                             }
                         }
                     } catch (e: Throwable) {
                         if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
-                        if (System.currentTimeMillis() - start < 15000) {
+                        if (totalRead == 0L && System.currentTimeMillis() - start < 20000) {
                             BypassConfig.recordFailure(strategy, targetHost)
                             if (msg.contains("reset") || msg.contains("pipe")) ProxyStats.recordMssFailure()
                         }
-                        if (msg.contains("reset")) ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
-                        else if (msg.contains("timeout")) ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
-                        else ProxyStats.recordCensorshipEvent(true)
+                        if (msg.contains("reset")) {
+                             ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                             ProxyStats.logRecovery("Connection Reset by Peer/DPI: $targetHost")
+                        } else if (msg.contains("timeout")) {
+                             ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                        } else {
+                             ProxyStats.recordCensorshipEvent(true)
+                        }
                     } finally {
                         when (bufSize) {
                             8192 -> ProxyStats.release8k(buffer)

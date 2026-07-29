@@ -347,18 +347,28 @@ object UdpTransportHandler {
         val rnd = ThreadLocalRandom.current()
         
         // 1. Shadowing: occasionally send a fake UDP handshake before real data
-        if (intensity > 60 && rnd.nextInt(100) < 5) {
-            val shadow = when(rnd.nextInt(3)) {
+        if (intensity > 55 && rnd.nextInt(100) < 10) {
+            val shadow = when(rnd.nextInt(4)) {
                 0 -> FakePacketHelper.buildWireguardFake()
                 1 -> FakePacketHelper.buildOpenVpnFake()
+                2 -> FakePacketHelper.buildQuicInitialFake()
                 else -> FakePacketHelper.buildProtocolConfusion("DTLS")
             }
             socket.send(DatagramPacket(shadow, shadow.size, targetInet, targetPort))
-            if (intensity > 85) delay(rnd.nextLong(1, 3))
+            if (intensity > 80) delay(rnd.nextLong(1, 4))
         }
 
-        // 2. Reordering Logic for QUIC or explicit UDP_REORDER
-        if (config.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 75 && rnd.nextInt(100) < 15)) {
+        // 2. QUIC-Specific Obfuscation: send a fake Initial with different CID
+        if (isQuic && intensity > 70 && rnd.nextInt(100) < 15) {
+            val fakeInitial = FakePacketHelper.buildQuicInitialExtremePadding()
+            TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetInet is java.net.Inet6Address)
+            socket.send(DatagramPacket(fakeInitial, fakeInitial.size, targetInet, targetPort))
+            delay(1)
+            TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
+        }
+
+        // 3. Reordering Logic for QUIC or explicit UDP_REORDER
+        if (config.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 80 && rnd.nextInt(100) < 20)) {
             val key = "${targetInet.hostAddress}:$targetPort"
             val buffer = reorderBuffers.getOrPut(key) { Collections.synchronizedList(mutableListOf<DatagramPacket>()) }
             
@@ -370,15 +380,20 @@ object UdpTransportHandler {
                 buffer.clear()
                 for (p in toSend) {
                     BypassConfig.applyUdpBypass(socket, p, config, host)
-                    if (rnd.nextBoolean()) delay(rnd.nextLong(1, 4))
+                    if (rnd.nextInt(100) < 30) delay(rnd.nextLong(1, 3))
                 }
             }
             return
         }
 
-        if (intensity > 40) {
-            val jitter = rnd.nextLong(0, (intensity / 5).toLong() + 5)
+        if (intensity > 35) {
+            val jitter = rnd.nextLong(0, (intensity / 6).toLong() + 3)
             if (jitter > 0) delay(jitter)
+        }
+        
+        // 4. Packet Stuttering: for new sessions, delay initial packets slightly more
+        if (intensity > 65 && !hostStrategyCache.containsKey(host)) {
+             delay(rnd.nextLong(10, 40))
         }
         
         // Randomize TTL slightly to avoid fingerprinting fixed TTL values
