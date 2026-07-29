@@ -371,14 +371,40 @@ object BypassConfig {
         return fallback
     }
 
+    private val lastStrategies = java.util.LinkedList<BypassStrategy>()
+    
     fun rotateGlobalStrategy() {
+        val fingerprint = getCensorshipFingerprint()
+        val intensity = ProxyStats.censorshipIntensity.value
+        
         val best = BypassStrategy.entries
-            .filter { it != BypassStrategy.DIRECT }
+            .filter { it != BypassStrategy.DIRECT && it != _strategy.value && !lastStrategies.contains(it) }
             .maxByOrNull { strat ->
-                HostCategory.entries.map { cat -> strategyScores[cat]?.get(strat)?.get() ?: 0 }.average()
+                var baseScore = HostCategory.entries.map { cat -> strategyScores[cat]?.get(strat)?.get() ?: 0 }.average()
+                
+                // Fingerprint matching
+                if (fingerprint.rstRate > 0.4 && strat.family == StrategyFamily.TCP) {
+                    if (strat == BypassStrategy.FAKE_PACKET || strat == BypassStrategy.TCP_OOB_DESYNC || strat == BypassStrategy.BYEBYEDPI_HYBRID) baseScore += 50
+                }
+                if (fingerprint.sniBlockRate > 0.4 && strat.family == StrategyFamily.TLS) {
+                    if (strat == BypassStrategy.SNI_SPLIT || strat == BypassStrategy.TLS_SNI_SKEW || strat == BypassStrategy.BYEBYEDPI_HYBRID) baseScore += 50
+                }
+                if (fingerprint.udpBlockRate > 0.4 && (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC)) {
+                    if (strat == BypassStrategy.UDP_QUIC_SMART_SHADOW || strat == BypassStrategy.UDP_DNS_REORDER_HYBRID) baseScore += 50
+                }
+                
+                // Adjust for intensity
+                if (intensity > 80 && strat.group == StrategyGroup.EXTREME) baseScore += 30
+                if (intensity < 30 && strat.group == StrategyGroup.LIGHT) baseScore += 20
+                
+                baseScore
             } ?: BypassStrategy.SNI_SPLIT
+        
+        lastStrategies.add(best)
+        if (lastStrategies.size > 5) lastStrategies.removeFirst()
+        
         _strategy.value = best
-        ProxyStats.logRecovery("Strategy rotated to best: ${best.name}")
+        ProxyStats.logRecovery("Strategy rotated (Fingerprint Aware): ${best.name}")
     }
 
     private var optimizerJob: Job? = null
@@ -699,9 +725,42 @@ object BypassConfig {
     }
     
     fun setGlobalStrategy(strat: BypassStrategy) = setStrategy(strat)
+    
+    fun identifyDpiType(e: Throwable, host: String?, dataSent: Int): DpiType {
+        val msg = e.message?.lowercase() ?: ""
+        return when {
+            msg.contains("reset") || msg.contains("connection reset") -> {
+                if (dataSent > 0) DpiType.TLS_SNI_BLOCK else DpiType.TCP_RESET
+            }
+            e is java.net.SocketTimeoutException || e is kotlinx.coroutines.TimeoutCancellationException -> {
+                DpiType.CONNECTION_TIMEOUT
+            }
+            msg.contains("refused") -> DpiType.NONE
+            else -> DpiType.NONE
+        }
+    }
 
     private val recentFailuresCount = java.util.concurrent.atomic.AtomicInteger(0)
     
+    data class DpiFingerprint(
+        val rstRate: Float,
+        val timeoutRate: Float,
+        val sniBlockRate: Float,
+        val udpBlockRate: Float,
+        val avgRttIncrease: Long
+    )
+
+    fun getCensorshipFingerprint(): DpiFingerprint {
+        val total = ProxyStats.dpiEvents.values.sum().coerceAtLeast(1).toFloat()
+        return DpiFingerprint(
+            rstRate = (ProxyStats.dpiEvents[DpiType.TCP_RESET] ?: 0).toFloat() / total,
+            timeoutRate = (ProxyStats.dpiEvents[DpiType.CONNECTION_TIMEOUT] ?: 0).toFloat() / total,
+            sniBlockRate = (ProxyStats.dpiEvents[DpiType.TLS_SNI_BLOCK] ?: 0).toFloat() / total,
+            udpBlockRate = (ProxyStats.dpiEvents[DpiType.UDP_BLOCK] ?: 0).toFloat() / total,
+            avgRttIncrease = (ProxyStats.lastLatency.value - 50).coerceAtLeast(0)
+        )
+    }
+
     fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean, avgDuration: Long = 50L) {
         if (success) {
             recordSuccess(strategy, avgDuration, host)
@@ -756,11 +815,26 @@ object BypassConfig {
                 } else {
                     sb.append(line).append("\r\n")
                 }
+                
+                // Technique 1.8: Tab instead of space
+                if (rnd.nextBoolean()) {
+                    sb.append("X-Forwarded-Host:\t").append(parts.getOrNull(1)?.trim() ?: "").append("\r\n")
+                }
+
                 // Technique 2: X-Forwarded-For injection
                 sb.append("X-Forwarded-For: ").append(rnd.nextInt(1, 255)).append(".")
                   .append(rnd.nextInt(1, 255)).append(".")
                   .append(rnd.nextInt(1, 255)).append(".")
                   .append(rnd.nextInt(1, 255)).append("\r\n")
+                
+                // Technique 3: Content-Length: 0 for GET (suspicious but works on some DPI)
+                if (rnd.nextBoolean()) {
+                    sb.append("Content-Length: 0\r\n")
+                }
+                
+                // Technique 4: Randomized Junk headers
+                val junkHeaders = listOf("X-DPI-Ignore", "X-Bypass", "X-Entropy", "X-Frag-Off")
+                sb.append(junkHeaders.random()).append(": ").append(rnd.nextInt(1000, 9999)).append("\r\n")
             } else {
                 sb.append(line).append("\r\n")
             }
@@ -1072,6 +1146,29 @@ object BypassConfig {
                     socket.send(packet)
                 }
             }
+            BypassStrategy.UDP_IP_FRAG -> {
+                try {
+                    if (length > 200) {
+                        // Force kernel fragmentation by setting MTU discover to DONT
+                        TtlHelper.setNoFrag(socket, false)
+                        socket.send(packet)
+                        TtlHelper.setNoFrag(socket, true)
+                    } else {
+                        socket.send(packet)
+                    }
+                } catch (e: Throwable) { socket.send(packet) }
+            }
+            BypassStrategy.QUIC_INITIAL_FRAGMENTATION -> {
+                if (length > 400 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    val p1 = data.copyOfRange(offset, offset + 128)
+                    val p2 = data.copyOfRange(offset + 128, offset + length)
+                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 3))
+                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
+                }
+            }
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
                 // Naive byte-level splitting breaks UDP because it's a datagram protocol.
                 // Instead, we inject a short fake packet with low TTL before the real packet to confuse DPI state.
@@ -1333,6 +1430,34 @@ object BypassConfig {
                 } else {
                     socket.send(packet)
                 }
+            }
+            BypassStrategy.UDP_SKEW_ADVANCED -> {
+                try {
+                    val isIpv6 = targetAddr is java.net.Inet6Address
+                    // 1. Send small noise part with low TTL
+                    val noise = ByteArray(rnd.nextInt(10, 30)) { rnd.nextInt(256).toByte() }
+                    TtlHelper.setUdpTtl(socket, 2, isIpv6)
+                    socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort))
+                    delay(1)
+                    
+                    // 2. Real data split into 3 parts, sent out of order
+                    TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                    if (length > 60) {
+                        val s1 = length / 3
+                        val s2 = (length * 2) / 3
+                        val p1 = data.copyOfRange(offset, offset + s1)
+                        val p2 = data.copyOfRange(offset + s1, offset + s2)
+                        val p3 = data.copyOfRange(offset + s2, offset + length)
+                        
+                        socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
+                        delay(rnd.nextLong(1, 3))
+                        socket.send(DatagramPacket(p3, p3.size, targetAddr, targetPort))
+                        delay(rnd.nextLong(1, 3))
+                        socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
+                    } else {
+                        socket.send(packet)
+                    }
+                } catch (e: Throwable) { socket.send(packet) }
             }
             else -> {
                 socket.send(packet)
@@ -3135,6 +3260,27 @@ object BypassConfig {
                         output.write(p2); output.flush()
                         delay(rnd.nextLong(1, 5))
                         output.write(p1); output.flush()
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_DATA_DESYNC_OVERLAP -> {
+                try {
+                    if (length > 20) {
+                        val split = length / 2
+                        val fake = ByteArray(split).apply { rnd.nextBytes(this) }
+                        
+                        // 1. Send first part of REAL data with TTL=2 (evade DPI)
+                        TtlHelper.setTtl(socket, 2)
+                        output.write(data, 0, split); output.flush()
+                        
+                        // 2. Send FAKE data that overlaps with the first part (evade DPI state machine)
+                        TtlHelper.setTtl(socket, 64)
+                        output.write(fake); output.flush()
+                        
+                        // 3. Send second part of REAL data
+                        output.write(data, split, length - split); output.flush()
                     } else {
                         output.write(data, 0, length); output.flush()
                     }

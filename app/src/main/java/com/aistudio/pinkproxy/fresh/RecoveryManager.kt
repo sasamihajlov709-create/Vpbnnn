@@ -87,7 +87,8 @@ object RecoveryManager {
                             BypassStrategy.TCP_REORDER_DESYNC, 
                             BypassStrategy.OOB_DESYNC,
                             BypassStrategy.TCP_SEGMENT_DESYNC,
-                            BypassStrategy.TCP_ZERO_WINDOW_DESYNC
+                            BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
+                            BypassStrategy.TCP_REVERSE_FRAG
                         )
                         BypassConfig.setGlobalStrategy(candidates.random())
                         triggerPanic("Active TCP Reset DPI detected")
@@ -97,7 +98,8 @@ object RecoveryManager {
                             BypassStrategy.SNI_SPLIT, 
                             BypassStrategy.TLS_CLIENT_HELLO_CHOP, 
                             BypassStrategy.TLS_REC_SPLIT,
-                            BypassStrategy.TLS_ECH_FAKE
+                            BypassStrategy.BYEBYEDPI_HYBRID,
+                            BypassStrategy.TCP_REVERSE_FRAG
                         )
                         BypassConfig.setGlobalStrategy(candidates.random())
                     }
@@ -115,6 +117,15 @@ object RecoveryManager {
                         val candidates = listOf(BypassStrategy.TLS_REC_SPLIT, BypassStrategy.TCP_ACK_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS)
                         BypassConfig.setGlobalStrategy(candidates.random())
                         if (recoveryEscalation >= 2) triggerPanic("DPI Timeout Escalation")
+                    }
+                    DpiType.UDP_BLOCK -> {
+                        val candidates = listOf(
+                            BypassStrategy.UDP_QUIC_SMART_SHADOW,
+                            BypassStrategy.UDP_DNS_REORDER_HYBRID,
+                            BypassStrategy.UDP_SKEW_REVERSE,
+                            BypassStrategy.QUIC_INITIAL_FRAGMENTATION
+                        )
+                        BypassConfig.setGlobalStrategy(candidates.random())
                     }
                     else -> {
                         BypassConfig.rotateGlobalStrategy()

@@ -127,14 +127,19 @@ object TcpTransportHandler {
                 } catch (e: Throwable) {
                     if (retryCount < maxRetries && (e is java.net.SocketException || e is java.io.IOException || e is TimeoutCancellationException)) {
                         retryCount++
-                        val msg = e.message?.lowercase() ?: ""
-                        val reason = when {
-                            e is TimeoutCancellationException -> BypassConfig.FailureReason.TIMEOUT
-                            msg.contains("reset") -> BypassConfig.FailureReason.TCP_RESET
-                            msg.contains("refused") -> BypassConfig.FailureReason.CONNECTION_REFUSED
-                            else -> BypassConfig.FailureReason.UNKNOWN
+                        val dpiType = BypassConfig.identifyDpiType(e, targetHost, 0)
+                        if (dpiType != DpiType.NONE) {
+                            BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
+                        } else {
+                            val msg = e.message?.lowercase() ?: ""
+                            val reason = when {
+                                e is TimeoutCancellationException -> BypassConfig.FailureReason.TIMEOUT
+                                msg.contains("reset") -> BypassConfig.FailureReason.TCP_RESET
+                                msg.contains("refused") -> BypassConfig.FailureReason.CONNECTION_REFUSED
+                                else -> BypassConfig.FailureReason.UNKNOWN
+                            }
+                            BypassConfig.recordFailure(strategy, targetHost, reason)
                         }
-                        BypassConfig.recordFailure(strategy, targetHost, reason)
                         ProxyStats.recordGlobalFailure()
                         delay(500)
                         continue

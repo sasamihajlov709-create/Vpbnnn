@@ -197,6 +197,7 @@ enum class BypassStrategy(
     UDP_IP_ID_MANGLE(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
     TCP_FOOL_DPI(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_REVERSE_FRAG(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
+    TCP_DATA_DESYNC_OVERLAP(StrategyFamily.TCP, 6, 5, StrategyGroup.EXTREME),
     UDP_SKEW_REVERSE(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
@@ -221,9 +222,12 @@ object ProxyStats {
 
     fun recordDpiEvent(type: DpiType) {
         _currentDpiType.value = type
+        dpiEvents[type] = (dpiEvents[type] ?: 0) + 1
         recordCensorshipEvent(true)
         logRecovery("Detected censorship type: $type")
     }
+    
+    val dpiEvents = ConcurrentHashMap<DpiType, Int>()
     
     fun recordDnsFailure() {
         _dnsFailureCount.update { it + 1 }

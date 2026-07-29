@@ -96,6 +96,17 @@ object TtlHelper {
         }
     }
 
+    fun setNoFrag(socket: java.net.DatagramSocket, noFrag: Boolean): Boolean {
+        return try {
+            val fd = getFileDescriptor(socket) ?: return false
+            val level = if (socket.inetAddress is java.net.Inet6Address) OsConstants.IPPROTO_IPV6 else OsConstants.IPPROTO_IP
+            val optname = if (socket.inetAddress is java.net.Inet6Address) 23 else 10 // IP_MTU_DISCOVER / IPV6_MTU_DISCOVER
+            val value = if (noFrag) 2 else 0 // IP_PMTUDISC_DO vs IP_PMTUDISC_DONT
+            Os.setsockoptInt(fd, level, optname, value)
+            true
+        } catch (e: Throwable) { false }
+    }
+
     fun tuneSocket(socket: Socket) {
         try {
             val fd = getFileDescriptor(socket) ?: return

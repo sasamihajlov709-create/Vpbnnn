@@ -193,6 +193,7 @@ object RobustResolver {
         
         val queries = listOf<suspend () -> List<InetAddress>>(
             { DnsProtocols.queryDohRacing(host, vpnService) },
+            { DnsProtocols.queryDohExtreme(host, vpnService) },
             { DnsProtocols.queryDohJson(host, vpnService) },
             { 
                 try {

@@ -448,8 +448,15 @@ object ServiceChecker {
                 // Just let the optimizer know this strategy had a successful probe.
                 BypassConfig.recordStrategyResult("global_probe", best.first, true, best.second)
                 ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} (${best.third}/${testHosts.size} hosts ok)! Logged for ranking.")
+                
+                // If the winner is very stable, maybe reduce intensity slightly
+                if (best.third == testHosts.size && best.second < 400) {
+                    ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 5).coerceAtLeast(0))
+                }
             } else {
-                ProxyStats.logRecovery("Autopilot: No clear winner in tournament. Maintaining current states.")
+                ProxyStats.logRecovery("CRITICAL: Autopilot failed to find a working strategy in tournament!")
+                ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value + 15).coerceAtMost(100))
+                BypassConfig.setPanicMode(true)
             }
             
             isProbing.set(false)
