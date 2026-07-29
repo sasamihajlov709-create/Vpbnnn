@@ -108,6 +108,24 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildQuicInitialReal(dcid: ByteArray, scid: ByteArray, payload: ByteArray): ByteArray {
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        // Header: Initial (0xC0 | packet number length 3 = 0xC3), Version 1
+        dos.writeByte(0xC3); dos.writeInt(0x00000001)
+        dos.writeByte(dcid.size); dos.write(dcid)
+        dos.writeByte(scid.size); dos.write(scid)
+        dos.writeByte(0x00) // Token Length
+        
+        // Length field (Varint)
+        val len = payload.size + 4 // + packet number
+        if (len < 64) dos.writeByte(len)
+        else { dos.writeByte(0x40 or (len shr 8)); dos.writeByte(len and 0xFF) }
+        
+        dos.writeInt(ThreadLocalRandom.current().nextInt()) // Packet Number
+        dos.write(payload)
+        return baos.toByteArray()
+    }
+
     fun buildQuicInitialExtremePadding(): ByteArray {
         val rnd = ThreadLocalRandom.current()
         val data = ByteArray(rnd.nextInt(1280, 1450)).apply { rnd.nextBytes(this) }

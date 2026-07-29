@@ -196,6 +196,8 @@ enum class BypassStrategy(
     DNS_OVER_TCP_FORCE(StrategyFamily.DNS, 2, 1, StrategyGroup.LIGHT),
     UDP_IP_ID_MANGLE(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
     TCP_FOOL_DPI(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
+    TCP_REVERSE_FRAG(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
+    UDP_SKEW_REVERSE(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

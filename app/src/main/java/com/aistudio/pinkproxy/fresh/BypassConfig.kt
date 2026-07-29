@@ -258,10 +258,10 @@ object BypassConfig {
                     when (dpiType) {
                         DpiType.TCP_RESET -> {
                             if (remembered.family == StrategyFamily.TCP) boostedScore += 40
-                            if (remembered == BypassStrategy.FAKE_PACKET || remembered == BypassStrategy.TCP_OOB_DESYNC || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.TCP_DATA_DESYNC) boostedScore += 60
+                            if (remembered == BypassStrategy.FAKE_PACKET || remembered == BypassStrategy.TCP_OOB_DESYNC || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.TCP_DATA_DESYNC || remembered == BypassStrategy.TCP_REVERSE_FRAG) boostedScore += 65
                         }
                         DpiType.CONNECTION_TIMEOUT -> {
-                            if (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP || remembered == BypassStrategy.FRAGMENT_MULTI || remembered == BypassStrategy.BYEBYEDPI_HYBRID) boostedScore += 45
+                            if (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP || remembered == BypassStrategy.FRAGMENT_MULTI || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.TCP_REVERSE_FRAG) boostedScore += 45
                             if (remembered == BypassStrategy.TCP_ZERO_WINDOW_STALL) boostedScore += 30
                         }
                         DpiType.TLS_SNI_BLOCK -> {
@@ -499,8 +499,15 @@ object BypassConfig {
             DpiType.TCP_RESET -> {
                 val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
                 val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
-                listOf(BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_SPLIT, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.TCP_DATA_DESYNC).forEach {
-                    scores[it]?.addAndGet(25)
+                listOf(BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_SPLIT, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.TCP_DATA_DESYNC, BypassStrategy.TCP_REVERSE_FRAG).forEach {
+                    scores[it]?.addAndGet(30)
+                }
+            }
+            DpiType.TLS_SNI_BLOCK -> {
+                val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+                val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
+                listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TLS_SNI_NULL_EXT, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.TCP_REVERSE_FRAG).forEach {
+                    scores[it]?.addAndGet(40)
                 }
             }
             DpiType.CONNECTION_TIMEOUT -> {
@@ -511,8 +518,8 @@ object BypassConfig {
             DpiType.UDP_BLOCK -> {
                 val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
                 val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
-                listOf(BypassStrategy.UDP_QUIC_SMART_SHADOW, BypassStrategy.UDP_DNS_REORDER_HYBRID, BypassStrategy.QUIC_INITIAL_FRAGMENT, BypassStrategy.UDP_IP_FRAG).forEach {
-                    scores[it]?.addAndGet(30)
+                listOf(BypassStrategy.UDP_QUIC_SMART_SHADOW, BypassStrategy.UDP_DNS_REORDER_HYBRID, BypassStrategy.QUIC_INITIAL_FRAGMENT, BypassStrategy.UDP_IP_FRAG, BypassStrategy.UDP_SKEW_REVERSE).forEach {
+                    scores[it]?.addAndGet(35)
                 }
             }
             else -> {}
@@ -693,12 +700,26 @@ object BypassConfig {
     
     fun setGlobalStrategy(strat: BypassStrategy) = setStrategy(strat)
 
+    private val recentFailuresCount = java.util.concurrent.atomic.AtomicInteger(0)
+    
     fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean, avgDuration: Long = 50L) {
         if (success) {
             recordSuccess(strategy, avgDuration, host)
+            recentFailuresCount.set((recentFailuresCount.get() - 1).coerceAtLeast(0))
         } else {
             recordFailure(strategy, host)
+            if (recentFailuresCount.incrementAndGet() >= 8) {
+                recentFailuresCount.set(0)
+                performEmergencyRotation()
+            }
         }
+    }
+
+    private fun performEmergencyRotation() {
+        ProxyStats.logRecovery("CRITICAL FAILURE RATE. Performing emergency strategy rotation...")
+        _isPanicModeFlow.value = true
+        rotateGlobalStrategy()
+        ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value + 20).coerceAtMost(100))
     }
 
     @Volatile var activeVpnService: VpnService? = null
@@ -728,7 +749,13 @@ object BypassConfig {
             if (line.startsWith("Host:", ignoreCase = true)) {
                 // Technique 1: Duplicate Host with different case and innocent value
                 sb.append("hOsT: ").append(innocent).append("\r\n")
-                sb.append(line).append("\r\n")
+                // Technique 1.5: Space before colon
+                val parts = line.split(":", limit = 2)
+                if (parts.size == 2 && rnd.nextBoolean()) {
+                    sb.append(parts[0]).append(" : ").append(parts[1].trim()).append("\r\n")
+                } else {
+                    sb.append(line).append("\r\n")
+                }
                 // Technique 2: X-Forwarded-For injection
                 sb.append("X-Forwarded-For: ").append(rnd.nextInt(1, 255)).append(".")
                   .append(rnd.nextInt(1, 255)).append(".")
@@ -1281,6 +1308,31 @@ object BypassConfig {
                 val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(128, 512))
                 val combined = data.copyOfRange(offset, offset + length) + padding
                 socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
+            }
+            BypassStrategy.QUIC_INITIAL_FRAGMENT -> {
+                if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    val split = 64
+                    val p1 = data.copyOfRange(offset, offset + split)
+                    val p2 = data.copyOfRange(offset + split, offset + length)
+                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 3))
+                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
+                }
+            }
+            BypassStrategy.UDP_SKEW_REVERSE -> {
+                if (length > 40) {
+                    val split = length / 2
+                    val p1 = data.copyOfRange(offset, offset + split)
+                    val p2 = data.copyOfRange(offset + split, offset + length)
+                    // Send second part first
+                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 4))
+                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
+                }
             }
             else -> {
                 socket.send(packet)
@@ -3069,6 +3121,22 @@ object BypassConfig {
                         output.write(data, 0, split); output.flush()
                         delay(config.delay1)
                         output.write(data, split, length - split); output.flush()
+                    }
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_REVERSE_FRAG -> {
+                try {
+                    if (length > 10) {
+                        val split = length / 2
+                        val p1 = data.copyOfRange(0, split)
+                        val p2 = data.copyOfRange(split, length)
+                        
+                        // Send part 2 first
+                        output.write(p2); output.flush()
+                        delay(rnd.nextLong(1, 5))
+                        output.write(p1); output.flush()
+                    } else {
+                        output.write(data, 0, length); output.flush()
                     }
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }

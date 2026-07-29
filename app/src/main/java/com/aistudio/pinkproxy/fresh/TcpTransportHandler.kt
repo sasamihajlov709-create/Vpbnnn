@@ -403,9 +403,9 @@ object TcpTransportHandler {
                                         val realSni = TlsParser.extractHostname(buffer, n, sniOffset)
                                         if (realSni != null) {
                                             if (BypassConfig.isHostCensored(realSni)) {
-                                                // High censorship host! Use BYEBYEDPI_SIM for maximum effectiveness
-                                                ProxyStats.logRecovery("Censorship Detected: Auto-Upgrading to BYEBYEDPI_SIM for $realSni")
-                                                val forceStrategy = BypassStrategy.BYEBYEDPI_SIM
+                                                // High censorship host! Use BYEBYEDPI_HYBRID for maximum effectiveness
+                                                ProxyStats.logRecovery("Censorship Detected: Auto-Upgrading to BYEBYEDPI_HYBRID for $realSni")
+                                                val forceStrategy = BypassStrategy.BYEBYEDPI_HYBRID
                                                 val forceConfig = BypassConfig.getSessionConfig(realSni, forceStrategy, BypassConfig.currentRttMs.value)
                                                 BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, forceConfig, realSni)
                                                 packetsCount++
@@ -469,7 +469,18 @@ object TcpTransportHandler {
                                             if (currentIntensity > 75) delay(rnd.nextLong(1, 8))
                                             
                                             // Fake retransmission/overlap trick (TCP Overlap)
-                                            if (currentIntensity > 85 && rnd.nextInt(100) < 25) {
+                                            if (currentIntensity > 85 && rnd.nextInt(100) < 35) {
+                                                if (rnd.nextBoolean()) {
+                                                    // Reverse fragmentation simulation
+                                                    val p1 = buffer.copyOfRange(split, n)
+                                                    val p2 = buffer.copyOfRange(0, split)
+                                                    remoteOut.write(p1); remoteOut.flush()
+                                                    delay(rnd.nextLong(1, 4))
+                                                    remoteOut.write(p2); remoteOut.flush()
+                                                    totalWrittenClient.addAndGet(n.toLong())
+                                                    ProxyStats.updateBytes(n.toLong())
+                                                    continue
+                                                }
                                                 TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 4))
                                                 val overlapSize = rnd.nextInt(1, (n - split).coerceAtLeast(2))
                                                 remoteOut.write(buffer, split, overlapSize)
