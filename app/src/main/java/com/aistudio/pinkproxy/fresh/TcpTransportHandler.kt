@@ -474,25 +474,9 @@ object TcpTransportHandler {
                                             
                                             if (currentIntensity > 75) delay(rnd.nextLong(1, 8))
                                             
-                                            // Fake retransmission/overlap trick (TCP Overlap)
+                                            // Confuse DPI state tracking with OOB data injection
                                             if (currentIntensity > 85 && rnd.nextInt(100) < 35) {
-                                                if (rnd.nextBoolean()) {
-                                                    // Reverse fragmentation simulation
-                                                    val p1 = buffer.copyOfRange(split, n)
-                                                    val p2 = buffer.copyOfRange(0, split)
-                                                    remoteOut.write(p1); remoteOut.flush()
-                                                    delay(rnd.nextLong(1, 4))
-                                                    remoteOut.write(p2); remoteOut.flush()
-                                                    totalWrittenClient.addAndGet(n.toLong())
-                                                    ProxyStats.updateBytes(n.toLong())
-                                                    continue
-                                                }
-                                                TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 4))
-                                                val overlapSize = rnd.nextInt(1, (n - split).coerceAtLeast(2))
-                                                remoteOut.write(buffer, split, overlapSize)
-                                                remoteOut.flush()
-                                                delay(1)
-                                                TtlHelper.setTtl(remoteSocket!!, 64)
+                                                try { remoteSocket?.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                                             }
 
                                             remoteOut.write(buffer, split, n - split)

@@ -253,10 +253,9 @@ object DnsProtocols {
             if (ProxyStats.censorshipIntensity.value > 65) {
                 val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
                 try {
-                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
-                    output.write(fake); output.flush()
-                    delay(1)
-                    TtlHelper.setTtl(socket, 64)
+                    try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+delay(1)
+TtlHelper.setTtl(socket, 64)
                 } catch(e: Throwable) {}
             }
             
