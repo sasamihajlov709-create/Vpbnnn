@@ -489,17 +489,24 @@ object FakePacketHelper {
     fun mangleHttpMethod(data: ByteArray, length: Int): ByteArray {
         if (length < 8) return data.copyOf(length)
         val copy = data.copyOf(length)
-        val s = String(data, 0, minOf(length, 10), Charsets.US_ASCII)
-        val spaceIdx = s.indexOf(' ')
+        var spaceIdx = -1
+        for (i in 0 until minOf(length, 10)) {
+            if (data[i] == ' '.code.toByte()) {
+                spaceIdx = i
+                break
+            }
+        }
         if (spaceIdx != -1) {
-            val method = s.substring(0, spaceIdx)
             val rnd = ThreadLocalRandom.current()
             if (rnd.nextBoolean()) {
-                // Change case: GET -> gEt
-                for (i in 0 until method.length) {
+                for (i in 0 until spaceIdx) {
                     if (rnd.nextBoolean()) {
-                        val c = method[i]
-                        copy[i] = if (c.isUpperCase()) c.lowercaseChar().code.toByte() else c.uppercaseChar().code.toByte()
+                        val c = copy[i]
+                        if (c in 'A'.code.toByte()..'Z'.code.toByte()) {
+                            copy[i] = (c + 32).toByte()
+                        } else if (c in 'a'.code.toByte()..'z'.code.toByte()) {
+                            copy[i] = (c - 32).toByte()
+                        }
                     }
                 }
             }
@@ -509,14 +516,19 @@ object FakePacketHelper {
 
     fun addSpaceToHttpMethod(data: ByteArray, length: Int): ByteArray {
         if (length < 8) return data.copyOf(length)
-        val s = String(data, 0, minOf(length, 12), Charsets.US_ASCII)
-        val spaceIdx = s.indexOf(' ')
+        var spaceIdx = -1
+        for (i in 0 until minOf(length, 12)) {
+            if (data[i] == ' '.code.toByte()) {
+                spaceIdx = i
+                break
+            }
+        }
         if (spaceIdx != -1) {
-            val baos = ByteArrayOutputStream()
-            baos.write(data, 0, spaceIdx + 1)
-            baos.write(' '.code) // Extra space
-            baos.write(data, spaceIdx + 1, length - (spaceIdx + 1))
-            return baos.toByteArray()
+            val result = ByteArray(length + 1)
+            System.arraycopy(data, 0, result, 0, spaceIdx + 1)
+            result[spaceIdx + 1] = ' '.code.toByte()
+            System.arraycopy(data, spaceIdx + 1, result, spaceIdx + 2, length - (spaceIdx + 1))
+            return result
         }
         return data.copyOf(length)
     }
@@ -538,16 +550,41 @@ object FakePacketHelper {
     }
 
     fun addDotToHost(data: ByteArray, length: Int): ByteArray {
-        val s = String(data, 0, length, Charsets.US_ASCII)
-        val hostLine = s.lines().find { it.startsWith("Host:", true) }
-        if (hostLine != null) {
-            val start = s.indexOf(hostLine)
-            val end = start + hostLine.length
-            val baos = ByteArrayOutputStream()
-            baos.write(data, 0, end)
-            baos.write('.'.code) // Dot after host
-            baos.write(data, end, length - end)
-            return baos.toByteArray()
+        val hostPrefix = byteArrayOf('H'.code.toByte(), 'o'.code.toByte(), 's'.code.toByte(), 't'.code.toByte(), ':'.code.toByte())
+        val hostPrefixLower = byteArrayOf('h'.code.toByte(), 'o'.code.toByte(), 's'.code.toByte(), 't'.code.toByte(), ':'.code.toByte())
+        
+        var matchIdx = 0
+        var foundHost = false
+        var insertPos = -1
+        
+        for (i in 0 until length - 1) {
+            if (!foundHost) {
+                if (data[i] == hostPrefix[matchIdx] || data[i] == hostPrefixLower[matchIdx]) {
+                    matchIdx++
+                    if (matchIdx == hostPrefix.size) {
+                        foundHost = true
+                    }
+                } else {
+                    matchIdx = 0
+                    // if it was newline, we could start matching on next
+                    if (data[i] == '\n'.code.toByte() && (data[i+1] == 'H'.code.toByte() || data[i+1] == 'h'.code.toByte())) {
+                        matchIdx = 0
+                    }
+                }
+            } else {
+                if (data[i] == '\r'.code.toByte() && data[i+1] == '\n'.code.toByte()) {
+                    insertPos = i
+                    break
+                }
+            }
+        }
+        
+        if (insertPos != -1) {
+            val result = ByteArray(length + 1)
+            System.arraycopy(data, 0, result, 0, insertPos)
+            result[insertPos] = '.'.code.toByte()
+            System.arraycopy(data, insertPos, result, insertPos + 1, length - insertPos)
+            return result
         }
         return data.copyOf(length)
     }
@@ -574,24 +611,41 @@ object FakePacketHelper {
     }
 
     fun randomizeHeaderCase(data: ByteArray, length: Int): ByteArray {
-        val s = String(data, 0, length, StandardCharsets.US_ASCII)
-        val lines = s.split("\r\n").toMutableList()
+        val copy = data.copyOf(length)
         val rnd = ThreadLocalRandom.current()
-        
-        for (i in 1 until lines.size) { // Skip request line
-            val line = lines[i]
-            if (line.isEmpty()) break // End of headers
-            val colonIdx = line.indexOf(':')
-            if (colonIdx != -1) {
-                val name = line.substring(0, colonIdx)
-                val value = line.substring(colonIdx)
-                val newName = name.toCharArray().map {
-                    if (rnd.nextBoolean()) it.lowercaseChar() else it.uppercaseChar()
-                }.joinToString("")
-                lines[i] = newName + value
+        var inHeaderName = false
+        var afterRequestLine = false
+        for (i in 0 until length) {
+            val b = copy[i]
+            if (!afterRequestLine) {
+                if (b == '\n'.code.toByte()) {
+                    afterRequestLine = true
+                    inHeaderName = true
+                }
+                continue
+            }
+            if (inHeaderName) {
+                if (b == ':'.code.toByte()) {
+                    inHeaderName = false
+                } else if (b in 'a'.code.toByte()..'z'.code.toByte() || b in 'A'.code.toByte()..'Z'.code.toByte()) {
+                    if (rnd.nextBoolean()) {
+                        if (b in 'a'.code.toByte()..'z'.code.toByte()) {
+                            copy[i] = (b - 32).toByte()
+                        } else {
+                            copy[i] = (b + 32).toByte()
+                        }
+                    }
+                } else if (b == '\n'.code.toByte()) {
+                    // Next line
+                    inHeaderName = true
+                }
+            } else {
+                if (b == '\n'.code.toByte()) {
+                    inHeaderName = true
+                }
             }
         }
-        return lines.joinToString("\r\n").toByteArray(StandardCharsets.US_ASCII)
+        return copy
     }
 
     fun injectMultiTlsPadding(data: ByteArray, length: Int, count: Int): ByteArray {
