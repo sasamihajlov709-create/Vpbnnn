@@ -112,7 +112,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         if (method == "CONNECT") {
             val hostPort = target.split(":")
             host = hostPort[0]
-            port = if (hostPort.size > 1) hostPort[1].toInt() else 443
+            port = if (hostPort.size > 1) hostPort[1].toIntOrNull() ?: 443 else 443
             
             // Consume remaining headers
             while (true) {

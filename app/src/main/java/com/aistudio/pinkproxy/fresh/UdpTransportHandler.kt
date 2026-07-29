@@ -157,7 +157,7 @@ object UdpTransportHandler {
                                 if (e is CancellationException) throw e
                                 break
                             }
-                            val pktAddr = packet.address
+                            val pktAddr = packet.address ?: continue
                             val pktPort = packet.port
                             if (clientUdpAddress == null) {
                                 if (pktAddr.isLoopbackAddress || pktAddr.hostAddress == "127.0.0.1") {
@@ -328,7 +328,7 @@ object UdpTransportHandler {
         val payload = packet.data
         val offset = packet.offset
         val length = packet.length
-        val targetInet = packet.address
+        val targetInet = packet.address ?: return
         val targetPort = packet.port
         
         val isQuic = targetPort == 443 && length > 0 && (payload[offset].toInt() and 0xC0) == 0xC0

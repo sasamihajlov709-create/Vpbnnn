@@ -101,19 +101,13 @@ object DnsProtocols {
             val targetAddr = InetAddress.getByName(dnsIp)
             socket.connect(targetAddr, 53)
             
-            // Fragment query into multiple parts and send out of order
-            if (query.size > 10) {
-                val split = query.size / 2
-                val p1 = query.copyOfRange(0, split)
-                val p2 = query.copyOfRange(split, query.size)
-                
-                // Send second part first (out of order reassembly challenge for DPI)
-                socket.send(DatagramPacket(p2, p2.size))
-                delay(rnd.nextLong(1, 3))
-                socket.send(DatagramPacket(p1, p1.size))
-            } else {
-                socket.send(DatagramPacket(query, query.size))
-            }
+            // Send decoy query with low TTL to trick DPI, then real complete query
+            TtlHelper.setUdpTtl(socket, 2, targetAddr is java.net.Inet6Address)
+            val decoy = DnsPacketEngine.buildDnsQuery("check.dns.internal", 1, rnd.nextInt(0x10000))
+            socket.send(DatagramPacket(decoy, decoy.size))
+            delay(rnd.nextLong(1, 3))
+            TtlHelper.setUdpTtl(socket, 64, targetAddr is java.net.Inet6Address)
+            socket.send(DatagramPacket(query, query.size))
             
             val respPacket = DatagramPacket(buffer, buffer.size)
             socket.receive(respPacket)
@@ -178,27 +172,14 @@ object DnsProtocols {
             delay(rnd.nextLong(1, 5))
             TtlHelper.setUdpTtl(socket, 64, isIpv6)
             
-            // 2. Fragmented Real Query
-            if (queryReal.size > 10 && ProxyStats.censorshipIntensity.value > 40) {
-                val split = rnd.nextInt(2, queryReal.size - 2)
-                val p1 = queryReal.copyOfRange(0, split)
-                val p2 = queryReal.copyOfRange(split, queryReal.size)
-                
-                // This is a trick: some middleboxes reassemble UDP fragments if they have the same ID? 
-                // No, standard UDP has no reassembly. But we send them as separate packets.
-                // Middleboxes that only look at the first packet will miss the query.
-                socket.send(DatagramPacket(p1, p1.size))
-                delay(rnd.nextLong(1, 3))
-                socket.send(DatagramPacket(p2, p2.size))
-                
-                // Also send a "Noise" packet between them or after
-                val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
-                TtlHelper.setUdpTtl(socket, 1, isIpv6) // Extremely low TTL
-                socket.send(DatagramPacket(noise, noise.size))
-                TtlHelper.setUdpTtl(socket, 64, isIpv6)
-            } else {
-                socket.send(DatagramPacket(queryReal, queryReal.size))
-            }
+            // 2. Send low-TTL noise datagram to confuse DPI session state
+            val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
+            TtlHelper.setUdpTtl(socket, 1, isIpv6)
+            socket.send(DatagramPacket(noise, noise.size))
+            TtlHelper.setUdpTtl(socket, 64, isIpv6)
+
+            // 3. Send full valid real query
+            socket.send(DatagramPacket(queryReal, queryReal.size))
             
             // 3. Send full real query again just in case (race against censorship)
             delay(rnd.nextLong(5, 15))

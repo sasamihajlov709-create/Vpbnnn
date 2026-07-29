@@ -187,14 +187,22 @@ class MainActivity : ComponentActivity() {
 
     private fun startVpnService() {
         val intent = Intent(this, PinkVpnService::class.java)
-        androidx.core.content.ContextCompat.startForegroundService(this, intent)
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(this, intent)
+        } catch (e: Throwable) {
+            Log.e("MainActivity", "Failed to start VPN service: ${e.message}")
+        }
     }
 
     private fun stopVpnService() {
         val intent = Intent(this, PinkVpnService::class.java).apply {
             action = "STOP"
         }
-        androidx.core.content.ContextCompat.startForegroundService(this, intent)
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(this, intent)
+        } catch (e: Throwable) {
+            Log.e("MainActivity", "Failed to stop VPN service: ${e.message}")
+        }
     }
 }
 
@@ -391,8 +399,12 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     CompactActionButton("OPTIMIZE", Modifier.weight(1f)) { 
-                        val intent = Intent(context, PinkVpnService::class.java).apply { action = "RESTART" }
-                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                        try {
+                            val intent = Intent(context, PinkVpnService::class.java).apply { action = "RESTART" }
+                            androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                        } catch (e: Throwable) {
+                            Log.e("MainActivity", "Failed to restart VPN: ${e.message}")
+                        }
                     }
                     CompactActionButton("STATS", Modifier.weight(1f)) { showStrategyStats = true }
                     CompactActionButton("LOGS", Modifier.weight(1f)) { showLogs = true }
@@ -1784,11 +1796,14 @@ fun ExpertSettingsCard(
                                 BypassConfig.isAutoTuning = it
                                 BypassConfig.saveTuningSettings(context)
                                 if (it) {
-                                    // Trigger immediate re-mutation
-                                    val intent = Intent(context, PinkVpnService::class.java).apply {
-                                        action = "CHANGE_STRATEGY"
+                                    try {
+                                        val intent = Intent(context, PinkVpnService::class.java).apply {
+                                            action = "CHANGE_STRATEGY"
+                                        }
+                                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                                    } catch (e: Throwable) {
+                                        Log.e("MainActivity", "Failed to change strategy: ${e.message}")
                                     }
-                                    androidx.core.content.ContextCompat.startForegroundService(context, intent)
                                 }
                             },
                             colors = SwitchDefaults.colors(
@@ -1980,10 +1995,14 @@ fun ExpertSettingsCard(
                                     BypassConfig.saveTuningSettings(context)
                                     // Trigger immediate change if VPN is running
                                     if (isVpnActive) {
-                                        val intent = Intent(context, PinkVpnService::class.java).apply {
-                                            action = "CHANGE_STRATEGY"
+                                        try {
+                                            val intent = Intent(context, PinkVpnService::class.java).apply {
+                                                action = "CHANGE_STRATEGY"
+                                            }
+                                            androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                                        } catch (e: Throwable) {
+                                            Log.e("MainActivity", "Failed to change strategy: ${e.message}")
                                         }
-                                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
                                     }
                                 }
                             )
@@ -2133,10 +2152,14 @@ fun ExpertSettingsCard(
                 Button(
                     onClick = {
                         BypassConfig.clearScores(context)
-                        val intent = Intent(context, PinkVpnService::class.java).apply {
-                            action = "RESTART"
+                        try {
+                            val intent = Intent(context, PinkVpnService::class.java).apply {
+                                action = "RESTART"
+                            }
+                            androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                        } catch (e: Throwable) {
+                            Log.e("MainActivity", "Failed to restart VPN: ${e.message}")
                         }
-                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = GentleDarkPink),
                     shape = RoundedCornerShape(8.dp),
