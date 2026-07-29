@@ -408,9 +408,9 @@ object TcpTransportHandler {
                                         val realSni = TlsParser.extractHostname(buffer, n, sniOffset)
                                         if (realSni != null) {
                                             if (BypassConfig.isHostCensored(realSni)) {
-                                                // High censorship host! Use BYEBYEDPI_HYBRID for maximum effectiveness
-                                                ProxyStats.logRecovery("Censorship Detected: Auto-Upgrading to BYEBYEDPI_HYBRID for $realSni")
-                                                val forceStrategy = BypassStrategy.BYEBYEDPI_HYBRID
+                                                // High censorship host! Use EXTREME strategies for maximum effectiveness
+                                                val forceStrategy = if (currentIntensity > 80) BypassStrategy.ZAPRET_EXTREME else BypassStrategy.BYEBYEDPI_EXTREME
+                                                ProxyStats.logRecovery("Censorship Detected: Auto-Upgrading to ${forceStrategy.name} for $realSni")
                                                 val forceConfig = BypassConfig.getSessionConfig(realSni, forceStrategy, BypassConfig.currentRttMs.value)
                                                 BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, forceConfig, realSni)
                                                 packetsCount++

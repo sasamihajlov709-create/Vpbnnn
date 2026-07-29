@@ -189,6 +189,8 @@ enum class BypassStrategy(
     TCP_DATA_DESYNC(StrategyFamily.TCP, 5, 5, StrategyGroup.EXTREME),
     TCP_ACK_SKEW_ADVANCED(StrategyFamily.TCP, 3, 3, StrategyGroup.HEAVY),
     BYEBYEDPI_HYBRID(StrategyFamily.ADAPTIVE, 6, 5, StrategyGroup.EXTREME),
+    BYEBYEDPI_EXTREME(StrategyFamily.ADAPTIVE, 6, 5, StrategyGroup.EXTREME),
+    ZAPRET_EXTREME(StrategyFamily.ADAPTIVE, 6, 5, StrategyGroup.EXTREME),
     UDP_QUIC_SMART_SHADOW(StrategyFamily.QUIC, 4, 3, StrategyGroup.HEAVY),
     UDP_DNS_REORDER_HYBRID(StrategyFamily.DNS, 3, 2, StrategyGroup.MEDIUM),
     UDP_REORDER(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),

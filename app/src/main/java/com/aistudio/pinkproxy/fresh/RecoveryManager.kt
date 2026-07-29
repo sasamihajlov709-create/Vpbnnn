@@ -99,6 +99,8 @@ object RecoveryManager {
                             BypassStrategy.TLS_CLIENT_HELLO_CHOP, 
                             BypassStrategy.TLS_REC_SPLIT,
                             BypassStrategy.BYEBYEDPI_HYBRID,
+                            BypassStrategy.BYEBYEDPI_EXTREME,
+                            BypassStrategy.ZAPRET_EXTREME,
                             BypassStrategy.TCP_REVERSE_FRAG
                         )
                         BypassConfig.setGlobalStrategy(candidates.random())

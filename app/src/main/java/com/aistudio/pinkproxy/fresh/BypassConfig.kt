@@ -263,15 +263,15 @@ object BypassConfig {
                     when (dpiType) {
                         DpiType.TCP_RESET -> {
                             if (remembered.family == StrategyFamily.TCP) boostedScore += 40
-                            if (remembered == BypassStrategy.FAKE_PACKET || remembered == BypassStrategy.TCP_OOB_DESYNC || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.TCP_DATA_DESYNC || remembered == BypassStrategy.TCP_REVERSE_FRAG) boostedScore += 65
+                            if (remembered == BypassStrategy.FAKE_PACKET || remembered == BypassStrategy.TCP_OOB_DESYNC || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.BYEBYEDPI_EXTREME || remembered == BypassStrategy.ZAPRET_EXTREME || remembered == BypassStrategy.TCP_DATA_DESYNC || remembered == BypassStrategy.TCP_REVERSE_FRAG) boostedScore += 65
                         }
                         DpiType.CONNECTION_TIMEOUT -> {
-                            if (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP || remembered == BypassStrategy.FRAGMENT_MULTI || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.TCP_REVERSE_FRAG) boostedScore += 45
+                            if (remembered == BypassStrategy.TLS_CLIENT_HELLO_CHOP || remembered == BypassStrategy.FRAGMENT_MULTI || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.BYEBYEDPI_EXTREME || remembered == BypassStrategy.ZAPRET_EXTREME || remembered == BypassStrategy.TCP_REVERSE_FRAG) boostedScore += 45
                             if (remembered == BypassStrategy.TCP_ZERO_WINDOW_STALL) boostedScore += 30
                         }
                         DpiType.TLS_SNI_BLOCK -> {
                             if (remembered.family == StrategyFamily.TLS || remembered.family == StrategyFamily.FRAGMENTATION) boostedScore += 50
-                            if (remembered == BypassStrategy.SNI_SPLIT || remembered == BypassStrategy.TLS_SNI_SKEW || remembered == BypassStrategy.TLS_SNI_NULL_EXT || remembered == BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID) boostedScore += 70
+                            if (remembered == BypassStrategy.SNI_SPLIT || remembered == BypassStrategy.TLS_SNI_SKEW || remembered == BypassStrategy.TLS_SNI_NULL_EXT || remembered == BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.BYEBYEDPI_EXTREME || remembered == BypassStrategy.ZAPRET_EXTREME) boostedScore += 70
                         }
                         DpiType.DNS_POISONING -> {
                             if (remembered == BypassStrategy.DNS_OVER_TCP || remembered == BypassStrategy.DNS_OVER_TCP_FORCE || remembered == BypassStrategy.DNS_NOISE) boostedScore += 60
@@ -389,10 +389,10 @@ object BypassConfig {
                 
                 // Fingerprint matching
                 if (fingerprint.rstRate > 0.4 && strat.family == StrategyFamily.TCP) {
-                    if (strat == BypassStrategy.FAKE_PACKET || strat == BypassStrategy.TCP_OOB_DESYNC || strat == BypassStrategy.BYEBYEDPI_HYBRID) baseScore += 50
+                    if (strat == BypassStrategy.FAKE_PACKET || strat == BypassStrategy.TCP_OOB_DESYNC || strat == BypassStrategy.BYEBYEDPI_HYBRID || strat == BypassStrategy.BYEBYEDPI_EXTREME || strat == BypassStrategy.ZAPRET_EXTREME) baseScore += 50
                 }
                 if (fingerprint.sniBlockRate > 0.4 && strat.family == StrategyFamily.TLS) {
-                    if (strat == BypassStrategy.SNI_SPLIT || strat == BypassStrategy.TLS_SNI_SKEW || strat == BypassStrategy.BYEBYEDPI_HYBRID) baseScore += 50
+                    if (strat == BypassStrategy.SNI_SPLIT || strat == BypassStrategy.TLS_SNI_SKEW || strat == BypassStrategy.BYEBYEDPI_HYBRID || strat == BypassStrategy.BYEBYEDPI_EXTREME || strat == BypassStrategy.ZAPRET_EXTREME) baseScore += 50
                 }
                 if (fingerprint.udpBlockRate > 0.4 && (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC)) {
                     if (strat == BypassStrategy.UDP_QUIC_SMART_SHADOW || strat == BypassStrategy.UDP_DNS_REORDER_HYBRID) baseScore += 50
@@ -539,14 +539,14 @@ object BypassConfig {
             DpiType.TCP_RESET -> {
                 val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
                 val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
-                listOf(BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_SPLIT, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.TCP_DATA_DESYNC, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TCP_WINDOW_SHAKE, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
+                listOf(BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_SPLIT, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.ZAPRET_EXTREME, BypassStrategy.TCP_DATA_DESYNC, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TCP_WINDOW_SHAKE, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
                     scores[it]?.addAndGet(30)
                 }
             }
             DpiType.TLS_SNI_BLOCK -> {
                 val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
                 val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
-                listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TLS_SNI_NULL_EXT, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TLS_CLIENT_HELLO_MULTI_PAD, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
+                listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TLS_SNI_NULL_EXT, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.ZAPRET_EXTREME, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TLS_CLIENT_HELLO_MULTI_PAD, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
                     scores[it]?.addAndGet(40)
                 }
             }
@@ -1442,6 +1442,30 @@ object BypassConfig {
                 delay(config.delay1)
                 TtlHelper.setUdpTtl(socket, 64, isIpv6)
                 socket.send(packet)
+            }
+            BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.ZAPRET_EXTREME -> {
+                // Aggressive QUIC evasion
+                val fakeQuic = FakePacketHelper.buildQuicInitialFake()
+                val fakeQuic2 = FakePacketHelper.buildQuicVersionNegotiation()
+                TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
+                socket.send(DatagramPacket(fakeQuic, fakeQuic.size, targetAddr, targetPort))
+                delay(1)
+                TtlHelper.setUdpTtl(socket, rnd.nextInt(3, 5), isIpv6)
+                socket.send(DatagramPacket(fakeQuic2, fakeQuic2.size, targetAddr, targetPort))
+                delay(config.delay1)
+                
+                // Real data fragmented if possible (QUIC initial)
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                if (length > 100 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    val split = rnd.nextInt(40, 80)
+                    val p1 = data.copyOfRange(offset, offset + split)
+                    val p2 = data.copyOfRange(offset + split, offset + length)
+                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
+                    delay(1)
+                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
+                }
             }
             BypassStrategy.UDP_QUIC_PAD -> {
                 val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(128, 512))
@@ -3294,6 +3318,66 @@ object BypassConfig {
                         delay(config.delay1)
                         output.write(data, split, length - split); output.flush()
                     }
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.BYEBYEDPI_EXTREME -> {
+                try {
+                    val sniOffset = TlsParser.findSniOffset(data, length, host)
+                    val split1 = if (sniOffset != -1) sniOffset else 5
+                    
+                    // Shake MSS
+                    TtlHelper.setMss(socket, rnd.nextInt(200, 500))
+                    TtlHelper.setWindowSize(socket, rnd.nextInt(256, 1024))
+                    
+                    // Ghost Packets
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    output.write(FakePacketHelper.buildTlsNoise(rnd.nextInt(256, 512))); output.flush()
+                    delay(1)
+                    
+                    // Real Data Part 1
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, split1); output.flush()
+                    
+                    // OOB desync
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                    delay(config.delay1)
+                    
+                    // Fake overlap
+                    TtlHelper.setTtl(socket, rnd.nextInt(3, 5))
+                    output.write(FakePacketHelper.buildUdpNoise(32)); output.flush()
+                    
+                    // Restore and Real Data Part 2
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, split1, length - split1); output.flush()
+                    
+                    TtlHelper.setMss(socket, 1400) // Restore MSS
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.ZAPRET_EXTREME -> {
+                try {
+                    val split = if (length > 40) length / 2 else length / 3
+                    val p1 = data.copyOfRange(0, split)
+                    val p2 = data.copyOfRange(split, length)
+                    
+                    TtlHelper.setMss(socket, rnd.nextInt(128, 512))
+                    
+                    // Disorder: Send Part 2 first (out of order, but kernel shouldn't ideally block us if we delay part 1, but we can't reliably force kernel out of order like Zapret Raw Sockets, so we emulate by delaying or injecting)
+                    // Since standard sockets don't allow arbitrary sequence number rewriting, we emulate disorder with OOB + overlapping fake data
+                    
+                    // Real P1
+                    output.write(p1); output.flush()
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                    
+                    // Overlap Fake P1 with Low TTL
+                    TtlHelper.setTtl(socket, 3)
+                    output.write(FakePacketHelper.buildUdpNoise(p1.size + 4)); output.flush()
+                    delay(1)
+                    
+                    // Real P2
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(p2); output.flush()
+                    
+                    TtlHelper.setMss(socket, 1400)
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_REVERSE_FRAG -> {
