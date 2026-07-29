@@ -381,6 +381,22 @@ object FakePacketHelper {
         return data.copyOf(length)
     }
 
+    fun mangleHttpMethodCase(data: ByteArray, length: Int): ByteArray {
+        if (length < 8) return data.copyOf(length)
+        val copy = data.copyOf(length)
+        // Only mangle first few bytes (the method)
+        for (i in 0 until minOf(length, 6)) {
+            if (copy[i] in 'a'.code.toByte()..'z'.code.toByte()) {
+                copy[i] = (copy[i] - 32).toByte()
+            } else if (copy[i] in 'A'.code.toByte()..'Z'.code.toByte()) {
+                if (ThreadLocalRandom.current().nextBoolean()) {
+                    copy[i] = (copy[i] + 32).toByte()
+                }
+            }
+        }
+        return copy
+    }
+
     fun addDotToHost(data: ByteArray, length: Int): ByteArray {
         val s = String(data, 0, length, Charsets.US_ASCII)
         val hostLine = s.lines().find { it.startsWith("Host:", true) }
@@ -395,7 +411,28 @@ object FakePacketHelper {
         }
         return data.copyOf(length)
     }
-    fun injectLargeGrease(data: ByteArray, length: Int): ByteArray = injectExtension(data, length, 0x4a4a, buildUdpNoise(1500))
+    fun injectLargeGrease(data: ByteArray, length: Int, greaseLen: Int = 1500): ByteArray = injectExtension(data, length, 0x4a4a, buildUdpNoise(greaseLen))
+    
+    fun padTlsRecord(data: ByteArray, length: Int, targetLen: Int = 1400): ByteArray {
+        if (length < 5 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        val rnd = ThreadLocalRandom.current()
+        val currentLen = ((data[3].toInt() and 0xFF) shl 8) or (data[4].toInt() and 0xFF)
+        if (currentLen + 5 != length) return data.copyOf(length) // Not a single complete record
+        
+        val paddingNeeded = targetLen - length
+        if (paddingNeeded <= 0) return data.copyOf(length)
+        
+        val baos = ByteArrayOutputStream()
+        baos.write(data, 0, length)
+        // Add padding record (Application Data with junk)
+        baos.write(0x17) // Content Type: App Data
+        baos.write(0x03); baos.write(0x03) // Version 1.2
+        baos.write((paddingNeeded shr 8) and 0xFF)
+        baos.write(paddingNeeded and 0xFF)
+        baos.write(buildUdpNoise(paddingNeeded))
+        return baos.toByteArray()
+    }
+
     fun splitTlsRecords(data: ByteArray, length: Int, splitPos: Int): ByteArray {
         if (length < 10) return data.copyOf(length)
         val res = ByteArray(length + 5)

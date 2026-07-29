@@ -96,6 +96,14 @@ object BypassConfig {
     // Session Stickiness with TTL
     private val hostStrategyMemory = ConcurrentHashMap<String, Pair<BypassStrategy, Long>>()
     private val SESSION_TTL = 30 * 60 * 1000L // 30 minutes
+    
+    private val censorHeuristic = ConcurrentHashMap<String, Int>()
+    private val hostLockTime = ConcurrentHashMap<String, Long>()
+
+    fun isHostProbablyCensored(host: String): Boolean {
+        if (hostLockTime[host]?.let { System.currentTimeMillis() - it < 300_000 } == true) return true
+        return (censorHeuristic[host] ?: 0) >= 3
+    }
 
     val isPanicMode: Boolean get() = _isPanicModeFlow.value
     fun setPanicMode(enabled: Boolean) {
@@ -446,22 +454,24 @@ object BypassConfig {
         
         ProxyStats.recordCensorshipEvent(false)
         
-        val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
-        
-        // Bonus for low RTT and effective strategy
-        val bonus = when {
-            rtt < 150 -> 25
-            rtt < 400 -> 15
-            else -> 5
-        }
-        scores[strat]?.addAndGet(bonus)?.let { 
-            if (it > 2000) scores[strat]?.set(2000)
-        }
+        if (host != null) {
+            censorHeuristic.remove(host)
+            hostLockTime.remove(host)
+            
+            val cat = HostClassifier.classify(host)
+            val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
+            
+            val bonus = when {
+                rtt < 150 -> 25
+                rtt < 400 -> 15
+                else -> 5
+            }
+            scores[strat]?.addAndGet(bonus)?.let { 
+                if (it > 2000) scores[strat]?.set(2000)
+            }
 
-        host?.let { 
-            hostStrategyMemory[it] = strat to (System.currentTimeMillis() + SESSION_TTL)
-            hostBlacklist[it]?.remove(strat)
+            hostStrategyMemory[host] = strat to (System.currentTimeMillis() + SESSION_TTL)
+            hostBlacklist[host]?.remove(strat)
         }
         
         strategyStats[strat]?.let { stats ->
@@ -510,6 +520,15 @@ object BypassConfig {
     fun recordFailure(strat: BypassStrategy, host: String?, reason: FailureReason = FailureReason.UNKNOWN) {
         ProxyStats.recordCensorshipEvent(true)
         
+        if (host != null) {
+            val count = censorHeuristic.getOrDefault(host, 0) + 1
+            censorHeuristic[host] = count
+            if (count >= 5) {
+                hostLockTime[host] = System.currentTimeMillis()
+                Log.w("PinkProxy", "Host $host is locked for 5m due to persistent failures")
+            }
+        }
+        
         val stats = strategyStats[strat]
         stats?.failures?.incrementAndGet()
 
@@ -556,9 +575,11 @@ object BypassConfig {
 
     fun performSelfHealing() {
         val rate = ProxyStats.getSuccessRate()
-        if (rate < 40 && !isPanicMode) {
+        val lockedCount = hostLockTime.filter { System.currentTimeMillis() - it.value < 300_000 }.size
+        
+        if ((rate < 40 || lockedCount >= 5) && !isPanicMode) {
             panicOptimize()
-        } else if (rate > 85 && isPanicMode) {
+        } else if (rate > 85 && lockedCount == 0 && isPanicMode) {
             _isPanicModeFlow.value = false
             ProxyStats.logRecovery("Stability restored: $rate%. Normal mode.")
         }
@@ -568,28 +589,29 @@ object BypassConfig {
         _isPanicModeFlow.value = true
         
         val oldMtu = _currentMtu.value
-        val newMtu = if (oldMtu > 1300) 1280 else if (oldMtu > 1200) 1100 else 1000
+        val newMtu = when {
+            oldMtu > 1300 -> 1280
+            oldMtu > 1200 -> 1100
+            else -> 1000
+        }
         _currentMtu.value = newMtu
         
-        ProxyStats.logRecovery("Panic Mode Active: MTU $oldMtu -> $newMtu. Attempting aggressive recovery.")
+        ProxyStats.logRecovery("Panic Mode Active: MTU $oldMtu -> $newMtu. Aggressive exploration started.")
         
         rotateGlobalStrategy()
         hostStrategyMemory.clear()
-        resetCaches()
+        censorHeuristic.clear() // Clear heuristics to try again
         
-        // Reset scores to give all strategies a fresh chance in new conditions
+        // Boost strategy search: increase variety
         HostCategory.entries.forEach { cat ->
             strategyScores[cat]?.forEach { (_, score) ->
-                if (score.get() < 60) score.set(100)
+                if (score.get() < 80) score.set(100)
             }
         }
         
-        // Temporarily change frag parameters to force different packet boundaries
         frag1 = 1
         frag2 = ThreadLocalRandom.current().nextInt(2, 6)
-        delay1 = 40
-        
-        ServiceChecker.runActiveProbing(null)
+        delay1 = 50
     }
 
     fun clearScores(context: Context) {
@@ -1201,6 +1223,15 @@ object BypassConfig {
             output.write(data, 0, length); output.flush(); return
         }
 
+        // Adaptive Delay Tuning based on RTT
+        val rtt = currentRttMs.value
+        val adaptiveDelay = when {
+            rtt < 40 -> rnd.nextLong(1, 2)
+            rtt < 120 -> rnd.nextLong(2, 4)
+            else -> rnd.nextLong(5, 12)
+        }
+        val effectiveDelay = if (config.delay1 > 0) config.delay1 else adaptiveDelay
+
         if (length <= 5 || TlsParser.isEchDetected(data, length)) {
             output.write(data, 0, length); output.flush(); return
         }
@@ -1209,51 +1240,62 @@ object BypassConfig {
             socket.tcpNoDelay = true
         } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
 
+        // 1. Data Mangle Stage (Hybrid potential)
+        var finalData = data
+        var finalLen = length
+        
+        if (isProbableHttp(data, length)) {
+            if (strategy == BypassStrategy.HTTP_METHOD_CASE_MANGLE || (strategy.family == StrategyFamily.HTTP && rnd.nextInt(100) < 20)) {
+                finalData = FakePacketHelper.mangleHttpMethodCase(finalData, finalLen)
+                finalLen = finalData.size
+            }
+        }
+
         when (strategy) {
             BypassStrategy.SNI_SPLIT -> {
-                val offset = TlsParser.findSniOffset(data, length, host)
-                val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, length - 1)
-                val safeSplit = split.coerceIn(1, length - 1)
-                output.write(data, 0, safeSplit); output.flush(); delay(config.delay1)
-                output.write(data, safeSplit, length - safeSplit); output.flush()
+                val offset = TlsParser.findSniOffset(finalData, finalLen, host)
+                val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, finalLen - 1)
+                val safeSplit = split.coerceIn(1, finalLen - 1)
+                output.write(finalData, 0, safeSplit); output.flush(); delay(effectiveDelay)
+                output.write(finalData, safeSplit, finalLen - safeSplit); output.flush()
             }
             BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT -> {
-                val offset = TlsParser.findSniOffset(data, length, host)
-                val split = if (offset != -1 && host.isNotEmpty()) offset + (host.length / 2) else config.frag1.coerceIn(1, length - 1)
-                val safeSplit = split.coerceIn(1, length - 1)
-                output.write(data, 0, safeSplit); output.flush(); delay(config.delay1)
-                output.write(data, safeSplit, length - safeSplit); output.flush()
+                val offset = TlsParser.findSniOffset(finalData, finalLen, host)
+                val split = if (offset != -1 && host.isNotEmpty()) offset + (host.length / 2) else config.frag1.coerceIn(1, finalLen - 1)
+                val safeSplit = split.coerceIn(1, finalLen - 1)
+                output.write(finalData, 0, safeSplit); output.flush(); delay(effectiveDelay)
+                output.write(finalData, safeSplit, finalLen - safeSplit); output.flush()
             }
             BypassStrategy.SNI_TRIPLE -> {
-                val offset = TlsParser.findSniOffset(data, length, host)
-                if (offset != -1 && length > offset + host.length + 1) {
+                val offset = TlsParser.findSniOffset(finalData, finalLen, host)
+                if (offset != -1 && finalLen > offset + host.length + 1) {
                     val part1 = (host.length / 3).coerceAtLeast(1)
                     val part2 = (2 * host.length / 3).coerceAtLeast(part1 + 1)
                     
                     val s1 = offset + part1
                     val s2 = offset + part2
                     
-                    output.write(data, 0, s1); output.flush(); delay(config.delay1)
-                    output.write(data, s1, s2 - s1); output.flush(); delay(config.delay2)
-                    output.write(data, s2, length - s2); output.flush()
+                    output.write(finalData, 0, s1); output.flush(); delay(effectiveDelay)
+                    output.write(finalData, s1, s2 - s1); output.flush(); delay(config.delay2.coerceAtLeast(effectiveDelay))
+                    output.write(finalData, s2, finalLen - s2); output.flush()
                 } else {
-                    val s1 = (length / 3).coerceIn(1, length - 2)
-                    val s2 = (2 * length / 3).coerceIn(s1 + 1, length - 1)
-                    output.write(data, 0, s1); output.flush(); delay(config.delay1)
-                    output.write(data, s1, s2 - s1); output.flush(); delay(config.delay2)
-                    output.write(data, s2, length - s2); output.flush()
+                    val s1 = (finalLen / 3).coerceIn(1, finalLen - 2)
+                    val s2 = (2 * finalLen / 3).coerceIn(s1 + 1, finalLen - 1)
+                    output.write(finalData, 0, s1); output.flush(); delay(effectiveDelay)
+                    output.write(finalData, s1, s2 - s1); output.flush(); delay(config.delay2.coerceAtLeast(effectiveDelay))
+                    output.write(finalData, s2, finalLen - s2); output.flush()
                 }
             }
             BypassStrategy.TCP_WINDOW_SHAKE -> {
                 try {
                     val originalSize = socket.receiveBufferSize
                     socket.receiveBufferSize = rnd.nextInt(128, 512)
-                    output.write(data, 0, length / 2); output.flush()
+                    output.write(finalData, 0, finalLen / 2); output.flush()
                     delay(rnd.nextLong(10, 50))
                     socket.receiveBufferSize = originalSize + rnd.nextInt(1, 1024)
-                    output.write(data, length / 2, length - (length / 2)); output.flush()
+                    output.write(finalData, finalLen / 2, finalLen - (finalLen / 2)); output.flush()
                 } catch (e: Throwable) {
-                    output.write(data, 0, length); output.flush()
+                    output.write(finalData, 0, finalLen); output.flush()
                 }
             }
             BypassStrategy.TLS_SNI_REVERSE -> {
@@ -2341,12 +2383,8 @@ object BypassConfig {
                 output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_RECORD_PADDING -> {
-                output.write(data, 0, length)
-                if (length > 0 && data[0] == 0x17.toByte()) {
-                    val pad = FakePacketHelper.buildTlsNoise(rnd.nextInt(32, 128))
-                    output.write(pad)
-                }
-                output.flush()
+                val padded = FakePacketHelper.padTlsRecord(finalData, finalLen, 1400)
+                output.write(padded); output.flush()
             }
             BypassStrategy.TLS_SESSION_ID_RAND -> {
                 if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {

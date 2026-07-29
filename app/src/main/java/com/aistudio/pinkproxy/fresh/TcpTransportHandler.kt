@@ -440,16 +440,23 @@ object TcpTransportHandler {
                                         throw e
                                     }
                                 } else {
-                                    // Implementation of TCP_MSS_CLAMP and fragmentation
-                                    if ((isMssClamp || currentIntensity > 70) && n > 1200) {
+                                    // Advanced Fragmentation & MSS Clamping simulation
+                                    if ((isMssClamp || currentIntensity > 50) && n > 1000) {
                                         var offset = 0
-                                        val mss = if (isMssClamp) minOf(1100, ProxyStats.maxMss.value) else ProxyStats.maxMss.value
+                                        val mss = when {
+                                            isMssClamp -> 800 + rnd.nextInt(200)
+                                            currentIntensity > 90 -> 400 + rnd.nextInt(600)
+                                            else -> 1200 + rnd.nextInt(100)
+                                        }
                                         while (offset < n) {
                                             val sz = minOf(mss, n - offset)
                                             remoteOut.write(buffer, offset, sz)
                                             remoteOut.flush()
                                             offset += sz
-                                            if (offset < n) delay(1)
+                                            if (offset < n) {
+                                                val d = if (currentIntensity > 80) rnd.nextLong(2, 6) else 1L
+                                                delay(d)
+                                            }
                                         }
                                     } else if (currentIntensity > 55 && n > 5) {
                                         // Opportunistic fragmentation
