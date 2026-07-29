@@ -168,6 +168,7 @@ object TcpTransportHandler {
                     try {
                         // Use reflection or the constant if available. 
                         // StandardSocketOptions.TCP_FAST_OPEN might not be visible in all environments.
+                        @Suppress("UNCHECKED_CAST")
                         val tfo = java.net.StandardSocketOptions::class.java.getField("TCP_FAST_OPEN").get(null) as? java.net.SocketOption<Int>
                         if (tfo != null) remoteSocket.setOption(tfo, 1)
                     } catch (e: Throwable) {}
