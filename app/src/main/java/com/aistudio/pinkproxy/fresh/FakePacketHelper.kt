@@ -433,6 +433,39 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun randomizeHeaderCase(data: ByteArray, length: Int): ByteArray {
+        val s = String(data, 0, length, StandardCharsets.US_ASCII)
+        val lines = s.split("\r\n").toMutableList()
+        val rnd = ThreadLocalRandom.current()
+        
+        for (i in 1 until lines.size) { // Skip request line
+            val line = lines[i]
+            if (line.isEmpty()) break // End of headers
+            val colonIdx = line.indexOf(':')
+            if (colonIdx != -1) {
+                val name = line.substring(0, colonIdx)
+                val value = line.substring(colonIdx)
+                val newName = name.toCharArray().map {
+                    if (rnd.nextBoolean()) it.lowercaseChar() else it.uppercaseChar()
+                }.joinToString("")
+                lines[i] = newName + value
+            }
+        }
+        return lines.joinToString("\r\n").toByteArray(StandardCharsets.US_ASCII)
+    }
+
+    fun injectMultiTlsPadding(data: ByteArray, length: Int, count: Int): ByteArray {
+        var currentData = data
+        var currentLen = length
+        val rnd = ThreadLocalRandom.current()
+        repeat(count) {
+            val padSize = rnd.nextInt(16, 64)
+            currentData = injectExtension(currentData, currentLen, 0x0015, ByteArray(padSize))
+            currentLen = currentData.size
+        }
+        return currentData
+    }
+
     fun splitTlsRecords(data: ByteArray, length: Int, splitPos: Int): ByteArray {
         if (length < 10) return data.copyOf(length)
         val res = ByteArray(length + 5)

@@ -182,6 +182,16 @@ enum class BypassStrategy(
     TCP_WINDOW_RESIZE_PACING(StrategyFamily.TCP, 3, 3, StrategyGroup.MEDIUM),
     TCP_KEEPALIVE_SKEW(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
     TCP_URGENT_DESYNC(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
+    TCP_SYN_FLOOD_FAKE(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
+    TLS_CLIENT_HELLO_MULTI_PAD(StrategyFamily.TLS, 3, 2, StrategyGroup.MEDIUM),
+    HTTP_HEADER_CASE_CHAOS(StrategyFamily.HTTP, 3, 2, StrategyGroup.MEDIUM),
+    QUIC_HANDSHAKE_SKEW(StrategyFamily.QUIC, 4, 3, StrategyGroup.HEAVY),
+    TCP_DATA_DESYNC(StrategyFamily.TCP, 5, 5, StrategyGroup.EXTREME),
+    TCP_ACK_SKEW_ADVANCED(StrategyFamily.TCP, 3, 3, StrategyGroup.HEAVY),
+    UDP_REORDER(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
+    UDP_SKEW_ADVANCED(StrategyFamily.UDP, 4, 4, StrategyGroup.EXTREME),
+    DNS_OVER_TCP_FORCE(StrategyFamily.DNS, 2, 1, StrategyGroup.LIGHT),
+    UDP_IP_ID_MANGLE(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

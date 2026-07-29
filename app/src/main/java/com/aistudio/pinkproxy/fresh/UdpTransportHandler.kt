@@ -9,6 +9,7 @@ import java.net.InetAddress
 import java.net.Socket
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.Collections
 
 object UdpTransportHandler {
 
@@ -209,7 +210,8 @@ object UdpTransportHandler {
                             val payloadLen = len - headerLen
                             ProxyStats.updateBytes(payloadLen.toLong())
                             
-                            if (targetPortNum == 53) {
+                            val strategy = BypassConfig.getBestStrategyForHost(targetHost)
+                            if (targetPortNum == 53 || strategy == BypassStrategy.DNS_OVER_TCP_FORCE) {
                                 val query = DnsUtils.parseDnsQName(data, headerLen, payloadLen)
                                 if (query != null) {
                                     val host = query.qname
@@ -237,7 +239,11 @@ object UdpTransportHandler {
                                     } else {
                                         launch(ProxyDispatcher.io) {
                                             try {
-                                                val res = RobustResolver.resolve(host, vpnService)
+                                                val res = if (strategy == BypassStrategy.DNS_OVER_TCP_FORCE) {
+                                                    RobustResolver.resolveDnsOverTcpOnly(host, vpnService)
+                                                } else {
+                                                    RobustResolver.resolve(host, vpnService)
+                                                }
                                                 if (res.isNotEmpty()) {
                                                     val ipStrs = res.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
                                                     val dnsReply = DnsUtils.buildDnsReply(data, headerLen, payloadLen, ipStrs, query.qtype == 28)
@@ -351,22 +357,21 @@ object UdpTransportHandler {
             if (intensity > 85) delay(rnd.nextLong(1, 3))
         }
 
-        // 2. Reordering Logic for QUIC
-        if (isQuic && intensity > 75 && rnd.nextInt(100) < 15) {
+        // 2. Reordering Logic for QUIC or explicit UDP_REORDER
+        if (config.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 75 && rnd.nextInt(100) < 15)) {
             val key = "${targetInet.hostAddress}:$targetPort"
-            val buffer = reorderBuffers.getOrPut(key) { mutableListOf() }
-            val swapped = synchronized(buffer) {
-                buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort))
-                if (buffer.size >= 2) {
-                    val p1 = buffer.removeAt(1)
-                    val p2 = buffer.removeAt(0)
-                    listOf(p1, p2)
-                } else null
-            }
-            swapped?.forEach { p ->
-                try {
+            val buffer = reorderBuffers.getOrPut(key) { Collections.synchronizedList(mutableListOf<DatagramPacket>()) }
+            
+            val pCopy = DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort)
+            buffer.add(pCopy)
+            
+            if (buffer.size >= 2 + rnd.nextInt(2)) {
+                val toSend = buffer.toMutableList().apply { shuffle() }
+                buffer.clear()
+                for (p in toSend) {
                     BypassConfig.applyUdpBypass(socket, p, config, host)
-                } catch (e: Throwable) {}
+                    if (rnd.nextBoolean()) delay(rnd.nextLong(1, 4))
+                }
             }
             return
         }

@@ -191,6 +191,56 @@ object DnsProtocols {
         return emptyList()
     }
 
+    suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val socket = Socket()
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        try {
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.tcpNoDelay = true
+            socket.connect(InetSocketAddress(dnsIp, 53), 4000)
+            socket.soTimeout = 4000
+            val output = socket.getOutputStream()
+            val fullQuery = ByteArray(query.size + 2)
+            fullQuery[0] = (query.size shr 8).toByte()
+            fullQuery[1] = (query.size and 0xFF).toByte()
+            System.arraycopy(query, 0, fullQuery, 2, query.size)
+            
+            // Fragmented send with fake padding
+            val split = rnd.nextInt(2, fullQuery.size - 2)
+            output.write(fullQuery, 0, split)
+            output.flush()
+            delay(rnd.nextLong(1, 10))
+            
+            // Inject fake segment if intensity is high
+            if (ProxyStats.censorshipIntensity.value > 65) {
+                val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
+                try {
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    output.write(fake); output.flush()
+                    delay(1)
+                    TtlHelper.setTtl(socket, 64)
+                } catch(e: Throwable) {}
+            }
+            
+            output.write(fullQuery, split, fullQuery.size - split)
+            output.flush()
+            
+            val dis = DataInputStream(socket.getInputStream())
+            val len = dis.readUnsignedShort()
+            if (len > 8192) return emptyList()
+            val resp = ByteArray(len)
+            dis.readFully(resp)
+            val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
+            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+        } catch (e: Throwable) {
+        } finally {
+            try { socket.close() } catch (e: Throwable) {}
+        }
+        return emptyList()
+    }
+
     suspend fun queryTcpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)

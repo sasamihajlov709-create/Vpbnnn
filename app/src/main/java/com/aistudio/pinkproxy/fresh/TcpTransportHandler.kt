@@ -265,12 +265,14 @@ object TcpTransportHandler {
                     val intensity = ProxyStats.censorshipIntensity.value
                     val activeConns = ProxyStats.activeConnections.value
                     val speed = ProxyStats.speedBytesPerSecond.value
+                    val stability = ProxyStats.stabilityScore.value
+                    val rnd = ThreadLocalRandom.current()
                     
-                    // Adaptive buffer size: small for high intensity, large for high speed
+                    // Adaptive buffer size: more conservative when under censorship or high load
                     val buffer = when {
                         intensity > 90 || activeConns > 100 -> ProxyStats.obtain8k()
-                        intensity > 70 || activeConns > 40 -> ProxyStats.obtain16k()
-                        speed > 512 * 1024 -> ProxyStats.obtain64k()
+                        intensity > 70 || activeConns > 50 || stability < 60 -> ProxyStats.obtain16k()
+                        speed > 1024 * 1024 -> ProxyStats.obtain64k()
                         else -> ProxyStats.obtain16k()
                     }
                     val bufSize = buffer.size
@@ -295,50 +297,40 @@ object TcpTransportHandler {
                                     val rtt = System.currentTimeMillis() - start
                                     BypassConfig.recordSuccess(strategy, rtt, targetHost)
                                     
-                                    // Detect DPI blocks in payload
+                                    // Deep Packet Inspection evasion: block marker detection
                                     if (n > 5) {
                                         if (buffer[0] == 0x15.toByte()) { // TLS Alert
                                             BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TLS_SNI_BLOCK)
-                                            BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.SSL_HANDSHAKE_ERROR)
-                                            throw java.io.IOException("TLS Alert (Possible DPI Block)")
+                                            throw java.io.IOException("TLS Alert (DPI Block)")
                                         } else {
-                                            // Fast byte-level scan for block markers
-                                            var foundBlock = false
                                             val scanLen = n.coerceAtMost(1024)
                                             val lowStr = String(buffer, 0, scanLen, Charsets.US_ASCII).lowercase()
-                                            
-                                            when {
-                                                lowStr.contains("403 forbidden") || lowStr.contains("403 access denied") -> foundBlock = true
-                                                lowStr.contains("url blocked") || lowStr.contains("censorship") -> foundBlock = true
-                                                lowStr.contains("connection reset") || lowStr.contains("err_connection_reset") -> foundBlock = true
-                                                lowStr.contains("<title>access denied") || lowStr.contains("<title>blocked") -> foundBlock = true
-                                                lowStr.contains("content-filter") || lowStr.contains("legal-block") || lowStr.contains("isp-block") -> foundBlock = true
-                                            }
-                                            
-                                            if (foundBlock) {
+                                            if (lowStr.contains("forbidden") || lowStr.contains("access denied") || lowStr.contains("blocked")) {
                                                 BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.HTTP_BLOCK)
-                                                BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.TCP_RESET)
-                                                throw java.io.IOException("DPI block detected in payload")
+                                                throw java.io.IOException("HTTP DPI Block")
                                             }
                                         }
                                     }
                                 }
                                 
-                                 lastActivity.set(System.currentTimeMillis())
+                                lastActivity.set(System.currentTimeMillis())
                                 clientOut.write(buffer, 0, n)
                                 clientOut.flush()
                                 ProxyStats.updateBytes(n.toLong())
                                 
-                                // Jittered reading to confuse timing analysis when under high intensity
-                                if (intensity > 80 && ThreadLocalRandom.current().nextInt(100) < 15) {
-                                    delay(ThreadLocalRandom.current().nextLong(2, 10))
-                                }
-                                
-                                // Traffic Shaping: if congestion window is low, throttle slightly
-                                val cwnd = ProxyStats.congestionWindow.value
-                                if (cwnd < 20 && intensity > 50) {
-                                    val delay = (1200L / cwnd).coerceAtMost(80)
-                                    delay(delay)
+                                // Smart Throttling & Traffic Pattern Obfuscation
+                                if (intensity > 60) {
+                                    // Random micro-delays to break timing analysis
+                                    if (rnd.nextInt(100) < (intensity - 40)) {
+                                        delay(rnd.nextLong(1, (intensity / 10).toLong().coerceAtLeast(2)))
+                                    }
+                                    
+                                    // Adaptive Shaping based on congestion and stability
+                                    val cwnd = ProxyStats.congestionWindow.value
+                                    if (cwnd < 40 || stability < 75) {
+                                        val throttleDelay = (2000L / (cwnd.coerceAtLeast(1) + (stability / 5))).coerceAtMost(100)
+                                        if (throttleDelay > 2) delay(throttleDelay)
+                                    }
                                 } else if (intensity > 85) {
                                     yield()
                                 }
@@ -347,20 +339,13 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
-                        if (System.currentTimeMillis() - start < 20000) {
+                        if (System.currentTimeMillis() - start < 15000) {
                             BypassConfig.recordFailure(strategy, targetHost)
-                            // Proactive MTU/MSS reduction on early failure
-                            if (msg.contains("reset") || msg.contains("broken pipe")) {
-                                ProxyStats.recordMssFailure()
-                            }
+                            if (msg.contains("reset") || msg.contains("pipe")) ProxyStats.recordMssFailure()
                         }
-                        when {
-                            msg.contains("reset") -> {
-                                ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
-                            }
-                            msg.contains("timeout") -> ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
-                            else -> ProxyStats.recordCensorshipEvent(true)
-                        }
+                        if (msg.contains("reset")) ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                        else if (msg.contains("timeout")) ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                        else ProxyStats.recordCensorshipEvent(true)
                     } finally {
                         when (bufSize) {
                             8192 -> ProxyStats.release8k(buffer)
@@ -416,21 +401,21 @@ object TcpTransportHandler {
                                                 // Real hostname found! Get specific strategy for it
                                                 val realStrategy = BypassConfig.getBestStrategyForHost(realSni)
                                                 if (realStrategy != strategy) {
-                                                    // Dynamic strategy upgrade for this session
-                                                    ProxyStats.logRecovery("Strategy Upgrade: Switching to ${realStrategy.name} for $realSni")
-                                                    val realConfig = BypassConfig.getSessionConfig(realSni, realStrategy, BypassConfig.currentRttMs.value)
-                                                    BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, realConfig, realSni)
-                                                    packetsCount++
-                                                    totalWrittenClient.addAndGet(n.toLong())
-                                                    ProxyStats.updateBytes(n.toLong())
-                                                    continue
+                                                     ProxyStats.logRecovery("Strategy Upgrade: Switching to ${realStrategy.name} for $realSni")
+                                                     val realConfig = BypassConfig.getSessionConfig(realSni, realStrategy, BypassConfig.currentRttMs.value)
+                                                     BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, realConfig, realSni)
+                                                     packetsCount++
+                                                     totalWrittenClient.addAndGet(n.toLong())
+                                                     ProxyStats.updateBytes(n.toLong())
+                                                     continue
                                                 }
                                             }
                                         }
                                     }
                                 }
 
-                                if (packetsCount <= 3 || (currentIntensity > 85 && packetsCount <= 8)) {
+                                val stability = ProxyStats.stabilityScore.value
+                                if (packetsCount <= 3 || (currentIntensity > 85 && packetsCount <= 12) || (stability < 50 && packetsCount <= 20)) {
                                     // Apply full bypass to initial handshake/header packets
                                     try {
                                         BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
@@ -441,12 +426,12 @@ object TcpTransportHandler {
                                     }
                                 } else {
                                     // Advanced Fragmentation & MSS Clamping simulation
-                                    if ((isMssClamp || currentIntensity > 50) && n > 1000) {
+                                    if ((isMssClamp || currentIntensity > 50) && n > 1100) {
                                         var offset = 0
                                         val mss = when {
-                                            isMssClamp -> 800 + rnd.nextInt(200)
-                                            currentIntensity > 90 -> 400 + rnd.nextInt(600)
-                                            else -> 1200 + rnd.nextInt(100)
+                                            isMssClamp -> 512 + rnd.nextInt(300)
+                                            currentIntensity > 90 -> 256 + rnd.nextInt(512)
+                                            else -> 1100 + rnd.nextInt(200)
                                         }
                                         while (offset < n) {
                                             val sz = minOf(mss, n - offset)
@@ -454,22 +439,24 @@ object TcpTransportHandler {
                                             remoteOut.flush()
                                             offset += sz
                                             if (offset < n) {
-                                                val d = if (currentIntensity > 80) rnd.nextLong(2, 6) else 1L
+                                                val d = if (currentIntensity > 80) rnd.nextLong(2, 10) else 1L
                                                 delay(d)
                                             }
                                         }
                                     } else if (currentIntensity > 55 && n > 5) {
-                                        // Opportunistic fragmentation
-                                        if (rnd.nextInt(100) < (currentIntensity - 35)) {
+                                        // Opportunistic fragmentation with smarter jitter
+                                        if (rnd.nextInt(100) < (currentIntensity - 30).coerceAtLeast(10)) {
                                             val split = rnd.nextInt(1, n)
                                             remoteOut.write(buffer, 0, split)
                                             remoteOut.flush()
-                                            if (currentIntensity > 80) delay(rnd.nextLong(1, 4))
                                             
-                                            // Fake retransmission/overlap trick
-                                            if (currentIntensity > 90 && rnd.nextInt(100) < 15) {
-                                                TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 5))
-                                                remoteOut.write(buffer, split, n - split)
+                                            if (currentIntensity > 75) delay(rnd.nextLong(1, 8))
+                                            
+                                            // Fake retransmission/overlap trick (TCP Overlap)
+                                            if (currentIntensity > 85 && rnd.nextInt(100) < 25) {
+                                                TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 4))
+                                                val overlapSize = rnd.nextInt(1, (n - split).coerceAtLeast(2))
+                                                remoteOut.write(buffer, split, overlapSize)
                                                 remoteOut.flush()
                                                 delay(1)
                                                 TtlHelper.setTtl(remoteSocket!!, 64)
@@ -479,7 +466,7 @@ object TcpTransportHandler {
                                             remoteOut.flush()
                                             
                                             // Occasionally send an urgent byte to confuse DPI state tracking
-                                            if (currentIntensity > 75 && rnd.nextInt(100) < 15) {
+                                            if (currentIntensity > 70 && rnd.nextInt(100) < 20) {
                                                 try { remoteSocket?.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                                             }
                                         } else {
@@ -488,7 +475,7 @@ object TcpTransportHandler {
                                         }
                                     } else {
                                         remoteOut.write(buffer, 0, n)
-                                        if (strategy == BypassStrategy.TCP_RANDOM_PADDING && rnd.nextInt(100) < 30) {
+                                        if (strategy == BypassStrategy.TCP_RANDOM_PADDING && rnd.nextInt(100) < 40) {
                                             try { remoteSocket?.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                                         }
                                         remoteOut.flush()

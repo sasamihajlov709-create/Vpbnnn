@@ -42,6 +42,23 @@ object RobustResolver {
     fun getCached(host: String): List<InetAddress>? = DnsCacheManager.getCached(host)
 
     fun clearCache() = DnsCacheManager.clear()
+    
+    suspend fun resolveDnsOverTcpOnly(host: String, vpnService: VpnService? = null): List<InetAddress> {
+        val cached = DnsCacheManager.getCached(host)
+        if (cached != null) return cached
+        
+        val servers = if (dnsMode == "Custom") listOf(customDnsIp) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
+        for (dns in servers) {
+            try {
+                val res = DnsProtocols.queryDnsOverTcp(host, dns, vpnService)
+                if (res.isNotEmpty()) {
+                    DnsCacheManager.put(host, res)
+                    return res
+                }
+            } catch (e: Throwable) {}
+        }
+        return emptyList()
+    }
 
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     suspend fun resolve(host: String, vpnService: VpnService? = null): List<InetAddress> {
@@ -199,6 +216,8 @@ object RobustResolver {
             },
             { DnsProtocols.queryDnsOverTcp(host, "8.8.8.8", vpnService) },
             { DnsProtocols.queryDnsOverTcp(host, "9.9.9.9", vpnService) },
+            { DnsProtocols.queryTcpDnsShadow(host, "1.1.1.1", vpnService) },
+            { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) },
             { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },
             { DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService) },
             { DnsProtocols.queryUdpDnsShadow(host, "9.9.9.9", vpnService) },

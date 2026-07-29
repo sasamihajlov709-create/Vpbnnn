@@ -113,6 +113,15 @@ object DnsPacketEngine {
         return bos.toByteArray()
     }
 
+    fun buildDnsQueryTcp(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000), mangleCase: Boolean = false): ByteArray {
+        val udpQuery = buildDnsQuery(host, type, id, mangleCase)
+        val bos = ByteArrayOutputStream()
+        val dos = java.io.DataOutputStream(bos)
+        dos.writeShort(udpQuery.size)
+        dos.write(udpQuery)
+        return bos.toByteArray()
+    }
+
     fun parseDnsResponse(data: ByteArray, length: Int, expectedId: Int = -1): List<InetAddress> {
         if (length < 12) return emptyList()
         val ips = mutableListOf<InetAddress>()
@@ -143,6 +152,9 @@ object DnsPacketEngine {
                     val rData = ByteArray(rdLen)
                     bb.get(rData)
                     ips.add(InetAddress.getByAddress(rData))
+                } else if (type == 5) { // CNAME
+                    // Skip CNAME data
+                    bb.position(bb.position() + rdLen)
                 } else {
                     bb.position(bb.position() + rdLen)
                 }
