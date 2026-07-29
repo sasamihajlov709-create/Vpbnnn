@@ -356,7 +356,7 @@ object ServiceChecker {
         val actualContext = context ?: appContext ?: return
         if (!isProbing.compareAndSet(false, true)) return
         _isProbingState.value = true
-        val scope = internalScope ?: CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+        val scope = if (internalScope?.isActive == true) internalScope!! else CoroutineScope(ProxyDispatcher.io + SupervisorJob())
         
         ProxyStats.logRecovery("Autopilot: Launching Parallel Strategy Tournament (Advanced Race)...")
         

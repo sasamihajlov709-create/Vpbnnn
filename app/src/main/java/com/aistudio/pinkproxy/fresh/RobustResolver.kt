@@ -89,11 +89,7 @@ object RobustResolver {
         } catch (e: Throwable) {
             if (e is CancellationException) throw e
             pendingResolutions.remove(cacheKey)
-            if (e is TimeoutCancellationException) {
-                // Return emergency fallback on timeout instead of failing
-                DnsCacheManager.getEmergencyFallback(host)?.let { return it }
-            }
-            throw e
+            DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
         }
     }
 

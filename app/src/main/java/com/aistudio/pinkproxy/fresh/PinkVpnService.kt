@@ -411,10 +411,18 @@ class PinkVpnService : VpnService() {
             .setOngoing(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(1, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                try {
+                    startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                } catch (e: Throwable) {
+                    startForeground(1, notification)
+                }
+            } else {
+                startForeground(1, notification)
+            }
+        } catch (e: Throwable) {
+            Log.e("PinkVpnService", "Failed to start foreground service: ${e.message}")
         }
     }
 

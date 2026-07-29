@@ -368,6 +368,11 @@ object BypassConfig {
         }
 
         val totalWeight = weightedEntries.sumOf { it.second }
+        if (totalWeight <= 0.0 || totalWeight.isNaN()) {
+            val fallback = validEntries.randomOrNull()?.key ?: BypassStrategy.SNI_SPLIT
+            hostStrategyMemory[host] = fallback to (now + SESSION_TTL)
+            return fallback
+        }
         var random = ThreadLocalRandom.current().nextDouble(totalWeight)
         for (entry in weightedEntries) {
             random -= entry.second
@@ -1228,6 +1233,50 @@ object BypassConfig {
                     socket.send(packet)
                 }
             }
+            BypassStrategy.QUIC_RST_SKEW -> {
+                val resetPacket = byteArrayOf(0x00, 0x00, 0x00, 0x00) + FakePacketHelper.buildUdpNoise(16)
+                try {
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
+                    socket.send(DatagramPacket(resetPacket, resetPacket.size, targetAddr, targetPort))
+                } catch (e: Throwable) {}
+                delay(config.delay1)
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                socket.send(packet)
+            }
+            BypassStrategy.UDP_HEARTBEAT -> {
+                val heartbeat = byteArrayOf(0x01, 0x00, 0x00, 0x00)
+                try { socket.send(DatagramPacket(heartbeat, heartbeat.size, targetAddr, targetPort)) } catch (e: Throwable) {}
+                delay(2)
+                socket.send(packet)
+            }
+            BypassStrategy.UDP_HIGH_VOL_PACING -> {
+                val count = rnd.nextInt(2, 5)
+                for (i in 0 until count) {
+                    val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(8, 24))
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch (e: Throwable) {}
+                    delay(rnd.nextLong(1, 3))
+                }
+                socket.send(packet)
+            }
+            BypassStrategy.QUIC_INITIAL_FAKE -> {
+                val fakeQuic = FakePacketHelper.buildQuicInitialFake()
+                try {
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
+                    socket.send(DatagramPacket(fakeQuic, fakeQuic.size, targetAddr, targetPort))
+                } catch (e: Throwable) {}
+                delay(config.delay1)
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                socket.send(packet)
+            }
+            BypassStrategy.DNS_NOISE -> {
+                val fakeDns = FakePacketHelper.buildDnsFakeQuery("cloudflare.com")
+                try { socket.send(DatagramPacket(fakeDns, fakeDns.size, targetAddr, targetPort)) } catch (e: Throwable) {}
+                delay(2)
+                socket.send(packet)
+            }
+            BypassStrategy.DNS_OVER_TCP_FORCE -> {
+                socket.send(packet)
+            }
             BypassStrategy.UDP_QUIC_SKEW -> {
                 val fake = FakePacketHelper.buildQuicInitialFake()
                 val isIpv6 = targetAddr is java.net.Inet6Address
@@ -2050,7 +2099,8 @@ TtlHelper.setTtl(socket, 64)
                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
             }
             BypassStrategy.OOB_DESYNC -> {
-                val split = rnd.nextInt(1, length.coerceAtMost(5))
+                val maxSplit = length.coerceAtMost(5)
+                val split = if (maxSplit > 1) rnd.nextInt(1, maxSplit) else 1
                 output.write(data, 0, split); output.flush()
                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 delay(config.delay1); output.write(data, split, length - split); output.flush()
@@ -2252,8 +2302,11 @@ TtlHelper.setTtl(socket, 64)
                     val bodyLen = ((data[3].toInt() and 0xFF) shl 8) or (data[4].toInt() and 0xFF)
                     if (bodyLen + 5 <= length) {
                         var pos = 5
-                        while (pos < 5 + bodyLen) {
-                            val chunk = rnd.nextInt(1, 5).coerceAtMost(5 + bodyLen - pos)
+                        val maxPos = 5 + bodyLen
+                        while (pos < maxPos) {
+                            val remaining = maxPos - pos
+                            if (remaining <= 0) break
+                            val chunk = rnd.nextInt(1, 5).coerceAtMost(remaining).coerceAtLeast(1)
                             val header = data.copyOfRange(0, 5)
                             header[3] = ((chunk shr 8) and 0xFF).toByte()
                             header[4] = (chunk and 0xFF).toByte()
@@ -2324,7 +2377,9 @@ TtlHelper.setTtl(socket, 64)
             BypassStrategy.TCP_DATA_OOB_SKEW -> {
                 var pos = 0
                 while (pos < length) {
-                    val sz = rnd.nextInt(10, 50).coerceAtMost(length - pos)
+                    val remaining = length - pos
+                    if (remaining <= 0) break
+                    val sz = rnd.nextInt(10, 50).coerceAtMost(remaining).coerceAtLeast(1)
                     output.write(data, pos, sz); output.flush()
                     pos += sz
                     if (pos < length && rnd.nextInt(100) < 30) {
@@ -2496,7 +2551,10 @@ TtlHelper.setTtl(socket, 64)
                     val maxChunk = if (ProxyStats.censorshipIntensity.value > 80) 10 else 40
                     var sent = 0
                     while (sent < bodyLen) {
-                        val cur = rnd.nextInt(5, maxChunk).coerceAtMost(bodyLen - sent)
+                        val remaining = bodyLen - sent
+                        if (remaining <= 0) break
+                        val upper = maxChunk.coerceAtLeast(6)
+                        val cur = rnd.nextInt(5, upper).coerceAtMost(remaining).coerceAtLeast(1)
                         val record = ByteArray(5 + cur)
                         record[0] = data[0]; record[1] = data[1]; record[2] = data[2]
                         record[3] = (cur shr 8).toByte(); record[4] = (cur and 0xFF).toByte()
@@ -2528,7 +2586,9 @@ TtlHelper.setTtl(socket, 64)
                 val baseChunk = if (currentIntensity > 60 || jitter > 40) 1 else 3
                 var offset = 0
                 while (offset < length) {
-                    val chunkSize = rnd.nextInt(baseChunk, baseChunk + 4).coerceAtMost(length - offset)
+                    val remaining = length - offset
+                    if (remaining <= 0) break
+                    val chunkSize = rnd.nextInt(baseChunk, baseChunk + 4).coerceAtMost(remaining).coerceAtLeast(1)
                     output.write(data, offset, chunkSize)
                     output.flush()
                     
@@ -2915,6 +2975,67 @@ TtlHelper.setTtl(socket, 64)
                         output.write(data, 0, length); output.flush()
                     }
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_MSS_CLAMP -> {
+                try { TtlHelper.setMss(socket, rnd.nextInt(256, 512)) } catch (e: Throwable) {}
+                val split = (finalLen / 2).coerceIn(1, finalLen - 1)
+                output.write(finalData, 0, split); output.flush()
+                delay(config.delay1)
+                output.write(finalData, split, finalLen - split); output.flush()
+                try { TtlHelper.setMss(socket, 1400) } catch (e: Throwable) {}
+            }
+            BypassStrategy.TCP_SMALL_CHUNKS -> {
+                var pos = 0
+                val chunkSize = rnd.nextInt(2, 8)
+                while (pos < finalLen) {
+                    val len = minOf(chunkSize, finalLen - pos)
+                    output.write(finalData, pos, len); output.flush()
+                    pos += len
+                    if (pos < finalLen) delay(rnd.nextLong(1, 4))
+                }
+            }
+            BypassStrategy.TCP_TIMESTAMP_MANGLE -> {
+                val p1 = finalData.copyOfRange(0, 1)
+                val p2 = finalData.copyOfRange(1, finalLen)
+                output.write(p1); output.flush()
+                try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                delay(config.delay1)
+                output.write(p2); output.flush()
+            }
+            BypassStrategy.TCP_WINDOW_SCAN -> {
+                try { socket.receiveBufferSize = 512 } catch (e: Throwable) {}
+                val split = 1
+                output.write(finalData, 0, split); output.flush()
+                delay(config.delay1)
+                try { socket.receiveBufferSize = 65536 } catch (e: Throwable) {}
+                output.write(finalData, split, finalLen - split); output.flush()
+            }
+            BypassStrategy.TLS_DIRTY -> {
+                val dirtyData = FakePacketHelper.addTlsGreaseExtensions(finalData, finalLen)
+                val split = (dirtyData.size / 2).coerceIn(1, dirtyData.size - 1)
+                output.write(dirtyData, 0, split); output.flush()
+                delay(config.delay1)
+                output.write(dirtyData, split, dirtyData.size - split); output.flush()
+            }
+            BypassStrategy.TLS_PADDING_RAND -> {
+                val padLen = rnd.nextInt(64, 512)
+                val padded = FakePacketHelper.injectTlsPadding(finalData, finalLen, padLen)
+                val split = (padded.size / 2).coerceIn(1, padded.size - 1)
+                output.write(padded, 0, split); output.flush()
+                delay(config.delay1)
+                output.write(padded, split, padded.size - split); output.flush()
+            }
+            BypassStrategy.TLS_SNI_GREASE -> {
+                val greased = FakePacketHelper.injectTlsGrease(finalData, finalLen)
+                output.write(greased, 0, greased.size); output.flush()
+            }
+            BypassStrategy.WINDOW_SIZE_MANGLE -> {
+                try { socket.receiveBufferSize = rnd.nextInt(256, 1024) } catch (e: Throwable) {}
+                val split = (finalLen / 2).coerceIn(1, finalLen - 1)
+                output.write(finalData, 0, split); output.flush()
+                delay(config.delay1)
+                try { socket.receiveBufferSize = 65536 } catch (e: Throwable) {}
+                output.write(finalData, split, finalLen - split); output.flush()
             }
             BypassStrategy.DIRECT -> {
                 output.write(data, 0, length); output.flush()

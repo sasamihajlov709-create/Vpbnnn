@@ -46,6 +46,7 @@ object TcpTransportHandler {
                     withTimeout(if (retryCount > 0) 8000 else 12000) {
                         val channel = kotlinx.coroutines.channels.Channel<Socket>(resolved.size)
                         val activeJobs = mutableListOf<Job>()
+                        val attemptedSockets = java.util.concurrent.CopyOnWriteArrayList<Socket>()
                         // Aggressive racing: attempt more IPs if censorship is high or it is a retry
                         val attempted = if (censorship > 70 || retryCount > 0) resolved.size else minOf(resolved.size, 3)
                         val raceDelay = if (censorship > 70) 50L else 250L
@@ -56,6 +57,7 @@ object TcpTransportHandler {
                             val ip = resolved[i]
                             activeJobs += scope.launch(ProxyDispatcher.io) {
                                 val s = Socket()
+                                attemptedSockets.add(s)
                                 try {
                                     try { vpnService?.protect(s) } catch (e: Throwable) {}
                                     TtlHelper.tuneSocket(s)
@@ -110,13 +112,21 @@ object TcpTransportHandler {
                                 }
                             }
                         }
+                        var winnerSocket: Socket? = null
                         val winner = try {
-                            channel.receive()
+                            val res = channel.receive()
+                            winnerSocket = res
+                            res
                         } catch (e: Throwable) {
                             throw Exception("All TCP connection attempts failed for $targetHost")
                         } finally {
                             channel.close()
                             activeJobs.forEach { it.cancel() }
+                            attemptedSockets.forEach { s ->
+                                if (s != winnerSocket) {
+                                    try { s.close() } catch (e: Throwable) {}
+                                }
+                            }
                             while (true) {
                                 val leftover = channel.tryReceive().getOrNull() ?: break
                                 try { leftover.close() } catch (e: Throwable) {}
@@ -285,15 +295,25 @@ object TcpTransportHandler {
                     
                     var firstResponse = true
                     var totalRead = 0L
+                    var consecutiveTimeouts = 0
                     try {
                         var n: Int
                         while (isActive) {
                             try {
                                 remoteSocket?.soTimeout = if (totalRead == 0L) 15000 else 60000
                                 n = remoteIn.read(buffer)
+                                consecutiveTimeouts = 0
                             } catch (e: Throwable) {
                                 if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
-                                    if (isActive) continue else break
+                                    consecutiveTimeouts++
+                                    val maxTimeouts = if (totalRead == 0L) 2 else 5
+                                    if (consecutiveTimeouts >= maxTimeouts || !isActive) {
+                                        if (totalRead == 0L) {
+                                            BypassConfig.recordFailure(strategy, targetHost)
+                                        }
+                                        break
+                                    }
+                                    continue
                                 }
                                 throw e
                             }
@@ -306,7 +326,7 @@ object TcpTransportHandler {
                                     BypassConfig.recordSuccess(strategy, rtt, targetHost)
                                     
                                     // Deep Packet Inspection evasion: block marker detection
-                                    if (n >= 5) {
+                                    if (n >= 7) {
                                         val contentType = buffer[0].toInt() and 0xFF
                                         if (contentType == 0x15) { // TLS Alert
                                             val alertLevel = buffer[5].toInt() and 0xFF
@@ -383,17 +403,23 @@ object TcpTransportHandler {
                 val clientToRemote = launch(ProxyDispatcher.io) {
                     val buffer = ProxyStats.obtain64k()
                     val rnd = ThreadLocalRandom.current()
+                    var detectedSni: String? = null
                     val isMssClamp = strategy == BypassStrategy.TCP_MSS_CLAMP
                     
                     try {
                         var n: Int
                         var packetsCount = 0
+                        var clientTimeouts = 0
                         while (isActive) {
                             try {
+                                clientSocket.soTimeout = 60000
                                 n = clientIn.read(buffer)
+                                clientTimeouts = 0
                             } catch (e: Throwable) {
                                 if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
-                                    if (isActive) continue else break
+                                    clientTimeouts++
+                                    if (clientTimeouts >= 5 || !isActive) break
+                                    continue
                                 }
                                 throw e
                             }
@@ -439,11 +465,12 @@ object TcpTransportHandler {
                                 val stability = ProxyStats.stabilityScore.value
                                 if (packetsCount <= 3 || (currentIntensity > 85 && packetsCount <= 12) || (stability < 50 && packetsCount <= 20)) {
                                     // Apply full bypass to initial handshake/header packets
+                                    val activeHost = detectedSni ?: targetHost
                                     try {
-                                        BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, targetHost)
+                                        BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, activeHost)
                                     } catch (e: Throwable) {
                                         if (e is CancellationException) throw e
-                                        BypassConfig.recordFailure(strategy, targetHost)
+                                        BypassConfig.recordFailure(strategy, activeHost)
                                         throw e
                                     }
                                 } else {
