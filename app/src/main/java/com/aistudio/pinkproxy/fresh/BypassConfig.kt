@@ -1080,7 +1080,7 @@ object BypassConfig {
             BypassStrategy.UDP_QUIC_PAD -> {
                 // For QUIC, we pad the initial packet with noise to hide the version/SNI
                 if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
-                    val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(256, 512))
+                    val padding = ByteArray(rnd.nextInt(256, 512)) { 0x00 }
                     val combined = data.copyOfRange(offset, offset + length) + padding
                     socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
                     // Occasional Version Negotiation noise
@@ -1102,81 +1102,33 @@ object BypassConfig {
                 
                 // 2. Real data reordered
                 TtlHelper.setUdpTtl(socket, 64, isIpv6)
-                if (length > 100) {
-                    val split = length / 2
-                    val part1 = data.copyOfRange(offset + split, offset + length)
-                    val part2 = data.copyOfRange(offset, offset + split)
-                    socket.send(DatagramPacket(part1, part1.size, targetAddr, targetPort))
-                    delay(rnd.nextLong(1, 5))
-                    socket.send(DatagramPacket(part2, part2.size, targetAddr, targetPort))
-                } else {
-                    socket.send(packet)
-                }
+                socket.send(packet)
             }
             BypassStrategy.UDP_SKEW_ADVANCED -> {
                 try {
+                    val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 30))
                     val isIpv6 = targetAddr is java.net.Inet6Address
-                    // 1. Send small noise part with low TTL
-                    val noise = ByteArray(rnd.nextInt(10, 30)) { rnd.nextInt(256).toByte() }
-                    TtlHelper.setUdpTtl(socket, udpTtlValue, isIpv6)
-                    socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort))
-                    delay(1)
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
+                    socket.send(DatagramPacket(fake, fake.size, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 3))
                     
-                    // 2. Real data split into 3 parts, sent out of order
+                    // 2. Real data
                     TtlHelper.setUdpTtl(socket, 64, isIpv6)
-                    if (length > 60) {
-                        val s1 = length / 3
-                        val s2 = (length * 2) / 3
-                        val p1 = data.copyOfRange(offset, offset + s1)
-                        val p2 = data.copyOfRange(offset + s1, offset + s2)
-                        val p3 = data.copyOfRange(offset + s2, offset + length)
-                        
-                        socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
-                        delay(rnd.nextLong(1, 3))
-                        socket.send(DatagramPacket(p3, p3.size, targetAddr, targetPort))
-                        delay(rnd.nextLong(1, 3))
-                        socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
-                    } else {
-                        socket.send(packet)
-                    }
-                } catch (e: Throwable) { socket.send(packet) }
-            }
-            BypassStrategy.UDP_DNS_REORDER_HYBRID -> {
-                // Combine DNS noise + reordering
-                val isIpv6 = targetAddr is java.net.Inet6Address
-                TtlHelper.setUdpTtl(socket, 2, isIpv6)
-                val noise = FakePacketHelper.buildDnsFakeQuery("google.com")
-                try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch (e: Throwable) {}
-                delay(1)
-                
-                TtlHelper.setUdpTtl(socket, 64, isIpv6)
-                if (length > 20) {
-                    val split = length - 10
-                    val part1 = data.copyOfRange(offset + split, offset + length)
-                    val part2 = data.copyOfRange(offset, offset + split)
-                    socket.send(DatagramPacket(part1, part1.size, targetAddr, targetPort))
-                    delay(2)
-                    socket.send(DatagramPacket(part2, part2.size, targetAddr, targetPort))
-                } else {
                     socket.send(packet)
-                }
+                } catch(e: Throwable) { socket.send(packet) }
             }
             BypassStrategy.QUIC_INITIAL_FRAGMENT -> {
                 if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
-                    val split = 64
-                    val part1 = data.copyOfRange(offset, offset + split)
-                    val part2 = data.copyOfRange(offset + split, offset + length)
-                    socket.send(DatagramPacket(part1, part1.size, targetAddr, targetPort))
+                    val noise = FakePacketHelper.buildUdpNoise(128)
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch(e: Throwable) {}
                     delay(rnd.nextLong(1, 4))
-                    socket.send(DatagramPacket(part2, part2.size, targetAddr, targetPort))
-                } else {
-                    socket.send(packet)
                 }
+                socket.send(packet)
             }
             BypassStrategy.QUIC_INITIAL_PADDING_EXTREME -> {
                 if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
                     // Maximum allowed UDP size (to avoid fragmentation but maximize entropy)
-                    val padding = FakePacketHelper.buildUdpNoise(rnd.nextInt(800, 1100))
+                    val padding = ByteArray(rnd.nextInt(800, 1100)) { 0x00 }
                     val combined = data.copyOfRange(offset, offset + length) + padding
                     socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
                     
@@ -1204,14 +1156,11 @@ object BypassConfig {
             }
             BypassStrategy.QUIC_INITIAL_FRAGMENTATION -> {
                 if (length > 400 && (data[offset].toInt() and 0xC0) == 0xC0) {
-                    val p1 = data.copyOfRange(offset, offset + 128)
-                    val p2 = data.copyOfRange(offset + 128, offset + length)
-                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
+                    val noise = FakePacketHelper.buildUdpNoise(256)
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch(e: Throwable) {}
                     delay(rnd.nextLong(1, 3))
-                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
-                } else {
-                    socket.send(packet)
                 }
+                socket.send(packet)
             }
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
                 // Naive byte-level splitting breaks UDP because it's a datagram protocol.
@@ -1253,6 +1202,32 @@ object BypassConfig {
                 val fake = FakePacketHelper.buildUdpNoise(48)
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
             }
+            BypassStrategy.UDP_DISCORD_FAKE -> {
+                val fake = FakePacketHelper.buildUdpNoise(64)
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_IKE_FAKE -> {
+                val fake = FakePacketHelper.getCachedIke()
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_DHCP_FAKE -> {
+                val fake = FakePacketHelper.getCachedDhcp()
+                writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_DNS_REORDER_HYBRID -> {
+                if (targetPort == 53) {
+                    val fakeDns = FakePacketHelper.buildDnsFakeQuery("google.com")
+                    try {
+                        TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
+                        socket.send(DatagramPacket(fakeDns, fakeDns.size, targetAddr, targetPort))
+                    } catch (e: Throwable) {}
+                    delay(rnd.nextLong(2, 6))
+                    TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                    socket.send(packet)
+                } else {
+                    socket.send(packet)
+                }
+            }
             BypassStrategy.UDP_QUIC_SKEW -> {
                 val fake = FakePacketHelper.buildQuicInitialFake()
                 val isIpv6 = targetAddr is java.net.Inet6Address
@@ -1264,13 +1239,7 @@ object BypassConfig {
             }
             BypassStrategy.UDP_DATA_FRAG -> {
                 if (length > 200) {
-                    val half = length / 2
-                    val p1 = data.copyOfRange(offset, offset + half)
-                    val p2 = data.copyOfRange(offset + half, offset + length)
-                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
-                    delay(rnd.nextLong(1, 5))
-                    
-                    // Optional noise injection between fragments
+                    // Optional noise injection before sending the real packet
                     if (ProxyStats.censorshipIntensity.value > 70) {
                          val randomNoise = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
                          try {
@@ -1280,11 +1249,8 @@ object BypassConfig {
                          } catch (e: Throwable) {}
                          TtlHelper.setUdpTtl(socket, 64, isIpv6)
                     }
-                    
-                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
-                } else {
-                    socket.send(packet)
                 }
+                socket.send(packet)
             }
             BypassStrategy.UDP_REORDER -> {
                 // Handled in UdpTransportHandler with buffering
@@ -1389,31 +1355,23 @@ object BypassConfig {
                 socket.send(DatagramPacket(fakeQuic2, fakeQuic2.size, targetAddr, targetPort))
                 delay(config.delay1)
                 
-                // Real data fragmented if possible (QUIC initial)
+                // Real data
                 TtlHelper.setUdpTtl(socket, 64, isIpv6)
                 if (length > 100 && (data[offset].toInt() and 0xC0) == 0xC0) {
-                    val split = rnd.nextInt(40, 80)
-                    val p1 = data.copyOfRange(offset, offset + split)
-                    val p2 = data.copyOfRange(offset + split, offset + length)
-                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
-                    delay(1)
-                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
+                    val padding = ByteArray(rnd.nextInt(64, 128)) { 0x00 }
+                    val combined = data.copyOfRange(offset, offset + length) + padding
+                    socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
                 } else {
                     socket.send(packet)
                 }
             }
             BypassStrategy.UDP_SKEW_REVERSE -> {
                 if (length > 40) {
-                    val split = length / 2
-                    val p1 = data.copyOfRange(offset, offset + split)
-                    val p2 = data.copyOfRange(offset + split, offset + length)
-                    // Send second part first
-                    socket.send(DatagramPacket(p2, p2.size, targetAddr, targetPort))
+                    val noise = FakePacketHelper.buildUdpNoise(32)
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch(e: Throwable) {}
                     delay(rnd.nextLong(1, 4))
-                    socket.send(DatagramPacket(p1, p1.size, targetAddr, targetPort))
-                } else {
-                    socket.send(packet)
                 }
+                socket.send(packet)
             }
             else -> {
                 socket.send(packet)
@@ -2827,7 +2785,7 @@ TtlHelper.setTtl(socket, 64)
                     // Send a segment that looks like a middle-connection packet but with low TTL
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     delay(1)
-                    try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                    output.write(data, 0, length); output.flush()
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.BYEBYEDPI_HYBRID -> {
@@ -2841,7 +2799,6 @@ TtlHelper.setTtl(socket, 64)
                         // 2. Real data with window shaking and OOB
                         TtlHelper.setTtl(socket, 64)
                         val split1 = sniOffset + 1
-                        val split2 = sniOffset + (if (host.isNotEmpty()) host.length / 2 else 5)
                         
                         // Shake window
                         try { socket.receiveBufferSize = rnd.nextInt(512, 1024) } catch (e: Throwable) {}
@@ -2850,11 +2807,7 @@ TtlHelper.setTtl(socket, 64)
                         try { socket.sendUrgentData(0x00) } catch (e: Throwable) {}
                         delay(config.delay1)
                         
-                        // Fake overlapping part
-                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
-                        delay(1)
-                        
-                        try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                        output.write(data, split1, length - split1); output.flush()
                     } else {
                         val split = (length / 2).coerceIn(1, length - 1)
                         output.write(data, 0, split); output.flush()

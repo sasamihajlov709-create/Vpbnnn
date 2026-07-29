@@ -43,7 +43,7 @@ object UdpTransportHandler {
             var clientUdpAddress: InetAddress? = null
             var clientUdpPort = 0
             
-            val udpOutChannel = kotlinx.coroutines.channels.Channel<Pair<DatagramPacket, String>>(500)
+            val udpOutChannels = Array(8) { kotlinx.coroutines.channels.Channel<Pair<DatagramPacket, String>>(500) }
             
             coroutineScope {
                 val jobs = mutableListOf<Job>()
@@ -76,7 +76,7 @@ object UdpTransportHandler {
                         }
                         
                         try {
-                            for (work in udpOutChannel) {
+                            for (work in udpOutChannels[i]) {
                                 val (packet, targetHost) = work
                                 activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
                                 try {
@@ -269,13 +269,17 @@ object UdpTransportHandler {
                                 val payload = data.copyOfRange(headerLen, len)
                                 val cached = RobustResolver.getCached(targetHost)
                                 if (cached != null && cached.isNotEmpty()) {
-                                    udpOutChannel.trySend(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
+                                    val hash = (targetHost.hashCode() xor targetPortNum)
+                                    val workerIdx = Math.abs(hash) % 8
+                                    udpOutChannels[workerIdx].trySend(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
                                 } else {
                                     launch(ProxyDispatcher.io) {
                                         try {
                                             val res = RobustResolver.resolve(targetHost, vpnService)
                                             if (res.isNotEmpty()) {
-                                                udpOutChannel.trySend(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
+                                                val hash2 = (targetHost.hashCode() xor targetPortNum)
+                                                val workerIdx2 = Math.abs(hash2) % 8
+                                                udpOutChannels[workerIdx2].trySend(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
                                             }
                                         } catch (e: Throwable) {}
                                     }
@@ -286,7 +290,7 @@ object UdpTransportHandler {
                         if (e !is CancellationException) Log.v("UdpTransport", "Client->Target error: ${e.message}")
                     } finally {
                         ProxyStats.release64k(buffer)
-                        udpOutChannel.close()
+                        udpOutChannels.forEach { it.close() }
                     }
                 }
                 
