@@ -58,7 +58,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                             client.tcpNoDelay = true
                             try { client.sendBufferSize = 64 * 1024 } catch (e: Throwable) {}
                             try { client.receiveBufferSize = 64 * 1024 } catch (e: Throwable) {}
-                            handleClient(client, scope)
+                            handleClient(client, this)
                         } finally {
                             activeConnectionSemaphore.release()
                         }

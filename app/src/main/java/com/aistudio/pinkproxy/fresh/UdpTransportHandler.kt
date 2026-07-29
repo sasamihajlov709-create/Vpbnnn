@@ -313,8 +313,14 @@ object UdpTransportHandler {
     }
 
     private val reorderBuffers = ConcurrentHashMap<String, MutableList<DatagramPacket>>()
+    private var lastReorderBufferCleanup = System.currentTimeMillis()
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
+        if (System.currentTimeMillis() - lastReorderBufferCleanup > 60000) {
+            lastReorderBufferCleanup = System.currentTimeMillis()
+            if (reorderBuffers.size > 200) reorderBuffers.clear()
+        }
+        
         val payload = packet.data
         val offset = packet.offset
         val length = packet.length

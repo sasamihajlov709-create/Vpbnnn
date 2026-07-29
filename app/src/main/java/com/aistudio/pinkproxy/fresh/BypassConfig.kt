@@ -3364,17 +3364,19 @@ object BypassConfig {
                     // Disorder: Send Part 2 first (out of order, but kernel shouldn't ideally block us if we delay part 1, but we can't reliably force kernel out of order like Zapret Raw Sockets, so we emulate by delaying or injecting)
                     // Since standard sockets don't allow arbitrary sequence number rewriting, we emulate disorder with OOB + overlapping fake data
                     
-                    // Real P1
+                    val fakeP1 = if (TlsParser.isClientHello(data, length)) FakePacketHelper.buildRealisticTlsHello(host).copyOfRange(0, minOf(split + 4, FakePacketHelper.buildRealisticTlsHello(host).size)) else FakePacketHelper.buildTlsNoise(p1.size + 4)
+                    
+                    // Overlap Fake P1 with Low TTL to poison DPI first
+                    TtlHelper.setTtl(socket, 3)
+                    output.write(fakeP1); output.flush()
+                    delay(1)
+                    
+                    // Real P1 with high TTL (normal)
+                    TtlHelper.setTtl(socket, 64)
                     output.write(p1); output.flush()
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                     
-                    // Overlap Fake P1 with Low TTL
-                    TtlHelper.setTtl(socket, 3)
-                    output.write(FakePacketHelper.buildUdpNoise(p1.size + 4)); output.flush()
-                    delay(1)
-                    
                     // Real P2
-                    TtlHelper.setTtl(socket, 64)
                     output.write(p2); output.flush()
                     
                     TtlHelper.setMss(socket, 1400)
@@ -3407,13 +3409,13 @@ object BypassConfig {
                         FakePacketHelper.buildUdpNoise(fakePacketSizeValue)
                     }
                     
-                    // 1. Send first part of REAL data with low TTL
+                    // 1. Send first part of FAKE data with low TTL to poison DPI
                     TtlHelper.setTtl(socket, 2)
-                    output.write(data, 0, split); output.flush()
-                    
-                    // 2. Send FAKE data that overlaps with the first part (evade DPI)
-                    TtlHelper.setTtl(socket, 64)
                     output.write(fake); output.flush()
+                    
+                    // 2. Send REAL data to server
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, split); output.flush()
                     
                     // 3. Send second part of REAL data
                     if (length > split) {
