@@ -319,10 +319,13 @@ object UdpTransportHandler {
     private val reorderBuffers = ConcurrentHashMap<String, MutableList<DatagramPacket>>()
     private var lastReorderBufferCleanup = System.currentTimeMillis()
 
+    private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
         if (System.currentTimeMillis() - lastReorderBufferCleanup > 60000) {
             lastReorderBufferCleanup = System.currentTimeMillis()
             if (reorderBuffers.size > 200) reorderBuffers.clear()
+            if (flowPacketCounter.size > 500) flowPacketCounter.clear()
         }
         
         val payload = packet.data
@@ -332,11 +335,28 @@ object UdpTransportHandler {
         val targetPort = packet.port
         
         val isQuic = targetPort == 443 && length > 0 && (payload[offset].toInt() and 0xC0) == 0xC0
+        val isDns = targetPort == 53
         
         // Basic filtering
         if (BypassConfig.blockQuic && isQuic) return
 
         val host = if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress ?: ""
+        val flowKey = "${targetInet.hostAddress}:$targetPort"
+        
+        // 0. Periodic Flow Noise Injection
+        if (!isDns) {
+            val counter = flowPacketCounter.getOrPut(flowKey) { java.util.concurrent.atomic.AtomicInteger(0) }
+            val count = counter.incrementAndGet()
+            if (count % 20 == 0) { // Every 20 packets
+                val intensity = ProxyStats.censorshipIntensity.value
+                val rnd = ThreadLocalRandom.current()
+                if (rnd.nextInt(100) < (intensity / 2).coerceIn(10, 50)) {
+                    val noiseSize = if (isQuic) rnd.nextInt(256, 1024) else rnd.nextInt(16, 64)
+                    val noise = FakePacketHelper.buildUdpNoise(noiseSize)
+                    try { socket.send(DatagramPacket(noise, noise.size, targetInet, targetPort)) } catch(e: Throwable) {}
+                }
+            }
+        }
         
         val now = System.currentTimeMillis()
         val cached = hostStrategyCache[host]

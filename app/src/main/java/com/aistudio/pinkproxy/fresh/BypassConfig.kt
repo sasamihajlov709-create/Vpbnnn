@@ -322,7 +322,7 @@ object BypassConfig {
     fun recordSuccess(strat: BypassStrategy, rtt: Long, host: String?) {
         ProxyStats.recordGlobalSuccess(rtt)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        DpiEngine.recordResult(strat, true, cat)
+        DpiEngine.recordResult(strat, true, cat, latencyMs = rtt)
         
         if (rtt > 0) {
             TrafficShaper.updateRtt(rtt)
@@ -793,8 +793,45 @@ object BypassConfig {
                 val fake = byteArrayOf(0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xa4.toByte(), 0x42) + ByteArray(12) { rnd.nextInt(256).toByte() }
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
             }
+            BypassStrategy.UDP_DATA_FRAG -> {
+                val chunkSize = rnd.nextInt(64, 256)
+                var pos = offset
+                while (pos < offset + length) {
+                    val remaining = (offset + length) - pos
+                    val sz = chunkSize.coerceAtMost(remaining)
+                    socket.send(DatagramPacket(data, pos, sz, targetAddr, targetPort))
+                    pos += sz
+                    if (pos < offset + length) delay(rnd.nextLong(1, 3))
+                }
+            }
+            BypassStrategy.UDP_FRAGMENT_SKEW -> {
+                val split = length / 2
+                if (split > 0) {
+                    // Send second half first if protocol might allow (not for DNS)
+                    val isDns = targetPort == 53
+                    if (!isDns && rnd.nextBoolean()) {
+                        socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
+                        delay(rnd.nextLong(1, 3))
+                        socket.send(DatagramPacket(data, offset, split, targetAddr, targetPort))
+                    } else {
+                        socket.send(DatagramPacket(data, offset, split, targetAddr, targetPort))
+                        delay(rnd.nextLong(1, 3))
+                        socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
+                    }
+                } else {
+                    socket.send(packet)
+                }
+            }
             BypassStrategy.UDP_NOISE_PAD -> {
+                // Pre-noise
+                if (rnd.nextInt(100) < 20) {
+                    val preNoise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 48))
+                    try { socket.send(DatagramPacket(preNoise, preNoise.size, targetAddr, targetPort)) } catch (e: Throwable) {}
+                }
+                
                 socket.send(packet)
+                
+                // Post-noise
                 if (rnd.nextInt(100) < 30) {
                     val noise = ByteArray(rnd.nextInt(10, 50)) { rnd.nextInt(256).toByte() }
                     try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch (e: Throwable) {}

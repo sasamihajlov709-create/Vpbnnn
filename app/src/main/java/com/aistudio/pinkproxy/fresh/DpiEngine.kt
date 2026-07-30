@@ -16,8 +16,12 @@ object DpiEngine {
     val currentDpiLevel = _currentDpiLevel.asStateFlow()
 
     private val strategyScores = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
+    private val strategyLatency = ConcurrentHashMap<BypassStrategy, java.util.concurrent.atomic.AtomicLong>()
     private val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
     private val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+
+    private var lastGlobalReset = System.currentTimeMillis()
+    private val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
 
     fun start(context: android.content.Context) {
         // Initialize scores
@@ -34,18 +38,67 @@ object DpiEngine {
         scope.launch {
             while (isActive) {
                 delay(30000)
-                analyzeAndAdjust()
+                try {
+                    analyzeAndAdjust()
+                    checkGlobalStall()
+                } catch (e: Throwable) {
+                    Log.e("DpiEngine", "Optimizer error", e)
+                }
             }
         }
     }
 
-    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null) {
+    private fun checkGlobalStall() {
+        val total = successHistory.values.sumOf { it.get() } + failureHistory.values.sumOf { it.get() }
+        if (total > 20) {
+            val rate = (successHistory.values.sumOf { it.get() }.toDouble() / total * 100)
+            if (rate < 15 && System.currentTimeMillis() - lastGlobalReset > 600_000) {
+                Log.e("DpiEngine", "GLOBAL STALL DETECTED (Success rate $rate%). Resetting all scores.")
+                resetEverything()
+                lastGlobalReset = System.currentTimeMillis()
+            }
+        }
+    }
+
+    private fun resetEverything() {
+        strategyScores.values.forEach { catScores ->
+            catScores.values.forEach { it.set(100) }
+        }
+        circuitBreakers.clear()
+        consecutiveFailures.clear()
+        successHistory.clear()
+        failureHistory.clear()
+    }
+
+    fun recordEvent(type: DpiType) {
+        eventHistory.getOrPut(type) { AtomicInteger(0) }.incrementAndGet()
+        
+        // Adjust scores based on DPI type
+        when (type) {
+            DpiType.TLS_SNI_BLOCK -> boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+            DpiType.UDP_BLOCK -> boostStrategyFamily(StrategyFamily.UDP, null)
+            DpiType.TCP_RESET -> boostStrategyFamily(StrategyFamily.TCP, null)
+            else -> {}
+        }
+    }
+
+    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0) {
         if (success) {
             successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             strategyScores[category]?.get(strategy)?.let { score ->
                 score.addAndGet(10)
                 if (score.get() > 2000) score.set(2000)
             }
+            
+            if (latencyMs > 0) {
+                val currentAvg = strategyLatency.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0) }
+                if (currentAvg.get() == 0L) {
+                    currentAvg.set(latencyMs)
+                } else {
+                    currentAvg.set((currentAvg.get() * 7 + latencyMs) / 8) // Smooth moving average
+                }
+            }
+            
             consecutiveFailures.remove(strategy)
             circuitBreakers.remove(strategy)
         } else {
@@ -83,11 +136,16 @@ object DpiEngine {
         
         if (validStrategies.isEmpty()) return BypassStrategy.CHAOS
         
-        // Find strategy with highest score, adding some randomness for exploration
+        // Find strategy with best combined score (score - latency_penalty)
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         return validStrategies
             .shuffled()
-            .maxByOrNull { it.value.get() + rnd.nextInt(-20, 20) }
+            .maxByOrNull { (strat, score) ->
+                val s = score.get().toDouble()
+                val latency = strategyLatency[strat]?.get() ?: 200L
+                val latencyPenalty = (latency / 10).coerceAtMost(50).toDouble()
+                s - latencyPenalty + rnd.nextInt(-20, 20)
+            }
             ?.key ?: BypassStrategy.SNI_SPLIT
     }
 
