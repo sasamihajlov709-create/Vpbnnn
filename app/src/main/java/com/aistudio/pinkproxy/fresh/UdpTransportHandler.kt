@@ -56,8 +56,9 @@ object UdpTransportHandler {
                         
                         // Heartbeat job for this worker's sessions
                         val hbJob = launch {
+                            val rnd = ThreadLocalRandom.current()
                             while (isActive) {
-                                delay(20000)
+                                delay(rnd.nextLong(20000, 45000))
                                 val now = System.currentTimeMillis()
                                 activeSessions.entries.removeIf { now - it.value > 60000 }
                                 
@@ -67,8 +68,9 @@ object UdpTransportHandler {
                                         try {
                                             val addr = InetAddress.getByName(parts[0])
                                             val port = parts[1].toInt()
-                                            // Send 1-byte heartbeat
-                                            outSocket.send(DatagramPacket(byteArrayOf(0x00), 1, addr, port))
+                                            // Send realistic noise instead of 0x00
+                                            val noise = if (port == 443) FakePacketHelper.buildUdpNoise(rnd.nextInt(1, 10)) else byteArrayOf(0x00)
+                                            outSocket.send(DatagramPacket(noise, noise.size, addr, port))
                                         } catch (e: Throwable) {}
                                     }
                                 }
@@ -322,10 +324,13 @@ object UdpTransportHandler {
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
-        if (System.currentTimeMillis() - lastReorderBufferCleanup > 60000) {
+        if (System.currentTimeMillis() - lastReorderBufferCleanup > 30000) {
             lastReorderBufferCleanup = System.currentTimeMillis()
-            if (reorderBuffers.size > 200) reorderBuffers.clear()
-            if (flowPacketCounter.size > 500) flowPacketCounter.clear()
+            if (reorderBuffers.size > 100) {
+                reorderBuffers.forEach { (k, v) -> if (v.size > 0) v.clear() }
+                reorderBuffers.clear()
+            }
+            if (flowPacketCounter.size > 300) flowPacketCounter.clear()
         }
         
         val payload = packet.data

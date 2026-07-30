@@ -257,7 +257,14 @@ object RobustResolver {
                 emptyList() 
             }
             if (res.isNotEmpty()) {
-                receivedResults.add(res)
+                val cleanRes = res.filter { !DnsPacketEngine.isSuspicious(it, host) }
+                if (cleanRes.isEmpty()) {
+                    ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+                    completed++
+                    continue
+                }
+                
+                receivedResults.add(cleanRes)
                 
                 val counts = mutableMapOf<List<String>, Int>()
                 for (r in receivedResults) {

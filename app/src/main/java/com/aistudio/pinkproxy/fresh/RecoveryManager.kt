@@ -141,10 +141,14 @@ object RecoveryManager {
                 }
             }
             RecoveryEvent.DNS_FAILURE -> {
+                Log.e("RecoveryManager", "Critical DNS failure detected. Escalation: $recoveryEscalation")
                 if (recoveryEscalation < 2) {
                     RobustResolver.clearCache()
+                    DnsOptimizer.forceRefresh()
                     recoveryEscalation++
                 } else {
+                    RobustResolver.clearCache()
+                    DnsOptimizer.forceRefresh()
                     triggerPanic("Repeated DNS failures")
                     requestServiceRestart("Persistent DNS failures")
                 }

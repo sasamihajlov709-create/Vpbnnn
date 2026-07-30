@@ -220,6 +220,43 @@ object DnsPacketEngine {
         return records
     }
 
+    private val suspiciousIps = setOf(
+        "127.0.0.1", "0.0.0.0", "1.1.1.1", "8.8.8.8", "9.9.9.9",
+        "10.10.10.10", "1.2.3.4", "10.10.34.34", "10.10.34.35",
+        "146.112.61.106", "146.112.61.104", "146.112.61.105", // Cisco Umbrella
+        "188.114.96.0", "188.114.97.0", "188.114.98.0", "188.114.99.0",
+        "31.13.71.36", "31.13.72.36", "31.13.73.36", // Facebook redirections
+        "77.88.8.8", "77.88.8.1", "213.180.204.3", "213.180.193.3", // Yandex
+        "95.167.13.50", "95.167.13.49", // Rostelecom block pages
+        "195.82.146.120", "195.82.146.114", // Megafon block pages
+        "212.188.7.20", "217.16.20.12", // MTS block pages
+        "8.254.218.126", "204.232.175.78", "198.101.242.72", // Generic blocks
+        "93.184.216.34" // Example.com (often used for redirection)
+    )
+
+    private val canaryDomains = setOf(
+        "youtube.com", "google.com", "facebook.com", "instagram.com", "twitter.com", 
+        "t.me", "telegram.org", "discord.com", "chatgpt.com", "github.com"
+    )
+
+    fun isSuspicious(address: InetAddress, host: String = ""): Boolean {
+        val hostAddress = address.hostAddress ?: return true
+        if (suspiciousIps.contains(hostAddress)) return true
+        
+        // If it's a known canary domain and resolves to something VERY suspicious (like private IP)
+        if (canaryDomains.any { host.contains(it, ignoreCase = true) }) {
+            if (address.isSiteLocalAddress || address.isLoopbackAddress || address.isAnyLocalAddress || hostAddress.startsWith("10.") || hostAddress.startsWith("127.")) {
+                return true
+            }
+        }
+        
+        // Check for local network redirects which shouldn't happen for global domains
+        if (address.isLoopbackAddress || address.isAnyLocalAddress || address.isLinkLocalAddress || address.isSiteLocalAddress) {
+            return true
+        }
+        return false
+    }
+
     private fun skipName(bb: java.nio.ByteBuffer) {
         var depth = 0
         while (depth < 64) { // Prevents infinite recursion

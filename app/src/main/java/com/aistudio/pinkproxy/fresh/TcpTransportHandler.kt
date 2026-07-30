@@ -96,11 +96,6 @@ object TcpTransportHandler {
             val finalSocket = remoteSocket ?: throw Exception("Failed to connect to $targetHost after retries")
             remoteSocket = finalSocket
             
-            if (remoteSocket == null) {
-                clientSocket.close()
-                return
-            }
-
             // Optimization: Reset timeouts and enable TCP_NODELAY for both ends of the tunnel
             try {
                 clientSocket.soTimeout = 0
@@ -241,6 +236,8 @@ object TcpTransportHandler {
                     var firstResponse = true
                     var totalRead = 0L
                     var consecutiveTimeouts = 0
+                    val startTime = System.currentTimeMillis()
+                    
                     try {
                         var n: Int
                         while (isActive) {
@@ -251,6 +248,16 @@ object TcpTransportHandler {
                             } catch (e: Throwable) {
                                 if (e is java.io.InterruptedIOException || e is java.net.SocketTimeoutException) {
                                     consecutiveTimeouts++
+                                    
+                                    // Blackhole detection: If we sent data but got NOTHING back for a while
+                                    val sent = totalWrittenClient.get().toInt()
+                                    if (totalRead == 0L && sent > 0) {
+                                        val duration = System.currentTimeMillis() - startTime
+                                        if (BypassConfig.detectBlackhole(targetHost, sent, 0, duration)) {
+                                            break // Exit loop, blackhole confirmed
+                                        }
+                                    }
+                                    
                                     val maxTimeouts = if (totalRead == 0L) 2 else 5
                                     if (consecutiveTimeouts >= maxTimeouts || !isActive) {
                                         if (totalRead == 0L) {
@@ -580,8 +587,8 @@ object TcpTransportHandler {
                             }
                             throw e
                         }
-                        if (!channel.isClosedForSend) {
-                            channel.trySend(s)
+                        if (channel.trySend(s).isSuccess) {
+                            // Successfully sent
                         } else {
                             s.close()
                         }

@@ -152,15 +152,21 @@ object DpiEngine {
         
         if (validStrategies.isEmpty()) return BypassStrategy.CHAOS
         
-        // Find strategy with best combined score (score - latency_penalty)
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        
+        // Exploration: 7% chance to try a random strategy from the same family to keep data fresh
+        if (rnd.nextInt(100) < 7) {
+            return validStrategies.random().key
+        }
+        
+        // Find strategy with best combined score (score - latency_penalty)
         return validStrategies
             .shuffled()
             .maxByOrNull { (strat, score) ->
                 val s = score.get().toDouble()
                 val latency = strategyLatency[strat]?.get() ?: 200L
-                val latencyPenalty = (latency / 10).coerceAtMost(50).toDouble()
-                s - latencyPenalty + rnd.nextInt(-20, 20)
+                val latencyPenalty = (latency / 15).coerceAtMost(40).toDouble()
+                s - latencyPenalty + rnd.nextInt(-15, 15)
             }
             ?.key ?: BypassStrategy.SNI_SPLIT
     }
@@ -170,13 +176,13 @@ object DpiEngine {
         strategyScores[category]?.forEach { (strat, score) ->
             if (strat.family == family) {
                 val boost = when (strat.group) {
-                    StrategyGroup.EXTREME -> 50
-                    StrategyGroup.HEAVY -> 35
-                    StrategyGroup.MEDIUM -> 20
-                    else -> 10
+                    StrategyGroup.EXTREME -> 60
+                    StrategyGroup.HEAVY -> 40
+                    StrategyGroup.MEDIUM -> 25
+                    else -> 15
                 }
                 score.addAndGet(boost)
-                if (score.get() > 2000) score.set(2000)
+                if (score.get() > 3000) score.set(3000)
             }
         }
     }
@@ -198,12 +204,15 @@ object DpiEngine {
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
         ProxyStats.updateCensorshipIntensity(100 - globalSuccessRate)
         
-        // Normalize scores periodically to prevent drift
+        // Smoother exponential decay to stay fresh
         strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
                 val s = score.get()
-                if (s > 1000) score.set(s / 2 + 50)
-                if (s < 10) score.set(50)
+                // Slowly trend towards base score (100)
+                if (s > 100) score.set((s * 0.85 + 15).toInt())
+                else if (s < 100) score.set((s * 1.1 + 2).toInt().coerceAtMost(100))
+                
+                if (s < 10) score.set(40)
             }
         }
         
