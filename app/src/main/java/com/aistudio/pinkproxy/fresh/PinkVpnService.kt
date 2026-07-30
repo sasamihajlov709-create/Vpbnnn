@@ -205,6 +205,13 @@ class PinkVpnService : VpnService() {
                     }
                     val isWifi = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
                     val isMobile = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
+                    
+                    if (isWifi && _isRunning.value) {
+                        try { if (wifiLock?.isHeld == false) wifiLock?.acquire() } catch(e: Throwable) {}
+                    } else {
+                        try { if (wifiLock?.isHeld == true) wifiLock?.release() } catch(e: Throwable) {}
+                    }
+                    
                     BypassConfig.updateNetworkType(if (isWifi) NetworkType.WIFI else if (isMobile) NetworkType.MOBILE else NetworkType.UNKNOWN)
                 }
             }
@@ -294,9 +301,6 @@ class PinkVpnService : VpnService() {
 
             try {
                 wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24h max
-                if (BypassConfig.currentNetworkType.value == NetworkType.WIFI) {
-                    wifiLock?.acquire()
-                }
             } catch (e: Throwable) {}
 
             proxyServer?.start() // Ensure proxy is running

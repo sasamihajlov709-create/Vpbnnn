@@ -2331,19 +2331,18 @@ TtlHelper.setTtl(socket, 64)
                 } else {
                     val headerEnd = findHeaderEnd(data, length)
                     if (headerEnd != -1) {
-                        val s = String(data, 0, headerEnd)
-                        if (s.contains("Host:", ignoreCase = true)) {
-                            val lines = s.split("\r\n").toMutableList()
-                            val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
-                            if (hostIdx != -1 && hostIdx < lines.size - 2) {
-                                val hostLine = lines.removeAt(hostIdx)
-                                lines.add(1, hostLine) // Move host to 2nd line
-                                output.write(lines.joinToString("\r\n").toByteArray())
-                                output.write(data, headerEnd, length - headerEnd)
-                                output.flush()
-                            } else {
-                                output.write(data, 0, length); output.flush()
-                            }
+                        // headerEnd is pos after \r\n\r\n. We want everything before the last \r\n\r\n
+                        val s = String(data, 0, headerEnd - 4, Charsets.US_ASCII)
+                        val lines = s.split("\r\n").toMutableList()
+                        val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                        if (hostIdx != -1 && lines.size > 1) {
+                            val hostLine = lines.removeAt(hostIdx)
+                            // Insert after Request-Line (index 0)
+                            lines.add(1.coerceAtMost(lines.size), hostLine)
+                            val newHead = lines.joinToString("\r\n") + "\r\n\r\n"
+                            output.write(newHead.toByteArray(Charsets.US_ASCII))
+                            output.write(data, headerEnd, length - headerEnd)
+                            output.flush()
                         } else {
                             output.write(data, 0, length); output.flush()
                         }
@@ -2436,13 +2435,13 @@ TtlHelper.setTtl(socket, 64)
                 } else {
                     val headerEnd = findHeaderEnd(data, length)
                     if (headerEnd != -1) {
-                        val s = String(data, 0, headerEnd, Charsets.US_ASCII)
+                        val s = String(data, 0, headerEnd - 4, Charsets.US_ASCII)
                         if (s.contains("Host:", ignoreCase = true)) {
                             val lines = s.split("\r\n").toMutableList()
                             val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
                             if (hostIdx != -1) {
                                 lines.add(hostIdx, "Host: www.google.com")
-                                val smuggled = lines.joinToString("\r\n")
+                                val smuggled = lines.joinToString("\r\n") + "\r\n\r\n"
                                 output.write(smuggled.toByteArray(Charsets.US_ASCII))
                                 output.write(data, headerEnd, length - headerEnd)
                                 output.flush()
@@ -2557,8 +2556,8 @@ TtlHelper.setTtl(socket, 64)
                 if (isProbableHttp(data, length)) {
                     val headerEnd = findHeaderEnd(data, length)
                     if (headerEnd != -1) {
-                        val request = String(data, 0, headerEnd, Charsets.US_ASCII)
-                        val modified = request.replace("\r\n\r\n", "\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5, max=1000\r\n\r\n")
+                        val request = String(data, 0, headerEnd - 4, Charsets.US_ASCII)
+                        val modified = request + "\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5, max=1000\r\n\r\n"
                         output.write(modified.toByteArray(Charsets.US_ASCII))
                         output.write(data, headerEnd, length - headerEnd)
                         output.flush()
@@ -2621,13 +2620,13 @@ TtlHelper.setTtl(socket, 64)
                 if (isProbableHttp(data, length)) {
                     val headerEnd = findHeaderEnd(data, length)
                     if (headerEnd != -1) {
-                        val head = String(data, 0, headerEnd, Charsets.US_ASCII)
+                        val head = String(data, 0, headerEnd - 4, Charsets.US_ASCII)
                         val lines = head.split("\r\n").toMutableList()
                         val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
-                        if (hostIdx != -1) {
+                        if (hostIdx != -1 && lines.size > 1) {
                             val hostLine = lines.removeAt(hostIdx)
-                            lines.add(1, hostLine) // Move Host to be the second line (after Request-Line)
-                            val newHead = lines.joinToString("\r\n")
+                            lines.add(1.coerceAtMost(lines.size), hostLine) // Move Host to be the second line (after Request-Line)
+                            val newHead = lines.joinToString("\r\n") + "\r\n\r\n"
                             output.write(newHead.toByteArray(Charsets.US_ASCII))
                             output.write(data, headerEnd, length - headerEnd)
                             output.flush()

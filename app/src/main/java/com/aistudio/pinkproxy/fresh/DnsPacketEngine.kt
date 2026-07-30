@@ -221,15 +221,27 @@ object DnsPacketEngine {
     }
 
     private fun skipName(bb: java.nio.ByteBuffer) {
-        var b = bb.get().toInt() and 0xFF
-        while (b != 0) {
+        var depth = 0
+        while (depth < 64) { // Prevents infinite recursion
+            if (bb.position() >= bb.limit()) break
+            var b = bb.get().toInt() and 0xFF
+            if (b == 0) break
+            
             if ((b and 0xC0) == 0xC0) { // Pointer
-                bb.get() // Skip the second byte of pointer
+                if (bb.position() < bb.limit()) {
+                    bb.get() // Skip the second byte of pointer
+                }
                 break
             } else {
-                bb.position(bb.position() + b)
-                b = bb.get().toInt() and 0xFF
+                val newPos = bb.position() + b
+                if (newPos <= bb.limit()) {
+                    bb.position(newPos)
+                } else {
+                    bb.position(bb.limit())
+                    break
+                }
             }
+            depth++
         }
     }
 }
