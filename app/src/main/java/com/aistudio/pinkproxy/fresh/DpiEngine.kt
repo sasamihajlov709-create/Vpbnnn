@@ -150,23 +150,39 @@ object DpiEngine {
             (circuitBreakers[strat] ?: 0L) < now
         }
         
-        if (validStrategies.isEmpty()) return BypassStrategy.CHAOS
+        if (validStrategies.isEmpty()) {
+            circuitBreakers.clear() // Emergency clear
+            return BypassStrategy.CHAOS
+        }
         
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         
-        // Exploration: 7% chance to try a random strategy from the same family to keep data fresh
+        // Exploration: 7% chance to try a random strategy to keep data fresh
         if (rnd.nextInt(100) < 7) {
             return validStrategies.random().key
         }
         
-        // Find strategy with best combined score (score - latency_penalty)
+        // Context-aware boost based on current DpiType detected globally
+        val currentDpi = ProxyStats.currentDpiType.value
+        
+        // Find strategy with best combined score (score - latency_penalty + context_boost)
         return validStrategies
             .shuffled()
             .maxByOrNull { (strat, score) ->
-                val s = score.get().toDouble()
+                var s = score.get().toDouble()
+                
+                // Contextual Boosts
+                when (currentDpi) {
+                    DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s += 100
+                    DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s += 100
+                    DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s += 100
+                    DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s += 150
+                    else -> {}
+                }
+                
                 val latency = strategyLatency[strat]?.get() ?: 200L
                 val latencyPenalty = (latency / 15).coerceAtMost(40).toDouble()
-                s - latencyPenalty + rnd.nextInt(-15, 15)
+                s - latencyPenalty + rnd.nextInt(-10, 10)
             }
             ?.key ?: BypassStrategy.SNI_SPLIT
     }
@@ -193,6 +209,23 @@ object DpiEngine {
 
     fun getAverageScore(strategy: BypassStrategy): Double {
         return strategyScores.values.map { it[strategy]?.get() ?: 0 }.map { it.toDouble() }.average()
+    }
+
+    fun resetStrategyScoresForNetworkChange() {
+        Log.i("DpiEngine", "Network change detected, performing partial score reset for faster adaptation.")
+        strategyScores.values.forEach { catScores ->
+            catScores.values.forEach { score ->
+                val s = score.get()
+                // Bring scores closer to baseline (100) but keep some "memory" of what was good
+                if (s > 300) score.set((s * 0.4 + 60).toInt())
+                else if (s < 50) score.set(80)
+                else score.set(100)
+            }
+        }
+        circuitBreakers.clear()
+        consecutiveFailures.clear()
+        successHistory.clear()
+        failureHistory.clear()
     }
 
     private fun analyzeAndAdjust() {

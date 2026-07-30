@@ -119,7 +119,10 @@ object TcpTransportHandler {
                 }
 
                 val intensity = ProxyStats.censorshipIntensity.value
-                val isWindowMangle = strategy == BypassStrategy.WINDOW_SIZE_MANGLE || strategy == BypassStrategy.TCP_ZERO_WINDOW_STALL
+                val isWindowMangle = strategy == BypassStrategy.WINDOW_SIZE_MANGLE || 
+                                   strategy == BypassStrategy.TCP_ZERO_WINDOW_STALL || 
+                                   strategy == BypassStrategy.TCP_WINDOW_SHRINK ||
+                                   strategy == BypassStrategy.TCP_WINDOW_SIZE_JITTER
                 
                 // Adaptive buffer sizes: small for DPI evasion, large for throughput
                 val bufSize = when {
@@ -136,6 +139,15 @@ object TcpTransportHandler {
                     scope.launch {
                         delay(rnd.nextLong(300, 800))
                         TtlHelper.setWindowSize(remoteSocket, bufSize)
+                    }
+                } else if (strategy == BypassStrategy.TCP_WINDOW_SHRINK) {
+                    TtlHelper.setWindowSize(remoteSocket, rnd.nextInt(16, 64))
+                } else if (strategy == BypassStrategy.TCP_WINDOW_SIZE_JITTER) {
+                    scope.launch {
+                        while (isActive && remoteSocket.isConnected) {
+                            TtlHelper.setWindowSize(remoteSocket, rnd.nextInt(64, 1460))
+                            delay(rnd.nextLong(2000, 5000))
+                        }
                     }
                 } else if (isWindowMangle) {
                     TtlHelper.setWindowSize(remoteSocket, rnd.nextInt(256, 1460))

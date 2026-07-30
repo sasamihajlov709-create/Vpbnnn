@@ -127,6 +127,7 @@ object BypassConfig {
             Log.i("BypassConfig", "Network type updated: $type. Clearing session memory.")
             hostStrategyMemory.clear() // Network changed, old strategies might not be optimal
             DpiEngine.clearCircuitBreakers()
+            DpiEngine.resetStrategyScoresForNetworkChange()
         }
     }
 
@@ -885,6 +886,15 @@ object BypassConfig {
                     socket.send(packet)
                 }
             }
+            BypassStrategy.UDP_QUIC_JITTER_PAD -> {
+                if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
+                    val padSize = rnd.nextInt(128, 768)
+                    val combined = data.copyOfRange(offset, offset + length) + FakePacketHelper.buildQuicJitterPad(padSize)
+                    socket.send(DatagramPacket(combined, combined.size, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
+                }
+            }
             BypassStrategy.UDP_QUIC_SMART_SHADOW -> {
                 // 1. Shadow Handshake (Fake QUIC Initial with low TTL)
                 val isIpv6 = targetAddr is java.net.Inet6Address
@@ -1296,6 +1306,14 @@ object BypassConfig {
         }
 
         when (strategy) {
+            BypassStrategy.TCP_WINDOW_SHRINK -> {
+                TtlHelper.setWindowSize(socket, rnd.nextInt(16, 128))
+                output.write(finalData, 0, finalLen); output.flush()
+            }
+            BypassStrategy.TCP_WINDOW_SIZE_JITTER -> {
+                TtlHelper.setWindowSize(socket, rnd.nextInt(256, 1460))
+                output.write(finalData, 0, finalLen); output.flush()
+            }
             BypassStrategy.TCP_SYN_FLOOD_FAKE -> {
                 repeat(rnd.nextInt(2, 5)) {
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
@@ -1309,10 +1327,26 @@ object BypassConfig {
             }
             BypassStrategy.SNI_SPLIT -> {
                 val offset = TlsParser.findSniOffset(finalData, finalLen, host)
-                val split = if (offset != -1) offset + 1 else config.frag1.coerceIn(1, finalLen - 1)
+                val jitter = if (isAutoTuning) rnd.nextInt(-1, 2) else 0
+                val split = if (offset != -1) offset + 1 + jitter else config.frag1.coerceIn(1, finalLen - 1)
                 val safeSplit = split.coerceIn(1, finalLen - 1)
                 output.write(finalData, 0, safeSplit); output.flush(); delay(effectiveDelay)
                 output.write(finalData, safeSplit, finalLen - safeSplit); output.flush()
+            }
+            BypassStrategy.TLS_SNI_JITTER_SPLIT -> {
+                val offset = TlsParser.findSniOffset(finalData, finalLen, host)
+                if (offset != -1 && host.length > 3) {
+                    val split1 = offset + rnd.nextInt(1, host.length / 2 + 1)
+                    val split2 = split1 + rnd.nextInt(1, host.length - (split1 - offset))
+                    
+                    output.write(finalData, 0, split1); output.flush(); delay(rnd.nextLong(10, 50))
+                    output.write(finalData, split1, split2 - split1); output.flush(); delay(rnd.nextLong(20, 100))
+                    output.write(finalData, split2, finalLen - split2); output.flush()
+                } else {
+                    val s = finalLen / 2
+                    output.write(finalData, 0, s); output.flush(); delay(effectiveDelay)
+                    output.write(finalData, s, finalLen - s); output.flush()
+                }
             }
             BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT -> {
                 val offset = TlsParser.findSniOffset(finalData, finalLen, host)
@@ -1730,14 +1764,29 @@ object BypassConfig {
                 delay(config.delay1)
                 output.write(data, split, length - split); output.flush()
             }
-            BypassStrategy.TCP_WINDOW_SIZE_SKEW, BypassStrategy.TCP_WINDOW_RESTRICT -> {
+            BypassStrategy.TCP_WINDOW_SIZE_SKEW, BypassStrategy.TCP_WINDOW_RESTRICT, BypassStrategy.TCP_WINDOW_SHRINK -> {
                 try {
                     val originalSize = socket.receiveBufferSize
-                    socket.receiveBufferSize = rnd.nextInt(32, 256) 
+                    val targetSize = if (strategy == BypassStrategy.TCP_WINDOW_SHRINK) rnd.nextInt(16, 64) else rnd.nextInt(32, 256)
+                    socket.receiveBufferSize = targetSize
                     val split = length / 2
                     output.write(data, 0, split); output.flush(); delay(config.delay1)
                     socket.receiveBufferSize = originalSize.coerceAtLeast(65536)
                     output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_WINDOW_SIZE_JITTER -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    val split = length / 3
+                    socket.receiveBufferSize = rnd.nextInt(64, 128)
+                    output.write(data, 0, split); output.flush(); delay(20)
+                    socket.receiveBufferSize = rnd.nextInt(256, 512)
+                    output.write(data, split, split); output.flush(); delay(20)
+                    socket.receiveBufferSize = originalSize.coerceAtLeast(65536)
+                    output.write(data, 2 * split, length - 2 * split); output.flush()
                 } catch (e: Throwable) {
                     output.write(data, 0, length); output.flush()
                 }

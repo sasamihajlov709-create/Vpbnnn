@@ -213,6 +213,10 @@ enum class BypassStrategy(
     TCP_FRAGMENT_REORDER(StrategyFamily.TCP, 8, 5, StrategyGroup.EXTREME),
     UDP_SKEW_REVERSE(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
     TCP_RETRANS_FAKE(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
+    TCP_WINDOW_SHRINK(StrategyFamily.TCP, 3, 2, StrategyGroup.HEAVY),
+    TCP_WINDOW_SIZE_JITTER(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
+    TLS_SNI_JITTER_SPLIT(StrategyFamily.TLS, 5, 4, StrategyGroup.EXTREME),
+    UDP_QUIC_JITTER_PAD(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

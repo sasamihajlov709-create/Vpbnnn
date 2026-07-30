@@ -702,4 +702,19 @@ object FakePacketHelper {
         System.arraycopy(data, splitPos, res, splitPos + 5, length - splitPos)
         return res
     }
+
+    fun buildQuicJitterPad(targetSize: Int): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val data = ByteArray(targetSize)
+        rnd.nextBytes(data)
+        // QUIC Long Header Initial packet minimal indicators if needed, 
+        // but for noise padding we just need the size to be variable.
+        return data
+    }
+
+    fun padTlsRecordAdvanced(data: ByteArray, length: Int, minSize: Int, maxSize: Int): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val targetSize = rnd.nextInt(minSize, maxSize)
+        return padTlsRecord(data, length, targetSize)
+    }
 }

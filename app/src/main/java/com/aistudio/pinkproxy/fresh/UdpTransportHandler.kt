@@ -319,18 +319,20 @@ object UdpTransportHandler {
     }
 
     private val reorderBuffers = ConcurrentHashMap<String, MutableList<DatagramPacket>>()
+    private val reorderMutex = Any()
     private var lastReorderBufferCleanup = System.currentTimeMillis()
 
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
-        if (System.currentTimeMillis() - lastReorderBufferCleanup > 30000) {
-            lastReorderBufferCleanup = System.currentTimeMillis()
-            if (reorderBuffers.size > 100) {
-                reorderBuffers.forEach { (k, v) -> if (v.size > 0) v.clear() }
-                reorderBuffers.clear()
+        if (System.currentTimeMillis() - lastReorderBufferCleanup > 60000) {
+            synchronized(reorderMutex) {
+                lastReorderBufferCleanup = System.currentTimeMillis()
+                if (reorderBuffers.size > 200) {
+                    reorderBuffers.clear()
+                }
             }
-            if (flowPacketCounter.size > 300) flowPacketCounter.clear()
+            if (flowPacketCounter.size > 500) flowPacketCounter.clear()
         }
         
         val payload = packet.data
