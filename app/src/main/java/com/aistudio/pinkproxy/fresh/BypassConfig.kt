@@ -279,7 +279,7 @@ object BypassConfig {
                         }
                         DpiType.TLS_SNI_BLOCK -> {
                             if (remembered.family == StrategyFamily.TLS || remembered.family == StrategyFamily.FRAGMENTATION) boostedScore += 50
-                            if (remembered == BypassStrategy.SNI_SPLIT || remembered == BypassStrategy.TLS_SNI_SKEW || remembered == BypassStrategy.TLS_SNI_NULL_EXT || remembered == BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.BYEBYEDPI_EXTREME || remembered == BypassStrategy.ZAPRET_EXTREME) boostedScore += 70
+                            if (remembered == BypassStrategy.SNI_SPLIT || remembered == BypassStrategy.TLS_SNI_SKEW || remembered == BypassStrategy.TLS_SNI_NULL_EXT || remembered == BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME || remembered == BypassStrategy.BYEBYEDPI_SIM || remembered == BypassStrategy.BYEBYEDPI_HYBRID || remembered == BypassStrategy.BYEBYEDPI_EXTREME || remembered == BypassStrategy.ZAPRET_EXTREME || remembered == BypassStrategy.TCP_BYTE_FRAG) boostedScore += 70
                         }
                         DpiType.DNS_POISONING -> {
                             if (remembered == BypassStrategy.DNS_OVER_TCP || remembered == BypassStrategy.DNS_OVER_TCP_FORCE || remembered == BypassStrategy.DNS_NOISE) boostedScore += 60
@@ -549,14 +549,14 @@ object BypassConfig {
             DpiType.TCP_RESET -> {
                 val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
                 val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
-                listOf(BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_SPLIT, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.ZAPRET_EXTREME, BypassStrategy.TCP_DATA_DESYNC, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TCP_WINDOW_SHAKE, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
+                listOf(BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.SNI_SPLIT, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.ZAPRET_EXTREME, BypassStrategy.TCP_BYTE_FRAG, BypassStrategy.TCP_DATA_DESYNC, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TCP_WINDOW_SHAKE, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
                     scores[it]?.addAndGet(30)
                 }
             }
             DpiType.TLS_SNI_BLOCK -> {
                 val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
                 val scores = strategyScores[cat] ?: strategyScores[HostCategory.OTHER]!!
-                listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TLS_SNI_NULL_EXT, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.ZAPRET_EXTREME, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TLS_CLIENT_HELLO_MULTI_PAD, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
+                listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_SNI_SKEW, BypassStrategy.TLS_SNI_NULL_EXT, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.ZAPRET_EXTREME, BypassStrategy.TCP_BYTE_FRAG, BypassStrategy.TCP_REVERSE_FRAG, BypassStrategy.TLS_CLIENT_HELLO_MULTI_PAD, BypassStrategy.TCP_FRAGMENT_REORDER).forEach {
                     scores[it]?.addAndGet(40)
                 }
             }
@@ -1575,6 +1575,34 @@ object BypassConfig {
                     output.write(finalData, finalLen / 2, finalLen - (finalLen / 2)); output.flush()
                 } catch (e: Throwable) {
                     output.write(finalData, 0, finalLen); output.flush()
+                }
+            }
+            BypassStrategy.TCP_BYTE_FRAG -> {
+                val offset = TlsParser.findSniOffset(data, length, host)
+                if (offset != -1 && host.isNotEmpty()) {
+                    output.write(data, 0, offset)
+                    output.flush()
+                    delay(config.delay1)
+                    
+                    var pos = offset
+                    while (pos < offset + host.length) {
+                        val chunk = minOf(2, offset + host.length - pos)
+                        output.write(data, pos, chunk)
+                        output.flush()
+                        delay(rnd.nextLong(1, 4))
+                        pos += chunk
+                    }
+                    output.write(data, pos, length - pos)
+                    output.flush()
+                } else {
+                    var pos = 0
+                    while (pos < length) {
+                        val chunk = rnd.nextInt(1, 5).coerceAtMost(length - pos)
+                        output.write(data, pos, chunk)
+                        output.flush()
+                        if (pos < length / 2) delay(rnd.nextLong(1, 3))
+                        pos += chunk
+                    }
                 }
             }
             BypassStrategy.TLS_SNI_NULL_EXT -> {
@@ -2910,21 +2938,29 @@ TtlHelper.setTtl(socket, 64)
             }
             BypassStrategy.ZAPRET_EXTREME -> {
                 try {
-                    val split = if (length > 40) length / 2 else length / 3
-                    val p1 = data.copyOfRange(0, split)
-                    val p2 = data.copyOfRange(split, length)
+                    val sniOffset = TlsParser.findSniOffset(data, length, host)
+                    var pos = 0
                     
-                    TtlHelper.setMss(socket, rnd.nextInt(128, 512))
-                    TtlHelper.setWindowSize(socket, rnd.nextInt(256, 1024))
+                    TtlHelper.setMss(socket, rnd.nextInt(64, 256))
+                    TtlHelper.setWindowSize(socket, rnd.nextInt(128, 512))
                     
-                    // Real P1 with high TTL (normal)
-                    output.write(p1); output.flush()
-                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
-                    
-                    delay(config.delay1)
+                    if (sniOffset != -1 && host.isNotEmpty()) {
+                        // Split right in the middle of SNI
+                        val split1 = sniOffset + (host.length / 2)
+                        output.write(data, 0, split1); output.flush()
+                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                        delay(config.delay1)
+                        pos = split1
+                    } else {
+                        val split1 = (length / 3).coerceAtLeast(1)
+                        output.write(data, 0, split1); output.flush()
+                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                        delay(config.delay1)
+                        pos = split1
+                    }
                     
                     // Real P2
-                    output.write(p2); output.flush()
+                    output.write(data, pos, length - pos); output.flush()
                     
                     TtlHelper.setMss(socket, 1400)
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }

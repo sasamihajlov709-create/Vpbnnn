@@ -385,12 +385,17 @@ object TcpTransportHandler {
                         }
                         
                         if (isEarly && msg.contains("reset")) {
-                             ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+                             val dpiType = DpiType.TCP_RESET
+                             ProxyStats.recordDpiEvent(dpiType)
+                             BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
                              ProxyStats.logRecovery("Connection Reset by Peer/DPI: $targetHost")
                         } else if (isEarly && msg.contains("timeout")) {
-                             ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                             val dpiType = DpiType.CONNECTION_TIMEOUT
+                             ProxyStats.recordDpiEvent(dpiType)
+                             BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
                         } else if (isEarly) {
                              ProxyStats.recordCensorshipEvent(true)
+                             BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.UNKNOWN)
                         }
                     } finally {
                         when (bufSize) {
