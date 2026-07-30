@@ -1496,7 +1496,7 @@ object BypassConfig {
         }
         val effectiveDelay = if (config.delay1 > 0) config.delay1 else adaptiveDelay
 
-        if (length <= 5 || TlsParser.isEchDetected(data, length)) {
+        if (length <= 5) {
             output.write(data, 0, length); output.flush(); return
         }
 
