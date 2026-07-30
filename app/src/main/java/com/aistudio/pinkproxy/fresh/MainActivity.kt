@@ -251,6 +251,7 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
     val stabilityScore by ProxyStats.stabilityScore.collectAsStateWithLifecycle(initialValue = 100)
     val currentMtu by BypassConfig.currentMtu.collectAsStateWithLifecycle(initialValue = 1400)
+    val successRate by ProxyStats.successRate.collectAsStateWithLifecycle(initialValue = 100)
     var showStrategyMenu by remember { mutableStateOf(false) }
     
     var showDiagnostics by remember { mutableStateOf(false) }
@@ -382,11 +383,12 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
                             bytesTransferred = ProxyStats.formatBytes(bytesTransferred),
                             sessionTime = formattedSessionTime,
                             connectivityScore = connectivityScore,
-                            successRate = ProxyStats.successRate.collectAsStateWithLifecycle(100).value,
+                            successRate = successRate,
                             stabilityScore = stabilityScore,
-                            signalQuality = ProxyStats.signalQuality.collectAsStateWithLifecycle(100).value,
+                            signalQuality = signalQuality,
                             mtu = currentMtu,
-                            isPanicMode = isPanicMode
+                            isPanicMode = isPanicMode,
+                            censorshipIntensity = censorshipIntensity
                         )
                     }
                 }
@@ -795,7 +797,7 @@ fun SpeedGraph(history: List<Long>, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String, connectivityScore: Int, successRate: Int, stabilityScore: Int, signalQuality: Int, mtu: Int, isPanicMode: Boolean) {
+fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String, connectivityScore: Int, successRate: Int, stabilityScore: Int, signalQuality: Int, mtu: Int, isPanicMode: Boolean, censorshipIntensity: Int) {
     Column(modifier = Modifier.padding(20.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MetricItem(stringResource(R.string.label_speed), speedText, GentleLightPink)
@@ -809,7 +811,7 @@ fun MetricsCard(speedText: String, bytesTransferred: String, sessionTime: String
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MetricItem(stringResource(R.string.label_health), "$connectivityScore%", if (connectivityScore > 70) Color(0xFF81C784) else Color(0xFFFFB74D))
             MetricItem(stringResource(R.string.label_stability), "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else if (stabilityScore > 50) Color(0xFFFFB74D) else Color(0xFFE57373))
-            MetricItem(stringResource(R.string.label_censorship), "${ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(0).value}%", if (ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(0).value < 30) Color(0xFF81C784) else Color(0xFFE57373))
+            MetricItem(stringResource(R.string.label_censorship), "$censorshipIntensity%", if (censorshipIntensity < 30) Color(0xFF81C784) else Color(0xFFE57373))
             MetricItem(stringResource(R.string.label_quality), "$signalQuality%", if (signalQuality > 70) Color(0xFF81C784) else Color(0xFFE57373))
         }
     }
