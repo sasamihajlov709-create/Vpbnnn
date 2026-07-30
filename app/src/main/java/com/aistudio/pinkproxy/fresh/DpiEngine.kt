@@ -204,24 +204,26 @@ object DpiEngine {
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
         ProxyStats.updateCensorshipIntensity(100 - globalSuccessRate)
         
-        // Smoother exponential decay to stay fresh
+        // Strategy Aging: trend back to baseline to allow re-evaluation of previously failed strategies
         strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
                 val s = score.get()
-                // Slowly trend towards base score (100)
-                if (s > 100) score.set((s * 0.85 + 15).toInt())
-                else if (s < 100) score.set((s * 1.1 + 2).toInt().coerceAtMost(100))
+                if (s > 100) {
+                    val decay = if (ProxyStats.censorshipIntensity.value > 80) 0.95 else 0.85
+                    score.set((s * decay + 100 * (1.0 - decay)).toInt())
+                } else if (s < 100) {
+                    score.set((s * 1.05 + 5).toInt().coerceAtMost(100))
+                }
                 
-                if (s < 10) score.set(40)
+                if (s < 5) score.set(50) // Don't let it stay at zero forever
             }
         }
         
         pruneStrategies()
-
         saveScores(ProxyDispatcher.context!!)
 
-        // Reset counters periodically to stay adaptive
-        if (totalSuccess + totalFailure > 500) {
+        // Reset history periodically to stay adaptive to network changes
+        if (totalSuccess + totalFailure > 300) {
             successHistory.clear()
             failureHistory.clear()
         }

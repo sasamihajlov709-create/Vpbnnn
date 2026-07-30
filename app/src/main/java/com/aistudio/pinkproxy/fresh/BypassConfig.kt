@@ -373,7 +373,9 @@ object BypassConfig {
 
     fun detectBlackhole(host: String, dataSent: Int, dataReceived: Int, duration: Long): Boolean {
         // A blackhole is when we sent data, waited significant time, but received NOTHING
-        if (dataSent > 0 && dataReceived == 0 && duration > 2000) {
+        // We refine this to be more sensitive if we already know the host is problematic
+        val sensitivity = if (censorHeuristic.getOrDefault(host, 0) > 2) 1500 else 3500
+        if (dataSent > 0 && dataReceived == 0 && duration > sensitivity) {
             recordDpiFailure(_strategy.value, host, DpiType.BLACKHOLE)
             return true
         }
@@ -1462,17 +1464,18 @@ object BypassConfig {
             BypassStrategy.TCP_ZERO_WINDOW_STALL -> {
                 try {
                     val originalSize = socket.receiveBufferSize
-                    val split = if (length > 2) rnd.nextInt(1, 3) else 1
+                    val split = if (length > 3) rnd.nextInt(1, 4) else 1
                     
                     // 1. Send first tiny fragment
                     output.write(data, 0, split); output.flush()
                     
                     // 2. Cycle zero window multiple times to drain DPI buffers
-                    for (i in 0 until rnd.nextInt(2, 5)) {
+                    val cycles = if (ProxyStats.censorshipIntensity.value > 80) rnd.nextInt(3, 6) else rnd.nextInt(2, 4)
+                    for (i in 0 until cycles) {
                         try { socket.receiveBufferSize = 1 } catch (e: Throwable) {}
-                        delay(rnd.nextLong(30, 80))
+                        delay(rnd.nextLong(40, 100))
                         
-                        // Send next byte if available
+                        // Send next byte if available to keep the session alive but throttled
                         val currentPos = split + i
                         if (currentPos < length) {
                             output.write(data, currentPos, 1); output.flush()
@@ -1481,16 +1484,10 @@ object BypassConfig {
                     
                     // 3. Open window and send the rest
                     try { socket.receiveBufferSize = originalSize.coerceAtLeast(65536) } catch (e: Throwable) {}
-                    val finalSentPos = split + 5 // based on loop max
+                    val finalSentPos = split + cycles
                     if (length > finalSentPos) {
-                        delay(rnd.nextLong(10, 30))
+                        delay(rnd.nextLong(15, 45))
                         output.write(data, finalSentPos, length - finalSentPos); output.flush()
-                    } else if (length > split && finalSentPos >= length) {
-                         // already sent or some bytes left
-                         val left = length - (split + (rnd.nextInt(0, 2))) // slightly variable
-                         if (left > 0 && (length - left) >= 0) {
-                             // Just write everything we missed
-                         }
                     }
                 } catch (e: Throwable) { 
                     try { output.write(data, 0, length); output.flush() } catch(e2: Throwable) {}

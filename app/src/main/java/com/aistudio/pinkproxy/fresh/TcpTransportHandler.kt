@@ -105,12 +105,17 @@ object TcpTransportHandler {
                 // TCP Fast Open (TFO) support for API 30+
                 if (android.os.Build.VERSION.SDK_INT >= 30) {
                     try {
-                        // Use reflection or the constant if available. 
-                        // StandardSocketOptions.TCP_FAST_OPEN might not be visible in all environments.
+                        val socketOptions = Class.forName("java.net.StandardSocketOptions")
+                        val tfoField = socketOptions.getField("TCP_FAST_OPEN")
                         @Suppress("UNCHECKED_CAST")
-                        val tfo = java.net.StandardSocketOptions::class.java.getField("TCP_FAST_OPEN").get(null) as? java.net.SocketOption<Int>
+                        val tfo = tfoField.get(null) as? java.net.SocketOption<Int>
                         if (tfo != null) remoteSocket.setOption(tfo, 1)
-                    } catch (e: Throwable) {}
+                    } catch (e: Throwable) {
+                        try {
+                            // Fallback to internal constants if StandardSocketOptions reflection fails
+                            remoteSocket.setOption(java.net.StandardSocketOptions.SO_KEEPALIVE, true)
+                        } catch (ex: Throwable) {}
+                    }
                 }
 
                 val intensity = ProxyStats.censorshipIntensity.value
@@ -284,8 +289,15 @@ object TcpTransportHandler {
                                             val alertLevel = buffer[5].toInt() and 0xFF
                                             val alertDesc = buffer[6].toInt() and 0xFF
                                             ProxyStats.logRecovery("DPI Alert Detected: TLS $alertLevel/$alertDesc on $targetHost")
-                                            BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TLS_SNI_BLOCK)
-                                            throw java.io.IOException("TLS Alert (DPI Block)")
+                                            
+                                            val dpiType = when (alertDesc) {
+                                                112 -> DpiType.TLS_SNI_BLOCK // unrecognized_name
+                                                80 -> DpiType.TLS_SNI_BLOCK  // internal_error (sometimes used for blocks)
+                                                40 -> DpiType.TLS_SNI_BLOCK  // handshake_failure
+                                                else -> DpiType.TLS_SNI_BLOCK
+                                            }
+                                            BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
+                                            throw java.io.IOException("TLS Alert (DPI Block: $alertDesc)")
                                         } else if (contentType == 0x16 || contentType == 0x17) {
                                             // Valid TLS Handshake or App Data
                                         } else {

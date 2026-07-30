@@ -6,10 +6,12 @@ import java.util.concurrent.Executors
 object ProxyDispatcher {
     @Volatile var context: android.content.Context? = null
 
-    val io = Executors.newFixedThreadPool(16) { r ->
+    private val coreCount = Runtime.getRuntime().availableProcessors()
+    private val poolSize = (coreCount * 4).coerceIn(16, 64)
+    val io = Executors.newFixedThreadPool(poolSize) { r ->
         Thread(r, "PinkProxyWorker").apply { 
             isDaemon = true
-            priority = Thread.NORM_PRIORITY + 1
+            priority = Thread.MAX_PRIORITY - 1
         }
     }.asCoroutineDispatcher()
     
