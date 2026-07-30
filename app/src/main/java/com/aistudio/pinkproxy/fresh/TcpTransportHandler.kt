@@ -70,7 +70,7 @@ object TcpTransportHandler {
                                     try {
                                         s.connect(InetSocketAddress(ip, targetPort), connectTimeout)
                                         val rtt = System.currentTimeMillis() - startConnect
-                                        ProxyStats.updateLatency(rtt)
+                                        ProxyStats.recordGlobalSuccess(rtt)
                                         DnsCacheManager.recordIpSuccess(ip.hostAddress ?: "", rtt)
                                     } catch (e: Throwable) {
                                         nextSignal.trySend(Unit) // Start next racer immediately
