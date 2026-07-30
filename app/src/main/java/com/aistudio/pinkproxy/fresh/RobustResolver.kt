@@ -86,8 +86,12 @@ object RobustResolver {
             withTimeout(12000) {
                 deferred.await()
             }
+        } catch (e: TimeoutCancellationException) {
+            pendingResolutions.remove(cacheKey)
+            DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
-            if (e is CancellationException) throw e
             pendingResolutions.remove(cacheKey)
             DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
         }

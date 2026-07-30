@@ -22,6 +22,7 @@ object TcpTransportHandler {
         scope: CoroutineScope
     ) {
         var remoteSocket: Socket? = null
+        var throughputJob: Job? = null
         try {
             val resolved = RobustResolver.resolve(targetHost, vpnService)
             if (resolved.isEmpty()) {
@@ -214,7 +215,7 @@ object TcpTransportHandler {
             // Start Throughput Monitor to detect stalled connections or blackholes
             var lastTotalForStall = totalWrittenClient.get()
             var silentPeriods = 0
-            val throughputJob = scope.launch(ProxyDispatcher.io) {
+            throughputJob = scope.launch(ProxyDispatcher.io) {
                 while (isActive && remoteSocket.isConnected && !remoteSocket.isClosed) {
                     delay(10000) // Check every 10s
                     val total = totalWrittenClient.get()
@@ -566,6 +567,7 @@ object TcpTransportHandler {
         } finally {
             try { clientSocket.close() } catch (e: Throwable) {}
             try { remoteSocket?.close() } catch (e: Throwable) {}
+            throughputJob?.cancel()
         }
     }
 }

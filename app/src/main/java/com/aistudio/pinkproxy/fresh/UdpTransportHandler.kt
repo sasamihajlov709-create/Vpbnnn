@@ -297,7 +297,7 @@ object UdpTransportHandler {
                 // Keep TCP connection alive, monitor for closure
                 launch(ProxyDispatcher.io) {
                     try {
-                        udpSocket.soTimeout = 5000
+                        clientSocket.soTimeout = 0
                         val inputStream = clientSocket.getInputStream()
                         while (isActive) {
                             if (inputStream.read() == -1) break

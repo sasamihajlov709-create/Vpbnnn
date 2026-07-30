@@ -472,6 +472,10 @@ TtlHelper.setTtl(socket, 64)
                             } else {
                                 DnsOptimizer.recordDohFailure(url)
                             }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            DnsOptimizer.recordDohFailure(url)
                         } finally {
                             if (completed.incrementAndGet() == urls.size) {
                                 channel.close()
@@ -504,15 +508,27 @@ TtlHelper.setTtl(socket, 64)
         )
         return supervisorScope {
             val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(hardcodedIps.size)
+            val completed = java.util.concurrent.atomic.AtomicInteger(0)
             hardcodedIps.forEach { url ->
                 launch(ProxyDispatcher.io) {
                     try {
                         val res = queryDoh(host, url, vpnService)
                         if (res.isNotEmpty()) channel.trySend(res)
-                    } catch (e: Throwable) {}
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                    } finally {
+                        if (completed.incrementAndGet() == hardcodedIps.size) {
+                            channel.close()
+                        }
+                    }
                 }
             }
-            withTimeoutOrNull(5000) { channel.receive() } ?: emptyList()
+            try {
+                withTimeoutOrNull(5000) { channel.receive() } ?: emptyList()
+            } catch (e: Throwable) {
+                emptyList()
+            }
         }
     }
 }

@@ -355,28 +355,31 @@ object ProxyStats {
         _maxMss.value = newMss
     }
 
-    private val _mssFailureCount = AtomicInteger(0)
-    val mssFailureCount: StateFlow<Int> = MutableStateFlow(0).apply {
-        // This is a bit hacky because I'm using AtomicInteger for internal state
-        // and StateFlow for UI. I'll just update it manually.
-    }.asStateFlow()
+    private val _mssFailureCount = MutableStateFlow(0)
+    val mssFailureCount: StateFlow<Int> = _mssFailureCount.asStateFlow()
     
     fun recordMssFailure() {
-        val newVal = _mssFailureCount.incrementAndGet()
-        logRecovery("MTU auto-correction: incrementing MSS failure count to $newVal")
-        if (newVal >= 3) {
-            val currentMss = _maxMss.value
-            if (currentMss > 512) {
-                val nextMss = (currentMss - 128).coerceAtLeast(512)
-                _maxMss.value = nextMss
-                logRecovery("MTU auto-correction: Reducing Max MSS to $nextMss")
-                _mssFailureCount.set(0)
+        _mssFailureCount.update { current ->
+            val newVal = current + 1
+            logRecovery("MTU auto-correction: incrementing MSS failure count to $newVal")
+            if (newVal >= 3) {
+                val currentMss = _maxMss.value
+                if (currentMss > 512) {
+                    val nextMss = (currentMss - 128).coerceAtLeast(512)
+                    _maxMss.value = nextMss
+                    logRecovery("MTU auto-correction: Reducing Max MSS to $nextMss")
+                    0
+                } else {
+                    newVal
+                }
+            } else {
+                newVal
             }
         }
     }
     
     fun resetMssFailureCount() {
-        _mssFailureCount.set(0)
+        _mssFailureCount.value = 0
     }
 
     fun recordDnsResult(success: Boolean) {
