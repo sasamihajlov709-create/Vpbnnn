@@ -153,19 +153,28 @@ class MainActivity : ComponentActivity() {
             stopVpnService()
         } else {
             try {
-                val intent = VpnService.prepare(this)
-                if (intent != null) {
-                    vpnLauncher.launch(intent)
+                // Ensure we use the exact application context to avoid UID mismatch errors
+                val vpnIntent = VpnService.prepare(applicationContext)
+                if (vpnIntent != null) {
+                    vpnLauncher.launch(vpnIntent)
                 } else {
                     startVpnService()
                 }
             } catch (e: SecurityException) {
-                android.util.Log.e("MainActivity", "VPN preparation failed", e)
+                android.util.Log.e("MainActivity", "VPN preparation failed: UID/Package mismatch", e)
                 android.widget.Toast.makeText(
                     this,
-                    "VPN setup failed: package/UID system conflict. Please restart the application.",
+                    "Security Error: System UID mismatch. Please clear app cache or reinstall.",
                     android.widget.Toast.LENGTH_LONG
                 ).show()
+                
+                // Fallback attempt with activity context
+                try {
+                    val intent = VpnService.prepare(this)
+                    if (intent != null) vpnLauncher.launch(intent) else startVpnService()
+                } catch(e2: Throwable) {
+                    Log.e("MainActivity", "Secondary VPN prep failed", e2)
+                }
             }
         }
     }

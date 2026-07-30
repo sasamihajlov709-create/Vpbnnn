@@ -147,4 +147,12 @@ object TtlHelper {
             true
         } catch (e: Throwable) { false }
     }
+
+    fun setLowTtlTemporary(socket: Socket, lowTtl: Int, delayMs: Long) {
+        val originalTtl = 64
+        setTtl(socket, lowTtl)
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor().schedule({
+            setTtl(socket, originalTtl)
+        }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
 }

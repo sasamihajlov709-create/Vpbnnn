@@ -99,6 +99,20 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildHandshakeCombo(noiseSize: Int = 32): ByteArray {
+        val baos = ByteArrayOutputStream()
+        baos.write(buildSshHandshake())
+        baos.write(buildUdpNoise(noiseSize))
+        return baos.toByteArray()
+    }
+
+    fun injectGrease(data: ByteArray, length: Int): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val grease = ByteArray(rnd.nextInt(2, 8))
+        rnd.nextBytes(grease)
+        return injectExtension(data, length, 0x1a1a + rnd.nextInt(0, 10) * 0x1111, grease)
+    }
+
     fun buildOpenVpnFake(): ByteArray {
         val rnd = ThreadLocalRandom.current()
         val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
@@ -406,7 +420,25 @@ object FakePacketHelper {
         dos.write(buildUdpNoise(size))
         return baos.toByteArray()
     }
-    fun injectTlsPadding(data: ByteArray, length: Int, size: Int): ByteArray = injectExtension(data, length, 0x0015, ByteArray(size))
+
+    fun buildFakeTlsHandshakeWithConfusion(sni: String): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val baos = ByteArrayOutputStream()
+        // 1. SSH banner
+        baos.write(buildSshHandshake())
+        // 2. HTTP request (truncated or fake)
+        baos.write("GET / HTTP/1.1\r\nHost: $sni\r\n\r\n".toByteArray())
+        // 3. Real-looking TLS ClientHello
+        baos.write(buildRealisticTlsHello(sni))
+        return baos.toByteArray()
+    }
+
+    fun injectTlsPadding(data: ByteArray, length: Int, padSize: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        val padding = ByteArray(padSize.coerceIn(1, 2048))
+        return injectExtension(data, length, 0x0015, padding)
+    }
+
     fun injectTlsGrease(data: ByteArray, length: Int): ByteArray = addTlsGreaseExtensions(data, length)
     fun buildFakeWebSocketHandshake(host: String): ByteArray = buildFakeHttpRequest(host, "/chat")
     fun buildHttp2PreambleFake(): ByteArray = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()

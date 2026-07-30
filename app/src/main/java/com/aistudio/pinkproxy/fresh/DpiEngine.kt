@@ -1,0 +1,210 @@
+package com.aistudio.pinkproxy.fresh
+
+import android.util.Log
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+
+object DpiEngine {
+    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+    private val successHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+    private val failureHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+    
+    private val _currentDpiLevel = MutableStateFlow(0)
+    val currentDpiLevel = _currentDpiLevel.asStateFlow()
+
+    private val strategyScores = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
+    private val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
+    private val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+
+    fun start(context: android.content.Context) {
+        // Initialize scores
+        HostCategory.entries.forEach { cat ->
+            val catScores = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+            BypassStrategy.entries.forEach { strat ->
+                catScores[strat] = AtomicInteger(100) // Base score
+            }
+            strategyScores[cat] = catScores
+        }
+        
+        loadScores(context)
+
+        scope.launch {
+            while (isActive) {
+                delay(30000)
+                analyzeAndAdjust()
+            }
+        }
+    }
+
+    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null) {
+        if (success) {
+            successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            strategyScores[category]?.get(strategy)?.let { score ->
+                score.addAndGet(10)
+                if (score.get() > 2000) score.set(2000)
+            }
+            consecutiveFailures.remove(strategy)
+            circuitBreakers.remove(strategy)
+        } else {
+            failureHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            
+            val penalty = when (reason) {
+                FailureReason.TCP_RESET -> 40
+                FailureReason.SSL_HANDSHAKE_ERROR -> 30
+                FailureReason.TIMEOUT -> 15
+                else -> 20
+            }
+            
+            strategyScores[category]?.get(strategy)?.let { score ->
+                score.addAndGet(-penalty)
+                if (score.get() < 10) score.set(10)
+            }
+            
+            val fails = consecutiveFailures.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            if (fails >= 5) {
+                // Trigger circuit breaker for 5 minutes
+                circuitBreakers[strategy] = System.currentTimeMillis() + 300_000
+                Log.w("DpiEngine", "Circuit breaker triggered for $strategy due to $fails consecutive failures")
+            }
+        }
+    }
+
+    fun getBestStrategy(category: HostCategory): BypassStrategy {
+        val catScores = strategyScores[category] ?: return BypassStrategy.SNI_SPLIT
+        val now = System.currentTimeMillis()
+        
+        // Filter out strategies under circuit breaker
+        val validStrategies = catScores.entries.filter { (strat, _) ->
+            (circuitBreakers[strat] ?: 0L) < now
+        }
+        
+        if (validStrategies.isEmpty()) return BypassStrategy.CHAOS
+        
+        // Find strategy with highest score, adding some randomness for exploration
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        return validStrategies
+            .shuffled()
+            .maxByOrNull { it.value.get() + rnd.nextInt(-20, 20) }
+            ?.key ?: BypassStrategy.SNI_SPLIT
+    }
+
+    fun boostStrategyFamily(family: StrategyFamily, host: String?) {
+        val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+        strategyScores[category]?.forEach { (strat, score) ->
+            if (strat.family == family) {
+                val boost = when (strat.group) {
+                    StrategyGroup.EXTREME -> 50
+                    StrategyGroup.HEAVY -> 35
+                    StrategyGroup.MEDIUM -> 20
+                    else -> 10
+                }
+                score.addAndGet(boost)
+                if (score.get() > 2000) score.set(2000)
+            }
+        }
+    }
+
+    fun clearCircuitBreakers() {
+        circuitBreakers.clear()
+    }
+
+    fun getAverageScore(strategy: BypassStrategy): Double {
+        return strategyScores.values.map { it[strategy]?.get() ?: 0 }.map { it.toDouble() }.average()
+    }
+
+    private fun analyzeAndAdjust() {
+        val totalSuccess = successHistory.values.sumOf { it.get() }
+        val totalFailure = failureHistory.values.sumOf { it.get() }
+        
+        if (totalSuccess + totalFailure == 0) return
+
+        val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
+        ProxyStats.updateCensorshipIntensity(100 - globalSuccessRate)
+        
+        // Normalize scores periodically to prevent drift
+        strategyScores.values.forEach { catScores ->
+            catScores.values.forEach { score ->
+                val s = score.get()
+                if (s > 1000) score.set(s / 2 + 50)
+                if (s < 10) score.set(50)
+            }
+        }
+        
+        pruneStrategies()
+
+        saveScores(ProxyDispatcher.context!!)
+
+        // Reset counters periodically to stay adaptive
+        if (totalSuccess + totalFailure > 500) {
+            successHistory.clear()
+            failureHistory.clear()
+        }
+    }
+
+    private fun pruneStrategies() {
+        strategyScores.forEach { (_, scores) ->
+            scores.forEach { (strat, score) ->
+                if (score.get() < 30) {
+                    circuitBreakers[strat] = System.currentTimeMillis() + 300000 
+                }
+            }
+        }
+    }
+
+    fun getCensorshipReport(): String {
+        val sb = StringBuilder()
+        sb.append("Intensity: ${ProxyStats.censorshipIntensity.value}%\n")
+        sb.append("Performers:\n")
+        strategyScores.forEach { (cat, scores) ->
+            val best = scores.maxByOrNull { it.value.get() }
+            if (best != null && best.value.get() > 100) {
+                sb.append("$cat: ${best.key}(${best.value})\n")
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun saveScores(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("dpi_engine_scores", android.content.Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        strategyScores.forEach { (cat, scores) ->
+            scores.forEach { (strat, score) ->
+                editor.putInt("${cat.name}_${strat.name}", score.get())
+            }
+        }
+        editor.apply()
+    }
+
+    private fun loadScores(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("dpi_engine_scores", android.content.Context.MODE_PRIVATE)
+        strategyScores.forEach { (cat, scores) ->
+            scores.forEach { (strat, score) ->
+                val saved = prefs.getInt("${cat.name}_${strat.name}", -1)
+                if (saved != -1) score.set(saved)
+            }
+        }
+    }
+
+    fun getRecommendedFragSize(): Int {
+        val intensity = ProxyStats.censorshipIntensity.value
+        return when {
+            intensity > 90 -> 1
+            intensity > 75 -> 2
+            intensity > 50 -> 4
+            else -> 10
+        }
+    }
+
+    fun getRecommendedDelay(): Long {
+        val intensity = ProxyStats.censorshipIntensity.value
+        return when {
+            intensity > 90 -> 150L
+            intensity > 70 -> 50L
+            intensity > 40 -> 20L
+            else -> 5L
+        }
+    }
+}

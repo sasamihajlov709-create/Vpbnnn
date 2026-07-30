@@ -78,6 +78,7 @@ class PinkVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        ProxyDispatcher.context = applicationContext
         
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PinkProxy:VpnLock").apply {
@@ -112,6 +113,7 @@ class PinkVpnService : VpnService() {
         BypassConfig.startNetworkWeatherSensor(serviceScope)
         ServiceChecker.startChecking(serviceScope, this)
         RecoveryManager.startHealthCheck(serviceScope)
+        DpiEngine.start(this)
 
         registerNetworkMonitor()
         startWatchdog()

@@ -33,16 +33,19 @@ object TcpTransportHandler {
             ProxyStats.addTraffic(targetHost)
             val totalWrittenClient = java.util.concurrent.atomic.AtomicLong(0)
 
-            val strategy = BypassConfig.getBestStrategyForHost(targetHost)
-            val config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
-
             val start = System.currentTimeMillis()
             val censorship = BypassConfig.censorshipLevel.value
             
             var retryCount = 0
             val maxRetries = if (censorship > 80) 2 else 1
             
+            var strategy = BypassConfig.getBestStrategyForHost(targetHost)
+            var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
+
             while (retryCount <= maxRetries) {
+                strategy = BypassConfig.getBestStrategyForHost(targetHost)
+                config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
+
                 remoteSocket = try {
                     withTimeout(if (retryCount > 0) 8000 else 12000) {
                         val channel = kotlinx.coroutines.channels.Channel<Socket>(resolved.size)
@@ -79,18 +82,18 @@ object TcpTransportHandler {
                                         DnsCacheManager.recordIpFailure(ip.hostAddress ?: "")
                                         
                                         val reason = when {
-                                            elapsed >= connectTimeout - 500 -> BypassConfig.FailureReason.TIMEOUT
-                                            msg.contains("reset") -> BypassConfig.FailureReason.TCP_RESET
-                                            msg.contains("refused") -> BypassConfig.FailureReason.CONNECTION_REFUSED
-                                            else -> BypassConfig.FailureReason.UNKNOWN
+                                            elapsed >= connectTimeout - 500 -> FailureReason.TIMEOUT
+                                            msg.contains("reset") -> FailureReason.TCP_RESET
+                                            msg.contains("refused") -> FailureReason.CONNECTION_REFUSED
+                                            else -> FailureReason.UNKNOWN
                                         }
                                         
-                                        if (reason == BypassConfig.FailureReason.TIMEOUT) {
+                                        if (reason == FailureReason.TIMEOUT) {
                                             BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.CONNECTION_TIMEOUT)
-                                            BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.TIMEOUT)
-                                        } else if (reason == BypassConfig.FailureReason.TCP_RESET) {
+                                            BypassConfig.recordFailure(strategy, targetHost, FailureReason.TIMEOUT)
+                                        } else if (reason == FailureReason.TCP_RESET) {
                                             BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.TCP_RESET)
-                                            BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.TCP_RESET)
+                                            BypassConfig.recordFailure(strategy, targetHost, FailureReason.TCP_RESET)
                                         }
                                         throw e
                                     }
@@ -144,10 +147,10 @@ object TcpTransportHandler {
                         } else {
                             val msg = e.message?.lowercase() ?: ""
                             val reason = when {
-                                e is TimeoutCancellationException -> BypassConfig.FailureReason.TIMEOUT
-                                msg.contains("reset") -> BypassConfig.FailureReason.TCP_RESET
-                                msg.contains("refused") -> BypassConfig.FailureReason.CONNECTION_REFUSED
-                                else -> BypassConfig.FailureReason.UNKNOWN
+                                e is TimeoutCancellationException -> FailureReason.TIMEOUT
+                                msg.contains("reset") -> FailureReason.TCP_RESET
+                                msg.contains("refused") -> FailureReason.CONNECTION_REFUSED
+                                else -> FailureReason.UNKNOWN
                             }
                             BypassConfig.recordFailure(strategy, targetHost, reason)
                         }
@@ -190,11 +193,22 @@ object TcpTransportHandler {
                 
                 // Adaptive buffer sizes: small for DPI evasion, large for throughput
                 val bufSize = when {
-                    isWindowMangle -> 1460
-                    intensity > 90 -> 8192
-                    intensity > 75 -> 16384
-                    intensity > 50 -> 32768
+                    isWindowMangle -> 1024
+                    intensity > 90 -> 4096
+                    intensity > 75 -> 8192
+                    intensity > 50 -> 16384
                     else -> 128 * 1024
+                }
+                
+                val rnd = java.util.concurrent.ThreadLocalRandom.current()
+                if (strategy == BypassStrategy.TCP_ZERO_WINDOW_STALL) {
+                    TtlHelper.setWindowSize(remoteSocket, 0)
+                    scope.launch {
+                        delay(rnd.nextLong(300, 800))
+                        TtlHelper.setWindowSize(remoteSocket, bufSize)
+                    }
+                } else if (isWindowMangle) {
+                    TtlHelper.setWindowSize(remoteSocket, rnd.nextInt(256, 1460))
                 }
                 
                 remoteSocket.sendBufferSize = if (isWindowMangle) 1460 else 128 * 1024
@@ -395,7 +409,7 @@ object TcpTransportHandler {
                              BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
                         } else if (isEarly) {
                              ProxyStats.recordCensorshipEvent(true)
-                             BypassConfig.recordFailure(strategy, targetHost, BypassConfig.FailureReason.UNKNOWN)
+                             BypassConfig.recordFailure(strategy, targetHost, FailureReason.UNKNOWN)
                         }
                     } finally {
                         when (bufSize) {

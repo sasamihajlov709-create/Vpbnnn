@@ -15,6 +15,14 @@ enum class StrategyFamily {
     TCP, TLS, HTTP, TIMING, FRAGMENTATION, ADAPTIVE, DNS, QUIC, GENERIC, UDP, DIRECT
 }
 
+enum class FailureReason {
+    TIMEOUT,
+    TCP_RESET,
+    SSL_HANDSHAKE_ERROR,
+    CONNECTION_REFUSED,
+    UNKNOWN
+}
+
 enum class BypassStrategy(
     val family: StrategyFamily = StrategyFamily.GENERIC,
     val cost: Int = 1,
@@ -129,6 +137,7 @@ enum class BypassStrategy(
     UDP_IP_FRAG(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
     QUIC_INITIAL_PADDING_EXTREME(StrategyFamily.UDP, 4, 3, StrategyGroup.EXTREME),
     QUIC_INITIAL_FRAGMENTATION(StrategyFamily.UDP, 5, 4, StrategyGroup.EXTREME),
+    UDP_IPv6_FRAG(StrategyFamily.UDP, 3, 3, StrategyGroup.MEDIUM),
     ECH_FRAG(StrategyFamily.TLS, 6, 6, StrategyGroup.EXTREME),
     QUIC_FORCE_FRAG(StrategyFamily.UDP, 5, 5, StrategyGroup.EXTREME),
     TCP_HANDSHAKE_CHAOS(StrategyFamily.TCP, 5, 5, StrategyGroup.EXTREME),
@@ -553,7 +562,16 @@ object HostClassifier {
     }
 }
 
-data class SessionConfig(val strategy: BypassStrategy, val frag1: Int, val frag2: Int, val frag3: Int, val delay1: Long, val delay2: Long, val fakeTtl: Int)
+data class SessionConfig(
+    val strategy: BypassStrategy,
+    val frag1: Int,
+    val delay1: Long,
+    val fakeTtl: Int,
+    val useIPv6: Boolean = false,
+    val frag2: Int = 0,
+    val frag3: Int = 0,
+    val delay2: Long = 0
+)
 
 data class StrategyMetric(val strategy: BypassStrategy, val score: Int, val successes: Long, val failures: Long, val avgRtt: Long)
 
