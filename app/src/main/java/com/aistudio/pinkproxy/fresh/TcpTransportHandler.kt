@@ -377,16 +377,19 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
+                        val isEarly = totalRead < 32768L || (System.currentTimeMillis() - start < 15000)
+                        
                         if (totalRead == 0L && System.currentTimeMillis() - start < 20000) {
                             BypassConfig.recordFailure(strategy, targetHost)
                             if (msg.contains("reset") || msg.contains("pipe")) ProxyStats.recordMssFailure()
                         }
-                        if (msg.contains("reset")) {
+                        
+                        if (isEarly && msg.contains("reset")) {
                              ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
                              ProxyStats.logRecovery("Connection Reset by Peer/DPI: $targetHost")
-                        } else if (msg.contains("timeout")) {
+                        } else if (isEarly && msg.contains("timeout")) {
                              ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
-                        } else {
+                        } else if (isEarly) {
                              ProxyStats.recordCensorshipEvent(true)
                         }
                     } finally {
