@@ -234,6 +234,8 @@ object FakePacketHelper {
 
     fun mangleSni(sni: String): String = if (ThreadLocalRandom.current().nextBoolean()) sni.lowercase() else "$sni."
 
+    fun buildFakeTlsClientHello(host: String): ByteArray = buildFakeClientHello(host)
+
     fun buildFakeClientHello(sni: String, intensity: Int = 50, paddingSize: Int = 0, noMangle: Boolean = false): ByteArray {
         val rnd = ThreadLocalRandom.current()
         val mangled = if (noMangle) sni else mangleSni(sni)

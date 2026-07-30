@@ -226,7 +226,8 @@ enum class DpiType {
     TLS_SNI_BLOCK,
     DNS_POISONING,
     CONNECTION_TIMEOUT,
-    HTTP_BLOCK
+    HTTP_BLOCK,
+    TLS_HANDSHAKE_TIMEOUT
 }
 
 object ProxyStats {

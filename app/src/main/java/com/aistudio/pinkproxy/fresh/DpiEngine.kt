@@ -75,9 +75,25 @@ object DpiEngine {
         
         // Adjust scores based on DPI type
         when (type) {
-            DpiType.TLS_SNI_BLOCK -> boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+            DpiType.TLS_SNI_BLOCK -> {
+                boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+                boostStrategyFamily(StrategyFamily.TLS, null)
+            }
             DpiType.UDP_BLOCK -> boostStrategyFamily(StrategyFamily.UDP, null)
-            DpiType.TCP_RESET -> boostStrategyFamily(StrategyFamily.TCP, null)
+            DpiType.TCP_RESET -> {
+                boostStrategyFamily(StrategyFamily.TCP, null)
+                boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+            }
+            DpiType.DNS_POISONING -> boostStrategyFamily(StrategyFamily.DNS, null)
+            DpiType.HTTP_BLOCK -> boostStrategyFamily(StrategyFamily.HTTP, null)
+            DpiType.TLS_HANDSHAKE_TIMEOUT -> {
+                boostStrategyFamily(StrategyFamily.TLS, null)
+                boostStrategyFamily(StrategyFamily.TIMING, null)
+            }
+            DpiType.CONNECTION_TIMEOUT -> {
+                boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+                boostStrategyFamily(StrategyFamily.TCP, null)
+            }
             else -> {}
         }
     }

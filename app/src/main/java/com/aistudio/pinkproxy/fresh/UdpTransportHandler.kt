@@ -347,14 +347,32 @@ object UdpTransportHandler {
         if (!isDns) {
             val counter = flowPacketCounter.getOrPut(flowKey) { java.util.concurrent.atomic.AtomicInteger(0) }
             val count = counter.incrementAndGet()
+            
+            // Random Jitter/Delay
+            val intensity = ProxyStats.censorshipIntensity.value
+            if (intensity > 60 && ThreadLocalRandom.current().nextInt(100) < 5) {
+                delay(ThreadLocalRandom.current().nextLong(1, 5))
+            }
+
             if (count % 20 == 0) { // Every 20 packets
-                val intensity = ProxyStats.censorshipIntensity.value
                 val rnd = ThreadLocalRandom.current()
                 if (rnd.nextInt(100) < (intensity / 2).coerceIn(10, 50)) {
                     val noiseSize = if (isQuic) rnd.nextInt(256, 1024) else rnd.nextInt(16, 64)
                     val noise = FakePacketHelper.buildUdpNoise(noiseSize)
                     try { socket.send(DatagramPacket(noise, noise.size, targetInet, targetPort)) } catch(e: Throwable) {}
                 }
+            }
+            
+            // UDP Reorder Simulation for certain flows (QUIC)
+            if (isQuic && intensity > 70 && count < 10) {
+                 if (ThreadLocalRandom.current().nextInt(100) < 15) {
+                     // Save this packet for a very short time and let next one pass first
+                     val buffer = reorderBuffers.getOrPut(flowKey) { mutableListOf() }
+                     if (buffer.size < 2) {
+                         buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort))
+                         return
+                     }
+                 }
             }
         }
         
