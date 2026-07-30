@@ -334,7 +334,7 @@ object UdpTransportHandler {
         val targetInet = packet.address ?: return
         val targetPort = packet.port
         
-        val isQuic = targetPort == 443 && length > 0 && (payload[offset].toInt() and 0xC0) == 0xC0
+        val isQuic = targetPort == 443 && length > 0 && ((payload[offset].toInt() and 0xC0) == 0xC0 || (payload[offset].toInt() and 0x80) != 0)
         val isDns = targetPort == 53
         
         // Basic filtering
@@ -344,17 +344,20 @@ object UdpTransportHandler {
         val flowKey = "${targetInet.hostAddress}:$targetPort"
         
         // 0. Periodic Flow Noise Injection
+        val counter = flowPacketCounter.getOrPut(flowKey) { java.util.concurrent.atomic.AtomicInteger(0) }
+        val count = counter.incrementAndGet()
+        
+        // Optimization: For high-volume flows (count > 50), bypass some heavy obfuscation to save CPU
+        val isHighVolume = count > 50
+        
         if (!isDns) {
-            val counter = flowPacketCounter.getOrPut(flowKey) { java.util.concurrent.atomic.AtomicInteger(0) }
-            val count = counter.incrementAndGet()
-            
-            // Random Jitter/Delay
+            // Random Jitter/Delay - skip for high volume to maintain performance
             val intensity = ProxyStats.censorshipIntensity.value
-            if (intensity > 60 && ThreadLocalRandom.current().nextInt(100) < 5) {
+            if (!isHighVolume && intensity > 60 && ThreadLocalRandom.current().nextInt(100) < 5) {
                 delay(ThreadLocalRandom.current().nextLong(1, 5))
             }
 
-            if (count % 20 == 0) { // Every 20 packets
+            if (!isHighVolume && count % 20 == 0) { // Every 20 packets, but only for initial burst
                 val rnd = ThreadLocalRandom.current()
                 if (rnd.nextInt(100) < (intensity / 2).coerceIn(10, 50)) {
                     val noiseSize = if (isQuic) rnd.nextInt(256, 1024) else rnd.nextInt(16, 64)
@@ -364,7 +367,7 @@ object UdpTransportHandler {
             }
             
             // UDP Reorder Simulation for certain flows (QUIC)
-            if (isQuic && intensity > 70 && count < 10) {
+            if (!isHighVolume && isQuic && intensity > 70 && count < 10) {
                  if (ThreadLocalRandom.current().nextInt(100) < 15) {
                      // Save this packet for a very short time and let next one pass first
                      val buffer = reorderBuffers.getOrPut(flowKey) { mutableListOf() }
@@ -379,11 +382,10 @@ object UdpTransportHandler {
         val now = System.currentTimeMillis()
         val cached = hostStrategyCache[host]
         
-        val config = if (cached == null || now - cached.second > 10000L) {
+        val config = if (cached == null || now - cached.second > 15000L) {
             val strat = BypassConfig.getBestStrategyForHost(host)
             val cfg = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
-            // Limit cache size to prevent memory leaks
-            if (hostStrategyCache.size > 200) hostStrategyCache.clear() 
+            if (hostStrategyCache.size > 500) hostStrategyCache.clear() 
             hostStrategyCache[host] = cfg to now
             cfg
         } else {
@@ -394,8 +396,8 @@ object UdpTransportHandler {
         val intensity = ProxyStats.censorshipIntensity.value
         val rnd = ThreadLocalRandom.current()
         
-        // 1. Shadowing: occasionally send a fake UDP handshake before real data
-        if (intensity > 55 && rnd.nextInt(100) < 10) {
+        // 1. Shadowing: occasionally send a fake UDP handshake before real data (Only for session start)
+        if (!isHighVolume && intensity > 55 && count < 5 && rnd.nextInt(100) < 15) {
             val shadow = when(rnd.nextInt(4)) {
                 0 -> FakePacketHelper.buildWireguardFake()
                 1 -> FakePacketHelper.buildOpenVpnFake()
@@ -403,11 +405,11 @@ object UdpTransportHandler {
                 else -> FakePacketHelper.buildProtocolConfusion("DTLS")
             }
             socket.send(DatagramPacket(shadow, shadow.size, targetInet, targetPort))
-            if (intensity > 80) delay(rnd.nextLong(1, 4))
+            if (intensity > 80) delay(rnd.nextLong(1, 5))
         }
 
         // 2. QUIC-Specific Obfuscation: send a fake Initial with different CID
-        if (isQuic && intensity > 70 && rnd.nextInt(100) < 15) {
+        if (!isHighVolume && isQuic && intensity > 70 && count < 3 && rnd.nextInt(100) < 20) {
             val fakeInitial = FakePacketHelper.buildQuicInitialExtremePadding()
             TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetInet is java.net.Inet6Address)
             socket.send(DatagramPacket(fakeInitial, fakeInitial.size, targetInet, targetPort))
@@ -416,7 +418,7 @@ object UdpTransportHandler {
         }
 
         // 3. Reordering Logic for QUIC or explicit UDP_REORDER
-        if (config.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 80 && rnd.nextInt(100) < 20)) {
+        if (!isHighVolume && (config.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 80 && rnd.nextInt(100) < 20))) {
             val key = "${targetInet.hostAddress}:$targetPort"
             val buffer = reorderBuffers.getOrPut(key) { Collections.synchronizedList(mutableListOf<DatagramPacket>()) }
             

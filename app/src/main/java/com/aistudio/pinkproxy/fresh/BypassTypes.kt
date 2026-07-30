@@ -212,6 +212,7 @@ enum class BypassStrategy(
     TCP_DATA_DESYNC_OVERLAP(StrategyFamily.TCP, 6, 5, StrategyGroup.EXTREME),
     TCP_FRAGMENT_REORDER(StrategyFamily.TCP, 8, 5, StrategyGroup.EXTREME),
     UDP_SKEW_REVERSE(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
+    TCP_RETRANS_FAKE(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

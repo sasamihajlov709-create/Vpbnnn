@@ -1406,6 +1406,25 @@ object BypassConfig {
                     output.write(data, 0, length); output.flush()
                 }
             }
+            BypassStrategy.TCP_RETRANS_FAKE -> {
+                try {
+                    val split = (length / 2).coerceAtLeast(1)
+                    // 1. Send first half
+                    output.write(data, 0, split); output.flush()
+                    delay(rnd.nextLong(5, 20))
+                    
+                    // 2. Send FAKE second half with low TTL (to confuse DPI but not reach server)
+                    val fakeTail = FakePacketHelper.buildUdpNoise(length - split)
+                    val oldTtl = TtlHelper.getSocketTtl(socket)
+                    TtlHelper.setTtl(socket, rnd.nextInt(3, 7))
+                    output.write(fakeTail); output.flush()
+                    delay(rnd.nextLong(10, 30))
+                    
+                    // 3. Send REAL second half with normal TTL
+                    TtlHelper.setTtl(socket, oldTtl)
+                    output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
             BypassStrategy.TCP_OVERLAP_SKEW -> {
                 try {
                     val offset = TlsParser.findSniOffset(data, length, host)

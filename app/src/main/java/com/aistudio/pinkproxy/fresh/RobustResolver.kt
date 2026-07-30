@@ -244,35 +244,56 @@ object RobustResolver {
         }
         
         var result = emptyList<InetAddress>()
-        val allResults = mutableListOf<List<InetAddress>>()
+        val receivedResults = mutableListOf<List<InetAddress>>()
         var completed = 0
+        
+        // Consensus mechanism: Require at least 2 independent sources to agree if censorship is high
+        val intensity = ProxyStats.censorshipIntensity.value
+        val consensusTarget = if (intensity > 80) 2 else 1
+        
         while (completed < queries.size) {
             val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { 
                 if (e !is TimeoutCancellationException && e is CancellationException) throw e
                 emptyList() 
             }
             if (res.isNotEmpty()) {
-                allResults.add(res)
-                // If we have at least 2 results, cross-verify them
-                if (allResults.size >= 2) {
-                    val common = allResults[0].intersect(allResults[1].toSet()).toList()
-                    if (common.isNotEmpty()) {
-                        result = common
-                        break
-                    }
+                receivedResults.add(res)
+                
+                val counts = mutableMapOf<List<String>, Int>()
+                for (r in receivedResults) {
+                    val sortedIpStrs = r.map { it.hostAddress ?: "" }.sorted()
+                    counts[sortedIpStrs] = (counts[sortedIpStrs] ?: 0) + 1
                 }
-                // If it's a known high-trust provider (DoH), trust it immediately
-                if (completed < 3) { // First 3 queries are DoH/DoT
-                    result = res
+                
+                val winner = counts.entries.maxByOrNull { it.value }
+                if (winner != null && winner.value >= consensusTarget) {
+                    // Re-construct InetAddress list from winner strings
+                    val winnerIps = receivedResults.first { r ->
+                        r.map { it.hostAddress ?: "" }.sorted() == winner.key
+                    }
+                    result = winnerIps
+                    break
+                }
+                
+                // Fast-path: if we have DoH results and they seem clean (not bogons), 
+                // we can lower consensus target if we've waited enough
+                if (completed >= 5 && receivedResults.isNotEmpty() && intensity <= 80) {
+                    result = receivedResults.first()
                     break
                 }
             }
             completed++
         }
         
-        // Final fallback: use the first non-empty result if cross-verification failed
-        if (result.isEmpty() && allResults.isNotEmpty()) {
-            result = allResults.first()
+        // Final fallback: use the most frequent result even if target not met
+        if (result.isEmpty() && receivedResults.isNotEmpty()) {
+            val counts = mutableMapOf<List<String>, Int>()
+            receivedResults.forEach { r ->
+                val sorted = r.map { it.hostAddress ?: "" }.sorted()
+                counts[sorted] = (counts[sorted] ?: 0) + 1
+            }
+            val winnerKey = counts.entries.maxByOrNull { it.value }?.key
+            result = receivedResults.firstOrNull { r -> r.map { it.hostAddress ?: "" }.sorted() == winnerKey } ?: receivedResults.first()
         }
         
         activeJobs.forEach { it.cancel() }

@@ -104,12 +104,25 @@ object DnsPacketEngine {
     private fun buildEcsOption(): ByteArray {
         val bos = ByteArrayOutputStream()
         val dos = java.io.DataOutputStream(bos)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        
         dos.writeShort(8) // Option Code: ECS
         dos.writeShort(8) // Option Length
         dos.writeShort(1) // Family: IPv4
         dos.writeByte(24) // Source Mask
         dos.writeByte(0) // Scope Mask
-        dos.write(byteArrayOf(1, 1, 1, 0)) // 1.1.1.0/24 as a generic "good" source
+        
+        val prefixes = listOf(
+            byteArrayOf(1, 1, 1, 0),    // Cloudflare
+            byteArrayOf(8, 8, 8, 0),    // Google
+            byteArrayOf(9, 9, 9, 0),    // Quad9
+            byteArrayOf(208.toByte(), 67.toByte(), 222.toByte(), 0), // OpenDNS
+            byteArrayOf(4, 2, 2, 0),     // Level3
+            byteArrayOf(185.toByte(), 199.toByte(), 108.toByte(), 0), // GitHub
+            byteArrayOf(104.toByte(), 16.toByte(), 0.toByte(), 0.toByte()),    // Cloudflare range
+            byteArrayOf(rnd.nextInt(1, 223).toByte(), rnd.nextInt(256).toByte(), rnd.nextInt(256).toByte(), 0) // Totally random
+        )
+        dos.write(prefixes.random())
         return bos.toByteArray()
     }
 

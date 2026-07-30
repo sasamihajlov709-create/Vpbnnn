@@ -148,6 +148,10 @@ object TtlHelper {
         } catch (e: Throwable) { false }
     }
 
+    fun getSocketTtl(socket: Socket): Int {
+        return 64 // Fallback as getsockopt is not reliably available in all environments
+    }
+
     fun setLowTtlTemporary(socket: Socket, lowTtl: Int, delayMs: Long) {
         val originalTtl = 64
         setTtl(socket, lowTtl)
