@@ -2915,6 +2915,7 @@ TtlHelper.setTtl(socket, 64)
                     val p2 = data.copyOfRange(split, length)
                     
                     TtlHelper.setMss(socket, rnd.nextInt(128, 512))
+                    TtlHelper.setWindowSize(socket, rnd.nextInt(256, 1024))
                     
                     // Real P1 with high TTL (normal)
                     output.write(p1); output.flush()
