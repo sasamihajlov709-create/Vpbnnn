@@ -2,7 +2,6 @@ package com.aistudio.pinkproxy.fresh
 
 import android.util.Log
 import java.net.InetAddress
-import androidx.core.content.edit
 import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
 

@@ -235,7 +235,10 @@ object RobustResolver {
         
         queries.forEach { query ->
             activeJobs += launch {
-                val res = try { query() } catch (e: Throwable) { emptyList() }
+                val res = try { query() } catch (e: Throwable) { 
+                    if (e is CancellationException) throw e
+                    emptyList() 
+                }
                 try { channel.send(res) } catch (e: Throwable) {}
             }
         }
@@ -244,7 +247,10 @@ object RobustResolver {
         val allResults = mutableListOf<List<InetAddress>>()
         var completed = 0
         while (completed < queries.size) {
-            val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { emptyList() }
+            val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { 
+                if (e !is TimeoutCancellationException && e is CancellationException) throw e
+                emptyList() 
+            }
             if (res.isNotEmpty()) {
                 allResults.add(res)
                 // If we have at least 2 results, cross-verify them

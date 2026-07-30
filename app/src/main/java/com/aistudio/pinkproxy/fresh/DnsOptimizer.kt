@@ -86,7 +86,10 @@ object DnsOptimizer {
                 async {
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh(domain, url, vpnService) } } catch (e: Throwable) { emptyList() }
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh(domain, url, vpnService) } } catch (e: Throwable) { 
+                        if (e !is TimeoutCancellationException && e is CancellationException) throw e
+                        emptyList() 
+                    }
                     if (res.isNotEmpty()) {
                         providerLatencies[url] = System.currentTimeMillis() - start
                         providerFailures[url] = 0
@@ -100,7 +103,10 @@ object DnsOptimizer {
                 async {
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDot(domain, server, vpnService) } } catch (e: Throwable) { emptyList() }
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDot(domain, server, vpnService) } } catch (e: Throwable) { 
+                        if (e !is TimeoutCancellationException && e is CancellationException) throw e
+                        emptyList() 
+                    }
                     if (res.isNotEmpty()) {
                         providerLatencies[server] = System.currentTimeMillis() - start
                         providerFailures[server] = 0
