@@ -1597,6 +1597,9 @@ object BypassConfig {
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
                     delay(1)
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                    
+                    // Write remaining real data
+                    output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) {
                     output.write(data, 0, length); output.flush()
                 }
@@ -1897,8 +1900,10 @@ TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, split); output.flush()
                 TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                 output.write(data, split, length - split); output.flush()
+                TtlHelper.setTtl(socket, 64)
                 delay(config.delay1)
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.TLS_RECORD_PADDING, BypassStrategy.TLS_HANDSHAKE_RANDOM_PADDING -> {
                 val mod = FakePacketHelper.injectTlsPadding(data, length, rnd.nextInt(128, 512))
@@ -2188,7 +2193,8 @@ TtlHelper.setTtl(socket, 64)
                 TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                 output.write(fake); output.flush()
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-                try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.TLS_MULTI_SNI -> {
                 val multiSni = FakePacketHelper.buildMultiSniHello(host)
@@ -2273,8 +2279,9 @@ TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, split); output.flush()
                 TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                 output.write(data, 0, split); output.flush() // Fake overlap
+                TtlHelper.setTtl(socket, 64)
                 delay(config.delay1)
-                try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.HTTP_CHUNKED_FAKE -> {
                 if (isProbableHttp(data, length)) {
@@ -2356,6 +2363,8 @@ TtlHelper.setTtl(socket, 64)
                     TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(fake); output.flush()
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(1)
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, length); output.flush()
                 } catch (e: Throwable) {
                     output.write(data, 0, length); output.flush()
                 }
@@ -2710,11 +2719,12 @@ TtlHelper.setTtl(socket, 64)
             }
             BypassStrategy.HTTP_CONNECTION_CLOSE_SKEW -> {
                 if (isProbableHttp(data, length)) {
-                    val fakeHeader = "Connection: keep-alive\r\n".toByteArray()
+                    val fakeHeader = "Connection: close\r\n".toByteArray()
                     TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                     injectHeaderAfterFirstLine(data, length, fakeHeader, output)
+                    TtlHelper.setTtl(socket, 64)
                     delay(config.delay1)
-                    try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
+                    output.write(data, 0, length); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TLS_CLIENT_HELLO_SHUFFLE -> {
