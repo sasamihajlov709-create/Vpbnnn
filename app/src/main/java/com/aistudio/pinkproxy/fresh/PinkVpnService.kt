@@ -356,6 +356,7 @@ class PinkVpnService : VpnService() {
                     RobustResolver.resolve(host, this@PinkVpnService)
                 } catch (e: Throwable) {}
             }
+            ServiceChecker.runActiveProbing(this@PinkVpnService)
         }
     }
     

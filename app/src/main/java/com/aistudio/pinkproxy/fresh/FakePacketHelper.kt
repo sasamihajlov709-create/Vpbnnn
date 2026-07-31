@@ -316,6 +316,23 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildQuicVersionNegotiation(dcid: ByteArray, scid: ByteArray): ByteArray {
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        // First byte: 0xC0 or higher (Header form = 1, Fixed bit = 1)
+        dos.writeByte(0xC0 or (rnd.nextInt(64)))
+        dos.writeInt(0x00000000) // Version 0 = Version Negotiation
+        
+        dos.writeByte(scid.size); dos.write(scid) // SCID from the original packet becomes DCID in the VN packet
+        dos.writeByte(dcid.size); dos.write(dcid) // DCID from the original packet becomes SCID in the VN packet
+        
+        // Supported versions (only junk ones to force fallback)
+        repeat(rnd.nextInt(1, 4)) {
+            dos.writeInt(rnd.nextInt())
+        }
+        return baos.toByteArray()
+    }
+
     fun buildQuicRetry(dcid: ByteArray, scid: ByteArray, token: ByteArray): ByteArray {
         val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
         val rnd = ThreadLocalRandom.current()

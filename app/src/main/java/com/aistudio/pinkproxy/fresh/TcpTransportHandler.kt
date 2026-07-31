@@ -139,6 +139,8 @@ object TcpTransportHandler {
                 retryCount++
                 if (retryCount <= maxRetries) {
                     ProxyStats.recordGlobalFailure()
+                    // Proactively re-probe host on failure to adapt to routing changes
+                    AutoTtlProber.scheduleProbe(targetHost, targetPort, vpnService, scope)
                     delay(200L * retryCount)
                 }
             }
@@ -155,6 +157,15 @@ object TcpTransportHandler {
                 // Tune MSS based on discovered MTU
                 val mss = (AutoTtlProber.getDiscoveredMtu(targetHost) - 40).coerceAtLeast(512)
                 TtlHelper.setMss(remoteSocket, mss)
+                
+                val intensity = ProxyStats.censorshipIntensity.value
+                val rnd = java.util.concurrent.ThreadLocalRandom.current()
+
+                // Adaptive Window Size Modulation
+                if (intensity > 60) {
+                    remoteSocket.receiveBufferSize = rnd.nextInt(8192, 32768)
+                    remoteSocket.sendBufferSize = rnd.nextInt(8192, 32768)
+                }
 
                 // TCP Fast Open (TFO) support for API 30+
                 if (android.os.Build.VERSION.SDK_INT >= 30) {
@@ -172,7 +183,6 @@ object TcpTransportHandler {
                     }
                 }
 
-                val intensity = ProxyStats.censorshipIntensity.value
                 val isWindowMangle = strategy == BypassStrategy.WINDOW_SIZE_MANGLE || 
                                    strategy == BypassStrategy.TCP_ZERO_WINDOW_STALL || 
                                    strategy == BypassStrategy.TCP_WINDOW_SHRINK ||
@@ -187,7 +197,6 @@ object TcpTransportHandler {
                     else -> 128 * 1024
                 }
                 
-                val rnd = java.util.concurrent.ThreadLocalRandom.current()
                 if (strategy == BypassStrategy.TCP_ZERO_WINDOW_STALL) {
                     TtlHelper.setWindowSize(remoteSocket, 0)
                     scope.launch {
@@ -456,7 +465,7 @@ object TcpTransportHandler {
                         when (bufSize) {
                             8192 -> ProxyStats.release8k(buffer)
                             16384 -> ProxyStats.release16k(buffer)
-                            65536 -> ProxyStats.release64k(buffer)
+                            65536 -> when (buffer.size) { 8192 -> ProxyStats.release8k(buffer); 16384 -> ProxyStats.release16k(buffer); 65536 -> ProxyStats.release64k(buffer); else -> {} }
                             else -> {}
                         }
                         try { clientSocket.shutdownOutput() } catch (e: Throwable) {}
@@ -601,7 +610,7 @@ object TcpTransportHandler {
                             }
                         }
                     } finally {
-                        ProxyStats.release64k(buffer)
+                        when (buffer.size) { 8192 -> ProxyStats.release8k(buffer); 16384 -> ProxyStats.release16k(buffer); 65536 -> ProxyStats.release64k(buffer); else -> {} }
                         try { remoteSocket?.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }

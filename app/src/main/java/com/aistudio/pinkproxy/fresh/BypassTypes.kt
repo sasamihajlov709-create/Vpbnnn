@@ -232,7 +232,10 @@ enum class BypassStrategy(
     TCP_WINDOW_STALL(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_ZERO_WINDOW_OOB(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
     TCP_TIMING_CHAOS(StrategyFamily.TCP, 4, 3, StrategyGroup.MEDIUM),
+    TCP_TLS_HELLO_FRAGMENT(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
+    TCP_TLS_SNI_CASE_MOD(StrategyFamily.TCP, 4, 3, StrategyGroup.MEDIUM),
     UDP_OVERLAP_SKEW(StrategyFamily.UDP, 5, 4, StrategyGroup.HEAVY),
+    TCP_REORDER(StrategyFamily.TCP, 4, 3, StrategyGroup.MEDIUM),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -505,6 +508,17 @@ object ProxyStats {
                 // Adaptive signal quality based on success rate and intensity
                 val quality = (successRate.value - censorshipIntensity.value / 2).coerceIn(0, 100)
                 _signalQuality.value = quality
+
+                // Automated Recovery/Panic Trigger
+                if (successRate.value < 40 && ProxyStats.activeConnections.value > 0) {
+                    if (!BypassConfig.isPanicModeFlow.value) {
+                        logRecovery("Critical success rate drop (${successRate.value}%). Activating Panic Mode.")
+                        BypassConfig.setPanicMode(true)
+                    }
+                } else if (successRate.value > 85 && BypassConfig.isPanicModeFlow.value) {
+                    logRecovery("Stability restored (${successRate.value}%). Deactivating Panic Mode.")
+                    BypassConfig.setPanicMode(false)
+                }
             }
         }
     }

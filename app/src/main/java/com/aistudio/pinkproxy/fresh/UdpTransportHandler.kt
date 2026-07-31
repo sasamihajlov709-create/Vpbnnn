@@ -355,7 +355,25 @@ object UdpTransportHandler {
         val isDns = targetPort == 53 || targetPort == 853 || targetPort == 784
         
         // Basic filtering
-        if (BypassConfig.blockQuic && isQuic) return
+        if (BypassConfig.blockQuic && isQuic) {
+            // Force immediate fallback by sending Version Negotiation back to client
+            if (isQuicInitial(payload, offset, length)) {
+                try {
+                    val dcidLen = payload[offset + 5].toInt() and 0xFF
+                    if (length > 6 + dcidLen) {
+                        val dcid = payload.copyOfRange(offset + 6, offset + 6 + dcidLen)
+                        val scidOffset = offset + 6 + dcidLen
+                        val scidLen = payload[scidOffset].toInt() and 0xFF
+                        if (length > scidOffset + 1 + scidLen) {
+                             val scid = payload.copyOfRange(scidOffset + 1, scidOffset + 1 + scidLen)
+                             val vn = FakePacketHelper.buildQuicVersionNegotiation(dcid, scid)
+                             socket.send(DatagramPacket(vn, vn.size, packet.address, packet.port))
+                        }
+                    }
+                } catch (e: Throwable) {}
+            }
+            return
+        }
 
         val host = if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress ?: ""
         val flowKey = "${targetInet.hostAddress}:$targetPort"
@@ -425,8 +443,8 @@ object UdpTransportHandler {
             if (intensity > 80) delay(rnd.nextLong(1, 5))
         }
 
-        // 2. QUIC-Specific Obfuscation: send a fake Initial with different CID
-        if (!isHighVolume && isQuic && intensity > 70 && count < 3 && rnd.nextInt(100) < 20) {
+        // 2. QUIC-Specific Obfuscation
+        if (!isHighVolume && isQuic && intensity > 70 && count < 3 && rnd.nextInt(100) < 30) {
             if (isQuicInitial(payload, offset, length)) {
                  // Extreme Obfuscation: send a Quic Retry first to "reset" DPI state
                  if (intensity > 85 && rnd.nextInt(100) < 25) {
@@ -442,6 +460,26 @@ object UdpTransportHandler {
                              delay(rnd.nextLong(1, 4))
                          }
                      }
+                 }
+                 
+                  if (config.strategy == BypassStrategy.UDP_OVERLAP_SKEW) {
+                      val split = rnd.nextInt(50, 150)
+                      val fake = FakePacketHelper.buildUdpNoise(split)
+                      TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetInet is java.net.Inet6Address)
+                      socket.send(DatagramPacket(fake, fake.size, targetInet, targetPort))
+                      delay(rnd.nextLong(1, 3))
+                      TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
+                      socket.send(DatagramPacket(payload, offset, length, targetInet, targetPort))
+                      return
+                  }
+
+                 // Fragmented Initial strategy
+                 if (BypassConfig.strategy.value == BypassStrategy.UDP_FRAGMENT_SKEW || intensity > 90) {
+                     val split = rnd.nextInt(100, 300)
+                     socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
+                     delay(rnd.nextLong(1, 5))
+                     socket.send(DatagramPacket(payload, offset + split, length - split, targetInet, targetPort))
+                     return
                  }
             }
             

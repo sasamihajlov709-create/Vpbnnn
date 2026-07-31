@@ -256,10 +256,14 @@ object DnsPacketEngine {
         "t.me", "telegram.org", "discord.com", "chatgpt.com", "github.com"
     )
 
-    fun isSuspicious(address: InetAddress, host: String = ""): Boolean {
+    fun isSuspicious(address: InetAddress, host: String = "", ttl: Long = -1): Boolean {
         val hostAddress = address.hostAddress ?: return true
         if (suspiciousIps.contains(hostAddress)) return true
         
+        // TTL Analysis:Spoofed DNS responses from DPI often have very low TTL (1 or 0)
+        // to avoid long-term cache poisoning while still disrupting the current request.
+        if (ttl != -1L && ttl <= 1L) return true
+
         // If it's a known canary domain and resolves to something VERY suspicious (like private IP)
         if (canaryDomains.any { host.contains(it, ignoreCase = true) }) {
             if (address.isSiteLocalAddress || address.isLoopbackAddress || address.isAnyLocalAddress || hostAddress.startsWith("10.") || hostAddress.startsWith("127.")) {

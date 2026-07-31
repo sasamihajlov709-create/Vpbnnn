@@ -175,16 +175,28 @@ object DpiEngine {
         }
     }
 
+    private val strategyMaturity = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+    private val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, BypassStrategy>>()
+
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
         if (success) {
             successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            
             strategyScores[category]?.get(strategy)?.let { score ->
-                score.addAndGet(10)
+                // Fast recovery for successful strategies
+                val bonus = if (latencyMs in 1..300) 15 else 5
+                score.addAndGet(bonus)
                 if (score.get() > 2000) score.set(2000)
             }
             
             if (host != null) {
                 hostStrategyBlacklist[host]?.remove(strategy)
+                
+                // Store in network-specific memory
+                val netType = BypassConfig.currentNetworkType.value.toString()
+                val netMemory = networkStrategyMemory.getOrPut(netType) { ConcurrentHashMap() }
+                netMemory[category] = strategy
             }
 
             if (latencyMs > 0) {
@@ -202,13 +214,13 @@ object DpiEngine {
             failureHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             
             val penalty = when (reason) {
-                FailureReason.TCP_RESET -> 45
-                FailureReason.CENSORSHIP_STALL -> 60
-                FailureReason.DNS_POISONED -> 30
-                FailureReason.SSL_HANDSHAKE_ERROR -> 35
-                FailureReason.MTU_EXCEEDED -> 20
-                FailureReason.TIMEOUT -> 15
-                else -> 20
+                FailureReason.TCP_RESET -> 80 // High confidence DPI block
+                FailureReason.CENSORSHIP_STALL -> 100
+                FailureReason.DNS_POISONED -> 40
+                FailureReason.SSL_HANDSHAKE_ERROR -> 50
+                FailureReason.MTU_EXCEEDED -> 30
+                FailureReason.TIMEOUT -> 20
+                else -> 25
             }
             
             strategyScores[category]?.get(strategy)?.let { score ->
@@ -225,14 +237,30 @@ object DpiEngine {
 
             if (host != null && (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL)) {
                 val hostBlacklist = hostStrategyBlacklist.getOrPut(host) { ConcurrentHashMap() }
-                hostBlacklist[strategy] = System.currentTimeMillis() + 600_000 // 10 mins blacklist for this specific host
+                // Progressive backoff for blacklisted host-strategy pairs
+                val currentLevel = hostBlacklist[strategy] ?: 0L
+                val waitTime = if (System.currentTimeMillis() > currentLevel) 600_000L else 1_800_000L // 10m then 30m
+                hostBlacklist[strategy] = System.currentTimeMillis() + waitTime
+                Log.d("DpiEngine", "Host $host blacklisted for strategy $strategy for ${waitTime/60000} min")
             }
         }
     }
 
     fun getBestStrategy(category: HostCategory, host: String? = null): BypassStrategy {
-        val catScores = strategyScores[category] ?: return BypassStrategy.SNI_SPLIT
         val now = System.currentTimeMillis()
+        val netType = BypassConfig.currentNetworkType.value.toString()
+        
+        // 1. Check Network Memory for a known-good strategy for this category on this network
+        networkStrategyMemory[netType]?.get(category)?.let { strat ->
+            if ((circuitBreakers[strat] ?: 0L) < now) {
+                val hostBlacklist = host?.let { hostStrategyBlacklist[it] }
+                if (hostBlacklist?.get(strat) == null || hostBlacklist[strat]!! < now) {
+                    return strat
+                }
+            }
+        }
+
+        val catScores = strategyScores[category] ?: return BypassStrategy.SNI_SPLIT
         
         // Filter out strategies under circuit breaker or host-specific blacklist
         val hostBlacklist = host?.let { hostStrategyBlacklist[it] }
@@ -245,7 +273,7 @@ object DpiEngine {
             circuitBreakers.clear() // Emergency clear
             return BypassStrategy.CHAOS
         }
-        
+
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         
         // Exploration: 7% chance to try a random strategy to keep data fresh
@@ -256,16 +284,25 @@ object DpiEngine {
         // Context-aware boost based on current DpiType detected globally
         val currentDpi = ProxyStats.currentDpiType.value
         
-        // Find strategy with best combined score (score - latency_penalty + context_boost)
+        // Find strategy with best combined score (score - latency_penalty + context_boost + maturity)
         return validStrategies
             .shuffled()
             .maxByOrNull { (strat, score) ->
                 var s = score.get().toDouble()
                 
+                // Maturity Bonus
+                s += (strategyMaturity[strat]?.get() ?: 0) / 10.0
+                
                 // Contextual Boosts
                 when (currentDpi) {
-                    DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s += 100
-                    DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s += 100
+                    DpiType.TLS_SNI_BLOCK -> {
+                        if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s += 100
+                        if (strat == BypassStrategy.TCP_TLS_SNI_CASE_MOD) s += 120
+                    }
+                    DpiType.TCP_RESET -> {
+                        if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s += 100
+                        if (strat == BypassStrategy.TCP_OVERLAP_SKEW) s += 130
+                    }
                     DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s += 100
                     DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s += 150
                     else -> {}

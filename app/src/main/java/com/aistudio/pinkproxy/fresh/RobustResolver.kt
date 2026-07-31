@@ -258,7 +258,13 @@ object RobustResolver {
                 emptyList() 
             }
             if (res.isNotEmpty()) {
-                val cleanRes = res.filter { !DnsPacketEngine.isSuspicious(it, host) }
+                // Check if any of these were detailed records with TTL
+                val detailed = DnsCacheManager.getCachedDetailed(host)
+                val cleanRes = res.filter { ip ->
+                    val recordTtl = detailed?.find { it.address == ip }?.ttlSeconds ?: -1L
+                    !DnsPacketEngine.isSuspicious(ip, host, recordTtl)
+                }
+                
                 if (cleanRes.isEmpty()) {
                     ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
                     completed++
@@ -266,7 +272,7 @@ object RobustResolver {
                 }
                 
                 // IP Verification Step: If high censorship, verify at least one IP from the result
-                if (intensity > 85 && completed % 2 == 0) {
+                if (intensity > 85 && (completed % 2 == 0 || receivedResults.isEmpty())) {
                     val verified = DnsOptimizer.verifyIp(host, cleanRes.first(), vpnService)
                     if (!verified) {
                         Log.w("RobustResolver", "Verification failed for ${cleanRes.first()} on $host (Poisoned IP?)")
