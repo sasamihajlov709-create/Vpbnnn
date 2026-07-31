@@ -137,8 +137,8 @@ object UdpTransportHandler {
                         } catch (e: Throwable) {
                             if (e !is CancellationException) Log.v("UdpTransport", "Target->Client error: ${e.message}")
                         } finally {
-                            ProxyStats.release64k(buffer)
-                            ProxyStats.release64k(respBuffer)
+                            when (buffer.size) { 8192 -> ProxyStats.release8k(buffer); 16384 -> ProxyStats.release16k(buffer); 65536 -> ProxyStats.release64k(buffer); else -> {} }
+                            when (respBuffer.size) { 8192 -> ProxyStats.release8k(respBuffer); 16384 -> ProxyStats.release16k(respBuffer); 65536 -> ProxyStats.release64k(respBuffer); else -> {} }
                         }
                     }
                 }
@@ -294,7 +294,7 @@ object UdpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("UdpTransport", "Client->Target error: ${e.message}")
                     } finally {
-                        ProxyStats.release64k(buffer)
+                        when (buffer.size) { 8192 -> ProxyStats.release8k(buffer); 16384 -> ProxyStats.release16k(buffer); 65536 -> ProxyStats.release64k(buffer); else -> {} }
                         udpOutChannels.forEach { it.close() }
                     }
                 }

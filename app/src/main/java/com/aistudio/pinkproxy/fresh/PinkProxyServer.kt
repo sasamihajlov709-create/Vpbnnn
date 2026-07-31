@@ -15,7 +15,7 @@ import java.io.*
 class PinkProxyServer(private val vpnService: VpnService, private val port: Int, val sessionSecret: String = "") {
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
-    private val activeConnectionSemaphore = Semaphore(2000)
+    private val activeConnectionSemaphore = Semaphore(5000)
 
     companion object {
         private val SOCKS5_AUTH_SUCCESS = byteArrayOf(5, 0)
