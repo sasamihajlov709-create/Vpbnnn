@@ -11,7 +11,10 @@ enum class RecoveryEvent {
     HANDSHAKE_FAILURE,
     DPI_DETECTED,
     TCP_STALL,
-    SSL_STALL
+    SSL_STALL,
+    CENSORSHIP_STALL,
+    DNS_POISONED,
+    MTU_EXCEEDED
 }
 
 object RecoveryManager {
@@ -181,31 +184,45 @@ object RecoveryManager {
                 triggerPanic("Proxy unreachable")
                 requestServiceRestart("Proxy crash or unreachable")
             }
-            RecoveryEvent.TUNNEL_STALL, RecoveryEvent.TCP_STALL, RecoveryEvent.SSL_STALL -> {
+            RecoveryEvent.TUNNEL_STALL, RecoveryEvent.TCP_STALL, RecoveryEvent.SSL_STALL, RecoveryEvent.CENSORSHIP_STALL -> {
                 if (recoveryEscalation < 3) {
                     BypassConfig.rotateGlobalStrategy()
                     if (recoveryEscalation > 0) {
                         val currentMtu = BypassConfig.currentMtu.value
                         if (currentMtu > 1100) {
-                            val reduction = if (event == RecoveryEvent.SSL_STALL) 150 else 80
+                            val reduction = if (event == RecoveryEvent.SSL_STALL || event == RecoveryEvent.CENSORSHIP_STALL) 150 else 80
                             BypassConfig.setMtu(currentMtu - reduction)
                             ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to $event")
                         }
                     }
                     recoveryEscalation++
                     
-                    // Specific boost for SSL stalling
-                    if (event == RecoveryEvent.SSL_STALL) {
+                    // Specific boost for SSL or Censorship stalling
+                    if (event == RecoveryEvent.SSL_STALL || event == RecoveryEvent.CENSORSHIP_STALL) {
                         BypassConfig.setGlobalStrategy(listOf(
                             BypassStrategy.TLS_REC_SPLIT,
                             BypassStrategy.TLS_CLIENT_HELLO_CHOP,
                             BypassStrategy.BYEBYEDPI_EXTREME,
-                            BypassStrategy.TCP_WINDOW_SHRINK
+                            BypassStrategy.TCP_WINDOW_SHRINK,
+                            BypassStrategy.TCP_TLS_SESSION_DESYNC
                         ).random())
                     }
                 } else {
                     triggerPanic("Critical stall detected ($event)")
                     requestServiceRestart("Persistent stalling")
+                }
+            }
+            RecoveryEvent.DNS_POISONED -> {
+                Log.e("RecoveryManager", "DNS Poisoning detected! Switching to DoH-only mode.")
+                RobustResolver.clearCache()
+                RobustResolver.dnsMode = "Smart DoH"
+                DnsOptimizer.forceRefresh()
+                recoveryEscalation++
+            }
+            RecoveryEvent.MTU_EXCEEDED -> {
+                val currentMtu = BypassConfig.currentMtu.value
+                if (currentMtu > 1200) {
+                    BypassConfig.setMtu(currentMtu - 100)
                 }
             }
             RecoveryEvent.HIGH_RTT, RecoveryEvent.HANDSHAKE_FAILURE -> {

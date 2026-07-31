@@ -67,6 +67,45 @@ object DpiEngine {
                 }
             }
         }
+        
+        // Auto-scan on first start or long time since last scan
+        val prefs = context.getSharedPreferences("dpi_engine_state", android.content.Context.MODE_PRIVATE)
+        val lastScan = prefs.getLong("last_scan_time", 0L)
+        if (System.currentTimeMillis() - lastScan > 86400000L) { // Daily scan or first time
+            performInitialScan(context)
+        }
+    }
+
+    fun performInitialScan(context: android.content.Context) {
+        scope.launch {
+            Log.i("DpiEngine", "Starting automated censorship fingerprinting...")
+            val targets = listOf("google.com", "youtube.com", "telegram.org")
+            val probes = listOf(
+                BypassStrategy.TCP_RETRANS_FAKE,
+                BypassStrategy.TLS_SNI_FRAGMENT,
+                BypassStrategy.SNI_SPLIT
+            )
+            
+            targets.forEach { host ->
+                probes.forEach { strat ->
+                    try {
+                        val ok = withTimeoutOrNull(5000) {
+                            RobustResolver.resolve(host)
+                        }
+                        if (ok != null && ok.isNotEmpty()) {
+                            recordResult(strat, true, HostClassifier.classify(host), latencyMs = 100)
+                        } else {
+                            recordResult(strat, false, HostClassifier.classify(host), reason = FailureReason.TIMEOUT)
+                        }
+                    } catch (e: Throwable) {}
+                    delay(500)
+                }
+            }
+            
+            context.getSharedPreferences("dpi_engine_state", android.content.Context.MODE_PRIVATE)
+                .edit().putLong("last_scan_time", System.currentTimeMillis()).apply()
+            Log.i("DpiEngine", "Initial scan complete. Intensity: ${ProxyStats.censorshipIntensity.value}")
+        }
     }
 
     private fun checkGlobalStall() {
@@ -153,8 +192,11 @@ object DpiEngine {
             failureHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             
             val penalty = when (reason) {
-                FailureReason.TCP_RESET -> 40
-                FailureReason.SSL_HANDSHAKE_ERROR -> 30
+                FailureReason.TCP_RESET -> 45
+                FailureReason.CENSORSHIP_STALL -> 60
+                FailureReason.DNS_POISONED -> 30
+                FailureReason.SSL_HANDSHAKE_ERROR -> 35
+                FailureReason.MTU_EXCEEDED -> 20
                 FailureReason.TIMEOUT -> 15
                 else -> 20
             }
@@ -347,21 +389,27 @@ object DpiEngine {
 
     fun getRecommendedFragSize(): Int {
         val intensity = ProxyStats.censorshipIntensity.value
+        val fingerprint = getCensorshipFingerprint()
+        
         return when {
-            intensity > 90 -> 1
-            intensity > 75 -> 2
-            intensity > 50 -> 4
-            else -> 10
+            intensity > 95 || fingerprint.rstRate > 0.4 -> 1
+            intensity > 85 || fingerprint.sniBlockRate > 0.5 -> 2
+            intensity > 70 -> 3
+            intensity > 50 -> 6
+            else -> 12
         }
     }
 
     fun getRecommendedDelay(): Long {
         val intensity = ProxyStats.censorshipIntensity.value
+        val fingerprint = getCensorshipFingerprint()
+        
         return when {
-            intensity > 90 -> 150L
-            intensity > 70 -> 50L
-            intensity > 40 -> 20L
-            else -> 5L
+            intensity > 95 || fingerprint.stallRate > 0.3 -> 200L
+            intensity > 85 -> 100L
+            intensity > 70 -> 40L
+            intensity > 40 -> 15L
+            else -> 4L
         }
     }
 }

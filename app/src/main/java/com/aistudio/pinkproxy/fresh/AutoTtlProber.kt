@@ -48,33 +48,85 @@ object AutoTtlProber {
             if (resolved.isEmpty()) return 64
             val target = resolved.first()
             
-            // Binary search or linear scan for TTL
-            // We want to find the lowest TTL that reaches the server.
-            // But for DPI, we want the TTL that reaches the censor but not the server.
-            // Usually, the censor is closer than the server.
-            
-            // 1. Estimate total distance to server
+            // 1. Estimate distance to server using ICMP or TCP SYN
             val serverDistance = estimateDistance(target, port, vpnService)
             if (serverDistance == -1) return 64
             
             Log.d("AutoTtlProber", "Server distance to $host: $serverDistance")
             
-            // 2. Scan for censor distance (DPI injection detection)
-            // We send a request with increasing TTL and check if we get a fake response.
-            // This is complex, so for now we'll just use a safe margin.
-            // Typically, censors are 2-10 hops away.
+            // 2. Identify censor distance
+            // We look for the first hop that returns a response when we send something "forbidden"
+            // but doesn't reach the server.
+            val censorDistance = identifyCensorHop(target, port, serverDistance, vpnService)
             
-            val censorTtl = if (serverDistance > 8) serverDistance - 5 else serverDistance / 2
-            val finalTtl = censorTtl.coerceAtLeast(2).coerceAtMost(serverDistance - 1)
+            val finalTtl = if (censorDistance != -1) {
+                censorDistance // Target the censor exactly
+            } else {
+                // Fallback: stay safe, usually censors are close (2-10 hops)
+                (serverDistance - 4).coerceAtLeast(3).coerceAtMost(serverDistance - 1)
+            }
             
             discoveredTtls[host] = finalTtl
-            if (discoveredTtls["global"] == null) discoveredTtls["global"] = finalTtl
+            updateGlobalConsensus(finalTtl)
             
             return finalTtl
         } catch (e: Throwable) {
             return 64
         } finally {
             probingHosts.remove(host)
+        }
+    }
+
+    private fun updateGlobalConsensus(newTtl: Int) {
+        val currentGlobal = discoveredTtls["global"] ?: 0
+        if (currentGlobal == 0) {
+            discoveredTtls["global"] = newTtl
+        } else {
+            // Weighted moving average for global TTL
+            discoveredTtls["global"] = (currentGlobal * 0.7 + newTtl * 0.3).toInt().coerceIn(2, 20)
+        }
+    }
+
+    private suspend fun identifyCensorHop(addr: InetAddress, port: Int, serverDist: Int, vpnService: VpnService?): Int {
+        // We try to trigger a RST or fake response from censor with increasing TTL
+        // starting from a very low value.
+        for (ttl in 2 until serverDist) {
+            if (isCensorTriggered(addr, port, ttl, vpnService)) {
+                return ttl
+            }
+        }
+        return -1
+    }
+
+    private suspend fun isCensorTriggered(addr: InetAddress, port: Int, ttl: Int, vpnService: VpnService?): Boolean {
+        return withContext(ProxyDispatcher.io) {
+            var socket: Socket? = null
+            try {
+                socket = Socket()
+                TtlHelper.setTtl(socket, ttl)
+                socket.connect(InetSocketAddress(addr, port), 1500)
+                
+                val output = socket.getOutputStream()
+                val input = socket.getInputStream()
+                
+                // Send a fake SNI that might be blocked
+                val fakeHello = FakePacketHelper.buildRealisticTlsHello("blocked.com")
+                output.write(fakeHello); output.flush()
+                
+                // If we get an immediate RST or some data back despite low TTL, it's the censor
+                val buffer = ByteArray(1024)
+                socket.soTimeout = 1000
+                val read = input.read(buffer)
+                
+                read > 0 // If we got data back, it reached the censor (or server, but TTL is low)
+            } catch (e: java.net.SocketTimeoutException) {
+                false
+            } catch (e: Throwable) {
+                // Likely a RST from censor
+                e.message?.contains("reset", true) == true
+            } finally {
+                try { socket?.close() } catch (e: Throwable) {}
+            }
         }
     }
 

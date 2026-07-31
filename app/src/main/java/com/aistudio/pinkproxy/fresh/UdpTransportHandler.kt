@@ -463,6 +463,20 @@ object UdpTransportHandler {
             TtlHelper.setUdpTtl(socket, randomTtl, isIpv6)
         }
 
+        // 5. Packet-Level Mangle: Fragmentation and Padding
+        if (length > 200 && !isDns && intensity > 40) {
+            val shouldFrag = config.strategy == BypassStrategy.UDP_DATA_FRAG || (intensity > 70 && rnd.nextInt(100) < 15)
+            if (shouldFrag) {
+                val split = rnd.nextInt(64, length - 64)
+                // First part
+                socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
+                if (intensity > 60) delay(rnd.nextLong(1, 4))
+                // Second part
+                socket.send(DatagramPacket(payload, offset + split, length - split, targetInet, targetPort))
+                return
+            }
+        }
+
         // Apply centralized UDP bypass
         BypassConfig.applyUdpBypass(socket, packet, config, host)
     }

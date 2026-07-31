@@ -1479,15 +1479,15 @@ object BypassConfig {
                 try {
                     val split = (length / 2).coerceAtLeast(1)
                     val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 4
-                    // 1. Send first half
+                    // 1. Send first half (Real)
                     output.write(data, 0, split); output.flush()
                     delay(rnd.nextLong(10, 30))
                     
-                    // 2. Send FAKE second half with low TTL (to confuse DPI but not reach server)
-                    val fakeTail = FakePacketHelper.buildTlsHeartbeat()
+                    // 2. Send FAKE second half with low TTL (matches length)
                     val oldTtl = TtlHelper.getSocketTtl(socket)
                     TtlHelper.setTtl(socket, discoveredTtl)
-                    output.write(fakeTail); output.flush()
+                    val fakePart = FakePacketHelper.buildUdpNoise(length - split)
+                    output.write(fakePart); output.flush()
                     delay(rnd.nextLong(20, 50))
                     
                     // 3. Send REAL second half with normal TTL
@@ -1524,10 +1524,10 @@ object BypassConfig {
                     output.write(data, 0, split); output.flush()
                     
                     // 2. OOB Byte to confuse state machine (Urgent Pointer)
-                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
+                    try { socket.sendUrgentData(rnd.nextInt(32, 126)) } catch (e: Throwable) {}
                     
-                    // 3. Second part after delay
-                    delay(config.delay1)
+                    // 3. Second part after delay with jitter
+                    delay(rnd.nextLong(10, 30))
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }

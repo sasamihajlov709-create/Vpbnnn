@@ -46,10 +46,18 @@ object TcpTransportHandler {
             var strategy = BypassConfig.getBestStrategyForHost(targetHost)
             var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
+            // Dynamic adjustment of maxRetries based on real-time success rate
+            val successRate = ProxyStats.getSuccessRate()
+            val adjustedMaxRetries = when {
+                successRate < 30 -> 3
+                successRate < 60 -> 2
+                else -> maxRetries
+            }
+
             // Proactively probe for TTL for this host in the background
             AutoTtlProber.scheduleProbe(targetHost, targetPort, vpnService, scope)
 
-            while (retryCount <= maxRetries) {
+            while (retryCount <= adjustedMaxRetries) {
                 if (retryCount > 0 || shouldRaceImmediately) {
                     // Strategy Racing: try top strategies in parallel
                     val racers = mutableListOf<BypassStrategy>()
@@ -58,11 +66,14 @@ object TcpTransportHandler {
                         racers.add(DpiEngine.getBestStrategy(HostClassifier.classify(targetHost)))
                         racers.add(BypassStrategy.SNI_SPLIT)
                     } else {
+                        // On retries, broaden the search
                         racers.add(DpiEngine.getBestStrategy(HostClassifier.classify(targetHost)))
                         racers.add(BypassStrategy.TCP_OOB_DESYNC)
                         racers.add(BypassStrategy.BYEBYEDPI_HYBRID)
+                        racers.add(BypassStrategy.TLS_SNI_SKEW)
+                        racers.add(BypassStrategy.TCP_RETRANS_FAKE)
                     }
-                    val finalRacers = racers.distinct().take(3)
+                    val finalRacers = racers.distinct().take(if (BypassConfig.isPanicMode) 5 else 3)
                     
                     remoteSocket = try {
                         withTimeout(if (retryCount == 0) 8000 else 15000) {
