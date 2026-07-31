@@ -264,6 +264,8 @@ class PinkVpnService : VpnService() {
                 .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
+                .addDnsServer("2606:4700:4700::1111")
+                .addDnsServer("2001:4860:4860::8888")
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 builder.setMetered(false)

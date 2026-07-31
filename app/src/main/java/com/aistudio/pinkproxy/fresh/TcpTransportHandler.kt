@@ -464,7 +464,7 @@ object TcpTransportHandler {
                         when (bufSize) {
                             8192 -> ProxyStats.release8k(buffer)
                             16384 -> ProxyStats.release16k(buffer)
-                            65536 -> when (buffer.size) { 8192 -> ProxyStats.release8k(buffer); 16384 -> ProxyStats.release16k(buffer); 65536 -> ProxyStats.release64k(buffer); else -> {} }
+                            65536 -> ProxyStats.release64k(buffer)
                             else -> {}
                         }
                         try { clientSocket.shutdownOutput() } catch (e: Throwable) {}

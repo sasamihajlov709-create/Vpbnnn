@@ -73,6 +73,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         continue
                     }
                                 
+                    ProxyStats.updateConnections(1)
                     val clientJob = scope.launch {
                         try {
                             client.tcpNoDelay = true
@@ -80,6 +81,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                             try { client.receiveBufferSize = 64 * 1024 } catch (e: Throwable) {}
                             handleClient(client, this)
                         } finally {
+                                            ProxyStats.updateConnections(-1)
                                             activeConnectionSemaphore.release()
                         }
                     }
