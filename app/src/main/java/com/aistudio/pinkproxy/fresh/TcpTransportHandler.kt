@@ -32,6 +32,7 @@ object TcpTransportHandler {
             }
             ProxyStats.addTraffic(targetHost)
             val totalWrittenClient = java.util.concurrent.atomic.AtomicLong(0)
+            val isTls = targetPort == 443 || targetPort == 8443
 
             val start = System.currentTimeMillis()
             val censorship = BypassConfig.censorshipLevel.value
@@ -171,6 +172,7 @@ object TcpTransportHandler {
             // Start Throughput Monitor to detect stalled connections or blackholes
             var lastTotalForStall = totalWrittenClient.get()
             var silentPeriods = 0
+            val jobIsTls = isTls
             throughputJob = scope.launch(ProxyDispatcher.io) {
                 while (isActive && remoteSocket.isConnected && !remoteSocket.isClosed) {
                     delay(10000) // Check every 10s
@@ -188,24 +190,26 @@ object TcpTransportHandler {
                                 remoteSocket.sendUrgentData(rnd.nextInt(256))
                                 val intensity = ProxyStats.censorshipIntensity.value
                                 if (intensity > 85) {
-                                     // Also send a tiny keep-alive probe
-                                     remoteOut.write(FakePacketHelper.buildFakeTcpKeepAlive())
+                                     // Send a fake TLS keep-alive or heartbeat to "kick" DPI state
+                                     if (rnd.nextBoolean()) {
+                                         remoteOut.write(FakePacketHelper.buildFakeTcpKeepAlive())
+                                     } else {
+                                         remoteOut.write(FakePacketHelper.buildTlsHeartbeat())
+                                     }
                                      remoteOut.flush()
                                 }
-                                Log.v("TcpTransport", "Kicked stalled session: $targetHost")
+                                Log.v("TcpTransport", "Kicked stalled session: $targetHost (intensity $intensity)")
                             } catch (e: Throwable) {}
                         }
 
                         if (silentPeriods >= 4) { // 40s of silence
                              BypassConfig.recordFailure(strategy, targetHost)
                              if (BypassConfig.isHostCensored(targetHost)) {
-                                 ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                                 ProxyStats.recordDpiEvent(if (jobIsTls) DpiType.SSL_STALL else DpiType.TCP_STALL)
                              }
-                             // Proactive disconnect if it's a known blocked host
-                             if (BypassConfig.isHostCensored(targetHost)) {
-                                 try { remoteSocket.close(); clientSocket.close() } catch (e: Throwable) {}
-                                 break
-                             }
+                             // Proactive disconnect
+                             try { remoteSocket.close(); clientSocket.close() } catch (e: Throwable) {}
+                             break
                         }
                     } else {
                         silentPeriods = 0

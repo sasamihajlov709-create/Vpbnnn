@@ -9,7 +9,9 @@ enum class RecoveryEvent {
     TUNNEL_STALL,
     HIGH_RTT,
     HANDSHAKE_FAILURE,
-    DPI_DETECTED
+    DPI_DETECTED,
+    TCP_STALL,
+    SSL_STALL
 }
 
 object RecoveryManager {
@@ -158,20 +160,31 @@ object RecoveryManager {
                 triggerPanic("Proxy unreachable")
                 requestServiceRestart("Proxy crash or unreachable")
             }
-            RecoveryEvent.TUNNEL_STALL -> {
+            RecoveryEvent.TUNNEL_STALL, RecoveryEvent.TCP_STALL, RecoveryEvent.SSL_STALL -> {
                 if (recoveryEscalation < 3) {
                     BypassConfig.rotateGlobalStrategy()
-                    if (recoveryEscalation > 1) {
+                    if (recoveryEscalation > 0) {
                         val currentMtu = BypassConfig.currentMtu.value
-                        if (currentMtu > 1200) {
-                            BypassConfig.setMtu(currentMtu - 100)
-                            ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - 100}")
+                        if (currentMtu > 1100) {
+                            val reduction = if (event == RecoveryEvent.SSL_STALL) 150 else 80
+                            BypassConfig.setMtu(currentMtu - reduction)
+                            ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to $event")
                         }
                     }
                     recoveryEscalation++
+                    
+                    // Specific boost for SSL stalling
+                    if (event == RecoveryEvent.SSL_STALL) {
+                        BypassConfig.setGlobalStrategy(listOf(
+                            BypassStrategy.TLS_REC_SPLIT,
+                            BypassStrategy.TLS_CLIENT_HELLO_CHOP,
+                            BypassStrategy.BYEBYEDPI_EXTREME,
+                            BypassStrategy.TCP_WINDOW_SHRINK
+                        ).random())
+                    }
                 } else {
-                    triggerPanic("Tunnel stall detected")
-                    requestServiceRestart("Data flow stalled")
+                    triggerPanic("Critical stall detected ($event)")
+                    requestServiceRestart("Persistent stalling")
                 }
             }
             RecoveryEvent.HIGH_RTT, RecoveryEvent.HANDSHAKE_FAILURE -> {

@@ -1306,6 +1306,24 @@ object BypassConfig {
         }
 
         when (strategy) {
+            BypassStrategy.TCP_WINDOW_SHRINK -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    socket.receiveBufferSize = rnd.nextInt(16, 64)
+                    output.write(finalData, 0, finalLen); output.flush()
+                    // Don't restore immediately, let it stick for this burst
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+            }
+            BypassStrategy.TCP_WINDOW_SIZE_JITTER -> {
+                try {
+                    val split = (finalLen / 2).coerceAtLeast(1)
+                    socket.receiveBufferSize = rnd.nextInt(64, 256)
+                    output.write(finalData, 0, split); output.flush()
+                    delay(rnd.nextLong(10, 30))
+                    socket.receiveBufferSize = rnd.nextInt(512, 1460)
+                    output.write(finalData, split, finalLen - split); output.flush()
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+            }
             BypassStrategy.TCP_SYN_FLOOD_FAKE -> {
                 repeat(rnd.nextInt(2, 5)) {
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
@@ -1452,14 +1470,14 @@ object BypassConfig {
                     val split = (length / 2).coerceAtLeast(1)
                     // 1. Send first half
                     output.write(data, 0, split); output.flush()
-                    delay(rnd.nextLong(5, 20))
+                    delay(rnd.nextLong(10, 30))
                     
                     // 2. Send FAKE second half with low TTL (to confuse DPI but not reach server)
-                    val fakeTail = FakePacketHelper.buildUdpNoise(length - split)
+                    val fakeTail = FakePacketHelper.buildFakeTcpKeepAlive()
                     val oldTtl = TtlHelper.getSocketTtl(socket)
                     TtlHelper.setTtl(socket, rnd.nextInt(3, 7))
                     output.write(fakeTail); output.flush()
-                    delay(rnd.nextLong(10, 30))
+                    delay(rnd.nextLong(20, 50))
                     
                     // 3. Send REAL second half with normal TTL
                     TtlHelper.setTtl(socket, oldTtl)
@@ -1475,13 +1493,14 @@ object BypassConfig {
                     output.write(data, 0, split); output.flush()
                     
                     // 2. Overlap with Fake (Low TTL) to poison DPI state
-                    val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 40))
-                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    val fake = FakePacketHelper.buildFakeTcpKeepAlive()
+                    val oldTtl = TtlHelper.getSocketTtl(socket)
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                     output.write(fake); output.flush()
                     
                     // 3. Part 2 (Real)
-                    delay(config.delay1)
-                    TtlHelper.setTtl(socket, 64)
+                    delay(rnd.nextLong(15, 50))
+                    TtlHelper.setTtl(socket, oldTtl)
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }

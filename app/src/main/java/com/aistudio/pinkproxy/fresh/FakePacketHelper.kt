@@ -712,9 +712,19 @@ object FakePacketHelper {
         return data
     }
 
-    fun padTlsRecordAdvanced(data: ByteArray, length: Int, minSize: Int, maxSize: Int): ByteArray {
-        val rnd = ThreadLocalRandom.current()
-        val targetSize = rnd.nextInt(minSize, maxSize)
-        return padTlsRecord(data, length, targetSize)
+    fun buildTlsHeartbeat(): ByteArray {
+        // TLS Heartbeat (RFC 6520) - often blocked if suspicious, but can "kick" buffers
+        val res = ByteArray(19)
+        res[0] = 0x18 // Heartbeat
+        res[1] = 0x03
+        res[2] = 0x03
+        res[3] = 0x00
+        res[4] = 0x0E
+        res[5] = 0x01 // Request
+        res[6] = 0x00
+        res[7] = 0x03 // Payload length
+        // Fake payload and padding
+        ThreadLocalRandom.current().nextBytes(res.sliceArray(8 until res.size))
+        return res
     }
 }
