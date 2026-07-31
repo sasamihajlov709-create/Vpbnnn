@@ -43,6 +43,9 @@ object TcpTransportHandler {
             var strategy = BypassConfig.getBestStrategyForHost(targetHost)
             var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
+            // Proactively probe for TTL for this host in the background
+            AutoTtlProber.scheduleProbe(targetHost, targetPort, vpnService, scope)
+
             while (retryCount <= maxRetries) {
                 if (retryCount > 0) {
                     // Strategy Racing on retry: try 3 top strategies in parallel

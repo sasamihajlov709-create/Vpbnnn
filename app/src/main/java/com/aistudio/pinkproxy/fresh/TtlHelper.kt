@@ -1,17 +1,22 @@
 package com.aistudio.pinkproxy.fresh
 
 import android.os.ParcelFileDescriptor
-import android.system.Os
-import android.system.OsConstants
+import android.util.Log
+import kotlinx.coroutines.*
 import java.net.Inet6Address
 import java.net.Socket
-import android.util.Log
+import java.net.DatagramSocket
+import java.io.FileDescriptor
 
 @android.annotation.SuppressLint("SoonBlockedPrivateApi")
 object TtlHelper {
     private var fdField: java.lang.reflect.Field? = null
     private var getImplMethod: java.lang.reflect.Method? = null
     private var getDatagramImplMethod: java.lang.reflect.Method? = null
+    
+    private var setsockoptIntMethod: java.lang.reflect.Method? = null
+    private var getsockoptIntMethod: java.lang.reflect.Method? = null
+    private var setsockoptByteMethod: java.lang.reflect.Method? = null
 
     init {
         try {
@@ -19,144 +24,134 @@ object TtlHelper {
             fdField?.isAccessible = true
             getImplMethod = java.net.Socket::class.java.getDeclaredMethod("getImpl")
             getImplMethod?.isAccessible = true
-            getDatagramImplMethod = java.net.DatagramSocket::class.java.getDeclaredMethod("getImpl")
+            getDatagramImplMethod = DatagramSocket::class.java.getDeclaredMethod("getImpl")
             getDatagramImplMethod?.isAccessible = true
-        } catch (e: Throwable) { Log.v("TtlHelper", "Reflection limited or unavailable") }
+            
+            val osClass = Class.forName("android.system.Os")
+            setsockoptIntMethod = osClass.getDeclaredMethod("setsockoptInt", FileDescriptor::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            getsockoptIntMethod = osClass.getDeclaredMethod("getsockoptInt", FileDescriptor::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            
+            try {
+                setsockoptByteMethod = osClass.getDeclaredMethod("setsockoptBytes", FileDescriptor::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, ByteArray::class.java)
+            } catch (e: Throwable) {
+                // Some versions might have different name or not have it
+            }
+        } catch (e: Throwable) {
+            Log.e("TtlHelper", "Reflection failed", e)
+        }
     }
 
-    private fun getFileDescriptor(socket: Any): java.io.FileDescriptor? {
+    private fun getFileDescriptor(socket: Any): FileDescriptor? {
         return try {
             val impl = when (socket) {
                 is Socket -> getImplMethod?.invoke(socket)
-                is java.net.DatagramSocket -> getDatagramImplMethod?.invoke(socket)
+                is DatagramSocket -> getDatagramImplMethod?.invoke(socket)
                 else -> null
             }
-            if (impl != null) fdField?.get(impl) as? java.io.FileDescriptor else null
-        } catch (e: Throwable) { null }
-    }
-
-    fun setTtl(socket: Socket, ttl: Int): Boolean {
-        return try {
-            val fd = getFileDescriptor(socket)
-            if (fd != null && fd.valid()) {
-                val isIpv6 = socket.inetAddress is java.net.Inet6Address
-                if (isIpv6) {
-                    Os.setsockoptInt(fd, OsConstants.IPPROTO_IPV6, OsConstants.IPV6_UNICAST_HOPS, ttl)
-                } else {
-                    Os.setsockoptInt(fd, OsConstants.IPPROTO_IP, OsConstants.IP_TTL, ttl)
-                }
-                true
-            } else {
-                // Fallback to ParcelFileDescriptor (dup) if reflection fails
-                val pfd = ParcelFileDescriptor.fromSocket(socket)
-                try {
-                    val isIpv6 = socket.inetAddress is java.net.Inet6Address
-                    if (isIpv6) {
-                        Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IPV6, OsConstants.IPV6_UNICAST_HOPS, ttl)
-                    } else {
-                        Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IP, OsConstants.IP_TTL, ttl)
-                    }
-                    true
-                } finally {
-                    try { pfd.close() } catch (e: Throwable) {}
-                }
-            }
+            if (impl != null) {
+                fdField?.get(impl) as? FileDescriptor
+            } else null
         } catch (e: Throwable) {
-            Log.v("TtlHelper", "Failed to set TTL: ${e.message}")
-            false
+            null
         }
     }
 
-    fun setUdpTtl(socket: java.net.DatagramSocket, ttl: Int, isIpv6: Boolean = false): Boolean {
-        return try {
-            val fd = getFileDescriptor(socket)
-            if (fd != null && fd.valid()) {
-                if (isIpv6 || socket.inetAddress is java.net.Inet6Address) {
-                    Os.setsockoptInt(fd, OsConstants.IPPROTO_IPV6, OsConstants.IPV6_UNICAST_HOPS, ttl)
-                } else {
-                    Os.setsockoptInt(fd, OsConstants.IPPROTO_IP, OsConstants.IP_TTL, ttl)
-                }
-                true
-            } else {
-                val pfd = ParcelFileDescriptor.fromDatagramSocket(socket)
-                try {
-                    if (isIpv6 || socket.inetAddress is java.net.Inet6Address) {
-                        Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IPV6, OsConstants.IPV6_UNICAST_HOPS, ttl)
-                    } else {
-                        Os.setsockoptInt(pfd.fileDescriptor, OsConstants.IPPROTO_IP, OsConstants.IP_TTL, ttl)
-                    }
-                    true
-                } finally {
-                    try { pfd.close() } catch (e: Throwable) {}
-                }
-            }
-        } catch (e: Throwable) {
-            Log.v("TtlHelper", "Failed to set UDP TTL: ${e.message}")
-            false
-        }
+    private fun setsockoptInt(fd: FileDescriptor, level: Int, option: Int, value: Int) {
+        try {
+            setsockoptIntMethod?.invoke(null, fd, level, option, value)
+        } catch (e: Throwable) {}
     }
 
-    fun setNoFrag(socket: java.net.DatagramSocket, noFrag: Boolean): Boolean {
+    private fun getsockoptInt(fd: FileDescriptor, level: Int, option: Int): Int {
         return try {
-            val fd = getFileDescriptor(socket) ?: return false
-            val level = if (socket.inetAddress is java.net.Inet6Address) OsConstants.IPPROTO_IPV6 else OsConstants.IPPROTO_IP
-            val optname = if (socket.inetAddress is java.net.Inet6Address) 23 else 10 // IP_MTU_DISCOVER / IPV6_MTU_DISCOVER
-            val value = if (noFrag) 2 else 0 // IP_PMTUDISC_DO vs IP_PMTUDISC_DONT
-            Os.setsockoptInt(fd, level, optname, value)
-            true
-        } catch (e: Throwable) { false }
+            getsockoptIntMethod?.invoke(null, fd, level, option) as? Int ?: 64
+        } catch (e: Throwable) { 64 }
     }
 
     fun tuneSocket(socket: Socket) {
         try {
-            val fd = getFileDescriptor(socket) ?: return
-            if (!fd.valid()) return
-            
             socket.tcpNoDelay = true
-            
-            // Set TCP_USER_TIMEOUT (20s) - Option 18 in IPPROTO_TCP (6)
-            try { Os.setsockoptInt(fd, 6, 18, 20000) } catch (e: Throwable) {}
-            
-            // Set TCP_NOTSENT_LOWAT (16KB) - Option 25 in IPPROTO_TCP (6)
-            try { Os.setsockoptInt(fd, 6, 25, 16384) } catch (e: Throwable) {}
-            
             socket.keepAlive = true
-            try {
-                Os.setsockoptInt(fd, 6, 4, 60) // TCP_KEEPIDLE
-                Os.setsockoptInt(fd, 6, 5, 20) // TCP_KEEPINTVL
-                Os.setsockoptInt(fd, 6, 6, 3)  // TCP_KEEPCNT
-            } catch (e: Throwable) {}
-        } catch (e: Throwable) {
-            Log.v("TtlHelper", "Socket tuning failed: ${e.message}")
-        }
+            try { socket.sendBufferSize = 128 * 1024 } catch (e: Throwable) {}
+            try { socket.receiveBufferSize = 128 * 1024 } catch (e: Throwable) {}
+        } catch (e: Throwable) {}
     }
 
-    fun setWindowSize(socket: Socket, size: Int): Boolean {
-        return try {
-            val fd = getFileDescriptor(socket) ?: return false
-            Os.setsockoptInt(fd, OsConstants.SOL_SOCKET, OsConstants.SO_SNDBUF, size)
-            Os.setsockoptInt(fd, OsConstants.SOL_SOCKET, OsConstants.SO_RCVBUF, size)
-            true
-        } catch (e: Throwable) { false }
+    fun setTtl(socket: Any, ttl: Int) {
+        try {
+            val fd = getFileDescriptor(socket)
+            if (fd != null && fd.valid()) {
+                val isIpv6 = if (socket is Socket) socket.inetAddress is Inet6Address else (socket as? DatagramSocket)?.inetAddress is Inet6Address
+                // IPPROTO_IP = 0, IP_TTL = 4, IPPROTO_IPV6 = 41, IPV6_UNICAST_HOPS = 16
+                if (isIpv6) {
+                    setsockoptInt(fd, 41, 16, ttl)
+                } else {
+                    setsockoptInt(fd, 0, 4, ttl)
+                }
+            }
+        } catch (e: Throwable) {}
     }
 
-    fun setMss(socket: Socket, mss: Int): Boolean {
-        return try {
-            val fd = getFileDescriptor(socket) ?: return false
-            Os.setsockoptInt(fd, 6, 2, mss) // IPPROTO_TCP (6), TCP_MAXSEG (2)
-            true
-        } catch (e: Throwable) { false }
+    fun setUdpTtl(socket: DatagramSocket, ttl: Int, isIpv6: Boolean = false) {
+        try {
+            val fd = getFileDescriptor(socket)
+            if (fd != null && fd.valid()) {
+                if (isIpv6) {
+                    setsockoptInt(fd, 41, 16, ttl)
+                } else {
+                    setsockoptInt(fd, 0, 4, ttl)
+                }
+            }
+        } catch (e: Throwable) {}
+    }
+
+    fun setMss(socket: Socket, mss: Int) {
+        try {
+            val fd = getFileDescriptor(socket)
+            if (fd != null && fd.valid()) {
+                // IPPROTO_TCP = 6, TCP_MAXSEG = 2
+                setsockoptInt(fd, 6, 2, mss)
+            }
+        } catch (e: Throwable) {}
+    }
+
+    fun setWindowSize(socket: Any, size: Int) {
+        try {
+            if (socket is Socket) socket.receiveBufferSize = size
+            else if (socket is DatagramSocket) socket.receiveBufferSize = size
+        } catch (e: Throwable) {}
+    }
+
+    fun setNoFrag(socket: Any, noFrag: Boolean) {
+        try {
+            val fd = getFileDescriptor(socket)
+            if (fd != null && fd.valid()) {
+                // IPPROTO_IP = 0, IP_MTU_DISCOVER = 10, IP_PMTUDISC_DO = 2, IP_PMTUDISC_DONT = 0
+                setsockoptInt(fd, 0, 10, if (noFrag) 2 else 0)
+            }
+        } catch (e: Throwable) {}
     }
 
     fun getSocketTtl(socket: Socket): Int {
-        return 64 // Fallback as getsockopt is not reliably available in all environments
+        return try {
+            val fd = getFileDescriptor(socket)
+            if (fd != null && fd.valid()) {
+                val isIpv6 = socket.inetAddress is Inet6Address
+                if (isIpv6) {
+                    getsockoptInt(fd, 41, 16)
+                } else {
+                    getsockoptInt(fd, 0, 4)
+                }
+            } else 64
+        } catch (e: Throwable) { 64 }
     }
 
     fun setLowTtlTemporary(socket: Socket, lowTtl: Int, delayMs: Long) {
-        val originalTtl = 64
+        val originalTtl = getSocketTtl(socket)
         setTtl(socket, lowTtl)
-        java.util.concurrent.Executors.newSingleThreadScheduledExecutor().schedule({
+        ProxyDispatcher.mainScope.launch {
+            delay(delayMs)
             setTtl(socket, originalTtl)
-        }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
     }
 }

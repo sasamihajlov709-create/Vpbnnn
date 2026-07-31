@@ -346,14 +346,24 @@ TtlHelper.setTtl(socket, 64)
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         val socket = Socket()
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
         try {
             try { vpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.tcpNoDelay = true
             socket.connect(InetSocketAddress(dnsIp, 53), 3000)
             socket.soTimeout = 3000
-            val dos = DataOutputStream(socket.getOutputStream())
-            dos.writeShort(query.size)
-            dos.write(query)
-            dos.flush()
+            val output = socket.getOutputStream()
+            
+            val fullQuery = ByteArray(query.size + 2)
+            fullQuery[0] = (query.size shr 8).toByte()
+            fullQuery[1] = (query.size and 0xFF).toByte()
+            System.arraycopy(query, 0, fullQuery, 2, query.size)
+            
+            // Fragment the TCP stream for the DNS query
+            val split = rnd.nextInt(2, fullQuery.size - 1)
+            output.write(fullQuery, 0, split); output.flush()
+            delay(rnd.nextLong(1, 5))
+            output.write(fullQuery, split, fullQuery.size - split); output.flush()
             
             val dis = DataInputStream(socket.getInputStream())
             val len = dis.readUnsignedShort()

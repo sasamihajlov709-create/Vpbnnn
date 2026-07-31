@@ -18,4 +18,6 @@ object ProxyDispatcher {
     val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "PinkProxyScheduler").apply { isDaemon = true }
     }.asCoroutineDispatcher()
+
+    val mainScope = kotlinx.coroutines.CoroutineScope(io + kotlinx.coroutines.SupervisorJob())
 }

@@ -212,6 +212,9 @@ object UdpTransportHandler {
                             val payloadLen = len - headerLen
                             ProxyStats.updateBytes(payloadLen.toLong())
                             
+                            // Schedule TTL probe for new UDP targets
+                            AutoTtlProber.scheduleProbe(targetHost, targetPortNum, vpnService, scope)
+
                             val strategy = BypassConfig.getBestStrategyForHost(targetHost)
                             if (targetPortNum == 53 || strategy == BypassStrategy.DNS_OVER_TCP_FORCE) {
                                 val query = DnsUtils.parseDnsQName(data, headerLen, payloadLen)

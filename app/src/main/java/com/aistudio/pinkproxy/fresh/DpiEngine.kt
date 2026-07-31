@@ -191,6 +191,13 @@ object DpiEngine {
                     else -> {}
                 }
                 
+                // Boost TTL-based strategies if AutoTtlProber has data
+                if (AutoTtlProber.getDiscoveredTtl("global") != null) {
+                    if (strat == BypassStrategy.TCP_RETRANS_FAKE || strat == BypassStrategy.TCP_OVERLAP_SKEW || strat == BypassStrategy.TCP_WINDOW_SHRINK) {
+                        s += 80
+                    }
+                }
+                
                 val latency = strategyLatency[strat]?.get() ?: 200L
                 val latencyPenalty = (latency / 15).coerceAtMost(40).toDouble()
                 s - latencyPenalty + rnd.nextInt(-10, 10)

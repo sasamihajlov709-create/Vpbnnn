@@ -299,6 +299,9 @@ class PinkVpnService : VpnService() {
                 return
             }
 
+            // Dynamically discover optimal TTL for DPI bypass
+            AutoTtlProber.startProbing(serviceScope, this)
+
             try {
                 wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24h max
             } catch (e: Throwable) {}

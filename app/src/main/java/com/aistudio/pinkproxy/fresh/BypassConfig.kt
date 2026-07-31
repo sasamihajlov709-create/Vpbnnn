@@ -1468,14 +1468,15 @@ object BypassConfig {
             BypassStrategy.TCP_RETRANS_FAKE -> {
                 try {
                     val split = (length / 2).coerceAtLeast(1)
+                    val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 4
                     // 1. Send first half
                     output.write(data, 0, split); output.flush()
                     delay(rnd.nextLong(10, 30))
                     
                     // 2. Send FAKE second half with low TTL (to confuse DPI but not reach server)
-                    val fakeTail = FakePacketHelper.buildFakeTcpKeepAlive()
+                    val fakeTail = FakePacketHelper.buildTlsHeartbeat()
                     val oldTtl = TtlHelper.getSocketTtl(socket)
-                    TtlHelper.setTtl(socket, rnd.nextInt(3, 7))
+                    TtlHelper.setTtl(socket, discoveredTtl)
                     output.write(fakeTail); output.flush()
                     delay(rnd.nextLong(20, 50))
                     
@@ -1488,14 +1489,15 @@ object BypassConfig {
                 try {
                     val offset = TlsParser.findSniOffset(data, length, host)
                     val split = if (offset != -1) offset + 2 else config.frag1.coerceIn(1, length - 1)
+                    val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
                     
                     // 1. Part 1 (Real)
                     output.write(data, 0, split); output.flush()
                     
                     // 2. Overlap with Fake (Low TTL) to poison DPI state
-                    val fake = FakePacketHelper.buildFakeTcpKeepAlive()
+                    val fake = FakePacketHelper.buildTlsHeartbeat()
                     val oldTtl = TtlHelper.getSocketTtl(socket)
-                    TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                    TtlHelper.setTtl(socket, discoveredTtl)
                     output.write(fake); output.flush()
                     
                     // 3. Part 2 (Real)
