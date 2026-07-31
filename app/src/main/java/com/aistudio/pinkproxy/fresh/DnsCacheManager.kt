@@ -10,6 +10,7 @@ object DnsCacheManager {
     private const val MAX_DNS_CACHE_SIZE = 1000
     
     private val dnsCache = ConcurrentHashMap<String, Pair<List<InetAddress>, Long>>() // Long is expiry time
+    private val detailedDnsCache = ConcurrentHashMap<String, Pair<List<DnsPacketEngine.DnsRecord>, Long>>()
     private val echSupportCache = ConcurrentHashMap<String, Boolean>()
     private val ipHeatmap = ConcurrentHashMap<String, Int>()
     private val ipRtt = ConcurrentHashMap<String, Long>()
@@ -112,11 +113,22 @@ object DnsCacheManager {
         }
     }
 
+    fun getCachedDetailed(host: String): List<DnsPacketEngine.DnsRecord>? {
+        val now = System.currentTimeMillis()
+        detailedDnsCache[host]?.let { (records, expiry) ->
+            if (now < expiry) return records
+            else detailedDnsCache.remove(host)
+        }
+        return null
+    }
+
     fun putDetailed(host: String, records: List<DnsPacketEngine.DnsRecord>) {
         if (records.isEmpty()) return
         val addresses = records.map { it.address }
         val minTtl = records.minOf { it.ttlSeconds }.coerceIn(30, 3600) * 1000L
+        val expiry = System.currentTimeMillis() + minTtl
         put(host, addresses, minTtl)
+        detailedDnsCache[host] = records to expiry
     }
 
     fun getStaticIps(host: String): List<InetAddress>? {

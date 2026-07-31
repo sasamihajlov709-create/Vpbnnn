@@ -209,9 +209,26 @@ object DnsPacketEngine {
                     bb.get(rData)
                     records.add(DnsRecord(InetAddress.getByAddress(rData), ttl, type))
                 } else if (type == 65) { // HTTPS Record
-                    // We don't parse full SvcParam yet, but we record the presence
-                    bb.position(bb.position() + rdLen)
-                    records.add(DnsRecord(InetAddress.getByName("0.0.0.0"), ttl, 65))
+                    val startPos = bb.position()
+                    try {
+                        bb.position(bb.position() + 2) // Skip SvcPriority
+                        skipName(bb) // Skip TargetName
+                        
+                        var paramsProcessed = 0
+                        while (bb.position() < startPos + rdLen && paramsProcessed < 20) {
+                            val paramKey = bb.short.toInt() and 0xFFFF
+                            val paramLen = bb.short.toInt() and 0xFFFF
+                            if (paramKey == 5) { // ECH (Encrypted Client Hello)
+                                records.add(DnsRecord(InetAddress.getByName("0.0.0.1"), ttl, 65)) // Use special IP as flag
+                                bb.position(bb.position() + paramLen)
+                            } else {
+                                bb.position(bb.position() + paramLen)
+                            }
+                            paramsProcessed++
+                        }
+                    } catch (e: Throwable) {
+                        bb.position(startPos + rdLen)
+                    }
                 } else {
                     bb.position(bb.position() + rdLen)
                 }

@@ -28,4 +28,23 @@ object HttpParser {
         val hostLine = s.lines().find { it.startsWith("Host:", true) } ?: return -1
         return s.indexOf(hostLine)
     }
+
+    fun mangleHostHeader(data: ByteArray, length: Int, mode: Int): ByteArray {
+        val s = String(data, 0, length, Charsets.US_ASCII)
+        val lines = s.split("\r\n").toMutableList()
+        val hostIndex = lines.indexOfFirst { it.startsWith("Host:", true) }
+        if (hostIndex == -1) return data
+
+        val originalHostLine = lines[hostIndex]
+        val hostValue = originalHostLine.substringAfter(":").trim()
+        
+        lines[hostIndex] = when (mode) {
+            1 -> "hOsT: $hostValue" // Mixed case header name
+            2 -> "Host:  $hostValue" // Double space
+            3 -> "Host:\t$hostValue" // Tab instead of space
+            else -> originalHostLine
+        }
+        
+        return lines.joinToString("\r\n").toByteArray(Charsets.US_ASCII)
+    }
 }

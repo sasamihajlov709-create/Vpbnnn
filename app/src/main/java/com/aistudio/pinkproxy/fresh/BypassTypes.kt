@@ -222,6 +222,9 @@ enum class BypassStrategy(
     UDP_QUIC_JITTER_PAD(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
     TLS_SNI_FRAGMENT(StrategyFamily.FRAGMENTATION, 4, 3, StrategyGroup.HEAVY),
     TCP_TLS_SESSION_DESYNC(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
+    TCP_WINDOW_SIZE_OSCILLATION(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
+    HTTP_HEADER_MANGLE(StrategyFamily.HTTP, 2, 1, StrategyGroup.LIGHT),
+    HTTP_LINE_SPLIT(StrategyFamily.HTTP, 3, 2, StrategyGroup.MEDIUM),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -243,12 +246,18 @@ enum class DpiType {
     SSL_STALL
 }
 
+data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())
+
 object ProxyStats {
+    private val _dpiEventHistory = MutableStateFlow(emptyList<DpiEvent>())
+    val dpiEventHistory: StateFlow<List<DpiEvent>> = _dpiEventHistory.asStateFlow()
+
     private val _currentDpiType = MutableStateFlow(DpiType.NONE)
     val currentDpiType: StateFlow<DpiType> = _currentDpiType.asStateFlow()
 
     fun recordDpiEvent(type: DpiType) {
         _currentDpiType.value = type
+        _dpiEventHistory.update { (it + DpiEvent(type)).takeLast(50) }
         dpiEvents[type] = (dpiEvents[type] ?: 0) + 1
         VpnRuntimeState.updateDpi(type.name)
         recordCensorshipEvent(true)

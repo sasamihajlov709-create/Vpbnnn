@@ -44,6 +44,15 @@ object TcpTransportHandler {
             var shouldRaceImmediately = censorship > 45 || isHostBlocked || HostClassifier.classify(targetHost) != HostCategory.OTHER
 
             var strategy = BypassConfig.getBestStrategyForHost(targetHost)
+            
+            // Check for ECH presence and adjust strategy
+            val dnsRecords = RobustResolver.getCachedDetailed(targetHost)
+            val hasEch = dnsRecords?.any { it.type == 65 && it.address.hostAddress == "0.0.0.1" } ?: false
+            if (hasEch && censorship > 30) {
+                strategy = BypassStrategy.ECH_FRAG
+                Log.d("TcpTransport", "ECH detected for $targetHost, applying ECH_FRAG")
+            }
+
             var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
             // Dynamic adjustment of maxRetries based on real-time success rate

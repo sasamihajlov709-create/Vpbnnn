@@ -187,6 +187,12 @@ object BypassConfig {
     }
 
     fun getBestStrategyForHost(host: String): BypassStrategy {
+        val panicMode = ProxyStats.dpiEventHistory.value.filter { it.type == DpiType.TCP_RESET || it.type == DpiType.CONNECTION_TIMEOUT }
+            .count { System.currentTimeMillis() - it.timestamp < 10000 } > 5
+        if (panicMode) {
+            return BypassStrategy.values().filter { it.group == StrategyGroup.EXTREME }.random()
+        }
+
         ensureMemoryEfficiency()
         if (!isAutoTuning) return _strategy.value
         
@@ -1334,6 +1340,58 @@ object BypassConfig {
                     output.write(finalData, split, finalLen - split); output.flush()
                 } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
             }
+            BypassStrategy.TCP_WINDOW_SIZE_OSCILLATION -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    val chunks = rnd.nextInt(3, 6)
+                    var pos = 0
+                    for (i in 0 until chunks) {
+                        val remaining = finalLen - pos
+                        if (remaining <= 0) break
+                        val sz = (remaining / (chunks - i)).coerceAtLeast(1)
+                        socket.receiveBufferSize = if (i % 2 == 0) rnd.nextInt(128, 512) else rnd.nextInt(1024, 8192)
+                        output.write(finalData, pos, sz); output.flush()
+                        pos += sz
+                        delay(rnd.nextLong(2, 10))
+                    }
+                    socket.receiveBufferSize = originalSize
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+            }
+            BypassStrategy.HTTP_HEADER_MANGLE -> {
+                if (isProbableHttp(finalData, finalLen)) {
+                    val mangled = HttpParser.mangleHostHeader(finalData, finalLen, rnd.nextInt(1, 4))
+                    output.write(mangled); output.flush()
+                } else {
+                    output.write(finalData, 0, finalLen); output.flush()
+                }
+            }
+            BypassStrategy.TCP_TLS_SESSION_DESYNC -> {
+                try {
+                    val offset = TlsParser.findSniOffset(finalData, finalLen, host)
+                    if (offset != -1) {
+                        // Send fake Session ID extension to desync DPI session tracking
+                        val fakeSessionId = ByteArray(32) { rnd.nextInt(256).toByte() }
+                        val mod = FakePacketHelper.injectExtension(finalData, finalLen, 0x0023, fakeSessionId) // Ticket extension
+                        output.write(mod, 0, offset + 2); output.flush(); delay(rnd.nextLong(5, 15))
+                        output.write(mod, offset + 2, mod.size - (offset + 2)); output.flush()
+                    } else {
+                        output.write(finalData, 0, finalLen); output.flush()
+                    }
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+            }
+            BypassStrategy.TLS_SNI_FRAGMENT -> {
+                val offset = TlsParser.findSniOffset(finalData, finalLen, host)
+                if (offset != -1 && host.length > 2) {
+                    val split1 = offset + 1
+                    val split2 = offset + host.length - 1
+                    output.write(finalData, 0, split1); output.flush(); delay(rnd.nextLong(1, 5))
+                    output.write(finalData, split1, split2 - split1); output.flush(); delay(rnd.nextLong(1, 5))
+                    output.write(finalData, split2, finalLen - split2); output.flush()
+                } else {
+                    output.write(finalData, 0, finalLen / 2); output.flush(); delay(2)
+                    output.write(finalData, finalLen / 2, finalLen - (finalLen / 2)); output.flush()
+                }
+            }
             BypassStrategy.TCP_SYN_FLOOD_FAKE -> {
                 repeat(rnd.nextInt(2, 5)) {
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
@@ -1474,6 +1532,31 @@ object BypassConfig {
                 } catch (e: Throwable) {
                     output.write(data, 0, length); output.flush()
                 }
+            }
+            BypassStrategy.ECH_FRAG -> {
+                // ECH detection implies we need extreme fragmentation for the first part of ClientHello
+                // to hide the ECH extension and Inner ClientHello
+                val rnd = java.util.concurrent.ThreadLocalRandom.current()
+                val split1 = rnd.nextInt(2, 5)
+                val split2 = rnd.nextInt(32, 64)
+                
+                output.write(data, 0, split1); output.flush()
+                delay(rnd.nextLong(1, 5))
+                output.write(data, split1, split2 - split1); output.flush()
+                delay(rnd.nextLong(1, 10))
+                
+                // Inject fake segment between fragments
+                if (ProxyStats.censorshipIntensity.value > 60) {
+                    val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 4
+                    val oldTtl = TtlHelper.getSocketTtl(socket)
+                    TtlHelper.setTtl(socket, discoveredTtl)
+                    val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
+                    output.write(fake); output.flush()
+                    delay(rnd.nextLong(5, 15))
+                    TtlHelper.setTtl(socket, oldTtl)
+                }
+                
+                output.write(data, split2, length - split2); output.flush()
             }
             BypassStrategy.TCP_RETRANS_FAKE -> {
                 try {
@@ -2939,6 +3022,34 @@ TtlHelper.setTtl(socket, 64)
                 delay(config.delay1)
                 try { socket.receiveBufferSize = 65536 } catch (e: Throwable) {}
                 output.write(finalData, split, finalLen - split); output.flush()
+            }
+            BypassStrategy.HTTP_LINE_SPLIT -> {
+                try {
+                    val s = String(data, 0, length, Charsets.US_ASCII)
+                    val lines = s.split("\r\n")
+                    if (lines.isNotEmpty() && (lines[0].startsWith("GET") || lines[0].startsWith("POST"))) {
+                        val reqLine = lines[0]
+                        if (reqLine.length > 5) {
+                            val split = rnd.nextInt(1, 4)
+                            output.write(reqLine.substring(0, split).toByteArray(Charsets.US_ASCII))
+                            output.flush()
+                            delay(rnd.nextLong(1, 5))
+                            output.write(reqLine.substring(split).toByteArray(Charsets.US_ASCII))
+                            output.write("\r\n".toByteArray(Charsets.US_ASCII))
+                            output.flush()
+                            
+                            if (lines.size > 1) {
+                                val rest = lines.drop(1).joinToString("\r\n")
+                                output.write(rest.toByteArray(Charsets.US_ASCII))
+                                output.flush()
+                            }
+                        } else {
+                            output.write(data, 0, length); output.flush()
+                        }
+                    } else {
+                        output.write(data, 0, length); output.flush()
+                    }
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.DIRECT -> {
                 output.write(data, 0, length); output.flush()

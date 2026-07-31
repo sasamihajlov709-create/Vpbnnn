@@ -244,6 +244,41 @@ object FakePacketHelper {
         return data
     }
 
+    fun buildQuicVersionChaos(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val baos = ByteArrayOutputStream()
+        val dos = DataOutputStream(baos)
+        
+        // Randomize Long Header type (0xC0 to 0xFF)
+        dos.writeByte(0xC0 or rnd.nextInt(64))
+        
+        // Random version (not necessarily a real one)
+        val versions = listOf(
+            byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte()), // QUIC v1
+            byteArrayOf(0x51.toByte(), 0x30.toByte(), 0x34.toByte(), 0x33.toByte()), // Q043
+            byteArrayOf(0x51.toByte(), 0x30.toByte(), 0x34.toByte(), 0x36.toByte()), // Q046
+            byteArrayOf(0x51.toByte(), 0x30.toByte(), 0x35.toByte(), 0x30.toByte()), // Q050
+            byteArrayOf(0xaa.toByte(), 0xaa.toByte(), 0xaa.toByte(), 0xaa.toByte()), // Reserved
+            byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte())  // Version Negotiation
+        )
+        val ver = versions.random()
+        dos.write(ver)
+        
+        // Random IDs
+        val dcidLen = rnd.nextInt(8, 21)
+        dos.writeByte(dcidLen)
+        dos.write(ByteArray(dcidLen).apply { rnd.nextBytes(this) })
+        
+        val scidLen = rnd.nextInt(8, 21)
+        dos.writeByte(scidLen)
+        dos.write(ByteArray(scidLen).apply { rnd.nextBytes(this) })
+        
+        // Noise
+        dos.write(buildUdpNoise(rnd.nextInt(10, 50)))
+        
+        return baos.toByteArray()
+    }
+
     fun buildStunBindingRequest(): ByteArray {
         val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos); val rnd = ThreadLocalRandom.current()
         dos.writeShort(0x0001); dos.writeShort(0); dos.writeInt(0x2112A442)
@@ -725,12 +760,23 @@ object FakePacketHelper {
     }
 
     fun splitTlsRecords(data: ByteArray, length: Int, splitPos: Int): ByteArray {
-        if (length < 10) return data.copyOf(length)
-        val res = ByteArray(length + 5)
-        System.arraycopy(data, 0, res, 0, splitPos)
-        System.arraycopy(data, 0, res, splitPos, 5)
-        System.arraycopy(data, splitPos, res, splitPos + 5, length - splitPos)
-        return res
+        if (length < 5 || splitPos < 5 || splitPos >= length) return data.copyOf(length)
+        try {
+            val baos = java.io.ByteArrayOutputStream()
+            // First record
+            baos.write(data[0].toInt()); baos.write(data[1].toInt()); baos.write(data[2].toInt())
+            val len1 = splitPos - 5
+            baos.write((len1 shr 8) and 0xFF); baos.write(len1 and 0xFF)
+            baos.write(data, 5, len1)
+            
+            // Second record
+            baos.write(data[0].toInt()); baos.write(data[1].toInt()); baos.write(data[2].toInt())
+            val len2 = length - splitPos
+            baos.write((len2 shr 8) and 0xFF); baos.write(len2 and 0xFF)
+            baos.write(data, splitPos, len2)
+            
+            return baos.toByteArray()
+        } catch (e: Exception) { return data.copyOf(length) }
     }
 
     fun buildQuicJitterPad(targetSize: Int): ByteArray {

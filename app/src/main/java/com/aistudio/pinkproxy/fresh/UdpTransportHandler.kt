@@ -423,6 +423,13 @@ object UdpTransportHandler {
             val fakeInitial = FakePacketHelper.buildQuicInitialExtremePadding()
             TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetInet is java.net.Inet6Address)
             socket.send(DatagramPacket(fakeInitial, fakeInitial.size, targetInet, targetPort))
+            
+            // Added: Version Negotiation chaos
+            if (intensity > 85) {
+                val chaos = FakePacketHelper.buildQuicVersionChaos()
+                socket.send(DatagramPacket(chaos, chaos.size, targetInet, targetPort))
+            }
+
             delay(1)
             TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
         }
@@ -449,6 +456,21 @@ object UdpTransportHandler {
         if (intensity > 35) {
             val jitter = rnd.nextLong(0, (intensity / 6).toLong() + 3)
             if (jitter > 0) delay(jitter)
+            
+            // Pad UDP packets to prevent size fingerprinting
+            if (intensity > 65 && length < 1200 && !isDns) {
+                val targetSize = if (length < 512) 512 else if (length < 1024) 1024 else 1280
+                val paddedData = ByteArray(targetSize)
+                System.arraycopy(payload, offset, paddedData, 0, length)
+                // We don't really need to fill with noise if it's just for size, but some DPIs check entropy
+                if (intensity > 85) {
+                    val noise = ByteArray(targetSize - length)
+                    rnd.nextBytes(noise)
+                    System.arraycopy(noise, 0, paddedData, length, noise.size)
+                }
+                socket.send(DatagramPacket(paddedData, targetSize, targetInet, targetPort))
+                return
+            }
         }
         
         // 4. Packet Stuttering: for new sessions, delay initial packets slightly more
@@ -463,16 +485,35 @@ object UdpTransportHandler {
             TtlHelper.setUdpTtl(socket, randomTtl, isIpv6)
         }
 
-        // 5. Packet-Level Mangle: Fragmentation and Padding
+        // 5. Packet-Level Mangle: Fragmentation, Padding and Reordering
         if (length > 200 && !isDns && intensity > 40) {
-            val shouldFrag = config.strategy == BypassStrategy.UDP_DATA_FRAG || (intensity > 70 && rnd.nextInt(100) < 15)
+            val shouldFrag = config.strategy == BypassStrategy.UDP_DATA_FRAG || (intensity > 60 && rnd.nextInt(100) < 25)
             if (shouldFrag) {
                 val split = rnd.nextInt(64, length - 64)
-                // First part
-                socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
-                if (intensity > 60) delay(rnd.nextLong(1, 4))
-                // Second part
-                socket.send(DatagramPacket(payload, offset + split, length - split, targetInet, targetPort))
+                val shouldReorder = intensity > 80 && rnd.nextInt(100) < 30
+                
+                if (shouldReorder) {
+                    // Send second part first
+                    socket.send(DatagramPacket(payload, offset + split, length - split, targetInet, targetPort))
+                    delay(rnd.nextLong(1, 5))
+                    socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
+                } else {
+                    // First part
+                    socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
+                    if (intensity > 60) delay(rnd.nextLong(1, 4))
+                    // Second part
+                    socket.send(DatagramPacket(payload, offset + split, length - split, targetInet, targetPort))
+                }
+                
+                // Optional shadow packet to confuse DPI
+                if (intensity > 85 && rnd.nextInt(100) < 15) {
+                    val shadow = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 40))
+                    val isIpv6 = targetInet is java.net.Inet6Address
+                    try {
+                        TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
+                        socket.send(DatagramPacket(shadow, shadow.size, targetInet, targetPort))
+                    } catch (e: Throwable) {}
+                }
                 return
             }
         }

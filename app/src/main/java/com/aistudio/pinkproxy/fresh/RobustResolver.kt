@@ -40,6 +40,7 @@ object RobustResolver {
     }
 
     fun getCached(host: String): List<InetAddress>? = DnsCacheManager.getCached(host)
+    fun getCachedDetailed(host: String): List<DnsPacketEngine.DnsRecord>? = DnsCacheManager.getCachedDetailed(host)
 
     fun clearCache() = DnsCacheManager.clear()
     
