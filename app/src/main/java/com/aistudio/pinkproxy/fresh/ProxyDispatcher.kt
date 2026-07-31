@@ -6,9 +6,7 @@ import java.util.concurrent.Executors
 object ProxyDispatcher {
     @Volatile var context: android.content.Context? = null
 
-    private val coreCount = Runtime.getRuntime().availableProcessors()
-    private val poolSize = (coreCount * 4).coerceIn(16, 64)
-    val io = Executors.newFixedThreadPool(poolSize) { r ->
+    val io = Executors.newCachedThreadPool() { r ->
         Thread(r, "PinkProxyWorker").apply { 
             isDaemon = true
             priority = Thread.MAX_PRIORITY - 1
