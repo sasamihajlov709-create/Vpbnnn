@@ -2192,60 +2192,16 @@ TtlHelper.setTtl(socket, 64)
                 output.write(mod2); output.flush()
             }
             BypassStrategy.CHAOS -> {
-                val rndVal = rnd.nextInt(6)
-                when (rndVal) {
-                    0 -> { // Extreme Multi-fragmentation
-                        var pos = 0
-                        while (pos < finalLen) {
-                            val chunk = rnd.nextInt(1, 3).coerceAtMost(finalLen - pos)
-                            output.write(finalData, pos, chunk); output.flush()
-                            pos += chunk
-                            if (rnd.nextBoolean()) delay(1)
-                        }
-                    }
-                    1 -> { // OOB + Window Oscillation
-                        try {
-                            socket.sendUrgentData(rnd.nextInt(256))
-                            val origSize = socket.receiveBufferSize
-                            socket.receiveBufferSize = rnd.nextInt(1, 64)
-                            output.write(finalData, 0, finalLen / 2); output.flush()
-                            delay(2)
-                            socket.receiveBufferSize = origSize
-                            output.write(finalData, finalLen / 2, finalLen - (finalLen / 2)); output.flush()
-                        } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
-                    }
-                    2 -> { // TLS Mangle + Padding
-                        val mod = FakePacketHelper.shuffleTlsExtensions(finalData, finalLen)
-                        val mod2 = FakePacketHelper.injectExtension(mod, mod.size, 0x0015, FakePacketHelper.buildUdpNoise(rnd.nextInt(100, 500)))
-                        output.write(mod2); output.flush()
-                    }
-                    3 -> { // Fake RETRANS sequence
-                        try {
-                            val split = finalLen / 2
-                            output.write(finalData, 0, split); output.flush()
-                            val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
-                            TtlHelper.setTtl(socket, discoveredTtl)
-                            output.write(FakePacketHelper.buildUdpNoise(finalLen - split))
-                            TtlHelper.setTtl(socket, 64)
-                            output.write(finalData, split, finalLen - split); output.flush()
-                        } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
-                    }
-                    4 -> { // HTTP Smuggling (if HTTP)
-                        if (HttpParser.isHttpRequest(finalData, finalLen)) {
-                            val smuggled = HttpParser.mangleHostHeader(finalData, finalLen, rnd.nextInt(1, 9))
-                            output.write(smuggled); output.flush()
-                        } else {
-                            output.write(finalData, 0, finalLen); output.flush()
-                        }
-                    }
-                    else -> {
-                        // Hybrid Split
-                        val s1 = rnd.nextInt(1, finalLen.coerceAtLeast(2))
-                        output.write(finalData, 0, s1); output.flush()
-                        delay(rnd.nextLong(1, 10))
-                        output.write(finalData, s1, finalLen - s1); output.flush()
-                    }
+                // Adaptive Intelligent Chaos: picks best sub-strategies based on category
+                val subStrategies = when (HostClassifier.classify(host)) {
+                    HostCategory.STREAMING -> listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TCP_WINDOW_SHRINK, BypassStrategy.FRAGMENT_MULTI)
+                    HostCategory.SOCIAL -> listOf(BypassStrategy.TLS_SNI_SKEW_ADVANCED, BypassStrategy.TCP_RETRANS_FAKE, BypassStrategy.OOB_DESYNC)
+                    else -> listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_GREASE, BypassStrategy.TCP_URGENT_SKEW)
                 }
+                
+                val picked = subStrategies.random()
+                // Use recursion to apply the picked sub-strategy within chaos context
+                applyBypass(socket, output, data, length, config.copy(strategy = picked), host)
             }
             BypassStrategy.TLS_MULTI_FRAG, BypassStrategy.FRAGMENT_MULTI -> {
                 val count = rnd.nextInt(6, 12)
@@ -2309,6 +2265,38 @@ TtlHelper.setTtl(socket, 64)
                 } else {
                     output.write(data, split, remaining); output.flush()
                 }
+            }
+            BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID, BypassStrategy.BYEBYEDPI_EXTREME -> {
+                val split = config.frag1.coerceIn(1, length - 1)
+                val fake = FakePacketHelper.buildHandshakeCombo(rnd.nextInt(32, 128))
+                TtlHelper.setTtl(socket, 2)
+                output.write(fake); output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, split); output.flush()
+                try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                delay(config.delay2)
+                output.write(data, split, length - split); output.flush()
+            }
+            BypassStrategy.ZAPRET_EXTREME -> {
+                val split1 = (length / 3).coerceAtLeast(1)
+                val split2 = (2 * length / 3).coerceAtLeast(split1 + 1).coerceAtMost(length - 1)
+                val fake1 = FakePacketHelper.buildHandshakeCombo(64)
+                TtlHelper.setTtl(socket, 2)
+                try { TtlHelper.setWindowSize(socket, 0) } catch(e: Throwable) {}
+                output.write(fake1); output.flush()
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 64)
+                try { TtlHelper.setWindowSize(socket, 16384) } catch(e: Throwable) {}
+                output.write(data, 0, split1); output.flush()
+                try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                delay(config.delay1)
+                TtlHelper.setTtl(socket, 3)
+                output.write(data, split1, split2 - split1); output.flush()
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, split1, split2 - split1); output.flush()
+                delay(config.delay2)
+                output.write(data, split2, length - split2); output.flush()
             }
             BypassStrategy.HTTP_CHUNKED_FAKE -> {
                 if (isProbableHttp(data, length)) {

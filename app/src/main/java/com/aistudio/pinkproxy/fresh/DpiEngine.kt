@@ -318,26 +318,40 @@ object DpiEngine {
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
         ProxyStats.updateCensorshipIntensity(100 - globalSuccessRate)
         
-        // Strategy Aging: trend back to baseline to allow re-evaluation of previously failed strategies
+        // Auto-Panic Mode trigger
+        if (globalSuccessRate < 20 && totalSuccess + totalFailure > 15) {
+             if (!BypassConfig.isPanicModeFlow.value) {
+                 BypassConfig.setPanicMode(true)
+                 Log.e("DpiEngine", "AUTO-PANIC TRIGGERED: Success rate too low ($globalSuccessRate%)")
+             }
+        } else if (globalSuccessRate > 60 && BypassConfig.isPanicModeFlow.value) {
+             BypassConfig.setPanicMode(false)
+             Log.i("DpiEngine", "Panic mode deactivated: Success rate recovered to $globalSuccessRate%")
+        }
+
+        // Strategy Aging: trend back to baseline to allow re-evaluation
         strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
                 val s = score.get()
                 if (s > 100) {
-                    val decay = if (ProxyStats.censorshipIntensity.value > 80) 0.95 else 0.85
+                    val decay = if (ProxyStats.censorshipIntensity.value > 85) 0.98 else 0.90
                     score.set((s * decay + 100 * (1.0 - decay)).toInt())
                 } else if (s < 100) {
-                    score.set((s * 1.05 + 5).toInt().coerceAtMost(100))
+                    val recovery = if (ProxyStats.censorshipIntensity.value < 30) 1.1 else 1.05
+                    score.set((s * recovery + 2).toInt().coerceAtMost(100))
                 }
-                
-                if (s < 5) score.set(50) // Don't let it stay at zero forever
+                if (s < 5) score.set(30) 
             }
         }
+        
+        // Adjust fragmentation and delays globally based on intensity
+        BypassConfig.frag1 = getRecommendedFragSize()
+        BypassConfig.delay1 = getRecommendedDelay()
         
         pruneStrategies()
         saveScores(ProxyDispatcher.context!!)
 
-        // Reset history periodically to stay adaptive to network changes
-        if (totalSuccess + totalFailure > 300) {
+        if (totalSuccess + totalFailure > 500) {
             successHistory.clear()
             failureHistory.clear()
         }
