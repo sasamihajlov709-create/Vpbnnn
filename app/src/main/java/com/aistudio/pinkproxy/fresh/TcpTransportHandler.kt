@@ -179,7 +179,24 @@ object TcpTransportHandler {
                     
                     if (delta < 32) { // Less than 32 bytes in 10s is very suspicious
                         silentPeriods++
-                        if (silentPeriods >= 3) { // 30s of silence
+                        
+                        // "Kick" the connection if it's stalled
+                        if (silentPeriods >= 2) {
+                            try {
+                                val rnd = ThreadLocalRandom.current()
+                                // Send OOB byte to trigger response or wake up state
+                                remoteSocket.sendUrgentData(rnd.nextInt(256))
+                                val intensity = ProxyStats.censorshipIntensity.value
+                                if (intensity > 85) {
+                                     // Also send a tiny keep-alive probe
+                                     remoteOut.write(FakePacketHelper.buildFakeTcpKeepAlive())
+                                     remoteOut.flush()
+                                }
+                                Log.v("TcpTransport", "Kicked stalled session: $targetHost")
+                            } catch (e: Throwable) {}
+                        }
+
+                        if (silentPeriods >= 4) { // 40s of silence
                              BypassConfig.recordFailure(strategy, targetHost)
                              if (BypassConfig.isHostCensored(targetHost)) {
                                  ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)

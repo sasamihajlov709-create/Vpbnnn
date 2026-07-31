@@ -233,7 +233,9 @@ enum class DpiType {
     CONNECTION_TIMEOUT,
     HTTP_BLOCK,
     TLS_HANDSHAKE_TIMEOUT,
-    BLACKHOLE
+    BLACKHOLE,
+    TCP_STALL,
+    SSL_STALL
 }
 
 object ProxyStats {

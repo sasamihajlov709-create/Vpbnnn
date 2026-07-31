@@ -94,6 +94,17 @@ object DpiEngine {
                 boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
                 boostStrategyFamily(StrategyFamily.TCP, null)
             }
+            DpiType.TCP_STALL, DpiType.SSL_STALL -> {
+                boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+                boostStrategyFamily(StrategyFamily.TCP, null)
+                boostStrategyFamily(StrategyFamily.TIMING, null)
+                // When stalling, EXTREME strategies are usually needed to break the block
+                BypassStrategy.entries.forEach { strat ->
+                    if (strat.group == StrategyGroup.EXTREME) {
+                        recordResult(strat, true, HostCategory.OTHER) // Soft boost
+                    }
+                }
+            }
             else -> {}
         }
     }

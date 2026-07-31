@@ -1306,20 +1306,25 @@ object BypassConfig {
         }
 
         when (strategy) {
-            BypassStrategy.TCP_WINDOW_SHRINK -> {
-                TtlHelper.setWindowSize(socket, rnd.nextInt(16, 128))
-                output.write(finalData, 0, finalLen); output.flush()
-            }
-            BypassStrategy.TCP_WINDOW_SIZE_JITTER -> {
-                TtlHelper.setWindowSize(socket, rnd.nextInt(256, 1460))
-                output.write(finalData, 0, finalLen); output.flush()
-            }
             BypassStrategy.TCP_SYN_FLOOD_FAKE -> {
                 repeat(rnd.nextInt(2, 5)) {
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     delay(rnd.nextLong(1, 5))
                 }
                 output.write(finalData, 0, finalLen); output.flush()
+            }
+            BypassStrategy.TCP_OOB_SEGMENTATION -> {
+                val chunks = rnd.nextInt(3, 7)
+                var pos = 0
+                while (pos < finalLen) {
+                    val remaining = finalLen - pos
+                    if (remaining <= 0) break
+                    val sz = (remaining / (chunks - (pos * chunks / finalLen).coerceAtMost(chunks - 1))).coerceAtLeast(1)
+                    output.write(finalData, pos, sz); output.flush()
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                    pos += sz
+                    if (pos < finalLen) delay(rnd.nextLong(1, 10))
+                }
             }
             BypassStrategy.TLS_CLIENT_HELLO_MULTI_PAD -> {
                 val mod = FakePacketHelper.injectMultiTlsPadding(finalData, finalLen, rnd.nextInt(2, 5))
