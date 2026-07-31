@@ -175,7 +175,7 @@ object DnsOptimizer {
         // Periodic Prober
         scope.launch(ProxyDispatcher.io) {
             while (isActive) {
-                val interval = if (ProxyStats.dnsFailureCount.value > 10) 10 * 60 * 1000L else 30 * 60 * 1000L
+                val interval = if (ProxyStats.dnsFailureCount.value > 10) 2 * 60 * 1000L else 15 * 60 * 1000L
                 delay(interval)
                 probeNow(vpnService)
             }

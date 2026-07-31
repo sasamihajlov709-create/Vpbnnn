@@ -1,0 +1,4 @@
+1016 [b=1]: delay(rnd.nextLong(2, 8))
+1017 [b=1]: } else {
+1018 [b=1]: socket.send(packet)
+1019 [b=0]: }
