@@ -40,6 +40,9 @@ object TcpTransportHandler {
             var retryCount = 0
             val maxRetries = if (censorship > 80) 2 else 1
             
+            val isHostBlocked = BypassConfig.isHostProbablyCensored(targetHost)
+            var shouldRaceImmediately = censorship > 45 || isHostBlocked || HostClassifier.classify(targetHost) != HostCategory.OTHER
+
             var strategy = BypassConfig.getBestStrategyForHost(targetHost)
             var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
@@ -47,18 +50,24 @@ object TcpTransportHandler {
             AutoTtlProber.scheduleProbe(targetHost, targetPort, vpnService, scope)
 
             while (retryCount <= maxRetries) {
-                if (retryCount > 0) {
-                    // Strategy Racing on retry: try 3 top strategies in parallel
-                    val racers = listOf(
-                        DpiEngine.getBestStrategy(HostClassifier.classify(targetHost)),
-                        BypassStrategy.SNI_SPLIT,
-                        BypassStrategy.TCP_OOB_DESYNC
-                    ).distinct().take(3)
+                if (retryCount > 0 || shouldRaceImmediately) {
+                    // Strategy Racing: try top strategies in parallel
+                    val racers = mutableListOf<BypassStrategy>()
+                    if (shouldRaceImmediately && retryCount == 0) {
+                        racers.add(strategy)
+                        racers.add(DpiEngine.getBestStrategy(HostClassifier.classify(targetHost)))
+                        racers.add(BypassStrategy.SNI_SPLIT)
+                    } else {
+                        racers.add(DpiEngine.getBestStrategy(HostClassifier.classify(targetHost)))
+                        racers.add(BypassStrategy.TCP_OOB_DESYNC)
+                        racers.add(BypassStrategy.BYEBYEDPI_HYBRID)
+                    }
+                    val finalRacers = racers.distinct().take(3)
                     
                     remoteSocket = try {
-                        withTimeout(15000) {
-                            val winnerChannel = kotlinx.coroutines.channels.Channel<Pair<Socket, BypassStrategy>>(racers.size)
-                            val jobs = racers.map { strat ->
+                        withTimeout(if (retryCount == 0) 8000 else 15000) {
+                            val winnerChannel = kotlinx.coroutines.channels.Channel<Pair<Socket, BypassStrategy>>(finalRacers.size)
+                            val jobs = finalRacers.map { strat ->
                                 scope.launch(ProxyDispatcher.io) {
                                     try {
                                         val racerConfig = BypassConfig.getSessionConfig(targetHost, strat, BypassConfig.currentRttMs.value)
@@ -83,9 +92,20 @@ object TcpTransportHandler {
                         null
                     }
                 } else {
+                    // Fast Failover: Connect with best strategy, but start racing if it takes too long
                     remoteSocket = try {
-                         connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
+                         val deferred = scope.async(ProxyDispatcher.io) {
+                             connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
+                         }
+                         withTimeoutOrNull(1200) {
+                             deferred.await()
+                         }
                     } catch (e: Throwable) { null }
+                    
+                    if (remoteSocket == null) {
+                        shouldRaceImmediately = true // Trigger racing on next loop or immediately
+                        continue 
+                    }
                 }
 
                 if (remoteSocket != null) break

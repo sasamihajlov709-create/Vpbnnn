@@ -222,7 +222,7 @@ object BypassConfig {
     private val lastStrategies = java.util.LinkedList<BypassStrategy>()
     
     fun rotateGlobalStrategy() {
-        val fingerprint = getCensorshipFingerprint()
+        val fingerprint = DpiEngine.getCensorshipFingerprint()
         val intensity = ProxyStats.censorshipIntensity.value
         
         val best = BypassStrategy.entries
@@ -274,6 +274,12 @@ object BypassConfig {
                     ProxyStats.recordCensorshipEvent(true)
                 } else if (currentRate > 90) {
                     ProxyStats.recordCensorshipEvent(false)
+                }
+
+                // If intensity is extremely high, be more aggressive
+                val intensity = ProxyStats.censorshipIntensity.value
+                if (intensity > 90 && !isPanicMode) {
+                    panicOptimize()
                 }
 
                 // MTU Auto-Probing: If we see many resets on large packets, reduce MSS/MTU
@@ -403,12 +409,14 @@ object BypassConfig {
     fun performSelfHealing() {
         val rate = ProxyStats.getSuccessRate()
         val lockedCount = hostLockTime.filter { System.currentTimeMillis() - it.value < 300_000 }.size
+        val intensity = ProxyStats.censorshipIntensity.value
         
-        if ((rate < 40 || lockedCount >= 5) && !isPanicMode) {
+        if ((rate < 35 || lockedCount >= 4 || intensity > 85) && !isPanicMode) {
             panicOptimize()
-        } else if (rate > 85 && lockedCount == 0 && isPanicMode) {
+        } else if (rate > 80 && lockedCount == 0 && intensity < 70 && isPanicMode) {
             _isPanicModeFlow.value = false
             ProxyStats.logRecovery("Stability restored: $rate%. Normal mode.")
+            DpiEngine.clearCircuitBreakers()
         }
     }
 
@@ -423,15 +431,17 @@ object BypassConfig {
         }
         _currentMtu.value = newMtu
         
-        ProxyStats.logRecovery("Panic Mode Active: MTU $oldMtu -> $newMtu. Aggressive exploration started.")
+        ProxyStats.logRecovery("Panic Mode Active: MTU $oldMtu -> $newMtu. Resetting engine and rotating strategy.")
         
+        DpiEngine.clearCircuitBreakers()
         rotateGlobalStrategy()
         hostStrategyMemory.clear()
-        censorHeuristic.clear() // Clear heuristics to try again
+        censorHeuristic.clear() 
         
         frag1 = 1
         frag2 = ThreadLocalRandom.current().nextInt(2, 6)
         delay1 = 50
+        blockQuic = true // Force fallback to TCP which we can bypass better
     }
 
     fun clearScores(context: Context) {

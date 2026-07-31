@@ -19,11 +19,11 @@ object RecoveryManager {
     private var restartCooldown = 60000L
     private var recoveryEscalation = 0
     private var healthCheckJob: Job? = null
+    private var stallMonitorJob: Job? = null
 
     fun startHealthCheck(scope: CoroutineScope) {
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch(ProxyDispatcher.io) {
-            var lastBytes = ProxyStats.bytesTransferred.value
             var lastCoolDown = System.currentTimeMillis()
             
             while (isActive) {
@@ -34,7 +34,6 @@ object RecoveryManager {
                     delay(delayMs)
                     
                     val now = System.currentTimeMillis()
-                    val currentBytes = ProxyStats.bytesTransferred.value
                     
                     // Strategy Cooling: Periodically try to reduce escalation if things are stable
                     if (now - lastCoolDown > 600000) { // Every 10 minutes
@@ -60,7 +59,6 @@ object RecoveryManager {
                         }
                     }
                     
-                    lastBytes = currentBytes
                     if (ProxyStats.currentDpiType.value != DpiType.NONE) {
                         handleEvent(RecoveryEvent.DPI_DETECTED, "DPI: ${ProxyStats.currentDpiType.value}")
                         ProxyStats.clearDpiType()
@@ -70,6 +68,29 @@ object RecoveryManager {
                 } catch (e: Throwable) {
                     Log.e("RecoveryManager", "Health check error", e)
                 }
+            }
+        }
+
+        stallMonitorJob?.cancel()
+        stallMonitorJob = scope.launch(ProxyDispatcher.io) {
+            var lastBytes = ProxyStats.bytesTransferred.value
+            var stallCounter = 0
+            
+            while (isActive) {
+                delay(5000)
+                val currentBytes = ProxyStats.bytesTransferred.value
+                val activeConns = ProxyStats.activeConnections.value
+                
+                if (activeConns > 0 && currentBytes == lastBytes) {
+                    stallCounter++
+                    if (stallCounter >= 3) { // 15 seconds of no traffic with active conns
+                        handleEvent(RecoveryEvent.TUNNEL_STALL, "No traffic for 15s with $activeConns active connections")
+                        stallCounter = 0
+                    }
+                } else {
+                    stallCounter = 0
+                }
+                lastBytes = currentBytes
             }
         }
     }

@@ -189,6 +189,36 @@ object FakePacketHelper {
     fun buildFakeTcpRst(): ByteArray = byteArrayOf(0x52, 0x53, 0x54, 0x00, 0x00, 0x00) + buildUdpNoise(ThreadLocalRandom.current().nextInt(2, 10))
     fun buildFakeTcpKeepAlive(): ByteArray = byteArrayOf(0x00)
 
+    fun buildFakeOcspResponse(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        // Simple ASN.1-like structure for OCSP
+        dos.writeByte(0x30); dos.writeByte(0x81.toInt()); dos.writeByte(0x80.toInt()) // Sequence
+        dos.writeByte(0x0a); dos.writeByte(0x01); dos.writeByte(0x00) // Enumerated: successful
+        // ... more noise to look like OCSP
+        dos.write(buildUdpNoise(100))
+        return baos.toByteArray()
+    }
+
+    fun buildFakeCertChain(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        dos.writeByte(0x0b) // Handshake type: Certificate
+        dos.write(byteArrayOf(0, 0, 0)) // Length (placeholder)
+        dos.write(byteArrayOf(0, 0, 0)) // Cert list length (placeholder)
+        repeat(2) {
+            val cert = buildUdpNoise(rnd.nextInt(500, 1000))
+            dos.write(byteArrayOf(0, (cert.size shr 8).toByte(), cert.size.toByte()))
+            dos.write(cert)
+        }
+        val result = baos.toByteArray()
+        val totalLen = result.size - 4
+        result[1] = ((totalLen shr 16) and 0xFF).toByte(); result[2] = ((totalLen shr 8) and 0xFF).toByte(); result[3] = (totalLen and 0xFF).toByte()
+        val listLen = result.size - 7
+        result[4] = ((listLen shr 16) and 0xFF).toByte(); result[5] = ((listLen shr 8) and 0xFF).toByte(); result[6] = (listLen and 0xFF).toByte()
+        return result
+    }
+
     fun buildProtocolConfusion(type: String): ByteArray = when (type) {
         "SSH" -> buildSshHandshake()
         "BITTORRENT" -> "BitTorrent protocol".toByteArray() + buildUdpNoise(48)

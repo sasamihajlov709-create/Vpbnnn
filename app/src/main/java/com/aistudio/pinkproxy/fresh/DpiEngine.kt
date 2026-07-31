@@ -22,6 +22,27 @@ object DpiEngine {
 
     private var lastGlobalReset = System.currentTimeMillis()
     private val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
+    
+    data class CensorshipFingerprint(
+        val rstRate: Double,
+        val sniBlockRate: Double,
+        val udpBlockRate: Double,
+        val timeoutRate: Double,
+        val stallRate: Double,
+        val intensity: Int
+    )
+
+    fun getCensorshipFingerprint(): CensorshipFingerprint {
+        val total = eventHistory.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
+        return CensorshipFingerprint(
+            rstRate = (eventHistory[DpiType.TCP_RESET]?.get() ?: 0) / total,
+            sniBlockRate = (eventHistory[DpiType.TLS_SNI_BLOCK]?.get() ?: 0) / total,
+            udpBlockRate = (eventHistory[DpiType.UDP_BLOCK]?.get() ?: 0) / total,
+            timeoutRate = (eventHistory[DpiType.CONNECTION_TIMEOUT]?.get() ?: 0) / total,
+            stallRate = ((eventHistory[DpiType.TCP_STALL]?.get() ?: 0) + (eventHistory[DpiType.SSL_STALL]?.get() ?: 0)) / total,
+            intensity = ProxyStats.censorshipIntensity.value
+        )
+    }
 
     fun start(context: android.content.Context) {
         // Initialize scores
