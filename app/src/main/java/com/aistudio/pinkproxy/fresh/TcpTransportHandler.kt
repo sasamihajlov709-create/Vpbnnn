@@ -65,6 +65,12 @@ object TcpTransportHandler {
 
             // Proactively probe for TTL for this host in the background
             AutoTtlProber.scheduleProbe(targetHost, targetPort, vpnService, scope)
+            
+            // Use discovered MTU if available
+            val discoveredMtu = AutoTtlProber.getDiscoveredMtu(targetHost)
+            if (discoveredMtu < 1300) {
+                Log.d("TcpTransport", "Using optimized MTU $discoveredMtu for $targetHost")
+            }
 
             while (retryCount <= adjustedMaxRetries) {
                 if (retryCount > 0 || shouldRaceImmediately) {
@@ -146,6 +152,10 @@ object TcpTransportHandler {
                 remoteSocket.soTimeout = 0
                 remoteSocket.tcpNoDelay = true
                 
+                // Tune MSS based on discovered MTU
+                val mss = (AutoTtlProber.getDiscoveredMtu(targetHost) - 40).coerceAtLeast(512)
+                TtlHelper.setMss(remoteSocket, mss)
+
                 // TCP Fast Open (TFO) support for API 30+
                 if (android.os.Build.VERSION.SDK_INT >= 30) {
                     try {
@@ -297,6 +307,9 @@ object TcpTransportHandler {
                     }
                 }
 
+                // Confusion pulse for DPI evasion
+                startConfusionPulse(targetHost, remoteOut, remoteSocket, this)
+
                 // Forward from Remote to Client (Direct)
                 val remoteToClient = launch(ProxyDispatcher.io) {
                     val intensity = ProxyStats.censorshipIntensity.value
@@ -397,8 +410,11 @@ object TcpTransportHandler {
                                 // Smart Throttling & Traffic Pattern Obfuscation
                                 if (intensity > 40) {
                                     // Random micro-delays to break timing analysis (Side-channel protection)
+                                    // Using Gaussian distribution for more natural jitter
                                     if (rnd.nextInt(100) < (intensity - 20)) {
-                                        val d = rnd.nextLong(1, (intensity / 15).toLong().coerceAtLeast(2))
+                                        val mean = (intensity / 15.0).coerceAtLeast(1.5)
+                                        val stdDev = mean / 3.0
+                                        val d = (rnd.nextGaussian() * stdDev + mean).toLong().coerceIn(1, 15)
                                         delay(d)
                                     }
                                     
@@ -708,6 +724,31 @@ object TcpTransportHandler {
                 }
             }
             winnerSocket
+        }
+    }
+
+    private suspend fun startConfusionPulse(host: String, output: OutputStream, socket: Socket, scope: CoroutineScope) {
+        scope.launch {
+            val rnd = java.util.concurrent.ThreadLocalRandom.current()
+            while (isActive && !socket.isClosed) {
+                delay(rnd.nextLong(15000, 45000)) // Every 15-45 seconds
+                if (socket.isClosed) break
+                try {
+                    // Send 1 byte of urgent data or a small noise packet with low TTL
+                    if (rnd.nextBoolean()) {
+                        socket.sendUrgentData(rnd.nextInt(256))
+                    } else {
+                        val oldTtl = TtlHelper.getSocketTtl(socket)
+                        TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                        output.write(FakePacketHelper.buildUdpNoise(rnd.nextInt(1, 16)))
+                        output.flush()
+                        TtlHelper.setTtl(socket, oldTtl)
+                    }
+                    Log.v("TcpTransport", "Confusion pulse sent to $host")
+                } catch (e: Throwable) {
+                    break
+                }
+            }
         }
     }
 }

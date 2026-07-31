@@ -117,8 +117,22 @@ object BypassConfig {
     }
 
     fun setMtu(mtu: Int) {
-        _currentMtu.value = mtu.coerceIn(576, 1500)
-        Log.i("BypassConfig", "MTU set to ${_currentMtu.value}")
+        val old = _currentMtu.value
+        val new = mtu.coerceIn(576, 1500)
+        if (old != new) {
+            _currentMtu.value = new
+            Log.i("BypassConfig", "MTU changed from $old to $new. Triggering VPN restart.")
+            activeVpnService?.let { service ->
+                try {
+                    val intent = android.content.Intent(service, PinkVpnService::class.java).apply { 
+                        action = "RESTART" 
+                    }
+                    service.startService(intent)
+                } catch (e: Throwable) {
+                    Log.e("BypassConfig", "Failed to trigger VPN restart for MTU change: ${e.message}")
+                }
+            }
+        }
     }
 
     fun updateNetworkType(type: NetworkType) {
@@ -202,7 +216,7 @@ object BypassConfig {
         if (hostLockTime.containsKey(host)) {
             val lockTime = hostLockTime[host] ?: 0
             if (System.currentTimeMillis() - lockTime < 300_000) {
-                return DpiEngine.getBestStrategy(cat)
+                return DpiEngine.getBestStrategy(cat, host)
             } else {
                 hostLockTime.remove(host)
                 censorHeuristic.remove(host)
@@ -220,7 +234,7 @@ object BypassConfig {
         }
 
         // 3. Adaptive Engine Recommendation
-        val best = DpiEngine.getBestStrategy(cat)
+        val best = DpiEngine.getBestStrategy(cat, host)
         hostStrategyMemory[host] = best to (now + SESSION_TTL)
         return best
     }
@@ -335,7 +349,7 @@ object BypassConfig {
     fun recordSuccess(strat: BypassStrategy, rtt: Long, host: String?) {
         ProxyStats.recordGlobalSuccess(rtt)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        DpiEngine.recordResult(strat, true, cat, latencyMs = rtt)
+        DpiEngine.recordResult(strat, true, cat, latencyMs = rtt, host = host)
         
         if (rtt > 0) {
             TrafficShaper.updateRtt(rtt)
@@ -398,7 +412,7 @@ object BypassConfig {
     fun recordFailure(strat: BypassStrategy, host: String?, reason: FailureReason = FailureReason.UNKNOWN) {
         ProxyStats.recordCensorshipEvent(true)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        DpiEngine.recordResult(strat, false, cat, reason)
+        DpiEngine.recordResult(strat, false, cat, reason, host = host)
         
         if (host != null) {
             val count = censorHeuristic.getOrDefault(host, 0) + 1
@@ -461,7 +475,7 @@ object BypassConfig {
         
         // Panic Mode Override: Use best known extreme strategy if things are really bad
         val effectiveStrategy = if (_isPanicModeFlow.value && rnd.nextInt(100) < 80) {
-            DpiEngine.getBestExtremeStrategy()
+            DpiEngine.getBestExtremeStrategy(host)
         } else {
             strategy
         }
@@ -947,6 +961,22 @@ object BypassConfig {
                     socket.send(packet)
                 } catch(e: Throwable) { socket.send(packet) }
             }
+            BypassStrategy.UDP_OVERLAP_SKEW -> {
+                try {
+                    val isIpv6 = targetAddr is java.net.Inet6Address
+                    // Send a slightly larger packet with low TTL, containing real data + noise
+                    val fakePayload = data.copyOfRange(offset, offset + length)
+                    rnd.nextBytes(fakePayload) // Randomize for the overlap
+                    
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
+                    socket.send(DatagramPacket(fakePayload, fakePayload.size, targetAddr, targetPort))
+                    
+                    delay(rnd.nextLong(1, 5))
+                    
+                    TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                    socket.send(packet)
+                } catch(e: Throwable) { socket.send(packet) }
+            }
             BypassStrategy.QUIC_INITIAL_FRAGMENT -> {
                 if (length > 200 && (data[offset].toInt() and 0xC0) == 0xC0) {
                     val noise = FakePacketHelper.buildUdpNoise(128)
@@ -1113,6 +1143,20 @@ object BypassConfig {
                 delay(config.delay1)
                 TtlHelper.setUdpTtl(socket, 64, isIpv6)
                 socket.send(packet)
+            }
+            BypassStrategy.UDP_REORDER -> {
+                if (rnd.nextInt(100) < 40) delay(rnd.nextLong(2, 10))
+                socket.send(packet)
+            }
+            BypassStrategy.UDP_FRAGMENT_SKEW -> {
+                if (length > 100) {
+                    val split = rnd.nextInt(20, length - 20)
+                    socket.send(DatagramPacket(data, offset, split, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 5))
+                    socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
+                }
             }
             BypassStrategy.UDP_OVERLAP_SKEW -> {
                 val isIpv6 = targetAddr is java.net.Inet6Address

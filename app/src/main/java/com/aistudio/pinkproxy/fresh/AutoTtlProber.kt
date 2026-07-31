@@ -16,6 +16,10 @@ object AutoTtlProber {
 
     fun getDiscoveredTtl(host: String): Int? = discoveredTtls[host] ?: discoveredTtls["global"]
 
+    private val discoveredMtus = ConcurrentHashMap<String, Int>()
+
+    fun getDiscoveredMtu(host: String): Int = discoveredMtus[host] ?: discoveredMtus["global"] ?: 1400
+
     fun startProbing(scope: CoroutineScope, vpnService: VpnService?) {
         scope.launch(ProxyDispatcher.io) {
             // Background prober for common canary domains to find global censor distance
@@ -25,6 +29,9 @@ object AutoTtlProber {
                     if (discoveredTtls["global"] == null) {
                         probeDistance(host, 443, vpnService)
                     }
+                    if (discoveredMtus["global"] == null) {
+                        probeBestMtu(host, 443, vpnService)
+                    }
                     delay(5000)
                 }
                 delay(TimeUnit.MINUTES.toMillis(15)) // Re-probe every 15 mins
@@ -33,9 +40,77 @@ object AutoTtlProber {
     }
 
     fun scheduleProbe(host: String, port: Int, vpnService: VpnService?, scope: CoroutineScope) {
-        if (discoveredTtls.containsKey(host) || probingHosts.contains(host)) return
+        if ((discoveredTtls.containsKey(host) && discoveredMtus.containsKey(host)) || probingHosts.contains(host)) return
         scope.launch(ProxyDispatcher.io) {
-            probeDistance(host, port, vpnService)
+            if (!discoveredTtls.containsKey(host)) probeDistance(host, port, vpnService)
+            if (!discoveredMtus.containsKey(host)) probeBestMtu(host, port, vpnService)
+        }
+    }
+
+    suspend fun probeBestMtu(host: String, port: Int, vpnService: VpnService?): Int {
+        if (probingHosts.contains(host + "_mtu")) return discoveredMtus[host] ?: discoveredMtus["global"] ?: 1400
+        probingHosts.add(host + "_mtu")
+        try {
+            val resolved = RobustResolver.resolve(host, vpnService)
+            if (resolved.isEmpty()) return 1400
+            val target = resolved.first()
+            
+            // Binary search for MTU
+            var low = 576
+            var high = 1500
+            var best = 1400
+            
+            while (low <= high) {
+                val mid = (low + high) / 2
+                if (tryMtu(target, port, mid, vpnService)) {
+                    best = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+                delay(100)
+            }
+            
+            discoveredMtus[host] = best
+            val currentGlobal = discoveredMtus["global"] ?: 1400
+            discoveredMtus["global"] = (currentGlobal * 0.8 + best * 0.2).toInt().coerceIn(576, 1500)
+            
+            if (best < 1300) {
+                ProxyStats.logRecovery("MTU Probe Result for $host: $best (Fragmented path detected)")
+            }
+            return best
+        } catch (e: Throwable) {
+            return 1400
+        } finally {
+            probingHosts.remove(host + "_mtu")
+        }
+    }
+
+    private suspend fun tryMtu(addr: InetAddress, port: Int, mtu: Int, vpnService: VpnService?): Boolean {
+        return withContext(ProxyDispatcher.io) {
+            var socket: Socket? = null
+            try {
+                socket = Socket()
+                vpnService?.protect(socket)
+                socket.tcpNoDelay = true
+                // We simulate MTU by setting MSS which is MTU - 40 (TCP+IP headers)
+                TtlHelper.setMss(socket, (mtu - 40).coerceAtLeast(512))
+                socket.connect(InetSocketAddress(addr, port), 2000)
+                
+                val output = socket.getOutputStream()
+                val payload = ByteArray(mtu - 40) { 0 } // Full size segment
+                output.write(payload)
+                output.flush()
+                
+                // If it doesn't time out, the MTU is likely okay
+                socket.soTimeout = 1500
+                socket.getInputStream().read()
+                true
+            } catch (e: Throwable) {
+                false
+            } finally {
+                try { socket?.close() } catch (e: Throwable) {}
+            }
         }
     }
 

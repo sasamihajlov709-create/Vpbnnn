@@ -327,6 +327,13 @@ object UdpTransportHandler {
 
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
 
+    private fun isQuicInitial(data: ByteArray, offset: Int, length: Int): Boolean {
+        if (length < 200) return false
+        val firstByte = data[offset].toInt() and 0xFF
+        // Long header (0x80), bit 6 fixed to 1 (0x40), Type Initial (0x00)
+        return (firstByte and 0x80) != 0 && (firstByte and 0x40) != 0 && (firstByte and 0x30) == 0x00
+    }
+
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
         if (System.currentTimeMillis() - lastReorderBufferCleanup > 60000) {
             synchronized(reorderMutex) {
@@ -345,7 +352,7 @@ object UdpTransportHandler {
         val targetPort = packet.port
         
         val isQuic = targetPort == 443 && length > 0 && ((payload[offset].toInt() and 0xC0) == 0xC0 || (payload[offset].toInt() and 0x80) != 0)
-        val isDns = targetPort == 53
+        val isDns = targetPort == 53 || targetPort == 853 || targetPort == 784
         
         // Basic filtering
         if (BypassConfig.blockQuic && isQuic) return
@@ -420,6 +427,24 @@ object UdpTransportHandler {
 
         // 2. QUIC-Specific Obfuscation: send a fake Initial with different CID
         if (!isHighVolume && isQuic && intensity > 70 && count < 3 && rnd.nextInt(100) < 20) {
+            if (isQuicInitial(payload, offset, length)) {
+                 // Extreme Obfuscation: send a Quic Retry first to "reset" DPI state
+                 if (intensity > 85 && rnd.nextInt(100) < 25) {
+                     val dcidLen = payload[offset + 5].toInt() and 0xFF
+                     if (length > 6 + dcidLen + 20) {
+                         val dcid = payload.copyOfRange(offset + 6, offset + 6 + dcidLen)
+                         val scidOffset = offset + 6 + dcidLen
+                         val scidLen = payload[scidOffset].toInt() and 0xFF
+                         if (length > scidOffset + 1 + scidLen) {
+                             val scid = payload.copyOfRange(scidOffset + 1, scidOffset + 1 + scidLen)
+                             val retry = FakePacketHelper.buildQuicRetry(dcid, scid, FakePacketHelper.buildUdpNoise(16))
+                             socket.send(DatagramPacket(retry, retry.size, targetInet, targetPort))
+                             delay(rnd.nextLong(1, 4))
+                         }
+                     }
+                 }
+            }
+            
             val fakeInitial = FakePacketHelper.buildQuicInitialExtremePadding()
             TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetInet is java.net.Inet6Address)
             socket.send(DatagramPacket(fakeInitial, fakeInitial.size, targetInet, targetPort))

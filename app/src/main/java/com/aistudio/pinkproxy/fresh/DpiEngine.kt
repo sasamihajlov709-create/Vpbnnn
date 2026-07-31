@@ -19,6 +19,7 @@ object DpiEngine {
     private val strategyLatency = ConcurrentHashMap<BypassStrategy, java.util.concurrent.atomic.AtomicLong>()
     private val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
     private val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+    private val hostStrategyBlacklist = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Long>>()
 
     private var lastGlobalReset = System.currentTimeMillis()
     private val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
@@ -130,7 +131,7 @@ object DpiEngine {
         failureHistory.clear()
     }
 
-    fun getBestExtremeStrategy(): BypassStrategy {
+    fun getBestExtremeStrategy(host: String? = null): BypassStrategy {
         val extreme = BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
         return extreme.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.ZAPRET_EXTREME
     }
@@ -174,7 +175,7 @@ object DpiEngine {
         }
     }
 
-    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0) {
+    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
         if (success) {
             successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             strategyScores[category]?.get(strategy)?.let { score ->
@@ -182,6 +183,10 @@ object DpiEngine {
                 if (score.get() > 2000) score.set(2000)
             }
             
+            if (host != null) {
+                hostStrategyBlacklist[host]?.remove(strategy)
+            }
+
             if (latencyMs > 0) {
                 val currentAvg = strategyLatency.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0) }
                 if (currentAvg.get() == 0L) {
@@ -217,19 +222,26 @@ object DpiEngine {
                 circuitBreakers[strategy] = System.currentTimeMillis() + 300_000
                 Log.w("DpiEngine", "Circuit breaker triggered for $strategy due to $fails consecutive failures")
             }
+
+            if (host != null && (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL)) {
+                val hostBlacklist = hostStrategyBlacklist.getOrPut(host) { ConcurrentHashMap() }
+                hostBlacklist[strategy] = System.currentTimeMillis() + 600_000 // 10 mins blacklist for this specific host
+            }
         }
     }
 
-    fun getBestStrategy(category: HostCategory): BypassStrategy {
+    fun getBestStrategy(category: HostCategory, host: String? = null): BypassStrategy {
         val catScores = strategyScores[category] ?: return BypassStrategy.SNI_SPLIT
         val now = System.currentTimeMillis()
         
-        // Filter out strategies under circuit breaker
+        // Filter out strategies under circuit breaker or host-specific blacklist
+        val hostBlacklist = host?.let { hostStrategyBlacklist[it] }
         val validStrategies = catScores.entries.filter { (strat, _) ->
-            (circuitBreakers[strat] ?: 0L) < now
+            (circuitBreakers[strat] ?: 0L) < now && (hostBlacklist?.get(strat) ?: 0L) < now
         }
         
         if (validStrategies.isEmpty()) {
+            if (host != null) hostStrategyBlacklist.remove(host)
             circuitBreakers.clear() // Emergency clear
             return BypassStrategy.CHAOS
         }

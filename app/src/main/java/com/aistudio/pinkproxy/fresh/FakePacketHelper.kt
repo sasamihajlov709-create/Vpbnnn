@@ -290,11 +290,13 @@ object FakePacketHelper {
         // Random version (not necessarily a real one)
         val versions = listOf(
             byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte()), // QUIC v1
+            byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x02.toByte()), // QUIC v2
             byteArrayOf(0x51.toByte(), 0x30.toByte(), 0x34.toByte(), 0x33.toByte()), // Q043
             byteArrayOf(0x51.toByte(), 0x30.toByte(), 0x34.toByte(), 0x36.toByte()), // Q046
             byteArrayOf(0x51.toByte(), 0x30.toByte(), 0x35.toByte(), 0x30.toByte()), // Q050
             byteArrayOf(0xaa.toByte(), 0xaa.toByte(), 0xaa.toByte(), 0xaa.toByte()), // Reserved
-            byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte())  // Version Negotiation
+            byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte()), // Version Negotiation
+            byteArrayOf(0xde.toByte(), 0xad.toByte(), 0xbe.toByte(), 0xef.toByte())  // Pure Chaos
         )
         val ver = versions.random()
         dos.write(ver)
@@ -309,8 +311,21 @@ object FakePacketHelper {
         dos.write(ByteArray(scidLen).apply { rnd.nextBytes(this) })
         
         // Noise
-        dos.write(buildUdpNoise(rnd.nextInt(10, 50)))
+        dos.write(buildUdpNoise(rnd.nextInt(10, 200)))
         
+        return baos.toByteArray()
+    }
+
+    fun buildQuicRetry(dcid: ByteArray, scid: ByteArray, token: ByteArray): ByteArray {
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        val rnd = ThreadLocalRandom.current()
+        // Type: Retry (0xC0 | 0x30 = 0xF0)
+        dos.writeByte(0xF0)
+        dos.writeInt(0x00000001) // Version
+        dos.writeByte(dcid.size); dos.write(dcid)
+        dos.writeByte(scid.size); dos.write(scid)
+        dos.write(token)
+        dos.write(buildUdpNoise(16)) // Integrity Tag (fake)
         return baos.toByteArray()
     }
 

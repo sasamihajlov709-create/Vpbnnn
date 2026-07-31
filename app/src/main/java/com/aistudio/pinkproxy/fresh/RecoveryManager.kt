@@ -207,6 +207,12 @@ object RecoveryManager {
                             BypassStrategy.TCP_TLS_SESSION_DESYNC
                         ).random())
                     }
+                    
+                    // Force immediate re-evaluation via active probing
+                    PinkVpnService.instance?.getServiceScope()?.launch {
+                        delay(2000)
+                        ServiceChecker.runActiveProbing(null)
+                    }
                 } else {
                     triggerPanic("Critical stall detected ($event)")
                     requestServiceRestart("Persistent stalling")

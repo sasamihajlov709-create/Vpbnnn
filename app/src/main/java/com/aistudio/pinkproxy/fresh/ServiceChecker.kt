@@ -224,6 +224,20 @@ object ServiceChecker {
         
         _proxyHealth.value = proxyResponsive.get()
         _lastCheckTime.value = System.currentTimeMillis()
+        
+        // Auto-Panic Logic: If internet is baseline ok but nothing is reachable via proxy
+        if (!anyServiceUp && finalInternet && results.isNotEmpty()) {
+            if (!BypassConfig.isPanicModeFlow.value) {
+                BypassConfig.setPanicMode(true)
+                ProxyStats.logRecovery("CRITICAL: All proxied services unreachable. Emergency Panic Mode activated.")
+            }
+        } else if (anyServiceUp && BypassConfig.isPanicModeFlow.value && results.count { it.isUp } >= 2) {
+            // Self-healing: if services are recovering, consider leaving panic mode
+            if (ProxyStats.successRate.value > 80) {
+                 BypassConfig.setPanicMode(false)
+                 ProxyStats.logRecovery("Recovery detected: Disabling Panic Mode.")
+            }
+        }
     }
 
     private val _customServices = MutableStateFlow<List<Pair<String, String>>>(emptyList())
