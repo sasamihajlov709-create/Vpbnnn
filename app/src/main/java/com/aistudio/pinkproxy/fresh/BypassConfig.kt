@@ -1330,6 +1330,17 @@ object BypassConfig {
                     // Don't restore immediately, let it stick for this burst
                 } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
             }
+            BypassStrategy.TCP_ZERO_WINDOW_OOB -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    socket.receiveBufferSize = 0
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                    delay(rnd.nextLong(100, 300))
+                    socket.receiveBufferSize = 16384
+                    delay(5)
+                    output.write(finalData, 0, finalLen); output.flush()
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+            }
             BypassStrategy.TCP_WINDOW_SIZE_JITTER -> {
                 try {
                     val split = (finalLen / 2).coerceAtLeast(1)
@@ -1357,7 +1368,7 @@ object BypassConfig {
                     socket.receiveBufferSize = originalSize
                 } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
             }
-            BypassStrategy.TCP_WINDOW_SHRINK -> {
+            BypassStrategy.TCP_WINDOW_STALL -> {
                 try {
                     val originalSize = socket.receiveBufferSize
                     socket.receiveBufferSize = 1

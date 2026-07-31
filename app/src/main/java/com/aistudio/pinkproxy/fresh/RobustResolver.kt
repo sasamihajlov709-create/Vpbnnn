@@ -265,6 +265,17 @@ object RobustResolver {
                     continue
                 }
                 
+                // IP Verification Step: If high censorship, verify at least one IP from the result
+                if (intensity > 85 && completed % 2 == 0) {
+                    val verified = DnsOptimizer.verifyIp(host, cleanRes.first(), vpnService)
+                    if (!verified) {
+                        Log.w("RobustResolver", "Verification failed for ${cleanRes.first()} on $host (Poisoned IP?)")
+                        ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+                        completed++
+                        continue
+                    }
+                }
+                
                 receivedResults.add(cleanRes)
                 
                 val counts = mutableMapOf<List<String>, Int>()

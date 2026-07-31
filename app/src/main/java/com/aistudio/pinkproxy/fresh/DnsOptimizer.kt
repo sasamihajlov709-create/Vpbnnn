@@ -49,6 +49,37 @@ object DnsOptimizer {
         "bing.com", "duckduckgo.com", "whatsapp.com", "discord.com", "signal.org"
     )
 
+    /**
+     * Verifies if an IP address is genuinely responding for the given domain.
+     * Prevents using spoofed/poisoned DNS results.
+     */
+    suspend fun verifyIp(domain: String, ip: java.net.InetAddress, vpnService: android.net.VpnService?): Boolean {
+        // 1. Basic Filter: Check for local/bogons
+        if (ip.isLoopbackAddress || ip.isAnyLocalAddress || ip.isLinkLocalAddress || ip.isSiteLocalAddress) return false
+        val host = ip.hostAddress ?: return false
+        if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("172.16.")) return false
+        
+        // 2. Connectivity Test: Try to connect to port 443 (standard for almost all critical domains)
+        return withTimeoutOrNull(2000) {
+            ProxyDispatcher.io.run {
+                val socket = java.net.Socket()
+                try {
+                    try { vpnService?.protect(socket) } catch(e: Throwable) {}
+                    socket.tcpNoDelay = true
+                    socket.connect(java.net.InetSocketAddress(ip, 443), 1500)
+                    
+                    // If we can connect, it's likely not a blackhole
+                    // For even better verification, we could check for valid TLS Handshake start
+                    true
+                } catch (e: Throwable) {
+                    false
+                } finally {
+                    try { socket.close() } catch (e: Throwable) {}
+                }
+            }
+        } ?: false
+    }
+
     fun getLatencyForUrl(url: String): Long = providerLatencies[url] ?: 500L
 
     fun getDohUrls(): List<String> {

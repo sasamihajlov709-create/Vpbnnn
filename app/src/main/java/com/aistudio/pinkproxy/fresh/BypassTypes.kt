@@ -229,6 +229,8 @@ enum class BypassStrategy(
     UDP_PADDING_CHAOS(StrategyFamily.UDP, 5, 5, StrategyGroup.HEAVY),
     CHAOS(StrategyFamily.ADAPTIVE, 9, 9, StrategyGroup.EXTREME),
     TCP_WINDOW_SHRINK(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
+    TCP_WINDOW_STALL(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
+    TCP_ZERO_WINDOW_OOB(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
