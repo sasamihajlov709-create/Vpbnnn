@@ -130,6 +130,11 @@ object DpiEngine {
         failureHistory.clear()
     }
 
+    fun getBestExtremeStrategy(): BypassStrategy {
+        val extreme = BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
+        return extreme.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.ZAPRET_EXTREME
+    }
+
     fun recordEvent(type: DpiType) {
         eventHistory.getOrPut(type) { AtomicInteger(0) }.incrementAndGet()
         
@@ -318,13 +323,14 @@ object DpiEngine {
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
         ProxyStats.updateCensorshipIntensity(100 - globalSuccessRate)
         
-        // Auto-Panic Mode trigger
-        if (globalSuccessRate < 20 && totalSuccess + totalFailure > 15) {
+        // Auto-Panic Mode trigger: More aggressive when seeing TCP Reset spikes
+        val fingerprint = getCensorshipFingerprint()
+        if ((globalSuccessRate < 25 && totalSuccess + totalFailure > 10) || fingerprint.rstRate > 0.4) {
              if (!BypassConfig.isPanicModeFlow.value) {
                  BypassConfig.setPanicMode(true)
-                 Log.e("DpiEngine", "AUTO-PANIC TRIGGERED: Success rate too low ($globalSuccessRate%)")
+                 Log.e("DpiEngine", "AUTO-PANIC TRIGGERED: High Reset Rate (${(fingerprint.rstRate*100).toInt()}%) or Low Success ($globalSuccessRate%)")
              }
-        } else if (globalSuccessRate > 60 && BypassConfig.isPanicModeFlow.value) {
+        } else if (globalSuccessRate > 65 && BypassConfig.isPanicModeFlow.value) {
              BypassConfig.setPanicMode(false)
              Log.i("DpiEngine", "Panic mode deactivated: Success rate recovered to $globalSuccessRate%")
         }
@@ -337,10 +343,10 @@ object DpiEngine {
                     val decay = if (ProxyStats.censorshipIntensity.value > 85) 0.98 else 0.90
                     score.set((s * decay + 100 * (1.0 - decay)).toInt())
                 } else if (s < 100) {
-                    val recovery = if (ProxyStats.censorshipIntensity.value < 30) 1.1 else 1.05
-                    score.set((s * recovery + 2).toInt().coerceAtMost(100))
+                    val recovery = if (ProxyStats.censorshipIntensity.value < 20) 1.2 else 1.08
+                    score.set((s * recovery + 5).toInt().coerceAtMost(100))
                 }
-                if (s < 5) score.set(30) 
+                if (s < 10) score.set(40) 
             }
         }
         

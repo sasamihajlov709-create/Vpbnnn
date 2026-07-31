@@ -231,6 +231,8 @@ enum class BypassStrategy(
     TCP_WINDOW_SHRINK(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_WINDOW_STALL(StrategyFamily.TCP, 4, 3, StrategyGroup.HEAVY),
     TCP_ZERO_WINDOW_OOB(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
+    TCP_TIMING_CHAOS(StrategyFamily.TCP, 4, 3, StrategyGroup.MEDIUM),
+    UDP_OVERLAP_SKEW(StrategyFamily.UDP, 5, 4, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -249,7 +251,8 @@ enum class DpiType {
     TLS_HANDSHAKE_TIMEOUT,
     BLACKHOLE,
     TCP_STALL,
-    SSL_STALL
+    SSL_STALL,
+    DNS_VERIFICATION_FAILURE
 }
 
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())

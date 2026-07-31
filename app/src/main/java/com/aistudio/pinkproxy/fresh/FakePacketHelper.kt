@@ -99,6 +99,19 @@ object FakePacketHelper {
         return baos.toByteArray()
     }
 
+    fun buildDecoyHttpResponse(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val statuses = listOf("200 OK", "404 Not Found", "302 Found", "301 Moved Permanently")
+        val contentTypes = listOf("text/html", "application/json", "image/png", "text/plain")
+        val status = statuses.random()
+        val ct = contentTypes.random()
+        val body = buildUdpNoise(rnd.nextInt(20, 100))
+        return ("HTTP/1.1 $status\r\n" +
+                "Content-Type: $ct\r\n" +
+                "Content-Length: ${body.size}\r\n" +
+                "Connection: close\r\n\r\n").toByteArray() + body
+    }
+
     fun buildHandshakeCombo(noiseSize: Int = 64): ByteArray {
         val baos = ByteArrayOutputStream()
         val rnd = ThreadLocalRandom.current()
@@ -239,6 +252,8 @@ object FakePacketHelper {
         "SSH" -> buildSshHandshake()
         "BITTORRENT" -> "BitTorrent protocol".toByteArray() + buildUdpNoise(48)
         "HTTP" -> buildFakeHttpRequest("google.com")
+        "REDIS" -> "*1\r\n$4\r\nPING\r\n".toByteArray()
+        "MEMCACHED" -> "stats\r\n".toByteArray()
         "QUIC" -> byteArrayOf(0xc0.toByte(), 0x00, 0x00, 0x00, 0x01) + buildUdpNoise(40)
         "DTLS" -> byteArrayOf(0x16, 0xfe.toByte(), 0xff.toByte()) + buildUdpNoise(24)
         else -> buildUdpNoise(64)

@@ -381,9 +381,10 @@ TtlHelper.setTtl(socket, 64)
 
     suspend fun queryDohDetailed(host: String, dohUrl: String, vpnService: VpnService?, type: Int = 1): List<DnsPacketEngine.DnsRecord> {
         val intensity = ProxyStats.censorshipIntensity.value
-        val timeout = (if (intensity > 80) 6000L else 4000L) + java.util.concurrent.ThreadLocalRandom.current().nextLong(0, 500)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        val timeout = (if (intensity > 80) 6000L else 4000L) + rnd.nextLong(0, 500)
         
-        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val id = rnd.nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         try {
             val client = getProtectedClient(vpnService).newBuilder()
@@ -398,11 +399,14 @@ TtlHelper.setTtl(socket, 64)
                 .header("Accept", "application/dns-message")
                 .header("User-Agent", FakePacketHelper.getRandomUserAgent())
                 .apply {
-                    val paddingSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(32, 128)
-                    header("X-Dns-Padding", ByteArray(paddingSize) { 'X'.code.toByte() }.toString(Charsets.US_ASCII))
-                    if (intensity > 60) {
-                        header("X-Forwarded-For", "${java.util.concurrent.ThreadLocalRandom.current().nextInt(1, 255)}.0.0.1")
-                        header("Cache-Control", "no-cache")
+                    val paddingSize = java.util.concurrent.ThreadLocalRandom.current().nextInt(64, 256)
+                    header("X-Dns-Padding", java.util.Base64.getEncoder().encodeToString(ByteArray(paddingSize) { rnd.nextInt(256).toByte() }))
+                    if (intensity > 50) {
+                        header("X-Forwarded-For", "${rnd.nextInt(1, 255)}.${rnd.nextInt(255)}.${rnd.nextInt(255)}.${rnd.nextInt(255)}")
+                        header("Cache-Control", "no-cache, no-store, must-revalidate")
+                        header("Pragma", "no-cache")
+                        header("Expires", "0")
+                        if (rnd.nextBoolean()) header("X-Requested-With", "XMLHttpRequest")
                     }
                 }
                 .build()
