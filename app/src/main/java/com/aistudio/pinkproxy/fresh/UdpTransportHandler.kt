@@ -130,8 +130,10 @@ object UdpTransportHandler {
                                     outPacket.address = clientUdpAddress
                                     outPacket.port = clientUdpPort
                                     outPacket.setData(respBuffer, 0, offset)
-                                    udpSocket.send(outPacket)
-                                    ProxyStats.updateBytes(packet.length.toLong())
+                                    try {
+                                        udpSocket.send(outPacket)
+                                        ProxyStats.updateBytes(packet.length.toLong())
+                                    } catch (e: Throwable) {}
                                 }
                             }
                         } catch (e: Throwable) {
