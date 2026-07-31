@@ -803,4 +803,124 @@ object FakePacketHelper {
         ThreadLocalRandom.current().nextBytes(res.sliceArray(8 until res.size))
         return res
     }
+
+    fun shuffleTlsExtensions(data: ByteArray, length: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        try {
+            var pos = 5 + 4 + 2 + 32 
+            val sidLen = data[pos].toInt() and 0xFF
+            pos += 1 + sidLen
+            val cipherLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherLen
+            val compLen = data[pos].toInt() and 0xFF
+            pos += 1 + compLen
+            if (pos >= length - 2) return data.copyOf(length)
+            
+            val extTotalLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos+1].toInt() and 0xFF)
+            if (pos + 2 + extTotalLen > length) return data.copyOf(length)
+            
+            val extensions = mutableListOf<Pair<Int, ByteArray>>()
+            var extPos = pos + 2
+            while (extPos < pos + 2 + extTotalLen) {
+                val type = ((data[extPos].toInt() and 0xFF) shl 8) or (data[extPos+1].toInt() and 0xFF)
+                val len = ((data[extPos+2].toInt() and 0xFF) shl 8) or (data[extPos+3].toInt() and 0xFF)
+                val extData = data.copyOfRange(extPos + 4, extPos + 4 + len)
+                extensions.add(type to extData)
+                extPos += 4 + len
+            }
+            
+            extensions.shuffle()
+            
+            val baos = ByteArrayOutputStream()
+            val dos = DataOutputStream(baos)
+            dos.write(data, 0, pos)
+            val newExtsBaos = ByteArrayOutputStream()
+            val newExtsDos = DataOutputStream(newExtsBaos)
+            for (ext in extensions) {
+                newExtsDos.writeShort(ext.first)
+                newExtsDos.writeShort(ext.second.size)
+                newExtsDos.write(ext.second)
+            }
+            val newExts = newExtsBaos.toByteArray()
+            dos.writeShort(newExts.size)
+            dos.write(newExts)
+            
+            val result = baos.toByteArray()
+            val recLen = result.size - 5
+            result[3] = ((recLen shr 8) and 0xFF).toByte(); result[4] = (recLen and 0xFF).toByte()
+            val handLen = result.size - 9
+            result[6] = ((handLen shr 16) and 0xFF).toByte(); result[7] = ((handLen shr 8) and 0xFF).toByte(); result[8] = (handLen and 0xFF).toByte()
+            return result
+        } catch (e: Exception) { return data.copyOf(length) }
+    }
+
+    fun addTlsGreaseExtensions(data: ByteArray, length: Int): ByteArray {
+        val greaseTypes = listOf(0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a, 0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa)
+        var current = data.copyOf(length)
+        val rnd = ThreadLocalRandom.current()
+        repeat(rnd.nextInt(1, 4)) {
+            val type = greaseTypes.random()
+            val greaseData = ByteArray(rnd.nextInt(0, 32))
+            rnd.nextBytes(greaseData)
+            current = injectExtension(current, current.size, type, greaseData)
+        }
+        return current
+    }
+
+    fun moveSniExtensionToEnd(data: ByteArray, length: Int): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        try {
+            var pos = 5 + 4 + 2 + 32 
+            val sidLen = data[pos].toInt() and 0xFF
+            pos += 1 + sidLen
+            val cipherLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherLen
+            val compLen = data[pos].toInt() and 0xFF
+            pos += 1 + compLen
+            if (pos >= length - 2) return data.copyOf(length)
+            
+            val extTotalLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos+1].toInt() and 0xFF)
+            if (pos + 2 + extTotalLen > length) return data.copyOf(length)
+            
+            val extensions = mutableListOf<Pair<Int, ByteArray>>()
+            var extPos = pos + 2
+            var sniExt: Pair<Int, ByteArray>? = null
+            
+            while (extPos < pos + 2 + extTotalLen) {
+                val type = ((data[extPos].toInt() and 0xFF) shl 8) or (data[extPos+1].toInt() and 0xFF)
+                val len = ((data[extPos+2].toInt() and 0xFF) shl 8) or (data[extPos+3].toInt() and 0xFF)
+                val extData = data.copyOfRange(extPos + 4, extPos + 4 + len)
+                if (type == 0x0000) {
+                    sniExt = type to extData
+                } else {
+                    extensions.add(type to extData)
+                }
+                extPos += 4 + len
+            }
+            
+            if (sniExt == null) return data.copyOf(length)
+            extensions.add(sniExt) // Add to the end
+            
+            val baos = ByteArrayOutputStream()
+            val dos = DataOutputStream(baos)
+            dos.write(data, 0, pos)
+            val newExtsBaos = ByteArrayOutputStream()
+            val newExtsDos = DataOutputStream(newExtsBaos)
+            for (ext in extensions) {
+                newExtsDos.writeShort(ext.first)
+                newExtsDos.writeShort(ext.second.size)
+                newExtsDos.write(ext.second)
+            }
+            val newExts = newExtsBaos.toByteArray()
+            dos.writeShort(newExts.size)
+            dos.write(newExts)
+            
+            val result = baos.toByteArray()
+            val recLen = result.size - 5
+            result[3] = ((recLen shr 8) and 0xFF).toByte(); result[4] = (recLen and 0xFF).toByte()
+            val handLen = result.size - 9
+            result[6] = ((handLen shr 16) and 0xFF).toByte(); result[7] = ((handLen shr 8) and 0xFF).toByte(); result[8] = (handLen and 0xFF).toByte()
+            return result
+        } catch (e: Exception) { return data.copyOf(length) }
+    }
 }

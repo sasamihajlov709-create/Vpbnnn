@@ -223,8 +223,17 @@ enum class BypassStrategy(
     TLS_SNI_FRAGMENT(StrategyFamily.FRAGMENTATION, 4, 3, StrategyGroup.HEAVY),
     TCP_TLS_SESSION_DESYNC(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
     TCP_WINDOW_SIZE_OSCILLATION(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
+    TCP_WINDOW_SHRINK(StrategyFamily.TCP, 2, 2, StrategyGroup.LIGHT),
+    TCP_SACK_PANIC(StrategyFamily.TCP, 6, 5, StrategyGroup.EXTREME),
+    TCP_SACK_SKEW(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
+    TLS_SNI_SKEW_ADVANCED(StrategyFamily.TLS, 6, 6, StrategyGroup.EXTREME),
+    TLS_EXT_CHAOS(StrategyFamily.TLS, 5, 5, StrategyGroup.HEAVY),
     HTTP_HEADER_MANGLE(StrategyFamily.HTTP, 2, 1, StrategyGroup.LIGHT),
     HTTP_LINE_SPLIT(StrategyFamily.HTTP, 3, 2, StrategyGroup.MEDIUM),
+    HTTP_HOST_REVERSE(StrategyFamily.HTTP, 4, 3, StrategyGroup.HEAVY),
+    UDP_STUTTER(StrategyFamily.UDP, 2, 2, StrategyGroup.LIGHT),
+    UDP_PADDING_CHAOS(StrategyFamily.UDP, 5, 5, StrategyGroup.HEAVY),
+    CHAOS(StrategyFamily.CHAOS, 9, 9, StrategyGroup.EXTREME),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

@@ -42,7 +42,15 @@ object HttpParser {
             1 -> "hOsT: $hostValue" // Mixed case header name
             2 -> "Host:  $hostValue" // Double space
             3 -> "Host:\t$hostValue" // Tab instead of space
+            4 -> "host: $hostValue" // Lowercase
+            5 -> "HOST: $hostValue" // Uppercase
+            6 -> "Host: $hostValue\r" // Trailing CR
+            7 -> "Host: $hostValue " // Trailing space
             else -> originalHostLine
+        }
+        
+        if (mode == 8) {
+            lines.add(hostIndex, "X-Forwarded-Host: $hostValue")
         }
         
         return lines.joinToString("\r\n").toByteArray(Charsets.US_ASCII)

@@ -1357,13 +1357,52 @@ object BypassConfig {
                     socket.receiveBufferSize = originalSize
                 } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
             }
+            BypassStrategy.TCP_WINDOW_SHRINK -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    socket.receiveBufferSize = 1
+                    output.write(finalData, 0, finalLen); output.flush()
+                    delay(rnd.nextLong(50, 200))
+                    socket.receiveBufferSize = originalSize
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+            }
+            BypassStrategy.TCP_SACK_PANIC, BypassStrategy.TCP_SACK_SKEW -> {
+                try {
+                    val originalSize = socket.receiveBufferSize
+                    var pos = 0
+                    while (pos < finalLen) {
+                        val chunk = rnd.nextInt(1, 32).coerceAtMost(finalLen - pos)
+                        socket.receiveBufferSize = rnd.nextInt(1, 100)
+                        output.write(finalData, pos, chunk); output.flush()
+                        pos += chunk
+                        if (rnd.nextBoolean()) delay(1)
+                    }
+                    socket.receiveBufferSize = originalSize
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+            }
             BypassStrategy.HTTP_HEADER_MANGLE -> {
                 if (isProbableHttp(finalData, finalLen)) {
-                    val mangled = HttpParser.mangleHostHeader(finalData, finalLen, rnd.nextInt(1, 4))
+                    val mangled = HttpParser.mangleHostHeader(finalData, finalLen, rnd.nextInt(1, 9))
                     output.write(mangled); output.flush()
                 } else {
                     output.write(finalData, 0, finalLen); output.flush()
                 }
+            }
+            BypassStrategy.HTTP_HOST_REVERSE -> {
+                try {
+                    val s = String(finalData, 0, finalLen, Charsets.US_ASCII)
+                    val lines = s.split("\r\n").toMutableList()
+                    val hostIdx = lines.indexOfFirst { it.startsWith("Host:", ignoreCase = true) }
+                    if (hostIdx != -1) {
+                        val hostLine = lines[hostIdx]
+                        val parts = hostLine.split(":")
+                        if (parts.size >= 2) {
+                            val key = parts[0].reversed()
+                            lines[hostIdx] = "$key:${parts.drop(1).joinToString(":")}"
+                        }
+                    }
+                    output.write(lines.joinToString("\r\n").toByteArray(Charsets.US_ASCII)); output.flush()
+                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
             }
             BypassStrategy.TCP_TLS_SESSION_DESYNC -> {
                 try {
@@ -2142,57 +2181,69 @@ TtlHelper.setTtl(socket, 64)
                     injectHeaderAfterFirstLine(data, length, FAKE_RANGE_HEADER, output)
                 }
             }
+            BypassStrategy.TLS_EXT_CHAOS -> {
+                val mod = FakePacketHelper.shuffleTlsExtensions(finalData, finalLen)
+                val mod2 = FakePacketHelper.addTlsGreaseExtensions(mod, mod.size)
+                output.write(mod2); output.flush()
+            }
+            BypassStrategy.TLS_SNI_SKEW_ADVANCED -> {
+                val mod = FakePacketHelper.moveSniExtensionToEnd(finalData, finalLen)
+                val mod2 = FakePacketHelper.injectExtension(mod, mod.size, 0x0000, "google.com".toByteArray())
+                output.write(mod2); output.flush()
+            }
             BypassStrategy.CHAOS -> {
-                val rndVal = rnd.nextInt(5)
+                val rndVal = rnd.nextInt(6)
                 when (rndVal) {
                     0 -> { // Extreme Multi-fragmentation
-                        val count = rnd.nextInt(5, 12)
-                        for (i in 0 until count) {
-                            val start = i * (length / count)
-                            val end = if (i == count - 1) length else (i + 1) * (length / count)
-                            if (end > start) {
-                                output.write(data, start, end - start); output.flush()
-                                delay(rnd.nextLong(1, 4))
-                                if (rnd.nextInt(100) < 20) { 
-                                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
-                                }
-                            }
+                        var pos = 0
+                        while (pos < finalLen) {
+                            val chunk = rnd.nextInt(1, 3).coerceAtMost(finalLen - pos)
+                            output.write(finalData, pos, chunk); output.flush()
+                            pos += chunk
+                            if (rnd.nextBoolean()) delay(1)
                         }
                     }
-                    1 -> { // SNI Split + Fake Padding + OOB
-                        val offset = TlsParser.findSniOffset(data, length, host)
-                        if (offset != -1) {
-                            output.write(data, 0, offset + 1); output.flush()
-                            try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
-                            delay(rnd.nextLong(20, 80))
-                            output.write(data, offset + 1, length - (offset + 1)); output.flush()
-                        } else {
-                            output.write(data, 0, length); output.flush()
-                        }
+                    1 -> { // OOB + Window Oscillation
+                        try {
+                            socket.sendUrgentData(rnd.nextInt(256))
+                            val origSize = socket.receiveBufferSize
+                            socket.receiveBufferSize = rnd.nextInt(1, 64)
+                            output.write(finalData, 0, finalLen / 2); output.flush()
+                            delay(2)
+                            socket.receiveBufferSize = origSize
+                            output.write(finalData, finalLen / 2, finalLen - (finalLen / 2)); output.flush()
+                        } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
                     }
-                    2 -> { // Window Shake
-                         try { socket.receiveBufferSize = rnd.nextInt(512, 2048) } catch (e: Throwable) {}
-                         val split = (length / 2).coerceIn(1, (length - 1).coerceAtLeast(1))
-                         output.write(data, 0, split); output.flush(); delay(config.delay1)
-                         output.write(data, split, length - split); output.flush()
+                    2 -> { // TLS Mangle + Padding
+                        val mod = FakePacketHelper.shuffleTlsExtensions(finalData, finalLen)
+                        val mod2 = FakePacketHelper.injectExtension(mod, mod.size, 0x0015, FakePacketHelper.buildUdpNoise(rnd.nextInt(100, 500)))
+                        output.write(mod2); output.flush()
                     }
-                    3 -> { // SNI Multi-Overlap
-                        val offset = TlsParser.findSniOffset(data, length, host)
-                        if (offset != -1) {
-                            output.write(data, 0, offset + 1); output.flush()
-                            try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                    3 -> { // Fake RETRANS sequence
+                        try {
+                            val split = finalLen / 2
+                            output.write(finalData, 0, split); output.flush()
+                            val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                            TtlHelper.setTtl(socket, discoveredTtl)
+                            output.write(FakePacketHelper.buildUdpNoise(finalLen - split))
                             TtlHelper.setTtl(socket, 64)
-                            delay(10)
-                            output.write(data, offset, length - offset); output.flush()
+                            output.write(finalData, split, finalLen - split); output.flush()
+                        } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
+                    }
+                    4 -> { // HTTP Smuggling (if HTTP)
+                        if (HttpParser.isHttpRequest(finalData, finalLen)) {
+                            val smuggled = HttpParser.mangleHostHeader(finalData, finalLen, rnd.nextInt(1, 9))
+                            output.write(smuggled); output.flush()
                         } else {
-                            output.write(data, 0, length); output.flush()
+                            output.write(finalData, 0, finalLen); output.flush()
                         }
                     }
-                    else -> { // TCP REORDER Simulation
-                        val split = (length / 2).coerceIn(1, (length - 1).coerceAtLeast(1))
-                        output.write(data, split, length - split); output.flush()
-                        delay(config.delay1)
-                        output.write(data, 0, split); output.flush()
+                    else -> {
+                        // Hybrid Split
+                        val s1 = rnd.nextInt(1, finalLen.coerceAtLeast(2))
+                        output.write(finalData, 0, s1); output.flush()
+                        delay(rnd.nextLong(1, 10))
+                        output.write(finalData, s1, finalLen - s1); output.flush()
                     }
                 }
             }

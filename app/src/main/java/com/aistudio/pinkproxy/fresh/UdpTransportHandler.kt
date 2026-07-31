@@ -473,6 +473,33 @@ object UdpTransportHandler {
             }
         }
         
+        if (config.strategy == BypassStrategy.UDP_STUTTER) {
+            val chunks = rnd.nextInt(2, 5)
+            var pos = 0
+            for (i in 0 until chunks) {
+                val sz = if (i == chunks - 1) length - pos else (length / chunks)
+                if (sz > 0) {
+                    socket.send(DatagramPacket(payload, offset + pos, sz, targetInet, targetPort))
+                    pos += sz
+                    delay(rnd.nextLong(2, 12))
+                }
+            }
+            return
+        }
+
+        if (config.strategy == BypassStrategy.UDP_PADDING_CHAOS) {
+            val targetSize = rnd.nextInt(1200, 1400)
+            if (length < targetSize) {
+                val padded = ByteArray(targetSize)
+                System.arraycopy(payload, offset, padded, 0, length)
+                val noise = ByteArray(targetSize - length)
+                rnd.nextBytes(noise)
+                System.arraycopy(noise, 0, padded, length, noise.size)
+                socket.send(DatagramPacket(padded, targetSize, targetInet, targetPort))
+                return
+            }
+        }
+
         // 4. Packet Stuttering: for new sessions, delay initial packets slightly more
         if (intensity > 65 && !hostStrategyCache.containsKey(host)) {
              delay(rnd.nextLong(10, 40))
