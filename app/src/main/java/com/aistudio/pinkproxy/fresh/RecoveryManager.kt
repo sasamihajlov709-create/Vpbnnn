@@ -269,6 +269,7 @@ object RecoveryManager {
     private fun triggerPanic(reason: String) {
         if (!BypassConfig.isPanicMode) {
             Log.w("RecoveryManager", "Triggering Panic Mode: $reason")
+            ProxyStats.clearCensorshipHistory()
             BypassConfig.panicOptimize()
         }
     }

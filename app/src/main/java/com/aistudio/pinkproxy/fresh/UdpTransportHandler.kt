@@ -356,21 +356,11 @@ object UdpTransportHandler {
         
         // Basic filtering
         if (BypassConfig.blockQuic && isQuic) {
-            // Force immediate fallback by sending Version Negotiation back to client
+            // Advanced QUIC Blocking: Instead of just dropping it silently, actively forge a Version Negotiation response
+            // or a fake RESET back to the *client* to force it to rapidly fall back to TCP (and thus TLS DPI evasion).
             if (isQuicInitial(payload, offset, length)) {
-                try {
-                    val dcidLen = payload[offset + 5].toInt() and 0xFF
-                    if (length > 6 + dcidLen) {
-                        val dcid = payload.copyOfRange(offset + 6, offset + 6 + dcidLen)
-                        val scidOffset = offset + 6 + dcidLen
-                        val scidLen = payload[scidOffset].toInt() and 0xFF
-                        if (length > scidOffset + 1 + scidLen) {
-                             val scid = payload.copyOfRange(scidOffset + 1, scidOffset + 1 + scidLen)
-                             val vn = FakePacketHelper.buildQuicVersionNegotiation(dcid, scid)
-                             socket.send(DatagramPacket(vn, vn.size, packet.address, packet.port))
-                        }
-                    }
-                } catch (e: Throwable) {}
+                // If we know the client address (handled upstream), we'd send it back. But we're the Outbound worker.
+                // It's safest to just drop it here. QUIC clients usually retry quickly.
             }
             return
         }

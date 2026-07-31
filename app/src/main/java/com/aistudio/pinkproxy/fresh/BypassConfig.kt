@@ -787,14 +787,13 @@ object BypassConfig {
             lastErrorTime = System.currentTimeMillis()
             if (errorCounter > 8) {
                 ProxyStats.updateCongestionWindow(-5)
-                // Heuristic: continuous errors might be MTU issues
-                if (errorCounter > 20) {
-                    val currentMtu = _currentMtu.value
-                    if (currentMtu > 1200) {
-                        _currentMtu.value = currentMtu - 50
-                        ProxyStats.logRecovery("MTU Auto-tuning: $currentMtu -> ${_currentMtu.value} due to persistent errors.")
-                        RecoveryManager.handleEvent(RecoveryEvent.TUNNEL_STALL, "MTU Tuned")
-                    }
+            }
+            if (errorCounter > 20) {
+                val currentMtu = _currentMtu.value
+                if (currentMtu > 1200) {
+                    _currentMtu.value = currentMtu - 50
+                    ProxyStats.logRecovery("MTU Auto-tuning: $currentMtu -> ${_currentMtu.value} due to persistent errors.")
+                    RecoveryManager.handleEvent(RecoveryEvent.TUNNEL_STALL, "MTU Tuned")
                 }
                 errorCounter = 0
             }
@@ -3002,26 +3001,44 @@ TtlHelper.setTtl(socket, 64)
                     val sniOffset = TlsParser.findSniOffset(data, length, host)
                     var pos = 0
                     
-                    TtlHelper.setMss(socket, rnd.nextInt(64, 256))
-                    TtlHelper.setWindowSize(socket, rnd.nextInt(128, 512))
+                    TtlHelper.setMss(socket, rnd.nextInt(64, 128)) // Harder MSS squeeze
+                    TtlHelper.setWindowSize(socket, rnd.nextInt(64, 256)) // Harder Window squeeze
                     
+                    // Phase 1: Heavy Noise Bombing (Low TTL)
+                    TtlHelper.setLowTtlTemporary(socket, rnd.nextInt(2, 5), 0)
+                    val fakeSni = FakePacketHelper.buildMultiSniHello("google.com")
+                    output.write(fakeSni); output.flush()
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable){}
+                    TtlHelper.setLowTtlTemporary(socket, 64, 2)
+                    
+                    // Phase 2: Staggered Micro-Fragments
                     if (sniOffset != -1 && host.isNotEmpty()) {
-                        // Split right in the middle of SNI
                         val split1 = sniOffset + (host.length / 2)
-                        output.write(data, 0, split1); output.flush()
+                        val split2 = sniOffset + (host.length / 3) // overlap bound
+                        
+                        output.write(data, 0, split2); output.flush()
                         try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                         delay(config.delay1)
+                        
+                        output.write(data, split2, split1 - split2); output.flush()
+                        delay(config.delay2)
                         pos = split1
                     } else {
-                        val split1 = (length / 3).coerceAtLeast(1)
+                        val split1 = (length / 4).coerceAtLeast(1)
                         output.write(data, 0, split1); output.flush()
                         try { socket.sendUrgentData(rnd.nextInt(256)) } catch (e: Throwable) {}
                         delay(config.delay1)
                         pos = split1
                     }
                     
-                    // Real P2
-                    output.write(data, pos, length - pos); output.flush()
+                    // Phase 3: Trailing Data
+                    val remain = length - pos
+                    if (remain > 0) {
+                        val split2 = pos + (remain / 2).coerceAtLeast(1)
+                        output.write(data, pos, split2 - pos); output.flush()
+                        delay(config.delay2.coerceAtLeast(5L))
+                        output.write(data, split2, length - split2); output.flush()
+                    }
                     
                     TtlHelper.setMss(socket, 1400)
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }

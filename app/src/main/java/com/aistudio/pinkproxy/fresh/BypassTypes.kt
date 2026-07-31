@@ -347,6 +347,10 @@ object ProxyStats {
         _censorshipIntensity.value = newVal.coerceIn(0, 100)
     }
 
+    fun clearCensorshipHistory() {
+        _censorshipIntensity.value = 0
+    }
+
     fun recordCensorshipEvent(isFailure: Boolean) {
         if (isFailure) {
             _errors.update { it + 1 }

@@ -523,7 +523,7 @@ TtlHelper.setTtl(socket, 64)
         return supervisorScope {
             val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(hardcodedIps.size)
             val completed = java.util.concurrent.atomic.AtomicInteger(0)
-            hardcodedIps.forEach { url ->
+            val jobs = hardcodedIps.map { url ->
                 launch(ProxyDispatcher.io) {
                     try {
                         val res = queryDoh(host, url, vpnService)
@@ -538,11 +538,13 @@ TtlHelper.setTtl(socket, 64)
                     }
                 }
             }
-            try {
+            val result = try {
                 withTimeoutOrNull(5000) { channel.receive() } ?: emptyList()
             } catch (e: Throwable) {
                 emptyList()
             }
+            jobs.forEach { it.cancel() }
+            result
         }
     }
 }

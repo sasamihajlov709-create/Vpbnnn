@@ -37,13 +37,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         scope.launch {
             while (isActive) {
                 delay(60000)
-                val activeCount = 2000 - activeConnectionSemaphore.availablePermits()
+                val activeCount = 5000 - activeConnectionSemaphore.availablePermits()
                 if (activeCount > 500) {
                     Log.i("PinkProxy", "Watchdog: $activeCount active connections. Cleaning up...")
                     // If semaphore is nearly empty, we might have leaked permits
-                    if (activeCount > 1800) {
+                    if (activeCount > 4800) {
                         Log.e("PinkProxy", "CRITICAL: Semaphore exhaustion. Force resetting permits.")
-                        activeConnectionSemaphore.release(2000 - activeConnectionSemaphore.availablePermits())
+                        activeConnectionSemaphore.release(5000 - activeConnectionSemaphore.availablePermits())
                     }
                 }
                 
@@ -72,7 +72,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         try { client.close() } catch (e: Throwable) {}
                         continue
                     }
-                    
+                                
                     val clientJob = scope.launch {
                         try {
                             client.tcpNoDelay = true
@@ -80,7 +80,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                             try { client.receiveBufferSize = 64 * 1024 } catch (e: Throwable) {}
                             handleClient(client, this)
                         } finally {
-                            activeConnectionSemaphore.release()
+                                            activeConnectionSemaphore.release()
                         }
                     }
                 }
@@ -179,7 +179,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             }
         }
 
-        ProxyStats.updateConnections(1)
         try {
             client.soTimeout = 10000
             val input = client.getInputStream()
@@ -301,7 +300,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             Log.v("PinkProxy", "Client handling error: ${e.message}")
         } finally {
             try { client.close() } catch (ex: Throwable) {}
-            ProxyStats.updateConnections(-1)
         }
     }
 }
