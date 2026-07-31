@@ -192,44 +192,36 @@ object RobustResolver {
             }
         }
         
-        val queries = listOf<suspend () -> List<InetAddress>>(
-            { DnsProtocols.queryDohRacing(host, vpnService) },
-            { DnsProtocols.queryDohExtreme(host, vpnService) },
-            { DnsProtocols.queryDohJson(host, vpnService) },
-            { 
-                try {
-                    val httpsRecords = DnsProtocols.queryHttpsRecord(host, vpnService)
-                    if (httpsRecords.isNotEmpty()) {
-                        DnsCacheManager.putEchSupport(host, true)
-                    }
-                } catch (e: Throwable) {}
-                emptyList()
-            },
-            { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) },
-            { 
-                val records = try { DnsProtocols.queryUdpDnsDetailed(host, "1.1.1.1", vpnService) } catch(e: Throwable) { emptyList() }
-                if (records.isNotEmpty()) DnsCacheManager.putDetailed(host, records)
-                records.map { it.address }
-            },
-            { 
-                val records = try { DnsProtocols.queryUdpDnsDetailed(host, "8.8.8.8", vpnService) } catch(e: Throwable) { emptyList() }
-                if (records.isNotEmpty()) DnsCacheManager.putDetailed(host, records)
-                records.map { it.address }
-            },
-            { DnsProtocols.queryUdpDnsReorder(host, "1.1.1.1", vpnService) },
-            { DnsProtocols.queryUdpDnsReorder(host, "8.8.8.8", vpnService) },
-            { DnsProtocols.queryDnsOverTcp(host, "8.8.8.8", vpnService) },
-            { DnsProtocols.queryDnsOverTcp(host, "9.9.9.9", vpnService) },
-            { DnsProtocols.queryTcpDnsShadow(host, "1.1.1.1", vpnService) },
-            { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) },
-            { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) },
-            { DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService) },
-            { DnsProtocols.queryUdpDnsShadow(host, "9.9.9.9", vpnService) },
-            { 
-                delay(600) // Slight delay for emergency fallback
-                DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
-            }
-        )
+        val queries = mutableListOf<suspend () -> List<InetAddress>>()
+        
+        // 1. Primary DoH (Very Reliable)
+        queries.add { DnsProtocols.queryDohRacing(host, vpnService) }
+        
+        // 2. DoT or fallback DoH
+        queries.add { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) }
+        
+        // 3. UDP with Shadow (Fast, evasion enabled)
+        queries.add { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) }
+        
+        // 4. TCP with Shadow (For extreme evasion)
+        queries.add { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
+        
+        // 5. Background ECH check (does not block main resolution)
+        queries.add { 
+            try {
+                val httpsRecords = DnsProtocols.queryHttpsRecord(host, vpnService)
+                if (httpsRecords.isNotEmpty()) {
+                    DnsCacheManager.putEchSupport(host, true)
+                }
+            } catch (e: Throwable) {}
+            emptyList()
+        }
+        
+        // 6. Emergency Fallback
+        queries.add { 
+            delay(1000) 
+            DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
+        }
         
         val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size)
         val activeJobs = mutableListOf<Job>()

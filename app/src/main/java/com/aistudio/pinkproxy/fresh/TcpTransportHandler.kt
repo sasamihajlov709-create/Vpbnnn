@@ -9,7 +9,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicLong
-import kotlinx.coroutines.selects.select
 
 object TcpTransportHandler {
 
@@ -615,11 +614,15 @@ object TcpTransportHandler {
                     }
                 }
 
-                select<Unit> {
-                    remoteToClient.onJoin {}
-                    clientToRemote.onJoin {}
-                }
-                
+                try {
+                    coroutineScope {
+                        val firstFinished = CompletableDeferred<Unit>()
+                        remoteToClient.invokeOnCompletion { firstFinished.complete(Unit) }
+                        clientToRemote.invokeOnCompletion { firstFinished.complete(Unit) }
+                        firstFinished.await()
+                    }
+                } catch(e: Throwable) {}
+
                 // Allow up to 2 seconds for graceful termination of the other direction
                 withTimeoutOrNull(2000) {
                     if (remoteToClient.isActive) remoteToClient.join()
