@@ -245,6 +245,7 @@ object TcpTransportHandler {
 
             val connectTime = System.currentTimeMillis() - start
             BypassConfig.TrafficShaper.updateRtt(connectTime)
+            DpiEngine.recordRtt(targetHost, connectTime)
 
             val clientIn = clientSocket.getInputStream()
             val clientOut = clientSocket.getOutputStream()
@@ -408,6 +409,7 @@ object TcpTransportHandler {
                                     firstResponse = false
                                     val rtt = System.currentTimeMillis() - start
                                     BypassConfig.recordSuccess(strategy, rtt, targetHost)
+                                    DpiEngine.recordRtt(targetHost, rtt)
                                     
                                     // Deep Packet Inspection evasion: block marker detection
                                     if (n >= 7) {

@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.LinkedList
+import java.util.Collections
 
 object DpiEngine {
     private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
@@ -20,6 +22,9 @@ object DpiEngine {
     private val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
     private val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     private val hostStrategyBlacklist = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Long>>()
+    
+    private val rttHistory = ConcurrentHashMap<HostCategory, MutableList<Long>>()
+    private val MAX_RTT_HISTORY = 10
 
     private var lastGlobalReset = System.currentTimeMillis()
     private val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
@@ -30,17 +35,27 @@ object DpiEngine {
         val udpBlockRate: Double,
         val timeoutRate: Double,
         val stallRate: Double,
+        val jitter: Double,
         val intensity: Int
     )
 
     fun getCensorshipFingerprint(): CensorshipFingerprint {
         val total = eventHistory.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
+        
+        // Calculate global jitter from RTT history
+        val allHistory = rttHistory.values.flatten()
+        val jitter = if (allHistory.size > 2) {
+            val diffs = allHistory.zipWithNext { a, b -> Math.abs(a - b) }
+            diffs.average()
+        } else 0.0
+
         return CensorshipFingerprint(
             rstRate = (eventHistory[DpiType.TCP_RESET]?.get() ?: 0) / total,
             sniBlockRate = (eventHistory[DpiType.TLS_SNI_BLOCK]?.get() ?: 0) / total,
             udpBlockRate = (eventHistory[DpiType.UDP_BLOCK]?.get() ?: 0) / total,
             timeoutRate = (eventHistory[DpiType.CONNECTION_TIMEOUT]?.get() ?: 0) / total,
             stallRate = ((eventHistory[DpiType.TCP_STALL]?.get() ?: 0) + (eventHistory[DpiType.SSL_STALL]?.get() ?: 0)) / total,
+            jitter = jitter,
             intensity = ProxyStats.censorshipIntensity.value
         )
     }
@@ -204,6 +219,24 @@ object DpiEngine {
 
     fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {
         return strategyChains[failedStrategy]
+    }
+
+    fun recordRtt(host: String, rtt: Long) {
+        val cat = HostClassifier.classify(host)
+        val history = rttHistory.getOrPut(cat) { Collections.synchronizedList(LinkedList()) }
+        
+        history.add(rtt)
+        if (history.size > MAX_RTT_HISTORY) history.removeAt(0)
+        
+        // Detect throttling: if current RTT is > 2.5x the average of previous ones
+        if (history.size >= 5) {
+            val avg = history.take(history.size - 1).average()
+            if (rtt > avg * 2.5 && rtt > 300) {
+                Log.w("DpiEngine", "THROTTLING DETECTED for $cat (RTT: $rtt, Avg: $avg). Boosting strategy family.")
+                boostStrategyFamily(StrategyFamily.ADAPTIVE, host)
+                ProxyStats.logRecovery("Throttling detected for $cat. Adaptive boost applied.")
+            }
+        }
     }
 
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
@@ -431,16 +464,35 @@ object DpiEngine {
         
         // Calculate Network Stability Score: combination of success rate and reset frequency
         val fingerprint = getCensorshipFingerprint()
+        // Automatic Censorship Intensity Calculation
+        val calculatedIntensity = (
+            fingerprint.rstRate * 30 + 
+            fingerprint.sniBlockRate * 40 + 
+            fingerprint.timeoutRate * 20 + 
+            fingerprint.stallRate * 10
+        ).toInt().coerceIn(0, 100)
+        
+        if (Math.abs(calculatedIntensity - ProxyStats.censorshipIntensity.value) > 15) {
+            ProxyStats.updateCensorshipIntensity(calculatedIntensity)
+            Log.i("DpiEngine", "Automatic Censorship Intensity updated to $calculatedIntensity")
+        }
+
         val stability = (globalSuccessRate * 0.6 + (100 - fingerprint.rstRate * 100) * 0.4).toInt().coerceIn(0, 100)
         ProxyStats.updateStabilityScore(stability)
         
         // Adaptive MTU Adjustment
-        if (fingerprint.timeoutRate > 0.4 || fingerprint.stallRate > 0.5) {
+        if (fingerprint.timeoutRate > 0.4 || fingerprint.stallRate > 0.5 || fingerprint.jitter > 500) {
              val currentMtu = BypassConfig.currentMtu.value
              if (currentMtu > 1100) {
                  BypassConfig.setMtu(currentMtu - 50)
-                 ProxyStats.logRecovery("Adaptive Engine: Reducing MTU to $currentMtu to evade blocking.")
+                 ProxyStats.logRecovery("Adaptive Engine: Reducing MTU to $currentMtu to evade jitter/blocking.")
              }
+        }
+        
+        // Jitter-based family boosting
+        if (fingerprint.jitter > 800) {
+            boostStrategyFamily(StrategyFamily.ADAPTIVE, null)
+            ProxyStats.logRecovery("High Jitter Detected (${fingerprint.jitter.toInt()}ms). Switching to ADAPTIVE family.")
         }
 
         // Auto-Panic Mode trigger: More aggressive when seeing TCP Reset spikes
