@@ -230,6 +230,23 @@ object UdpTransportHandler {
                             val payloadLen = len - headerLen
                             val payloadOffset = headerLen
                             
+                            // DNS Interceptor
+                            if (targetPortNum == 53) {
+                                val dnsPayload = ByteArray(payloadLen)
+                                System.arraycopy(data, payloadOffset, dnsPayload, 0, payloadLen)
+                                val response = DnsInterceptor.intercept(dnsPayload, vpnService)
+                                if (response != null) {
+                                    val respPacket = ByteArray(headerLen + response.size)
+                                    System.arraycopy(data, 0, respPacket, 0, headerLen)
+                                    System.arraycopy(response, 0, respPacket, headerLen, response.size)
+                                    try {
+                                        udpSocket.send(DatagramPacket(respPacket, respPacket.size, clientUdpAddress, clientUdpPort))
+                                    } catch (e: Throwable) {}
+                                    continue
+                                }
+                            }
+
+                            
                             // Proactive QUIC rejection to force fallback to TCP
                             if (BypassConfig.blockQuic && targetPortNum == 443 && payloadLen > 20) {
                                 if (isQuicInitial(data, payloadOffset, payloadLen)) {
