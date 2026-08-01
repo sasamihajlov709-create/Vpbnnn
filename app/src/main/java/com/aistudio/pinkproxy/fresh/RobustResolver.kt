@@ -258,9 +258,6 @@ object RobustResolver {
         val receivedResults = mutableListOf<List<InetAddress>>()
         var completed = 0
         
-        // Consensus mechanism: Require at least 2 independent sources to agree if censorship is high
-        val consensusTarget = if (intensity > 80) 2 else 1
-        
         while (completed < queries.size) {
             val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { 
                 if (e !is TimeoutCancellationException && e is CancellationException) throw e
@@ -293,41 +290,18 @@ object RobustResolver {
                 
                 receivedResults.add(cleanRes)
                 
-                val counts = mutableMapOf<List<String>, Int>()
-                for (r in receivedResults) {
-                    val sortedIpStrs = r.map { it.hostAddress ?: "" }.sorted()
-                    counts[sortedIpStrs] = (counts[sortedIpStrs] ?: 0) + 1
-                }
-                
-                val winner = counts.entries.maxByOrNull { it.value }
-                if (winner != null && winner.value >= consensusTarget) {
-                    // Re-construct InetAddress list from winner strings
-                    val winnerIps = receivedResults.first { r ->
-                        r.map { it.hostAddress ?: "" }.sorted() == winner.key
-                    }
-                    result = winnerIps
-                    break
-                }
-                
-                // Fast-path: if we have DoH results and they seem clean (not bogons), 
-                // we can lower consensus target if we've waited enough
-                if (completed >= 5 && receivedResults.isNotEmpty() && intensity <= 80) {
-                    result = receivedResults.first()
+                // Fast path: As soon as we receive a clean resolution from any secure resolver, return immediately
+                if (cleanRes.isNotEmpty()) {
+                    result = cleanRes
                     break
                 }
             }
             completed++
         }
         
-        // Final fallback: use the most frequent result even if target not met
+        // Final fallback: use the first received result if loop ended
         if (result.isEmpty() && receivedResults.isNotEmpty()) {
-            val counts = mutableMapOf<List<String>, Int>()
-            receivedResults.forEach { r ->
-                val sorted = r.map { it.hostAddress ?: "" }.sorted()
-                counts[sorted] = (counts[sorted] ?: 0) + 1
-            }
-            val winnerKey = counts.entries.maxByOrNull { it.value }?.key
-            result = receivedResults.firstOrNull { r -> r.map { it.hostAddress ?: "" }.sorted() == winnerKey } ?: receivedResults.first()
+            result = receivedResults.first()
         }
         
         activeJobs.forEach { it.cancel() }

@@ -423,7 +423,7 @@ object ServiceChecker {
                                         socket.getOutputStream().flush()
                                         val response = ByteArray(5)
                                         val readCount = socket.getInputStream().read(response)
-                                        if (readCount >= 1 && response[0] == 0x16.toByte()) {
+                                        if (readCount >= 1 && (response[0] == 0x16.toByte() || response[0] == 0x17.toByte() || response[0] == 0x14.toByte() || response[0] == 'H'.code.toByte())) {
                                             success = true
                                         }
                                     }
