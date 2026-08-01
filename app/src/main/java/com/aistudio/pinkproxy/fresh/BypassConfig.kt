@@ -212,39 +212,19 @@ object BypassConfig {
     }
 
     fun getBestStrategyForHost(host: String): BypassStrategy {
-        val panicMode = ProxyStats.dpiEventHistory.value.filter { it.type == DpiType.TCP_RESET || it.type == DpiType.CONNECTION_TIMEOUT }
-            .count { System.currentTimeMillis() - it.timestamp < 10000 } > 5
-        if (panicMode) {
-            return BypassStrategy.values().filter { it.group == StrategyGroup.EXTREME }.random()
-        }
-
         ensureMemoryEfficiency()
         if (!isAutoTuning) return _strategy.value
         
         val cat = HostClassifier.classify(host)
-        
-        // 1. Check for manual lock
-        if (hostLockTime.containsKey(host)) {
-            val lockTime = hostLockTime[host] ?: 0
-            if (System.currentTimeMillis() - lockTime < 300_000) {
-                return DpiEngine.getBestStrategy(cat, host)
-            } else {
-                hostLockTime.remove(host)
-                censorHeuristic.remove(host)
-            }
-        }
-
-        // 2. Persistent Memory check
         val now = System.currentTimeMillis()
+
+        // 1. Check for persistent memory
         hostStrategyMemory[host]?.let { (remembered, expiry) ->
-            if (now < expiry) {
-                return remembered
-            } else {
-                hostStrategyMemory.remove(host)
-            }
+            if (now < expiry) return remembered
+            hostStrategyMemory.remove(host)
         }
 
-        // 3. Adaptive Engine Recommendation
+        // 2. Adaptive Engine Selection
         val best = DpiEngine.getBestStrategy(cat, host)
         hostStrategyMemory[host] = best to (now + SESSION_TTL)
         return best
@@ -514,12 +494,21 @@ object BypassConfig {
         
         val ttl = if (fakeTtl == 0) rnd.nextInt(3, 8) else fakeTtl
         
+        // Dynamic MSS calculation to evade DPI fingerprinting
+        val mss = when {
+            intensity > 90 -> rnd.nextInt(128, 512)
+            intensity > 75 -> rnd.nextInt(512, 1000)
+            intensity > 50 -> 1100 + rnd.nextInt(100)
+            else -> 1440
+        }
+
         return SessionConfig(
             strategy = effectiveStrategy,
             frag1 = f1,
             delay1 = d1,
             fakeTtl = ttl,
-            useIPv6 = host.contains(":") || (rnd.nextInt(100) < 15 && intensity > 60)
+            useIPv6 = host.contains(":") || (rnd.nextInt(100) < 15 && intensity > 60),
+            mss = mss
         )
     }
     
@@ -1097,6 +1086,39 @@ object BypassConfig {
             BypassStrategy.UDP_TELEGRAM_FAKE -> {
                 val fake = FakePacketHelper.buildUdpNoise(48)
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
+            }
+            BypassStrategy.UDP_COMBINED_NUCLEAR -> {
+                val isIpv6 = targetAddr is java.net.Inet6Address
+                // 1. Double Shadow: Send two different fake protocol handshakes with very low TTL
+                try {
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
+                    val fake1 = FakePacketHelper.buildProtocolConfusion("DTLS")
+                    socket.send(DatagramPacket(fake1, fake1.size, targetAddr, targetPort))
+                    delay(1)
+                    val fake2 = FakePacketHelper.buildProtocolConfusion("QUIC")
+                    socket.send(DatagramPacket(fake2, fake2.size, targetAddr, targetPort))
+                    delay(rnd.nextLong(2, 5))
+                } catch (e: Throwable) {}
+
+                // 2. Fragmented and Reordered real data with Redundancy
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                val split = (length / 2).coerceIn(1, length - 1)
+                
+                // Redundancy: send a copy of the whole packet first (might be blocked, but good if first part is lost)
+                if (rnd.nextBoolean()) {
+                    socket.send(packet)
+                    delay(1)
+                }
+
+                if (rnd.nextBoolean()) {
+                    socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 3))
+                    socket.send(DatagramPacket(data, offset, split, targetAddr, targetPort))
+                } else {
+                    socket.send(DatagramPacket(data, offset, split, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 3))
+                    socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
+                }
             }
             BypassStrategy.UDP_COMBINED_HYBRID -> {
                 val isIpv6 = targetAddr is java.net.Inet6Address
@@ -3333,6 +3355,44 @@ TtlHelper.setTtl(socket, 64)
                     output.write(data, 3, length - 3); output.flush()
                 } else {
                     output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_COMBINED_NUCLEAR -> {
+                // Nuclear strategy: Zero Window Stall + Multiple Fake Ttl segments + Reorder + OOB
+                val sniOffset = TlsParser.findSniOffset(data, length)
+                
+                // 1. Initial Zero-Window Stall to freeze DPI tracking
+                try { TtlHelper.setWindowSize(socket, 0) } catch(e: Throwable) {}
+                delay(rnd.nextLong(20, 100))
+                
+                // 2. Send Multiple Fake segments with low TTL to poison DPI reassembly
+                repeat(rnd.nextInt(2, 4)) {
+                    val chaos = FakePacketHelper.buildTlsChaosPacket()
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    output.write(chaos); output.flush()
+                    delay(rnd.nextLong(2, 10))
+                }
+                
+                // 3. Send first bit of real data with tiny window
+                TtlHelper.setTtl(socket, 64)
+                try { TtlHelper.setWindowSize(socket, rnd.nextInt(2, 16)) } catch(e: Throwable) {}
+                val split1 = if (sniOffset != -1) sniOffset + 1 else 2
+                output.write(data, 0, split1); output.flush()
+                delay(config.delay1)
+                
+                // 4. Send OOB data to further confuse reassembly
+                if (rnd.nextBoolean()) try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                
+                // 5. Restore window and send rest of data fragmented
+                try { TtlHelper.setWindowSize(socket, 65535) } catch(e: Throwable) {}
+                val remaining = length - split1
+                if (remaining > 20) {
+                    val split2 = remaining / 2
+                    output.write(data, split1, split2); output.flush()
+                    delay(config.delay2)
+                    output.write(data, split1 + split2, remaining - split2); output.flush()
+                } else if (remaining > 0) {
+                    output.write(data, split1, remaining); output.flush()
                 }
             }
             BypassStrategy.TCP_COMBINED_HYBRID -> {

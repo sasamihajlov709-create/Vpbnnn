@@ -114,10 +114,16 @@ object DpiEngine {
         val total = successHistory.values.sumOf { it.get() } + failureHistory.values.sumOf { it.get() }
         if (total > 20) {
             val rate = (successHistory.values.sumOf { it.get() }.toDouble() / total * 100)
-            if (rate < 15 && System.currentTimeMillis() - lastGlobalReset > 600_000) {
-                Log.e("DpiEngine", "GLOBAL STALL DETECTED (Success rate $rate%). Resetting all scores.")
-                resetEverything()
+            val fingerprint = getCensorshipFingerprint()
+            
+            if ((rate < 15 || fingerprint.timeoutRate > 0.8) && System.currentTimeMillis() - lastGlobalReset > 480_000) {
+                Log.e("DpiEngine", "GLOBAL STALL DETECTED (Success rate $rate%, Timeout ${fingerprint.timeoutRate*100}%). Emergency fallback rotation.")
+                ProxyStats.logRecovery("Global Connectivity Stall: Emergency Strategy Rotation Triggered")
+                BypassConfig.rotateGlobalStrategy()
                 lastGlobalReset = System.currentTimeMillis()
+                
+                // Nuclear reset if it's really bad
+                if (rate < 5) resetEverything()
             }
         }
     }
@@ -133,8 +139,13 @@ object DpiEngine {
     }
 
     fun getBestExtremeStrategy(host: String? = null): BypassStrategy {
-        val extreme = BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
-        return extreme.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.ZAPRET_EXTREME
+        val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+        val extreme = strategyScores[cat]?.entries?.filter { it.key.group == StrategyGroup.EXTREME } ?: emptyList()
+        if (extreme.isEmpty()) {
+            return BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
+                .maxByOrNull { getAverageScore(it) } ?: BypassStrategy.ZAPRET_EXTREME
+        }
+        return extreme.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.ZAPRET_EXTREME
     }
 
     fun recordEvent(type: DpiType) {
@@ -423,6 +434,15 @@ object DpiEngine {
         val stability = (globalSuccessRate * 0.6 + (100 - fingerprint.rstRate * 100) * 0.4).toInt().coerceIn(0, 100)
         ProxyStats.updateStabilityScore(stability)
         
+        // Adaptive MTU Adjustment
+        if (fingerprint.timeoutRate > 0.4 || fingerprint.stallRate > 0.5) {
+             val currentMtu = BypassConfig.currentMtu.value
+             if (currentMtu > 1100) {
+                 BypassConfig.setMtu(currentMtu - 50)
+                 ProxyStats.logRecovery("Adaptive Engine: Reducing MTU to $currentMtu to evade blocking.")
+             }
+        }
+
         // Auto-Panic Mode trigger: More aggressive when seeing TCP Reset spikes
         if ((globalSuccessRate < 25 && totalSuccess + totalFailure > 10) || fingerprint.rstRate > 0.4) {
              if (!BypassConfig.isPanicModeFlow.value) {

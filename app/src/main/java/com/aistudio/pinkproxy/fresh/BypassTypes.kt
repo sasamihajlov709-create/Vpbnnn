@@ -238,6 +238,8 @@ enum class BypassStrategy(
     TCP_REORDER(StrategyFamily.TCP, 4, 3, StrategyGroup.MEDIUM),
     TCP_COMBINED_HYBRID(StrategyFamily.ADAPTIVE, 10, 8, StrategyGroup.EXTREME),
     UDP_COMBINED_HYBRID(StrategyFamily.ADAPTIVE, 8, 7, StrategyGroup.EXTREME),
+    TCP_COMBINED_NUCLEAR(StrategyFamily.ADAPTIVE, 12, 10, StrategyGroup.EXTREME),
+    UDP_COMBINED_NUCLEAR(StrategyFamily.ADAPTIVE, 12, 10, StrategyGroup.EXTREME),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -641,7 +643,8 @@ data class SessionConfig(
     val useIPv6: Boolean = false,
     val frag2: Int = 0,
     val frag3: Int = 0,
-    val delay2: Long = 0
+    val delay2: Long = 0,
+    val mss: Int = 1300
 )
 
 data class StrategyMetric(val strategy: BypassStrategy, val score: Int, val successes: Long, val failures: Long, val avgRtt: Long)

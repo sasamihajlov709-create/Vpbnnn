@@ -591,13 +591,8 @@ object TcpTransportHandler {
                                     if ((isMssClamp || currentIntensity > 50) && n > 1100) {
                                         var offset = 0
                                         while (offset < n) {
-                                            // Opportunistic MSS Shifting: vary MSS for each fragment to break DPI fingerprint
-                                            val mss = when {
-                                                isMssClamp -> 512 + rnd.nextInt(300)
-                                                currentIntensity > 90 -> rnd.nextInt(128, 768)
-                                                currentIntensity > 75 -> rnd.nextInt(512, 1100)
-                                                else -> 1100 + rnd.nextInt(200)
-                                            }
+                                            // Dynamic MSS from config (automated by DpiEngine/BypassConfig)
+                                            val mss = if (isMssClamp) minOf(config.mss, 512 + rnd.nextInt(300)) else config.mss
                                             val sz = minOf(mss, n - offset)
                                             remoteOut.write(buffer, offset, sz)
                                             remoteOut.flush()

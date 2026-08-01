@@ -226,9 +226,18 @@ object DnsProtocols {
             
             // Fragmented send with fake padding
             val split = rnd.nextInt(2, fullQuery.size - 2)
+            
+            // Zero-Window Stall to freeze DPI buffer
+            TtlHelper.setWindowSize(socket, 0)
+            delay(rnd.nextLong(10, 50))
+            TtlHelper.setWindowSize(socket, rnd.nextInt(4, 16)) // Force tiny initial segment
+            
             output.write(fullQuery, 0, split)
             output.flush()
-            delay(rnd.nextLong(1, 10))
+            delay(rnd.nextLong(1, 15))
+            
+            // Restore window for the rest
+            TtlHelper.setWindowSize(socket, 65535)
             
             // Inject fake segment if intensity is high
             if (ProxyStats.censorshipIntensity.value > 65) {
@@ -359,10 +368,17 @@ TtlHelper.setTtl(socket, 64)
             fullQuery[1] = (query.size and 0xFF).toByte()
             System.arraycopy(query, 0, fullQuery, 2, query.size)
             
-            // Fragment the TCP stream for the DNS query
+            // Fragment the TCP stream for the DNS query with Zero-Window pulses
             val split = rnd.nextInt(2, fullQuery.size - 1)
+            
+            if (ProxyStats.censorshipIntensity.value > 70) {
+                TtlHelper.setWindowSize(socket, 0)
+                delay(rnd.nextLong(5, 20))
+                TtlHelper.setWindowSize(socket, 65535)
+            }
+            
             output.write(fullQuery, 0, split); output.flush()
-            delay(rnd.nextLong(1, 5))
+            delay(rnd.nextLong(2, 8))
             output.write(fullQuery, split, fullQuery.size - split); output.flush()
             
             val dis = DataInputStream(socket.getInputStream())
