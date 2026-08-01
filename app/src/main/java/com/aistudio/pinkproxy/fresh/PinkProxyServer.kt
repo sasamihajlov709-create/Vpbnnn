@@ -162,6 +162,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.DelicateCoroutinesApi::class)
     private suspend fun handleClient(client: Socket, scope: CoroutineScope) {
+        val startTimestamp = System.currentTimeMillis()
         // UID Verification for Android 10+ (API 29+)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             try {
@@ -289,14 +290,26 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             readExactly(input, portBytes, 0, 2)
             val targetPort = ((portBytes[0].toInt() and 0xff) shl 8) or (portBytes[1].toInt() and 0xff)
             
-            // SOCKS5 success response
-            if (ProxyStats.censorshipIntensity.value > 85) delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(10, 50))
+            val intensity = ProxyStats.censorshipIntensity.value
+            // 3. Adaptive SOCKS5 Handshake Jitter to defeat protocol timing analysis
+            if (intensity > 60) {
+                val jitter = if (intensity > 90) ThreadLocalRandom.current().nextLong(20, 100) else ThreadLocalRandom.current().nextLong(5, 25)
+                delay(jitter)
+            }
+            
             output.write(SOCKS5_CONNECT_SUCCESS)
             output.flush()
             
             client.soTimeout = 0 // Remove timeout for the tunneled connection
             try { client.keepAlive = true } catch (e: Throwable) {}
-            TcpTransportHandler.handleTcpSession(client, host ?: "", targetPort, vpnService, scope)
+            
+            val activeHost = host ?: ""
+            if (BypassConfig.isHostDirect(activeHost)) {
+                // For direct hosts, use direct strategy to save overhead
+                TcpTransportHandler.handleTcpSession(client, activeHost, targetPort, vpnService, scope)
+            } else {
+                TcpTransportHandler.handleTcpSession(client, activeHost, targetPort, vpnService, scope)
+            }
 
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e

@@ -158,6 +158,17 @@ object BypassConfig {
             toRemove.forEach { hostStrategyMemory.remove(it.key) }
         }
         
+        if (hostLockTime.size > 2000) {
+            hostLockTime.entries.removeIf { now - it.value > 300_000 }
+            if (hostLockTime.size > 2000) {
+                hostLockTime.clear()
+            }
+        }
+        
+        if (censorHeuristic.size > 2000) {
+            censorHeuristic.clear() // Hard reset if overgrown
+        }
+        
         // Clear old blacklist entries
         hostBlacklist.forEach { (_, map) ->
             map.entries.removeIf { now - it.value > 600_000 }

@@ -325,10 +325,26 @@ object UdpTransportHandler {
     }
 
     private val reorderBuffers = ConcurrentHashMap<String, MutableList<DatagramPacket>>()
-    private val reorderMutex = Any()
-    private var lastReorderBufferCleanup = System.currentTimeMillis()
-
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+    private var lastGlobalCleanup = System.currentTimeMillis()
+
+    private fun ensureGlobalMemoryEfficiency() {
+        val now = System.currentTimeMillis()
+        if (now - lastGlobalCleanup < 30000) return
+        lastGlobalCleanup = now
+
+        if (reorderBuffers.size > 300) {
+            // Remove 100 random entries to reduce memory without full clear
+            val keys = reorderBuffers.keys().toList().shuffled().take(100)
+            keys.forEach { reorderBuffers.remove(it) }
+        }
+        if (flowPacketCounter.size > 1000) {
+            flowPacketCounter.clear() 
+        }
+        if (hostStrategyCache.size > 500) {
+            hostStrategyCache.clear()
+        }
+    }
 
     private fun isQuicInitial(data: ByteArray, offset: Int, length: Int): Boolean {
         if (length < 200) return false
@@ -338,15 +354,7 @@ object UdpTransportHandler {
     }
 
     private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
-        if (System.currentTimeMillis() - lastReorderBufferCleanup > 60000) {
-            synchronized(reorderMutex) {
-                lastReorderBufferCleanup = System.currentTimeMillis()
-                if (reorderBuffers.size > 200) {
-                    reorderBuffers.clear()
-                }
-            }
-            if (flowPacketCounter.size > 500) flowPacketCounter.clear()
-        }
+        ensureGlobalMemoryEfficiency()
         
         val payload = packet.data
         val offset = packet.offset
@@ -359,12 +367,9 @@ object UdpTransportHandler {
         
         // Basic filtering
         if (BypassConfig.blockQuic && isQuic) {
-            // Advanced QUIC Blocking: Instead of just dropping it silently, actively forge a Version Negotiation response
-            // or a fake RESET back to the *client* to force it to rapidly fall back to TCP (and thus TLS DPI evasion).
-            if (isQuicInitial(payload, offset, length)) {
-                // If we know the client address (handled upstream), we'd send it back. But we're the Outbound worker.
-                // It's safest to just drop it here. QUIC clients usually retry quickly.
-            }
+            // PROACTIVE QUIC BLOCKING: We can't easily send to client from here without the client socket
+            // However, we can send a "Public Reset" or "Version Negotiation" to the TARGET
+            // to confuse the remote state if it's already established.
             return
         }
 

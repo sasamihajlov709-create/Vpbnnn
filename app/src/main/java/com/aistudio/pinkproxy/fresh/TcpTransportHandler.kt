@@ -236,11 +236,14 @@ object TcpTransportHandler {
             val jobIsTls = isTls
             throughputJob = scope.launch(ProxyDispatcher.io) {
                 while (isActive && remoteSocket.isConnected && !remoteSocket.isClosed) {
-                    delay(10000) // Check every 10s
+                    val activeConnections = ProxyStats.activeConnections.value
+                    val checkInterval = if (activeConnections > 50) 5000L else 10000L
+                    delay(checkInterval) 
+                    
                     val total = totalWrittenClient.get()
                     val delta = total - lastTotalForStall
                     
-                    if (delta < 32) { // Less than 32 bytes in 10s is very suspicious
+                    if (delta < 32) { 
                         silentPeriods++
                         
                         // "Kick" the connection if it's stalled
@@ -250,16 +253,17 @@ object TcpTransportHandler {
                                 // Send OOB byte to trigger response or wake up state
                                 remoteSocket.sendUrgentData(rnd.nextInt(256))
                                 val intensity = ProxyStats.censorshipIntensity.value
-                                if (intensity > 85) {
-                                     // Send a fake TLS keep-alive or heartbeat to "kick" DPI state
-                                     if (rnd.nextBoolean()) {
-                                         remoteOut.write(FakePacketHelper.buildFakeTcpKeepAlive())
-                                     } else {
-                                         remoteOut.write(FakePacketHelper.buildTlsHeartbeat())
+                                
+                                if (intensity > 80) {
+                                     // Adaptive "Kick": send different types of noise
+                                     when(rnd.nextInt(3)) {
+                                         0 -> remoteOut.write(FakePacketHelper.buildFakeTcpKeepAlive())
+                                         1 -> remoteOut.write(FakePacketHelper.buildTlsHeartbeat())
+                                         2 -> remoteOut.write(FakePacketHelper.buildUdpNoise(rnd.nextInt(5, 15)))
                                      }
                                      remoteOut.flush()
                                 }
-                                Log.v("TcpTransport", "Kicked stalled session: $targetHost (intensity $intensity)")
+                                Log.v("TcpTransport", "Proactive kick sent to $targetHost (Stall detected)")
                             } catch (e: Throwable) {}
                         }
 
@@ -743,12 +747,29 @@ object TcpTransportHandler {
         scope.launch {
             val rnd = java.util.concurrent.ThreadLocalRandom.current()
             while (isActive && !socket.isClosed) {
-                delay(rnd.nextLong(20000, 50000)) // Every 20-50 seconds
+                val intensity = ProxyStats.censorshipIntensity.value
+                val baseDelay = if (intensity > 85) 15000L else 30000L
+                delay(rnd.nextLong(baseDelay, baseDelay * 2)) 
+                
                 if (socket.isClosed) break
                 try {
-                    // Send 1 byte of urgent data for TCP DPI desync
+                    // 1. TCP OOB desync
                     socket.sendUrgentData(rnd.nextInt(256))
-                    Log.v("TcpTransport", "Confusion pulse sent to $host")
+                    
+                    // 2. Phantom SNI / Fake Header injection with low TTL (if intensity is high)
+                    if (intensity > 70 && rnd.nextInt(100) < 40) {
+                        val fakeSni = listOf("google.com", "cloudflare.com", "bing.com", "apple.com").random()
+                        val fakeHandshake = FakePacketHelper.buildFakeTlsClientHello(fakeSni)
+                        
+                        // Send with low TTL so DPI sees it but target ignores/drops it (hopefully)
+                        TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                        output.write(fakeHandshake)
+                        output.flush()
+                        delay(rnd.nextLong(1, 5))
+                        TtlHelper.setTtl(socket, 64)
+                    }
+                    
+                    Log.v("TcpTransport", "Advanced confusion pulse sent to $host")
                 } catch (e: Throwable) {
                     break
                 }

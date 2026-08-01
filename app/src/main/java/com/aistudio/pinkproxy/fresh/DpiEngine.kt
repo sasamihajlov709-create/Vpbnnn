@@ -284,42 +284,51 @@ object DpiEngine {
         // Context-aware boost based on current DpiType detected globally
         val currentDpi = ProxyStats.currentDpiType.value
         
-        // Find strategy with best combined score (score - latency_penalty + context_boost + maturity)
-        return validStrategies
-            .shuffled()
-            .maxByOrNull { (strat, score) ->
-                var s = score.get().toDouble()
-                
-                // Maturity Bonus
-                s += (strategyMaturity[strat]?.get() ?: 0) / 10.0
-                
-                // Contextual Boosts
-                when (currentDpi) {
-                    DpiType.TLS_SNI_BLOCK -> {
-                        if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s += 100
-                        if (strat == BypassStrategy.TCP_TLS_SNI_CASE_MOD) s += 120
-                    }
-                    DpiType.TCP_RESET -> {
-                        if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s += 100
-                        if (strat == BypassStrategy.TCP_OVERLAP_SKEW) s += 130
-                    }
-                    DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s += 100
-                    DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s += 150
-                    else -> {}
+        // Softmax-like selection: Pick strategy with probability proportional to its score
+        val totalScore = validStrategies.sumOf { (strat, score) ->
+            var s = score.get().toDouble()
+            
+            // Maturity Bonus
+            s += (strategyMaturity[strat]?.get() ?: 0) / 8.0
+            
+            // Contextual Boosts
+            when (currentDpi) {
+                DpiType.TLS_SNI_BLOCK -> {
+                    if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
                 }
-                
-                // Boost TTL-based strategies if AutoTtlProber has data
-                if (AutoTtlProber.getDiscoveredTtl("global") != null) {
-                    if (strat == BypassStrategy.TCP_RETRANS_FAKE || strat == BypassStrategy.TCP_OVERLAP_SKEW || strat == BypassStrategy.TCP_WINDOW_SHRINK) {
-                        s += 80
-                    }
+                DpiType.TCP_RESET -> {
+                    if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
                 }
-                
-                val latency = strategyLatency[strat]?.get() ?: 200L
-                val latencyPenalty = (latency / 15).coerceAtMost(40).toDouble()
-                s - latencyPenalty + rnd.nextInt(-10, 10)
+                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 1.5
+                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.0
+                else -> {}
             }
-            ?.key ?: BypassStrategy.SNI_SPLIT
+            
+            val latency = strategyLatency[strat]?.get() ?: 200L
+            val latencyPenalty = (latency / 20.0).coerceAtMost(50.0)
+            (s - latencyPenalty).coerceAtLeast(10.0)
+        }
+
+        var randomPivot = rnd.nextDouble() * totalScore
+        for ((strat, score) in validStrategies) {
+            var s = score.get().toDouble()
+            s += (strategyMaturity[strat]?.get() ?: 0) / 8.0
+            when (currentDpi) {
+                DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
+                DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
+                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 1.5
+                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.0
+                else -> {}
+            }
+            val latency = strategyLatency[strat]?.get() ?: 200L
+            val latencyPenalty = (latency / 20.0).coerceAtMost(50.0)
+            val weight = (s - latencyPenalty).coerceAtLeast(10.0)
+            
+            randomPivot -= weight
+            if (randomPivot <= 0) return strat
+        }
+
+        return validStrategies.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
     }
 
     fun boostStrategyFamily(family: StrategyFamily, host: String?) {
@@ -403,6 +412,18 @@ object DpiEngine {
         BypassConfig.frag1 = getRecommendedFragSize()
         BypassConfig.delay1 = getRecommendedDelay()
         
+        // Clean up stale blacklist entries to prevent memory leaks
+        val now = System.currentTimeMillis()
+        hostStrategyBlacklist.keys().toList().forEach { host ->
+            val hostMap = hostStrategyBlacklist[host]
+            if (hostMap != null) {
+                hostMap.entries.removeIf { it.value < now }
+                if (hostMap.isEmpty()) {
+                    hostStrategyBlacklist.remove(host)
+                }
+            }
+        }
+
         pruneStrategies()
         saveScores(ProxyDispatcher.context!!)
 

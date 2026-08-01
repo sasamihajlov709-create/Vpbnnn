@@ -12,13 +12,21 @@ import java.util.concurrent.TimeUnit
 
 object AutoTtlProber {
     private val discoveredTtls = ConcurrentHashMap<String, Int>()
+    private val networkTtls = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+    private val networkMtus = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
     private val probingHosts = java.util.concurrent.ConcurrentSkipListSet<String>()
 
-    fun getDiscoveredTtl(host: String): Int? = discoveredTtls[host] ?: discoveredTtls["global"]
+    fun getDiscoveredTtl(host: String): Int? {
+        val netType = BypassConfig.getNetworkType().toString()
+        return networkTtls[netType]?.get(host) ?: networkTtls[netType]?.get("global") ?: discoveredTtls[host] ?: discoveredTtls["global"]
+    }
 
     private val discoveredMtus = ConcurrentHashMap<String, Int>()
 
-    fun getDiscoveredMtu(host: String): Int = discoveredMtus[host] ?: discoveredMtus["global"] ?: 1400
+    fun getDiscoveredMtu(host: String): Int {
+        val netType = BypassConfig.getNetworkType().toString()
+        return networkMtus[netType]?.get(host) ?: networkMtus[netType]?.get("global") ?: discoveredMtus[host] ?: discoveredMtus["global"] ?: 1400
+    }
 
     fun startProbing(scope: CoroutineScope, vpnService: VpnService?) {
         scope.launch(ProxyDispatcher.io) {
@@ -34,6 +42,19 @@ object AutoTtlProber {
                     }
                     delay(5000)
                 }
+                
+                // Cleanup overgrown caches to prevent memory leak
+                if (discoveredTtls.size > 1000) {
+                    val globalTtl = discoveredTtls["global"]
+                    discoveredTtls.clear()
+                    if (globalTtl != null) discoveredTtls["global"] = globalTtl
+                }
+                if (discoveredMtus.size > 1000) {
+                    val globalMtu = discoveredMtus["global"]
+                    discoveredMtus.clear()
+                    if (globalMtu != null) discoveredMtus["global"] = globalMtu
+                }
+
                 delay(TimeUnit.MINUTES.toMillis(15)) // Re-probe every 15 mins
             }
         }
@@ -151,13 +172,15 @@ object AutoTtlProber {
     }
 
     private fun updateGlobalConsensus(newTtl: Int) {
-        val currentGlobal = discoveredTtls["global"] ?: 0
+        val netType = BypassConfig.getNetworkType().toString()
+        val netMap = networkTtls.getOrPut(netType) { ConcurrentHashMap() }
+        val currentGlobal = netMap["global"] ?: 0
         if (currentGlobal == 0) {
-            discoveredTtls["global"] = newTtl
+            netMap["global"] = newTtl
         } else {
-            // Weighted moving average for global TTL
-            discoveredTtls["global"] = (currentGlobal * 0.7 + newTtl * 0.3).toInt().coerceIn(2, 20)
+            netMap["global"] = (currentGlobal * 0.6 + newTtl * 0.4).toInt().coerceIn(2, 30)
         }
+        discoveredTtls["global"] = netMap["global"]!!
     }
 
     private suspend fun identifyCensorHop(addr: InetAddress, port: Int, serverDist: Int, vpnService: VpnService?): Int {

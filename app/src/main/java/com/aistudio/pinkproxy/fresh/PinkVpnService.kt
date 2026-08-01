@@ -190,12 +190,14 @@ class PinkVpnService : VpnService() {
                 override fun onAvailable(network: android.net.Network) {
                     Log.i("PinkVpnService", "Network available: $network")
                     try { setUnderlyingNetworks(arrayOf(network)) } catch (e: Throwable) {}
+                    DnsCacheManager.onNetworkChanged()
                     RobustResolver.clearCache()
                 }
 
                 override fun onLost(network: android.net.Network) {
                     Log.i("PinkVpnService", "Network lost: $network")
                     try { setUnderlyingNetworks(null) } catch (e: Throwable) {}
+                    DnsCacheManager.onNetworkChanged()
                     RobustResolver.clearCache()
                 }
 
@@ -489,10 +491,12 @@ class PinkVpnService : VpnService() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= 60) { // TRIM_MEMORY_MODERATE
-            ProxyStats.logRecovery("System memory low (level $level). Releasing pools.")
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) { 
+            ProxyStats.logRecovery("System memory low (level $level). Aggressive cleanup...")
             ProxyStats.releaseAllPools()
+            DnsCacheManager.ensureEfficiency()
             RobustResolver.clearCache()
+            java.lang.System.gc()
         }
     }
 

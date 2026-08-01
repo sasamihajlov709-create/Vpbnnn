@@ -87,7 +87,29 @@ object DnsCacheManager {
         "medium.com" to listOf("162.159.153.4", "162.159.152.4")
     )
 
+    fun onNetworkChanged() {
+        // Clear RTT and Heatmap for suspicious IPs only on network change
+        // to re-evaluate routing quality on the new network.
+        ipRtt.clear()
+        dnsCache.entries.removeIf { it.value.second - System.currentTimeMillis() < CACHE_TTL_MS / 2 }
+        Log.d("DnsCache", "Network change detected, optimized DNS cache")
+    }
+
+    fun ensureEfficiency() {
+        if (ipHeatmap.size > 1500) {
+            val threshold = 30
+            ipHeatmap.entries.removeIf { it.value < threshold }
+        }
+        if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
+            val now = System.currentTimeMillis()
+            dnsCache.entries.removeIf { it.value.second < now }
+        }
+        if (ipRtt.size > 1000) ipRtt.clear()
+        if (suspectedPoisonedIps.size > 500) suspectedPoisonedIps.clear()
+    }
+
     fun getCached(host: String): List<InetAddress>? {
+        ensureEfficiency()
         if (isIpAddress(host)) {
             return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { null }
         }
@@ -149,26 +171,19 @@ object DnsCacheManager {
 
     fun recordIpSuccess(ip: String, rtt: Long = 0) {
         val current = ipHeatmap.getOrDefault(ip, 50)
-        ipHeatmap[ip] = (current + 5).coerceAtMost(100)
-        if (ipHeatmap.size > 2000) {
-            val lowest = ipHeatmap.entries.minByOrNull { it.value }
-            if (lowest != null) ipHeatmap.remove(lowest.key)
-        }
+        ipHeatmap[ip] = (current + 8).coerceAtMost(100)
+        
         if (rtt > 0) {
             val oldRtt = ipRtt.getOrDefault(ip, rtt)
-            ipRtt[ip] = (oldRtt * 0.7 + rtt * 0.3).toLong()
-            if (ipRtt.size > 2000) {
-                val highest = ipRtt.entries.maxByOrNull { it.value }
-                if (highest != null) ipRtt.remove(highest.key)
-            }
+            // Use EMA (Exponential Moving Average) for RTT tracking
+            ipRtt[ip] = (oldRtt * 0.6 + rtt * 0.4).toLong()
         }
         
         // Propagate success to same-IP domains
-        if (ipHeatmap.getOrDefault(ip, 50) > 80) {
+        if (ipHeatmap.getOrDefault(ip, 50) > 85) {
              dnsCache.forEach { (host, entry) ->
                  if (entry.first.any { it.hostAddress == ip }) {
-                     // Slightly boost TTL for these
-                     dnsCache[host] = entry.first to (entry.second + 60000L) 
+                     dnsCache[host] = entry.first to (entry.second + 30000L) 
                  }
              }
         }
