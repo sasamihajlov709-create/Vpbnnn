@@ -236,6 +236,8 @@ enum class BypassStrategy(
     TCP_TLS_SNI_CASE_MOD(StrategyFamily.TCP, 4, 3, StrategyGroup.MEDIUM),
     UDP_OVERLAP_SKEW(StrategyFamily.UDP, 5, 4, StrategyGroup.HEAVY),
     TCP_REORDER(StrategyFamily.TCP, 4, 3, StrategyGroup.MEDIUM),
+    TCP_COMBINED_HYBRID(StrategyFamily.ADAPTIVE, 10, 8, StrategyGroup.EXTREME),
+    UDP_COMBINED_HYBRID(StrategyFamily.ADAPTIVE, 8, 7, StrategyGroup.EXTREME),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
@@ -312,6 +314,14 @@ object ProxyStats {
     fun release16k(buf: ByteArray) { if (buf.size >= 16384) bufferPool16k.offer(buf) }
     fun obtain64k(): ByteArray = bufferPool64k.poll() ?: ByteArray(65536)
     fun release64k(buf: ByteArray) { if (buf.size >= 65536) bufferPool64k.offer(buf) }
+
+    fun releasePool(buf: ByteArray) {
+        when (buf.size) {
+            8192 -> release8k(buf)
+            16384 -> release16k(buf)
+            65536 -> release64k(buf)
+        }
+    }
 
     fun releaseAllPools() {
         bufferPool8k.clear()
@@ -396,6 +406,14 @@ object ProxyStats {
 
     private val _successRate = MutableStateFlow(100)
     val successRate: StateFlow<Int> = _successRate.asStateFlow()
+
+    fun updateStabilityScore(newVal: Int) {
+        _stabilityScore.value = newVal.coerceIn(0, 100)
+    }
+
+    fun updateCongestionWindow(delta: Int) {
+        _congestionWindow.update { (it + delta).coerceIn(1, 1000) }
+    }
 
     private val _maxMss = MutableStateFlow(1460)
     val maxMss: StateFlow<Int> = _maxMss.asStateFlow()
@@ -582,10 +600,6 @@ object ProxyStats {
         _activeConnections.update { it + delta }
     }
 
-    fun updateCongestionWindow(delta: Int) {
-        _congestionWindow.update { (it + delta).coerceIn(2, 128) }
-    }
-    
     fun getSuccessRate() = _successRate.value
 }
 

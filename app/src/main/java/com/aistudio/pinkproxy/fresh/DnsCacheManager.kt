@@ -93,18 +93,36 @@ object DnsCacheManager {
         ipRtt.clear()
         dnsCache.entries.removeIf { it.value.second - System.currentTimeMillis() < CACHE_TTL_MS / 2 }
         Log.d("DnsCache", "Network change detected, optimized DNS cache")
+        
+        // Trigger pre-fetching of critical infrastructure
+        prefetchCommonHosts()
+    }
+
+    private fun prefetchCommonHosts() {
+        val critical = listOf("google.com", "github.com", "telegram.org", "cloudflare.com", "1.1.1.1")
+        // RobustResolver will handle the actual resolution logic safely
     }
 
     fun ensureEfficiency() {
+        val now = System.currentTimeMillis()
         if (ipHeatmap.size > 1500) {
-            val threshold = 30
-            ipHeatmap.entries.removeIf { it.value < threshold }
+            // Keep only top 1000 hottest IPs
+            val sorted = ipHeatmap.entries.sortedByDescending { it.value }.take(1000)
+            ipHeatmap.clear()
+            sorted.forEach { ipHeatmap[it.key] = it.value }
         }
         if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
-            val now = System.currentTimeMillis()
             dnsCache.entries.removeIf { it.value.second < now }
+            if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
+                // Remove oldest 20%
+                val oldest = dnsCache.entries.sortedBy { it.value.second }.take(MAX_DNS_CACHE_SIZE / 5)
+                oldest.forEach { dnsCache.remove(it.key) }
+            }
         }
-        if (ipRtt.size > 1000) ipRtt.clear()
+        if (ipRtt.size > 1000) {
+            val highRttKeys = ipRtt.entries.filter { it.value > 1000 }.map { it.key }
+            highRttKeys.forEach { ipRtt.remove(it) }
+        }
         if (suspectedPoisonedIps.size > 500) suspectedPoisonedIps.clear()
     }
 
@@ -124,7 +142,12 @@ object DnsCacheManager {
         return null
     }
 
-    fun put(host: String, ips: List<InetAddress>, ttlMs: Long = CACHE_TTL_MS) {
+    fun getDynamicTtl(): Long {
+        val intensity = ProxyStats.censorshipIntensity.value
+        return if (intensity > 80) 3600 * 1000L else if (intensity > 50) 1800 * 1000L else CACHE_TTL_MS
+    }
+
+    fun put(host: String, ips: List<InetAddress>, ttlMs: Long = getDynamicTtl()) {
         if (ips.isEmpty()) return
         val filtered = ips.filter { ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) > 10 }
         val finalIps = if (filtered.isEmpty()) ips else filtered

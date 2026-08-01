@@ -182,12 +182,17 @@ object RobustResolver {
     }
 
     private suspend fun performParallelResolution(host: String, vpnService: VpnService?): List<InetAddress> = coroutineScope {
+        val intensity = ProxyStats.censorshipIntensity.value
         // Obfuscation: send fake queries for popular domains to hide the real one
-        if (ProxyStats.censorshipIntensity.value > 30 && !host.contains("google") && !host.contains("facebook")) {
+        if (ProxyStats.censorshipIntensity.value > 40 && !host.contains("google") && !host.contains("facebook")) {
             launch {
-                val shadows = listOf("google.com", "bing.com", "cloudflare.com", "apple.com")
-                shadows.shuffled().take(1).forEach { shadow ->
-                    try { DnsProtocols.queryUdpDnsShadow(shadow, "1.1.1.1", vpnService) } catch (e: Throwable) {}
+                val shadows = listOf("google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com", "wikipedia.org", "netflix.com")
+                val rnd = java.util.concurrent.ThreadLocalRandom.current()
+                shadows.shuffled().take(rnd.nextInt(2, 5)).forEach { shadow ->
+                    try { 
+                        delay(rnd.nextLong(10, 100))
+                        DnsProtocols.queryUdpDnsShadow(shadow, "8.8.8.8", vpnService) 
+                    } catch (e: Throwable) {}
                 }
             }
         }
@@ -205,6 +210,11 @@ object RobustResolver {
         
         // 4. TCP with Shadow (For extreme evasion)
         queries.add { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
+        
+        // 4.5 DoH Smuggling (Experimental resilience)
+        if (intensity > 60) {
+            queries.add { DnsProtocols.queryDohSmuggling(host, vpnService) }
+        }
         
         // 5. Background ECH check (does not block main resolution)
         queries.add { 
@@ -241,7 +251,6 @@ object RobustResolver {
         var completed = 0
         
         // Consensus mechanism: Require at least 2 independent sources to agree if censorship is high
-        val intensity = ProxyStats.censorshipIntensity.value
         val consensusTarget = if (intensity > 80) 2 else 1
         
         while (completed < queries.size) {

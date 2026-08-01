@@ -547,6 +547,59 @@ TtlHelper.setTtl(socket, 64)
             result
         }
     }
+
+    suspend fun queryDohSmuggling(host: String, vpnService: VpnService?): List<InetAddress> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        val targets = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
+        val target = targets.random()
+        val socket = Socket()
+        try {
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.tcpNoDelay = true
+            socket.connect(InetSocketAddress(target, 443), 4000)
+            socket.soTimeout = 4000
+            val output = socket.getOutputStream()
+            val input = socket.getInputStream()
+            val sb = StringBuilder()
+            sb.append("POST /dns-query HTTP/1.1\r\n")
+            sb.append("Host: ").append(listOf("dns.google", "cloudflare-dns.com").random()).append("\r\n")
+            sb.append("Content-Type: application/dns-message\r\n")
+            sb.append("Content-Length: ").append(query.size).append("\r\n")
+            sb.append("Accept: application/dns-message\r\n")
+            sb.append("User-Agent: ").append(FakePacketHelper.getRandomUserAgent()).append("\r\n")
+            sb.append("Transfer-Encoding: chunked\r\n")
+            sb.append("X-Forwarded-For: 127.0.0.1\r\n")
+            sb.append("\r\n")
+            val headers = sb.toString().toByteArray()
+            output.write(headers)
+            output.flush()
+            output.write(query)
+            output.flush()
+            val buffer = ByteArray(4096)
+            val n = input.read(buffer)
+            if (n > 0) {
+                var bodyOffset = -1
+                for (i in 0 until n - 3) {
+                    if (buffer[i] == 0x0D.toByte() && buffer[i+1] == 0x0A.toByte() && 
+                        buffer[i+2] == 0x0D.toByte() && buffer[i+3] == 0x0A.toByte()) {
+                        bodyOffset = i + 4
+                        break
+                    }
+                }
+                if (bodyOffset != -1) {
+                    val bodyLen = n - bodyOffset
+                    val ips = DnsPacketEngine.parseDnsResponse(buffer.copyOfRange(bodyOffset, n), bodyLen, id)
+                    return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+                }
+            }
+        } catch (e: Throwable) {
+        } finally {
+            try { socket.close() } catch (e: Throwable) {}
+        }
+        return emptyList()
+    }
 }
 
 class ProtectedSocketFactory(private val vpnService: VpnService?) : javax.net.SocketFactory() {

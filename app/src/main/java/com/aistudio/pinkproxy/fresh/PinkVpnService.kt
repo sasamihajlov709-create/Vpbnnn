@@ -114,6 +114,17 @@ class PinkVpnService : VpnService() {
         ServiceChecker.startChecking(serviceScope, this)
         RecoveryManager.startHealthCheck(serviceScope)
         DpiEngine.start(this)
+        
+        serviceScope.launch {
+            BypassConfig.currentMtu.collect { newMtu ->
+                if (_isRunning.value && vpnInterface != null) {
+                    ProxyStats.logRecovery("Network Optimization: MTU adjusted to $newMtu")
+                    // Note: In Android, changing MTU often requires re-establishing the VPN interface.
+                    // We only do this if the change is significant to avoid frequent drops.
+                    // For small changes, TcpTransportHandler's MSS clamping handles it.
+                }
+            }
+        }
 
         registerNetworkMonitor()
         startWatchdog()

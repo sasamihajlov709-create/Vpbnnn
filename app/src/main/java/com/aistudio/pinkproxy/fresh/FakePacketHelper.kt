@@ -194,6 +194,31 @@ object FakePacketHelper {
 
     fun buildUdpNoise(size: Int): ByteArray = ByteArray(size).apply { ThreadLocalRandom.current().nextBytes(this) }
 
+    fun injectMultipleSni(data: ByteArray, length: Int, host: String): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        try {
+            val rnd = ThreadLocalRandom.current()
+            val fakeSnis = listOf("google.com", "bing.com", "apple.com", "microsoft.com", "cloudflare.com")
+            
+            var current = data.copyOf(length)
+            // Inject 1-2 fake SNIs
+            repeat(rnd.nextInt(1, 3)) {
+                val fake = fakeSnis.random()
+                val sniExt = buildSniExtension(fake)
+                current = injectExtension(current, current.size, 0x0000, sniExt)
+            }
+            
+            // Finally inject the real one
+            val realSniExt = buildSniExtension(host)
+            current = injectExtension(current, current.size, 0x0000, realSniExt)
+            
+            updateTlsLengths(current)
+            return current
+        } catch (e: Exception) {
+            return data.copyOf(length)
+        }
+    }
+    
     fun buildEchFakeRecord(host: String): ByteArray {
         val rnd = ThreadLocalRandom.current()
         val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
@@ -216,7 +241,6 @@ object FakePacketHelper {
     }
 
     fun buildFakeTcpRst(): ByteArray = byteArrayOf(0x52, 0x53, 0x54, 0x00, 0x00, 0x00) + buildUdpNoise(ThreadLocalRandom.current().nextInt(2, 10))
-    fun buildFakeTcpKeepAlive(): ByteArray = byteArrayOf(0x00)
 
     fun buildFakeOcspResponse(): ByteArray {
         val rnd = ThreadLocalRandom.current()
@@ -270,7 +294,36 @@ object FakePacketHelper {
         return ("GET $path HTTP/1.1\r\nHost: $host\r\nUser-Agent: ${getRandomUserAgent()}\r\nConnection: keep-alive\r\n\r\n").toByteArray()
     }
 
-    fun getRandomUserAgent(): String = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    fun getRandomUserAgent(): String {
+        val rnd = ThreadLocalRandom.current()
+        val uas = listOf(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0"
+        )
+        return uas[rnd.nextInt(uas.size)]
+    }
+
+    fun buildTlsHeartbeat(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)
+        // Type: Heartbeat (24), Version: 1.2 (0x0303)
+        dos.writeByte(24); dos.writeShort(0x0303)
+        // Length (placeholder)
+        val payload = buildUdpNoise(rnd.nextInt(16, 64))
+        dos.writeShort(payload.size + 3)
+        dos.writeByte(0x01) // hb_request
+        dos.writeShort(payload.size)
+        dos.write(payload)
+        return baos.toByteArray()
+    }
+
+    fun buildFakeTcpKeepAlive(): ByteArray {
+        // Just a 1-byte noise packet that looks like a TCP keep-alive or a segment with no payload
+        return byteArrayOf(ThreadLocalRandom.current().nextInt(256).toByte())
+    }
 
     fun buildQuicInitial(): ByteArray {
         val rnd = ThreadLocalRandom.current()
@@ -885,20 +938,15 @@ object FakePacketHelper {
         return data
     }
 
-    fun buildTlsHeartbeat(): ByteArray {
-        // TLS Heartbeat (RFC 6520) - often blocked if suspicious, but can "kick" buffers
-        val res = ByteArray(19)
-        res[0] = 0x18 // Heartbeat
-        res[1] = 0x03
-        res[2] = 0x03
-        res[3] = 0x00
-        res[4] = 0x0E
-        res[5] = 0x01 // Request
-        res[6] = 0x00
-        res[7] = 0x03 // Payload length
-        // Fake payload and padding
-        ThreadLocalRandom.current().nextBytes(res.sliceArray(8 until res.size))
-        return res
+    fun buildDnsChaosPacket(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val domains = listOf("gstatic.com", "safebrowsing.googleapis.com", "connectivitycheck.gstatic.com", "play.google.com", "update.googleapis.com")
+        return buildDnsFakeQuery(domains.random())
     }
 
+    fun buildTlsChaosPacket(): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val hosts = listOf("mtalk.google.com", "alt1-mtalk.google.com", "clients4.google.com", "www.googleapis.com")
+        return buildRealisticTlsHello(hosts.random())
+    }
 }

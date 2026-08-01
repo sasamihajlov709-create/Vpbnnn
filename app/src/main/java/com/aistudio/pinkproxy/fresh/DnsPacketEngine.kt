@@ -139,41 +139,47 @@ object DnsPacketEngine {
         if (length < 12) return emptyList()
         val ips = mutableListOf<InetAddress>()
         try {
-            val bb = java.nio.ByteBuffer.wrap(data, 0, length)
-            val id = bb.short.toInt() and 0xFFFF
+            // Quick fingerprint check: must have QR=1 (response)
+            if ((data[2].toInt() and 0x80) == 0) return emptyList()
+            
+            val id = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
             if (expectedId != -1 && id != expectedId) return emptyList()
-            val flags = bb.short.toInt() and 0xFFFF
-            val qCount = bb.short.toInt() and 0xFFFF
-            val aCount = bb.short.toInt() and 0xFFFF
-            bb.position(bb.position() + 4) // Skip Authority and Additional counts
+            
+            val qCount = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+            val aCount = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
+            
+            val bb = java.nio.ByteBuffer.wrap(data, 0, length)
+            bb.position(12)
             
             // Skip questions
             for (i in 0 until qCount) {
+                if (bb.position() >= length) break
                 skipName(bb)
-                bb.position(bb.position() + 4) // Type and Class
+                if (bb.position() + 4 <= length) {
+                    bb.position(bb.position() + 4) // Type and Class
+                }
             }
             
             // Parse answers
             for (i in 0 until aCount) {
+                if (bb.position() >= length) break
                 skipName(bb)
+                if (bb.position() + 10 > length) break
                 val type = bb.short.toInt() and 0xFFFF
                 bb.position(bb.position() + 2) // Class
                 bb.position(bb.position() + 4) // TTL
                 val rdLen = bb.short.toInt() and 0xFFFF
                 
+                if (bb.position() + rdLen > length) break
                 if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
                     val rData = ByteArray(rdLen)
                     bb.get(rData)
                     ips.add(InetAddress.getByAddress(rData))
-                } else if (type == 5) { // CNAME
-                    // Skip CNAME data
-                    bb.position(bb.position() + rdLen)
                 } else {
                     bb.position(bb.position() + rdLen)
                 }
             }
         } catch (e: Throwable) {
-            // Ignore parse errors
         }
         return ips
     }
@@ -240,15 +246,16 @@ object DnsPacketEngine {
     private val suspiciousIps = setOf(
         "127.0.0.1", "0.0.0.0", "1.1.1.1", "8.8.8.8", "9.9.9.9",
         "10.10.10.10", "1.2.3.4", "10.10.34.34", "10.10.34.35",
+        "127.0.0.53", "127.0.0.54", "0.0.0.1",
         "146.112.61.106", "146.112.61.104", "146.112.61.105", // Cisco Umbrella
         "188.114.96.0", "188.114.97.0", "188.114.98.0", "188.114.99.0",
         "31.13.71.36", "31.13.72.36", "31.13.73.36", // Facebook redirections
         "77.88.8.8", "77.88.8.1", "213.180.204.3", "213.180.193.3", // Yandex
-        "95.167.13.50", "95.167.13.49", // Rostelecom block pages
-        "195.82.146.120", "195.82.146.114", // Megafon block pages
-        "212.188.7.20", "217.16.20.12", // MTS block pages
-        "8.254.218.126", "204.232.175.78", "198.101.242.72", // Generic blocks
-        "93.184.216.34" // Example.com (often used for redirection)
+        "95.167.13.50", "95.167.13.49", // Rostelecom
+        "195.82.146.120", "195.82.146.114", // Megafon
+        "212.188.7.20", "217.16.20.12", // MTS
+        "8.254.218.126", "204.232.175.78", "198.101.242.72",
+        "93.184.216.34", "103.224.212.222", "127.42.42.42"
     )
 
     private val canaryDomains = setOf(
@@ -279,23 +286,25 @@ object DnsPacketEngine {
     }
 
     private fun skipName(bb: java.nio.ByteBuffer) {
+        val limit = bb.limit()
         var depth = 0
-        while (depth < 64) { // Prevents infinite recursion
-            if (bb.position() >= bb.limit()) break
-            var b = bb.get().toInt() and 0xFF
+        while (depth < 40) {
+            val pos = bb.position()
+            if (pos >= limit) break
+            val b = bb.get().toInt() and 0xFF
             if (b == 0) break
             
             if ((b and 0xC0) == 0xC0) { // Pointer
-                if (bb.position() < bb.limit()) {
-                    bb.get() // Skip the second byte of pointer
+                if (bb.position() < limit) {
+                    bb.get() 
                 }
                 break
             } else {
                 val newPos = bb.position() + b
-                if (newPos <= bb.limit()) {
+                if (newPos <= limit) {
                     bb.position(newPos)
                 } else {
-                    bb.position(bb.limit())
+                    bb.position(limit)
                     break
                 }
             }

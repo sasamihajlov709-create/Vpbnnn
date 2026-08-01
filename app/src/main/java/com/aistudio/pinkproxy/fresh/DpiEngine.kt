@@ -185,9 +185,9 @@ object DpiEngine {
             
             strategyScores[category]?.get(strategy)?.let { score ->
                 // Fast recovery for successful strategies
-                val bonus = if (latencyMs in 1..300) 15 else 5
+                val bonus = if (latencyMs in 1..300) 25 else 10
                 score.addAndGet(bonus)
-                if (score.get() > 2000) score.set(2000)
+                if (score.get() > 3000) score.set(3000)
             }
             
             if (host != null) {
@@ -196,7 +196,11 @@ object DpiEngine {
                 // Store in network-specific memory
                 val netType = BypassConfig.currentNetworkType.value.toString()
                 val netMemory = networkStrategyMemory.getOrPut(netType) { ConcurrentHashMap() }
-                netMemory[category] = strategy
+                
+                // Only promote if it's consistently working
+                if ((strategyMaturity[strategy]?.get() ?: 0) > 3) {
+                    netMemory[category] = strategy
+                }
             }
 
             if (latencyMs > 0) {
@@ -250,6 +254,22 @@ object DpiEngine {
         val now = System.currentTimeMillis()
         val netType = BypassConfig.currentNetworkType.value.toString()
         
+        // 0. Active Probing for high-priority host failure recovery
+        if (host != null && ProxyStats.censorshipIntensity.value > 80) {
+            val blacklist = hostStrategyBlacklist[host]
+            if (blacklist != null && blacklist.size > 3) {
+                 // Too many failures for this host, trigger immediate exploration of EXTREME strategies
+                 scope.launch { triggerMicroProbe(host, category) }
+            }
+        }
+
+        // 0. High Intensity override: use hybrid strategies if censorship is extreme
+        if (ProxyStats.censorshipIntensity.value > 90) {
+            val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID)
+            val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_HYBRID
+            if ((circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
+        }
+
         // 1. Check Network Memory for a known-good strategy for this category on this network
         networkStrategyMemory[netType]?.get(category)?.let { strat ->
             if ((circuitBreakers[strat] ?: 0L) < now) {
@@ -381,8 +401,12 @@ object DpiEngine {
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
         ProxyStats.updateCensorshipIntensity(100 - globalSuccessRate)
         
-        // Auto-Panic Mode trigger: More aggressive when seeing TCP Reset spikes
+        // Calculate Network Stability Score: combination of success rate and reset frequency
         val fingerprint = getCensorshipFingerprint()
+        val stability = (globalSuccessRate * 0.6 + (100 - fingerprint.rstRate * 100) * 0.4).toInt().coerceIn(0, 100)
+        ProxyStats.updateStabilityScore(stability)
+        
+        // Auto-Panic Mode trigger: More aggressive when seeing TCP Reset spikes
         if ((globalSuccessRate < 25 && totalSuccess + totalFailure > 10) || fingerprint.rstRate > 0.4) {
              if (!BypassConfig.isPanicModeFlow.value) {
                  BypassConfig.setPanicMode(true)
@@ -430,6 +454,25 @@ object DpiEngine {
         if (totalSuccess + totalFailure > 500) {
             successHistory.clear()
             failureHistory.clear()
+        }
+    }
+
+    private suspend fun triggerMicroProbe(host: String, category: HostCategory) {
+        val probes = BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME || it.group == StrategyGroup.HEAVY }
+            .shuffled().take(3)
+            
+        for (strat in probes) {
+            try {
+                val ok = withTimeoutOrNull(3000) {
+                    RobustResolver.resolve(host)
+                }
+                if (ok != null && ok.isNotEmpty()) {
+                    recordResult(strat, true, category, latencyMs = 200, host = host)
+                    Log.i("DpiEngine", "Micro-probe SUCCESS for $host using ${strat.name}")
+                    return
+                }
+            } catch (e: Throwable) {}
+            delay(200)
         }
     }
 

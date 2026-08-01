@@ -65,6 +65,14 @@ object TcpTransportHandler {
             // Proactively probe for TTL for this host in the background
             AutoTtlProber.scheduleProbe(targetHost, targetPort, vpnService, scope)
             
+            // SNI Ghosting: send a fake handshake to a whitelisted domain with low TTL
+            // to "prime" the DPI state machine with an innocent session before the real one.
+            if (censorship > 65 && isTls && retryCount == 0) {
+                scope.launch(ProxyDispatcher.io) {
+                    performSniGhosting(targetHost, vpnService)
+                }
+            }
+            
             // Use discovered MTU if available
             val discoveredMtu = AutoTtlProber.getDiscoveredMtu(targetHost)
             if (discoveredMtu < 1300) {
@@ -348,6 +356,11 @@ object TcpTransportHandler {
                         var n: Int
                         while (isActive) {
                             try {
+                                val intensity = ProxyStats.censorshipIntensity.value
+                                if (intensity > 50) {
+                                    applyWindowChaos(remoteSocket, intensity, rnd)
+                                    applyWindowPulse(intensity, rnd)
+                                }
                                 remoteSocket?.soTimeout = if (totalRead == 0L) 15000 else 60000
                                 n = remoteIn.read(buffer)
                                 consecutiveTimeouts = 0
@@ -465,12 +478,7 @@ object TcpTransportHandler {
                              BypassConfig.recordFailure(strategy, targetHost, FailureReason.UNKNOWN)
                         }
                     } finally {
-                        when (bufSize) {
-                            8192 -> ProxyStats.release8k(buffer)
-                            16384 -> ProxyStats.release16k(buffer)
-                            65536 -> ProxyStats.release64k(buffer)
-                            else -> {}
-                        }
+                        ProxyStats.releasePool(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
@@ -488,6 +496,10 @@ object TcpTransportHandler {
                         var clientTimeouts = 0
                         while (isActive) {
                             try {
+                                val currentIntensity = ProxyStats.censorshipIntensity.value
+                                if (currentIntensity > 60) {
+                                    applyWindowPulse(currentIntensity, rnd)
+                                }
                                 clientSocket.soTimeout = 60000
                                 n = clientIn.read(buffer)
                                 clientTimeouts = 0
@@ -650,6 +662,66 @@ object TcpTransportHandler {
         }
     }
 
+    private suspend fun performSniGhosting(targetHost: String, vpnService: VpnService?) {
+        val ghostTargets = listOf("google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com")
+        val target = ghostTargets.random()
+        var socket: Socket? = null
+        try {
+            val ips = RobustResolver.resolve(target, vpnService)
+            if (ips.isEmpty()) return
+            
+            socket = Socket()
+            try { vpnService?.protect(socket) } catch (e: Throwable) {}
+            socket.tcpNoDelay = true
+            socket.soTimeout = 2000
+            
+            // Random temporal gap before ghosting
+            delay(ThreadLocalRandom.current().nextLong(50, 200))
+            
+            // Use very low TTL to ensure it doesn't reach the real server but reaches the local/ISP DPI
+            val discoveredTtl = AutoTtlProber.getDiscoveredTtl(targetHost) ?: 4
+            TtlHelper.setTtl(socket, (discoveredTtl - 1).coerceAtLeast(2))
+            
+            socket.connect(InetSocketAddress(ips.random(), 443), 1500)
+            val output = socket.getOutputStream()
+            
+            // Send a very convincing ClientHello
+            val ghostHello = FakePacketHelper.buildChromeHello(target)
+            output.write(ghostHello)
+            output.flush()
+            
+            // Send some OOB data to further confuse state
+            delay(ThreadLocalRandom.current().nextLong(10, 50))
+            socket.sendUrgentData(ThreadLocalRandom.current().nextInt(256))
+            
+            // Delay a bit before closing to let DPI process it
+            delay(ThreadLocalRandom.current().nextLong(20, 60))
+        } catch (e: Throwable) {
+        } finally {
+            try { socket?.close() } catch (e: Throwable) {}
+        }
+        
+        // Random gap between ghost and real handshake
+        delay(ThreadLocalRandom.current().nextLong(100, 300))
+    }
+
+    private suspend fun applyWindowPulse(intensity: Int, rnd: ThreadLocalRandom) {
+        if (intensity > 45 && rnd.nextInt(100) < (intensity / 5).coerceIn(5, 20)) {
+            // Induce a small pause to force a TCP Window Update/Zero-Window advertisement from kernel
+            delay(rnd.nextLong(1, 5))
+        }
+    }
+
+    private fun applyWindowChaos(socket: Socket?, intensity: Int, rnd: ThreadLocalRandom) {
+        if (socket == null || intensity < 50) return
+        try {
+            // Randomly vary the advertised window size by changing receive buffer size
+            val base = if (intensity > 85) 16384 else 65536
+            val chaos = rnd.nextInt(-2048, 2048)
+            socket.receiveBufferSize = (base + chaos).coerceAtLeast(4096)
+        } catch (e: Throwable) {}
+    }
+
     private suspend fun connectToBestIp(
         ips: List<java.net.InetAddress>,
         port: Int,
@@ -756,20 +828,36 @@ object TcpTransportHandler {
                     // 1. TCP OOB desync
                     socket.sendUrgentData(rnd.nextInt(256))
                     
-                    // 2. Phantom SNI / Fake Header injection with low TTL (if intensity is high)
-                    if (intensity > 70 && rnd.nextInt(100) < 40) {
-                        val fakeSni = listOf("google.com", "cloudflare.com", "bing.com", "apple.com").random()
+                    // 2. Phantom SNI / Fake Header injection with low TTL
+                    if (intensity > 60 && rnd.nextInt(100) < 45) {
+                        val fakeSni = listOf("google.com", "cloudflare.com", "bing.com", "apple.com", "microsoft.com").random()
                         val fakeHandshake = FakePacketHelper.buildFakeTlsClientHello(fakeSni)
                         
-                        // Send with low TTL so DPI sees it but target ignores/drops it (hopefully)
                         TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                         output.write(fakeHandshake)
                         output.flush()
-                        delay(rnd.nextLong(1, 5))
+                        delay(rnd.nextLong(1, 4))
                         TtlHelper.setTtl(socket, 64)
                     }
                     
-                    Log.v("TcpTransport", "Advanced confusion pulse sent to $host")
+                    // 3. Fake TLS Heartbeat or TCP KeepAlive (if intensity is extreme)
+                    if (intensity > 85 && rnd.nextInt(100) < 30) {
+                        val heart = if (rnd.nextBoolean()) FakePacketHelper.buildTlsHeartbeat() else FakePacketHelper.buildFakeTcpKeepAlive()
+                        output.write(heart)
+                        output.flush()
+                    }
+                    
+                    // 4. Zero-Window Probe Simulation (perturb DPI TCP state)
+                    if (intensity > 75 && rnd.nextInt(100) < 20) {
+                        try {
+                             socket.setSendBufferSize(1)
+                             socket.sendUrgentData(0)
+                             delay(rnd.nextLong(5, 15))
+                             socket.setSendBufferSize(65536)
+                        } catch (e: Throwable) {}
+                    }
+                    
+                    Log.v("TcpTransport", "Advanced confusion pulse sent to $host (intensity $intensity)")
                 } catch (e: Throwable) {
                     break
                 }

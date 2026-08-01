@@ -210,8 +210,36 @@ object UdpTransportHandler {
                             val targetPortNum = ((data[headerLen].toInt() and 0xFF) shl 8) or (data[headerLen + 1].toInt() and 0xFF)
                             headerLen += 2
                             
-                            ProxyStats.addTraffic(targetHost)
                             val payloadLen = len - headerLen
+                            val payloadOffset = headerLen
+                            
+                            // Proactive QUIC rejection to force fallback to TCP
+                            if (BypassConfig.blockQuic && targetPortNum == 443 && payloadLen > 20) {
+                                if (isQuicInitial(data, payloadOffset, payloadLen)) {
+                                    // Extract DCID/SCID to build a convincing VN packet
+                                    val dcidLen = data[payloadOffset + 5].toInt() and 0xFF
+                                    if (payloadLen > 6 + dcidLen) {
+                                        val dcid = data.copyOfRange(payloadOffset + 6, payloadOffset + 6 + dcidLen)
+                                        val scidOffset = payloadOffset + 6 + dcidLen
+                                        val scidLen = data[scidOffset].toInt() and 0xFF
+                                        if (payloadLen > scidOffset + 1 + scidLen) {
+                                            val scid = data.copyOfRange(scidOffset + 1, scidOffset + 1 + scidLen)
+                                            val vn = FakePacketHelper.buildQuicVersionNegotiation(dcid, scid)
+                                            
+                                            // Re-wrap in SOCKS5 UDP header
+                                            val resp = ByteArray(headerLen + vn.size)
+                                            System.arraycopy(data, 0, resp, 0, headerLen)
+                                            System.arraycopy(vn, 0, resp, headerLen, vn.size)
+                                            try {
+                                                udpSocket.send(DatagramPacket(resp, resp.size, pktAddr, pktPort))
+                                            } catch (e: Throwable) {}
+                                        }
+                                    }
+                                    continue // Don't forward blocked QUIC
+                                }
+                            }
+
+                            ProxyStats.addTraffic(targetHost)
                             ProxyStats.updateBytes(payloadLen.toLong())
                             
                             // Schedule TTL probe for new UDP targets
@@ -327,21 +355,22 @@ object UdpTransportHandler {
     private val reorderBuffers = ConcurrentHashMap<String, MutableList<DatagramPacket>>()
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
     private var lastGlobalCleanup = System.currentTimeMillis()
+    private val REORDER_TIMEOUT = 5000L // 5 seconds
 
     private fun ensureGlobalMemoryEfficiency() {
         val now = System.currentTimeMillis()
-        if (now - lastGlobalCleanup < 30000) return
+        if (now - lastGlobalCleanup < 15000) return
         lastGlobalCleanup = now
 
-        if (reorderBuffers.size > 300) {
-            // Remove 100 random entries to reduce memory without full clear
+        if (reorderBuffers.size > 200) {
+            // Remove 100 random entries OR old entries
             val keys = reorderBuffers.keys().toList().shuffled().take(100)
             keys.forEach { reorderBuffers.remove(it) }
         }
-        if (flowPacketCounter.size > 1000) {
+        if (flowPacketCounter.size > 500) {
             flowPacketCounter.clear() 
         }
-        if (hostStrategyCache.size > 500) {
+        if (hostStrategyCache.size > 300) {
             hostStrategyCache.clear()
         }
     }
