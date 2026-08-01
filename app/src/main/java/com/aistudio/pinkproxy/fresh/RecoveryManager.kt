@@ -109,25 +109,21 @@ object RecoveryManager {
                 when (type) {
                     DpiType.TCP_RESET -> {
                         val candidates = listOf(
-                            BypassStrategy.SNI_SPLIT, 
-                            BypassStrategy.TCP_REORDER_DESYNC, 
-                            BypassStrategy.OOB_DESYNC,
-                            BypassStrategy.TCP_SEGMENT_DESYNC,
+                            BypassStrategy.TCP_COMBINED_NUCLEAR,
+                            BypassStrategy.TCP_COMBINED_HYBRID,
                             BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
-                            BypassStrategy.TCP_REVERSE_FRAG
+                            BypassStrategy.OOB_DESYNC
                         )
                         BypassConfig.setGlobalStrategy(candidates.random())
                         triggerPanic("Active TCP Reset DPI detected")
                     }
                     DpiType.TLS_SNI_BLOCK -> {
                         val candidates = listOf(
-                            BypassStrategy.SNI_SPLIT, 
-                            BypassStrategy.TLS_CLIENT_HELLO_CHOP, 
-                            BypassStrategy.TLS_REC_SPLIT,
-                            BypassStrategy.BYEBYEDPI_HYBRID,
+                            BypassStrategy.TCP_COMBINED_NUCLEAR,
                             BypassStrategy.BYEBYEDPI_EXTREME,
                             BypassStrategy.ZAPRET_EXTREME,
-                            BypassStrategy.TCP_REVERSE_FRAG
+                            BypassStrategy.SNI_SPLIT,
+                            BypassStrategy.TLS_CLIENT_HELLO_CHOP
                         )
                         BypassConfig.setGlobalStrategy(candidates.random())
                     }
@@ -148,9 +144,9 @@ object RecoveryManager {
                     }
                     DpiType.UDP_BLOCK -> {
                         val candidates = listOf(
+                            BypassStrategy.UDP_COMBINED_NUCLEAR,
+                            BypassStrategy.UDP_COMBINED_HYBRID,
                             BypassStrategy.UDP_QUIC_SMART_SHADOW,
-                            BypassStrategy.UDP_DNS_REORDER_HYBRID,
-                            BypassStrategy.UDP_SKEW_REVERSE,
                             BypassStrategy.QUIC_INITIAL_FRAGMENTATION
                         )
                         BypassConfig.setGlobalStrategy(candidates.random())

@@ -796,6 +796,9 @@ object TcpTransportHandler {
                         
                         val startConnect = System.currentTimeMillis()
                         try {
+                            // Introduce micro-jitter before connect to de-synchronize parallel probes
+                            if (i > 0) delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(5, 40))
+                            
                             s.connect(InetSocketAddress(ip, port), connectTimeout)
                             val rtt = System.currentTimeMillis() - startConnect
                             ProxyStats.recordGlobalSuccess(rtt)
@@ -822,20 +825,22 @@ object TcpTransportHandler {
                             }
                             throw e
                         }
-                        if (channel.trySend(s).isSuccess) {
-                            // Successfully sent
+                        
+                        if (isActive && !channel.isClosedForSend && channel.trySend(s).isSuccess) {
+                            // Won the race
+                            nextSignal.trySend(Unit)
                         } else {
-                            s.close()
+                            try { s.close() } catch (e: Throwable) {}
                         }
                     } catch (e: Throwable) {
                         try { s.close() } catch (ex: Exception) {}
-                        if (failures.incrementAndGet() == attempted) {
+                        if (failures.incrementAndGet() >= attempted) {
                             channel.close()
                         }
                     }
                 }
                 if (i < attempted - 1) {
-                    val dynamicDelay = if (censorship > 85) (raceDelay / 2) else (raceDelay + i * 100L)
+                    val dynamicDelay = if (censorship > 85) (raceDelay / 3) else (raceDelay + i * 50L)
                     withTimeoutOrNull(dynamicDelay) {
                         nextSignal.receive()
                     }
@@ -844,13 +849,16 @@ object TcpTransportHandler {
             
             var winnerSocket: Socket? = null
             try {
-                winnerSocket = withTimeoutOrNull(12000) { channel.receive() }
+                winnerSocket = withTimeoutOrNull(15000) { channel.receive() }
             } catch (e: Throwable) {} finally {
                 channel.close()
                 activeJobs.forEach { it.cancel() }
+                // Critical: Explicitly wait and ensure all loser sockets are closed
                 attemptedSockets.forEach { s ->
                     if (s != winnerSocket) {
-                        try { s.close() } catch (e: Throwable) {}
+                        try { 
+                            if (!s.isClosed) s.close() 
+                        } catch (e: Throwable) {}
                     }
                 }
             }

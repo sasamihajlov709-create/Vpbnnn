@@ -273,7 +273,9 @@ object ProxyStats {
 
     fun recordDpiEvent(type: DpiType) {
         _currentDpiType.value = type
-        _dpiEventHistory.update { (it + DpiEvent(type)).takeLast(50) }
+        _dpiEventHistory.update { current ->
+            (current + DpiEvent(type)).takeLast(50)
+        }
         dpiEvents[type] = (dpiEvents[type] ?: 0) + 1
         VpnRuntimeState.updateDpi(type.name)
         recordCensorshipEvent(true)
@@ -366,10 +368,11 @@ object ProxyStats {
     fun recordCensorshipEvent(isFailure: Boolean) {
         if (isFailure) {
             _errors.update { it + 1 }
-            _successRate.update { (it * 0.9).toInt().coerceIn(0, 100) }
-            _censorshipIntensity.update { (it + 5).coerceAtMost(100) }
+            _successRate.update { (it * 0.85 + 0).toInt().coerceIn(0, 100) }
+            _censorshipIntensity.update { (it + 8).coerceAtMost(100) }
         } else {
-            _censorshipIntensity.update { (it - 1).coerceAtLeast(0) }
+            _successRate.update { (it * 0.98 + 2).toInt().coerceIn(0, 100) }
+            _censorshipIntensity.update { (it - 2).coerceAtLeast(0) }
         }
     }
 
@@ -561,12 +564,12 @@ object ProxyStats {
         if (rtt > 0) {
              val lastRtt = _lastLatency.value
              val jitter = Math.abs(rtt - lastRtt)
-             val jitterPenalty = (jitter / 15).coerceAtMost(25)
-             _stabilityScore.update { (it * 0.97 + (100 - jitterPenalty) * 0.03).toInt().coerceIn(0, 100) }
+             val jitterPenalty = (jitter / 10).coerceAtMost(30)
+             _stabilityScore.update { (it * 0.95 + (100 - jitterPenalty) * 0.05).toInt().coerceIn(0, 100) }
              updateLatency(rtt)
         }
-        _censorshipIntensity.update { (it - 2).coerceAtLeast(0) }
-        _successRate.update { (it * 0.99 + 100 * 0.01).toInt().coerceIn(0, 100) }
+        _censorshipIntensity.update { (it - 3).coerceAtLeast(0) }
+        _successRate.update { (it * 0.97 + 3).toInt().coerceIn(0, 100) }
     }
 
     fun recordGlobalFailure() {

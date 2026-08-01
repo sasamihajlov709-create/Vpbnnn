@@ -25,7 +25,10 @@ object DnsCacheManager {
         "185.112.82.16", "82.200.130.206", "217.16.20.12", "188.114.98.1", "188.114.99.1",
         "77.88.8.8", "77.88.8.1", "114.114.114.114", "223.5.5.5", "180.76.76.76",
         "62.213.63.174", "104.244.42.1", "199.16.156.231", "162.159.138.232",
-        "104.18.6.192", "104.18.7.192"
+        "104.18.6.192", "104.18.7.192", "104.239.213.7", "172.217.16.10",
+        "142.250.180.14", "142.250.180.142", "172.217.16.206", "172.217.20.78",
+        "142.250.185.74", "142.251.33.206", "142.251.1.136", "142.251.46.174",
+        "142.251.46.206", "142.250.185.78", "142.250.184.206", "172.217.16.110"
     ))
 
     private val staticIps = mapOf(
@@ -34,13 +37,17 @@ object DnsCacheManager {
         "dns.quad9.net" to listOf("9.9.9.9", "149.112.112.112", "2620:fe::fe"),
         "google.com" to listOf("142.250.190.46"),
         "facebook.com" to listOf("157.240.22.35"),
-        "github.com" to listOf("140.82.112.4", "140.82.113.3")
+        "github.com" to listOf("140.82.112.4", "140.82.113.3"),
+        "telegram.org" to listOf("149.154.167.99", "149.154.167.51", "149.154.165.120", "149.154.160.1", "91.108.56.100", "91.108.56.110"),
+        "t.me" to listOf("149.154.167.99", "149.154.175.50", "91.108.4.156")
     )
 
     private val bogonIps = setOf(
         "127.0.0.1", "0.0.0.0", "1.1.1.1", "8.8.8.8", "10.0.0.1",
         "37.61.54.158", "78.153.224.238", "93.188.160.219", "159.106.121.75",
-        "203.98.7.65", "243.185.187.39", "46.82.174.68", "78.16.49.15"
+        "203.98.7.65", "243.185.187.39", "46.82.174.68", "78.16.49.15",
+        "10.10.10.10", "1.2.3.4", "5.5.5.5", "10.0.0.0", "127.0.0.2",
+        "100.64.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1"
     )
 
     fun isSuspicious(host: String, ips: List<InetAddress>): Boolean {
@@ -297,28 +304,45 @@ object DnsCacheManager {
     private val poisonedPrefixes = setOf(
         "146.112.", "128.121.", "67.215.", "204.232.", "198.18.", 
         "93.184.216.34", "104.239.213.7", "188.114.96.", "188.114.97.",
-        "188.114.98.", "188.114.99.", "37.228.114.", "8.254.218."
+        "188.114.98.", "188.114.99.", "37.228.114.", "8.254.218.",
+        "46.161.1.", "185.11.144.", "185.11.145.", "185.11.146.", "185.11.147."
     )
 
     fun isPoisoned(address: InetAddress, host: String): Boolean {
         val ip = address.hostAddress ?: return true
+        
+        // 1. Static blacklist check
         if (poisonedIps.contains(ip)) {
             ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
             return true
         }
-        if (address.isLoopbackAddress || address.isAnyLocalAddress) return true
+        
+        // 2. Loopback/Bogon check
+        if (address.isLoopbackAddress || address.isAnyLocalAddress || ip == "0.0.0.0" || ip == "127.0.0.1") return true
         
         val isLocalHost = host.endsWith(".local") || host.contains("localhost") || 
                           host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")
                           
         if (!isLocalHost) {
+            // 3. Private range check for public domains
             if (address.isLinkLocalAddress || address.isSiteLocalAddress) return true
             if (ip.startsWith("10.") || ip.startsWith("127.") || ip.startsWith("0.")) return true
+            if (ip.startsWith("100.64.")) return true // CGNAT IP
             
+            // 4. Prefix blacklist check
             if (poisonedPrefixes.any { ip.startsWith(it) }) {
                 ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
                 return true
             }
+            
+            // 5. Entropy check: Poisoned IPs often come in tight blocks or weird distributions
+            // For example, some censors return 8.8.8.8 for everything.
+            if (ip == "8.8.8.8" || ip == "1.1.1.1" || ip == "9.9.9.9") {
+                if (!host.contains("google") && !host.contains("cloudflare") && !host.contains("quad9")) return true
+            }
+            
+            // 6. Geolocation mismatch check (conceptual, if we had geodb)
+            // Censors often point to local IPs (e.g., within Russia/China) for US-based sites.
         }
         return false
     }

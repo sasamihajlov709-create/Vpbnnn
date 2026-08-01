@@ -324,8 +324,12 @@ object DpiEngine {
             }
         }
 
-        // 0. High Intensity override: use hybrid strategies if censorship is extreme
-        if (ProxyStats.censorshipIntensity.value > 90) {
+        // 0. High Intensity override: use hybrid or nuclear strategies if censorship is extreme
+        if (ProxyStats.censorshipIntensity.value > 95) {
+            val nuclear = listOf(BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.UDP_COMBINED_NUCLEAR)
+            val bestNuclear = nuclear.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_NUCLEAR
+            if ((circuitBreakers[bestNuclear] ?: 0L) < now) return bestNuclear
+        } else if (ProxyStats.censorshipIntensity.value > 85) {
             val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID)
             val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_HYBRID
             if ((circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
@@ -457,90 +461,96 @@ object DpiEngine {
         val totalSuccess = successHistory.values.sumOf { it.get() }
         val totalFailure = failureHistory.values.sumOf { it.get() }
         
-        if (totalSuccess + totalFailure == 0) return
+        if (totalSuccess + totalFailure == 0) {
+            // Passive recovery when no data: slowly reduce intensity
+            ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 2).coerceAtLeast(0))
+            return
+        }
 
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
-        ProxyStats.updateCensorshipIntensity(100 - globalSuccessRate)
         
         // Calculate Network Stability Score: combination of success rate and reset frequency
         val fingerprint = getCensorshipFingerprint()
-        // Automatic Censorship Intensity Calculation
+        
+        // Automatic Censorship Intensity Calculation: Non-linear weighting
+        // Resets and SNI blocks are much more indicative of DPI presence than simple timeouts
         val calculatedIntensity = (
-            fingerprint.rstRate * 30 + 
-            fingerprint.sniBlockRate * 40 + 
-            fingerprint.timeoutRate * 20 + 
-            fingerprint.stallRate * 10
+            fingerprint.rstRate * 45 + 
+            fingerprint.sniBlockRate * 55 + 
+            fingerprint.timeoutRate * 15 + 
+            fingerprint.stallRate * 25 +
+            (fingerprint.jitter / 200).coerceAtMost(10.0)
         ).toInt().coerceIn(0, 100)
         
-        if (Math.abs(calculatedIntensity - ProxyStats.censorshipIntensity.value) > 15) {
-            ProxyStats.updateCensorshipIntensity(calculatedIntensity)
-            Log.i("DpiEngine", "Automatic Censorship Intensity updated to $calculatedIntensity")
+        // Exponential smoothing for intensity updates to avoid jitter
+        val currentIntensity = ProxyStats.censorshipIntensity.value
+        val targetIntensity = if (calculatedIntensity > currentIntensity) {
+            // React faster to blocking
+            (currentIntensity * 0.6 + calculatedIntensity * 0.4).toInt()
+        } else {
+            // Recover slower to ensure stability
+            (currentIntensity * 0.9 + calculatedIntensity * 0.1).toInt()
+        }
+        
+        if (Math.abs(targetIntensity - currentIntensity) >= 1) {
+            ProxyStats.updateCensorshipIntensity(targetIntensity)
+            Log.i("DpiEngine", "Automatic Intensity updated: $targetIntensity (Success Rate: $globalSuccessRate%)")
         }
 
-        val stability = (globalSuccessRate * 0.6 + (100 - fingerprint.rstRate * 100) * 0.4).toInt().coerceIn(0, 100)
+        val stability = (globalSuccessRate * 0.5 + (100 - (fingerprint.rstRate + fingerprint.sniBlockRate) * 100).coerceAtLeast(0.0) * 0.5).toInt().coerceIn(0, 100)
         ProxyStats.updateStabilityScore(stability)
         
-        // Adaptive MTU Adjustment
+        // Adaptive MTU Adjustment (Handled also by CensorshipExpert, but kept here for double-layered safety)
         if (fingerprint.timeoutRate > 0.4 || fingerprint.stallRate > 0.5 || fingerprint.jitter > 500) {
-             val currentMtu = BypassConfig.currentMtu.value
-             if (currentMtu > 1100) {
-                 BypassConfig.setMtu(currentMtu - 50)
-                 ProxyStats.logRecovery("Adaptive Engine: Reducing MTU to $currentMtu to evade jitter/blocking.")
+             val mtu = BypassConfig.currentMtu.value
+             if (mtu > 1100) {
+                 BypassConfig.setMtu(mtu - 64)
+                 ProxyStats.logRecovery("Autonomous Engine: Critical packet drop detected. Down-scaling MTU.")
              }
         }
         
         // Jitter-based family boosting
         if (fingerprint.jitter > 800) {
             boostStrategyFamily(StrategyFamily.ADAPTIVE, null)
-            ProxyStats.logRecovery("High Jitter Detected (${fingerprint.jitter.toInt()}ms). Switching to ADAPTIVE family.")
+            ProxyStats.logRecovery("High Network Jitter (${fingerprint.jitter.toInt()}ms). Activating Adaptive Family.")
         }
 
         // Auto-Panic Mode trigger: More aggressive when seeing TCP Reset spikes
-        if ((globalSuccessRate < 25 && totalSuccess + totalFailure > 10) || fingerprint.rstRate > 0.4) {
-             if (!BypassConfig.isPanicModeFlow.value) {
-                 BypassConfig.setPanicMode(true)
-                 Log.e("DpiEngine", "AUTO-PANIC TRIGGERED: High Reset Rate (${(fingerprint.rstRate*100).toInt()}%) or Low Success ($globalSuccessRate%)")
-             }
-        } else if (globalSuccessRate > 65 && BypassConfig.isPanicModeFlow.value) {
+        val isPanic = BypassConfig.isPanicModeFlow.value
+        if (!isPanic && (globalSuccessRate < 35 || fingerprint.rstRate > 0.35 || fingerprint.sniBlockRate > 0.5)) {
+             BypassConfig.setPanicMode(true)
+             Log.e("DpiEngine", "EMERGENCY PANIC TRIGGERED: High Block Rate Detected.")
+        } else if (isPanic && globalSuccessRate > 75 && fingerprint.rstRate < 0.1) {
              BypassConfig.setPanicMode(false)
-             Log.i("DpiEngine", "Panic mode deactivated: Success rate recovered to $globalSuccessRate%")
+             Log.i("DpiEngine", "Panic mode deactivated: Success rate recovered.")
         }
 
-        // Strategy Aging: trend back to baseline to allow re-evaluation
+        // Strategy Aging: trend back to baseline with intensity-aware decay
         strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
                 val s = score.get()
+                val intensityFactor = ProxyStats.censorshipIntensity.value / 100.0
+                
                 if (s > 100) {
-                    val decay = if (ProxyStats.censorshipIntensity.value > 85) 0.98 else 0.90
+                    // Decay good strategies slower if intensity is high (keep what works)
+                    val decay = if (intensityFactor > 0.8) 0.99 else 0.95
                     score.set((s * decay + 100 * (1.0 - decay)).toInt())
                 } else if (s < 100) {
-                    val recovery = if (ProxyStats.censorshipIntensity.value < 20) 1.2 else 1.08
-                    score.set((s * recovery + 5).toInt().coerceAtMost(100))
+                    // Recover failed strategies slower if intensity is high (avoid re-trying broken stuff too often)
+                    val recovery = if (intensityFactor > 0.8) 1.01 else 1.05
+                    score.set((s * recovery + 2).toInt().coerceAtMost(100))
                 }
-                if (s < 10) score.set(40) 
             }
         }
         
-        // Adjust fragmentation and delays globally based on intensity
+        // Global Bypass Optimization
         BypassConfig.frag1 = getRecommendedFragSize()
         BypassConfig.delay1 = getRecommendedDelay()
         
-        // Clean up stale blacklist entries to prevent memory leaks
-        val now = System.currentTimeMillis()
-        hostStrategyBlacklist.keys().toList().forEach { host ->
-            val hostMap = hostStrategyBlacklist[host]
-            if (hostMap != null) {
-                hostMap.entries.removeIf { it.value < now }
-                if (hostMap.isEmpty()) {
-                    hostStrategyBlacklist.remove(host)
-                }
-            }
-        }
-
         pruneStrategies()
         saveScores(ProxyDispatcher.context!!)
 
-        if (totalSuccess + totalFailure > 500) {
+        if (totalSuccess + totalFailure > 1000) {
             successHistory.clear()
             failureHistory.clear()
         }

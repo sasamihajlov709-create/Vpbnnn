@@ -127,6 +127,7 @@ class PinkVpnService : VpnService() {
         ServiceChecker.startChecking(serviceScope, this)
         RecoveryManager.startHealthCheck(serviceScope)
         DpiEngine.start(this)
+        CensorshipExpert.start()
         
         serviceScope.launch {
             BypassConfig.currentMtu.collect { newMtu ->
