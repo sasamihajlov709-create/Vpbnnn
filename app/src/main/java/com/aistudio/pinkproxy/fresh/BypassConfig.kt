@@ -3318,14 +3318,22 @@ TtlHelper.setTtl(socket, 64)
             }
             BypassStrategy.TCP_COMBINED_HYBRID -> {
                 // The ultimate "Nuclear" option for TCP
-                // 1. Send Fake segment with low TTL and OOB data
-                val fake = FakePacketHelper.buildHandshakeCombo(rnd.nextInt(64, 128))
-                TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
-                output.write(fake); output.flush()
-                try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                // 1. Send Multiple Fake segments with very low TTL
+                val chaosCount = rnd.nextInt(1, 3)
+                repeat(chaosCount) {
+                    val chaos = when(rnd.nextInt(3)) {
+                        0 -> FakePacketHelper.buildHandshakeCombo(rnd.nextInt(64, 128))
+                        1 -> FakePacketHelper.buildHttpChaosPacket()
+                        else -> FakePacketHelper.buildTlsChaosPacket()
+                    }
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    output.write(chaos); output.flush()
+                    if (rnd.nextBoolean()) try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                    delay(rnd.nextLong(1, 5))
+                }
                 delay(config.delay1)
                 
-                // 2. SNI Split + Zero Window Stall
+                // 2. SNI Split + Zero Window Stall + Advanced Fragmentation
                 TtlHelper.setTtl(socket, 64)
                 val sniOffset = TlsParser.findSniOffset(data, length)
                 if (sniOffset != -1) {
@@ -3333,7 +3341,16 @@ TtlHelper.setTtl(socket, 64)
                     output.write(data, 0, sniOffset); output.flush()
                     delay(config.delay2)
                     try { TtlHelper.setWindowSize(socket, 65536) } catch(e: Throwable) {}
-                    output.write(data, sniOffset, length - sniOffset); output.flush()
+                    
+                    val rest = length - sniOffset
+                    if (rest > 10 && rnd.nextBoolean()) {
+                        val split2 = rest / 2
+                        output.write(data, sniOffset, split2); output.flush()
+                        delay(rnd.nextLong(1, 3))
+                        output.write(data, sniOffset + split2, rest - split2); output.flush()
+                    } else {
+                        output.write(data, sniOffset, rest); output.flush()
+                    }
                 } else {
                     val split = (length / 2).coerceIn(1, length - 1)
                     output.write(data, 0, split); output.flush()

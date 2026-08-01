@@ -939,14 +939,22 @@ object FakePacketHelper {
     }
 
     fun buildDnsChaosPacket(): ByteArray {
-        val rnd = ThreadLocalRandom.current()
-        val domains = listOf("gstatic.com", "safebrowsing.googleapis.com", "connectivitycheck.gstatic.com", "play.google.com", "update.googleapis.com")
+        val domains = listOf("gstatic.com", "safebrowsing.googleapis.com", "connectivitycheck.gstatic.com", "play.google.com", "update.googleapis.com", "mtalk.google.com", "android.googleapis.com", "dl.google.com")
         return buildDnsFakeQuery(domains.random())
     }
 
     fun buildTlsChaosPacket(): ByteArray {
-        val rnd = ThreadLocalRandom.current()
-        val hosts = listOf("mtalk.google.com", "alt1-mtalk.google.com", "clients4.google.com", "www.googleapis.com")
+        val hosts = listOf("mtalk.google.com", "alt1-mtalk.google.com", "clients4.google.com", "www.googleapis.com", "oauth2.googleapis.com", "android.clients.google.com")
         return buildRealisticTlsHello(hosts.random())
+    }
+
+    fun buildHttpChaosPacket(): ByteArray {
+        val methods = listOf("GET", "POST", "HEAD", "OPTIONS")
+        val paths = listOf("/", "/check", "/api/v1/status", "/gen_204", "/favicon.ico")
+        val hosts = listOf("connectivitycheck.gstatic.com", "www.google.com", "clients3.google.com")
+        val method = methods.random()
+        val path = paths.random()
+        val host = hosts.random()
+        return "$method $path HTTP/1.1\r\nHost: $host\r\nUser-Agent: Android\r\nConnection: close\r\n\r\n".toByteArray()
     }
 }

@@ -328,7 +328,7 @@ object TcpTransportHandler {
                 }
 
                 // Confusion pulse for DPI evasion
-                startConfusionPulse(targetHost, remoteOut, remoteSocket, this)
+                startConfusionPulse(targetHost, remoteOut, remoteSocket!!, this)
 
                 // Forward from Remote to Client (Direct)
                 val remoteToClient = launch(ProxyDispatcher.io) {
@@ -864,4 +864,5 @@ object TcpTransportHandler {
             }
         }
     }
+    private var lastGlobalCleanup = System.currentTimeMillis()
 }
