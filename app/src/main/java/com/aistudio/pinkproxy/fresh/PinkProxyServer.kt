@@ -15,7 +15,7 @@ import java.io.*
 class PinkProxyServer(private val vpnService: VpnService, private val port: Int, val sessionSecret: String = "") {
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
-    private val activeConnectionSemaphore = Semaphore(5000)
+    private val activeConnectionSemaphore = Semaphore(300)
 
     companion object {
         private val SOCKS5_AUTH_SUCCESS = byteArrayOf(5, 0)
@@ -37,18 +37,18 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         scope.launch {
             while (isActive) {
                 delay(60000)
-                val activeCount = 5000 - activeConnectionSemaphore.availablePermits()
-                if (activeCount > 500) {
+                val activeCount = 300 - activeConnectionSemaphore.availablePermits()
+                if (activeCount > 200) {
                     Log.i("PinkProxy", "Watchdog: $activeCount active connections. Cleaning up...")
                     // If semaphore is nearly empty, we might have leaked permits
-                    if (activeCount > 4800) {
+                    if (activeCount > 280) {
                         Log.e("PinkProxy", "CRITICAL: Semaphore exhaustion. Force resetting permits.")
-                        activeConnectionSemaphore.release(5000 - activeConnectionSemaphore.availablePermits())
+                        activeConnectionSemaphore.release(300 - activeConnectionSemaphore.availablePermits())
                     }
                 }
                 
                 // Force memory cleanup if needed
-                if (activeCount > 1000) {
+                if (activeCount > 150) {
                     System.gc()
                 }
             }
