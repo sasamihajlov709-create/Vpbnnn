@@ -142,6 +142,13 @@ object FakePacketHelper {
         return injectExtension(data, length, 0x1a1a + rnd.nextInt(0, 10) * 0x1111, grease)
     }
 
+    fun injectEchGrease(data: ByteArray, length: Int): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val grease = buildUdpNoise(rnd.nextInt(128, 256))
+        // ECH GREASE uses extension 0xfe0d
+        return injectExtension(data, length, 0xfe0d, grease)
+    }
+
     fun buildOpenVpnFake(): ByteArray {
         val rnd = ThreadLocalRandom.current()
         val baos = ByteArrayOutputStream(); val dos = DataOutputStream(baos)

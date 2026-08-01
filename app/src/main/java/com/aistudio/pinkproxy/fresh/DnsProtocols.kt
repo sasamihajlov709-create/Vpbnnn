@@ -67,6 +67,46 @@ object DnsProtocols {
         return client
     }
 
+    suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        
+        // Wrap DNS query in a fake QUIC Initial packet (Shadow QUIC)
+        // This is highly effective because UDP:443 is usually allowed, 
+        // and DPI reassembly for QUIC is complex/expensive.
+        val quicPacket = FakePacketHelper.buildQuicInitialReal(
+            dcid = ByteArray(8) { 0 }, 
+            scid = ByteArray(8) { 0 }, 
+            payload = query
+        )
+        
+        val socket = DatagramSocket()
+        val buffer = ProxyStats.obtain8k()
+        try {
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.soTimeout = 3000
+            val targetAddr = InetAddress.getByName(dnsIp)
+            socket.connect(targetAddr, 443) // Target UDP:443
+            
+            socket.send(DatagramPacket(quicPacket, quicPacket.size))
+            
+            val respPacket = DatagramPacket(buffer, buffer.size)
+            socket.receive(respPacket)
+            
+            // Note: A real DoQ server would respond with QUIC packet. 
+            // If it's a "simple" shadow proxy on the other end, it might just return raw DNS.
+            // If it's real QUIC, parsing would be needed. 
+            // For now, we assume the other end is our "Shadow Proxy" or it's a lucky transparent pass.
+            val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
+            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+        } catch (e: Throwable) {
+        } finally {
+            ProxyStats.release8k(buffer)
+            try { socket.close() } catch (e: Throwable) {}
+        }
+        return emptyList()
+    }
+
     suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)

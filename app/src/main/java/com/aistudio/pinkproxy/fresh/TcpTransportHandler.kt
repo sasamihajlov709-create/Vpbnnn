@@ -95,7 +95,7 @@ object TcpTransportHandler {
                         racers.add(BypassStrategy.TLS_SNI_SKEW)
                         racers.add(BypassStrategy.TCP_RETRANS_FAKE)
                     }
-                    val finalRacers = racers.distinct().take(if (BypassConfig.isPanicMode) 5 else 3)
+                    val finalRacers = racers.distinct().take(if (BypassConfig.isPanicMode || censorship > 85) 5 else 3)
                     
                     remoteSocket = try {
                         withTimeout(if (retryCount == 0) 8000 else 15000) {

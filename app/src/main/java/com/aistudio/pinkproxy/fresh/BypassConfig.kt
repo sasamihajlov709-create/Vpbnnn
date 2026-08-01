@@ -2499,15 +2499,72 @@ TtlHelper.setTtl(socket, 64)
                     
                     delay(config.delay1)
                     
-                    // 2. Restore normal state
+                    // 2. Fragmented ClientHello with urgent data and window jitter
                     TtlHelper.setTtl(socket, 64)
-                    try { TtlHelper.setWindowSize(socket, 16384) } catch(e: Throwable) {}
+                    try { TtlHelper.setWindowSize(socket, rnd.nextInt(2, 10)) } catch(e: Throwable) {}
                     
-                    val split = (length / 2).coerceIn(1, length - 1)
+                    val split = if (length > 10) 5 else 1
                     output.write(data, 0, split); output.flush()
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     delay(config.delay2)
+                    
+                    try { TtlHelper.setWindowSize(socket, 65535) } catch(e: Throwable) {}
                     output.write(data, split, length - split); output.flush()
-                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+                } catch (e: Throwable) { 
+                    try { output.write(data, 0, length); output.flush() } catch(ex: Throwable) {}
+                }
+            }
+            BypassStrategy.ECH_GREASE -> {
+                val greased = FakePacketHelper.injectEchGrease(finalData, finalLen)
+                output.write(greased); output.flush()
+            }
+            BypassStrategy.TCP_SEGMENT_OVERLAP -> {
+                try {
+                    val split = (length / 2).coerceAtLeast(1)
+                    val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                    
+                    // 1. Part 1 (Real)
+                    output.write(data, 0, split); output.flush()
+                    
+                    // 2. Part 2 Overlap (Fake data with real sequence range, low TTL)
+                    TtlHelper.setTtl(socket, discoveredTtl)
+                    output.write(FakePacketHelper.buildUdpNoise(length - split))
+                    output.flush()
+                    
+                    // 3. Part 2 (Real)
+                    delay(config.delay1)
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.TCP_SEGMENT_REVERSE -> {
+                try {
+                    val split = (length / 2).coerceAtLeast(1)
+                    // We can't actually reverse TCP segments without raw sockets easily,
+                    // but we can send part 2 with low TTL then part 1 then part 2 real.
+                    
+                    val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                    
+                    // 1. Part 2 (Low TTL)
+                    TtlHelper.setTtl(socket, discoveredTtl)
+                    output.write(data, split, length - split); output.flush()
+                    
+                    // 2. Part 1 (Real)
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, split); output.flush()
+                    
+                    // 3. Part 2 (Real)
+                    delay(config.delay1)
+                    output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) {
+                    output.write(data, 0, length); output.flush()
+                }
+            }
+            BypassStrategy.DNS_OVER_QUIC -> {
+                // Handled by RobustResolver/DnsProtocols, skip TCP bypass logic
+                output.write(data, 0, length); output.flush()
             }
             BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID -> {
                 val split = config.frag1.coerceIn(1, length - 1)

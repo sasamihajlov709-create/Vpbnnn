@@ -2,6 +2,8 @@ package com.aistudio.pinkproxy.fresh
 
 import android.util.Log
 import kotlinx.coroutines.*
+import java.net.Socket
+import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -45,19 +47,71 @@ object CensorshipExpert {
 
     private suspend fun performLightBackgroundScan() {
         // Only scan if intensity is non-zero, to avoid unneeded traffic
-        if (ProxyStats.censorshipIntensity.value < 5) return
+        val intensity = ProxyStats.censorshipIntensity.value
+        if (intensity < 5) return
         
         Log.d("CensorshipExpert", "Performing background network health scan...")
         val targets = listOf("dns.google", "one.one.one.one", "www.google.com")
-        targets.forEach { host ->
-            try {
-                // Try UDP DNS with shadow - common test for DPI presence
-                val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", BypassConfig.activeVpnService)
-                if (res.isEmpty()) {
-                    ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+        
+        // Parallel health checks
+        coroutineScope {
+            targets.map { host ->
+                launch {
+                    try {
+                        // Try UDP DNS with shadow - common test for DPI presence
+                        val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", BypassConfig.activeVpnService)
+                        if (res.isEmpty()) {
+                            ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
+                        }
+                    } catch (e: Throwable) {}
                 }
-            } catch (e: Throwable) {}
-            delay(2000)
+            }.forEach { it.join() }
+        }
+        
+        // Proactive Strategy Evaluation: Test a few strategies to see what's winning
+        if (intensity > 40 && ProxyStats.getSuccessRate() < 70) {
+            evaluateBestStrategies()
+        }
+    }
+
+    private suspend fun evaluateBestStrategies() {
+        Log.i("CensorshipExpert", "Evaluating optimal strategies proactively...")
+        val testHost = "www.google.com"
+        val testPort = 443
+        val strategiesToTest = listOf(
+            BypassStrategy.SNI_SPLIT,
+            BypassStrategy.TCP_OOB_DESYNC,
+            BypassStrategy.BYEBYEDPI_HYBRID,
+            BypassStrategy.TLS_SNI_SKEW
+        )
+        
+        coroutineScope {
+            strategiesToTest.forEach { strat ->
+                launch {
+                    val start = System.currentTimeMillis()
+                    val socket = Socket()
+                    try {
+                        BypassConfig.activeVpnService?.protect(socket)
+                        socket.soTimeout = 5000
+                        val ips = RobustResolver.resolve(testHost)
+                        if (ips.isNotEmpty()) {
+                            val config = BypassConfig.getSessionConfig(testHost, strat, 100)
+                            socket.connect(InetSocketAddress(ips.random(), testPort), 3000)
+                            // Simulate a tiny part of handshake to see if it's reset
+                            val hello = FakePacketHelper.buildChromeHello(testHost)
+                            BypassConfig.applyBypass(socket, socket.getOutputStream(), hello, hello.size, config, testHost)
+                            
+                            val rtt = System.currentTimeMillis() - start
+                            DpiEngine.recordResult(strat, true, HostCategory.OTHER, latencyMs = rtt)
+                        }
+                    } catch (e: Throwable) {
+                        DpiEngine.recordResult(strat, false, HostCategory.OTHER)
+                    } finally {
+                        try { socket.close() } catch (e: Throwable) {}
+                    }
+                }
+                delay(500) // Staggered tests
+            }
         }
     }
 

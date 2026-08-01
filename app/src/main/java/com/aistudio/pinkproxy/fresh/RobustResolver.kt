@@ -216,6 +216,9 @@ object RobustResolver {
             queries.add { DnsProtocols.queryTcpDnsNuclear(host, "8.8.8.8", vpnService) }
         }
         
+        // 4.3 DNS over QUIC (Shadow/Pseudo-QUIC for UDP:443 evasion)
+        queries.add { DnsProtocols.queryDnsOverQuic(host, "8.8.8.8", vpnService) }
+        
         // 4.5 DoH Smuggling (Experimental resilience)
         if (intensity > 60) {
             queries.add { DnsProtocols.queryDohSmuggling(host, vpnService) }
