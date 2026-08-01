@@ -325,6 +325,18 @@ object FakePacketHelper {
         return byteArrayOf(ThreadLocalRandom.current().nextInt(256).toByte())
     }
 
+    fun buildFakeRetransmission(realData: ByteArray, length: Int): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val copy = realData.copyOf(length)
+        // Mangle 30-70% of the data to keep it looking somewhat similar in structure but invalid
+        val mangleRatio = rnd.nextDouble(0.3, 0.7)
+        val bytesToMangle = (length * mangleRatio).toInt().coerceAtLeast(1)
+        repeat(bytesToMangle) {
+            copy[rnd.nextInt(length)] = rnd.nextInt(256).toByte()
+        }
+        return copy
+    }
+
     fun buildQuicInitial(): ByteArray {
         val rnd = ThreadLocalRandom.current()
         val data = ByteArray(rnd.nextInt(1200, 1280)).apply { rnd.nextBytes(this) }

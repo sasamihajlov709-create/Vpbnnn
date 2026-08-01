@@ -200,26 +200,39 @@ object AutoTtlProber {
             try {
                 socket = Socket()
                 TtlHelper.setTtl(socket, ttl)
-                socket.connect(InetSocketAddress(addr, port), 1500)
+                socket.connect(InetSocketAddress(addr, port), 1000)
                 
                 val output = socket.getOutputStream()
                 val input = socket.getInputStream()
                 
-                // Send a fake SNI that might be blocked
-                val fakeHello = FakePacketHelper.buildRealisticTlsHello("blocked.com")
-                output.write(fakeHello); output.flush()
+                // Use a multi-stage trigger: TLS SNI + HTTP Host header
+                val rnd = ThreadLocalRandom.current()
+                val trigger = when(rnd.nextInt(3)) {
+                    0 -> FakePacketHelper.buildRealisticTlsHello("blocked.com")
+                    1 -> "GET / HTTP/1.1\r\nHost: blocked.com\r\n\r\n".toByteArray()
+                    else -> FakePacketHelper.buildHttpChaosPacket()
+                }
+                output.write(trigger); output.flush()
                 
-                // If we get an immediate RST or some data back despite low TTL, it's the censor
+                // If we get data back despite low TTL, it's either the censor or we reached the server
+                // We check the first few bytes to see if it's a typical block page or TLS alert
                 val buffer = ByteArray(1024)
-                socket.soTimeout = 1000
-                val read = input.read(buffer)
+                socket.soTimeout = 800
+                val read = try { input.read(buffer) } catch(e: Throwable) { -2 }
                 
-                read > 0 // If we got data back, it reached the censor (or server, but TTL is low)
+                if (read > 0) {
+                    val content = String(buffer, 0, read.coerceAtMost(128), Charsets.US_ASCII).lowercase()
+                    // If it's a block page or TLS Alert, it's definitely the censor
+                    content.contains("forbidden") || content.contains("block") || buffer[0] == 0x15.toByte() || read > 0
+                } else {
+                    false
+                }
             } catch (e: java.net.SocketTimeoutException) {
                 false
             } catch (e: Throwable) {
-                // Likely a RST from censor
-                e.message?.contains("reset", true) == true
+                // RST/FIN from middlebox is a clear indicator
+                val msg = e.message?.lowercase() ?: ""
+                msg.contains("reset") || msg.contains("closed") || msg.contains("pipe")
             } finally {
                 try { socket?.close() } catch (e: Throwable) {}
             }

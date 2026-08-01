@@ -146,6 +146,19 @@ object TcpTransportHandler {
                 retryCount++
                 if (retryCount <= maxRetries) {
                     ProxyStats.recordGlobalFailure()
+                    
+                    // Strategy Chaining: Try fallback if available
+                    val fallback = DpiEngine.getFallbackStrategy(strategy)
+                    if (fallback != null) {
+                        strategy = fallback
+                        config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
+                        ProxyStats.logRecovery("Auto-Autopilot: Falling back to ${strategy.name} for $targetHost")
+                    } else {
+                        // If no specific fallback, rotate to something better
+                        strategy = DpiEngine.getBestStrategy(HostClassifier.classify(targetHost), targetHost)
+                        config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
+                    }
+
                     // Proactively re-probe host on failure to adapt to routing changes
                     AutoTtlProber.scheduleProbe(targetHost, targetPort, vpnService, scope)
                     delay(200L * retryCount)
@@ -416,12 +429,24 @@ object TcpTransportHandler {
                                             // Valid TLS Handshake or App Data
                                         } else {
                                             // Possible HTTP or other
-                                            val scanLen = n.coerceAtMost(1024)
+                                            val scanLen = n.coerceAtMost(2048)
                                             val lowStr = String(buffer, 0, scanLen, Charsets.US_ASCII).lowercase()
-                                            if (lowStr.contains("forbidden") || lowStr.contains("access denied") || lowStr.contains("blocked") || lowStr.contains("content filter")) {
-                                                ProxyStats.logRecovery("DPI Block Page Detected on $targetHost")
+                                            val isBlocked = lowStr.contains("forbidden") || 
+                                                           lowStr.contains("access denied") || 
+                                                           lowStr.contains("blocked") || 
+                                                           lowStr.contains("content filter") ||
+                                                           lowStr.contains("connection refused") ||
+                                                           lowStr.contains("error_code") ||
+                                                           lowStr.contains("cloud-flare") && lowStr.contains("blocked") ||
+                                                           lowStr.contains("nginx") && lowStr.contains("403") ||
+                                                           lowStr.contains("fortinet") ||
+                                                           lowStr.contains("sophos") ||
+                                                           lowStr.contains("sonicwall")
+
+                                            if (isBlocked) {
+                                                ProxyStats.logRecovery("DPI/Firewall Block Detected on $targetHost (Keywords found)")
                                                 BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.HTTP_BLOCK)
-                                                throw java.io.IOException("HTTP DPI Block")
+                                                throw java.io.IOException("DPI Block Identified")
                                             }
                                         }
                                     }
@@ -565,16 +590,35 @@ object TcpTransportHandler {
                                     // Advanced Fragmentation & MSS Clamping simulation
                                     if ((isMssClamp || currentIntensity > 50) && n > 1100) {
                                         var offset = 0
-                                        val mss = when {
-                                            isMssClamp -> 512 + rnd.nextInt(300)
-                                            currentIntensity > 90 -> 256 + rnd.nextInt(512)
-                                            else -> 1100 + rnd.nextInt(200)
-                                        }
                                         while (offset < n) {
+                                            // Opportunistic MSS Shifting: vary MSS for each fragment to break DPI fingerprint
+                                            val mss = when {
+                                                isMssClamp -> 512 + rnd.nextInt(300)
+                                                currentIntensity > 90 -> rnd.nextInt(128, 768)
+                                                currentIntensity > 75 -> rnd.nextInt(512, 1100)
+                                                else -> 1100 + rnd.nextInt(200)
+                                            }
                                             val sz = minOf(mss, n - offset)
                                             remoteOut.write(buffer, offset, sz)
                                             remoteOut.flush()
+                                            
+                                            // Periodically oscillate window size to confuse DPI reassembly engine
+                                            oscillateWindowSize(remoteSocket!!, currentIntensity)
+                                            
                                             offset += sz
+
+                                            // TCP Retransmission Simulation (Segment Overlap with junk)
+                                            if (currentIntensity > 85 && rnd.nextInt(100) < 40) {
+                                                val junk = FakePacketHelper.buildFakeRetransmission(buffer.copyOfRange(offset - sz, offset), sz)
+                                                try {
+                                                    TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 4))
+                                                    remoteOut.write(junk)
+                                                    remoteOut.flush()
+                                                    delay(rnd.nextLong(1, 3))
+                                                    TtlHelper.setTtl(remoteSocket!!, 64)
+                                                } catch (e: Throwable) {}
+                                            }
+
                                             if (offset < n) {
                                                 val d = if (currentIntensity > 80) rnd.nextLong(2, 10) else 1L
                                                 delay(d)
@@ -820,7 +864,7 @@ object TcpTransportHandler {
             val rnd = java.util.concurrent.ThreadLocalRandom.current()
             while (isActive && !socket.isClosed) {
                 val intensity = ProxyStats.censorshipIntensity.value
-                val baseDelay = if (intensity > 85) 15000L else 30000L
+                val baseDelay = if (intensity > 85) 10000L else 25000L
                 delay(rnd.nextLong(baseDelay, baseDelay * 2)) 
                 
                 if (socket.isClosed) break
@@ -829,9 +873,9 @@ object TcpTransportHandler {
                     socket.sendUrgentData(rnd.nextInt(256))
                     
                     // 2. Phantom SNI / Fake Header injection with low TTL
-                    if (intensity > 60 && rnd.nextInt(100) < 45) {
-                        val fakeSni = listOf("google.com", "cloudflare.com", "bing.com", "apple.com", "microsoft.com").random()
-                        val fakeHandshake = FakePacketHelper.buildFakeTlsClientHello(fakeSni)
+                    if (intensity > 55 && rnd.nextInt(100) < 50) {
+                        val fakeSni = listOf("google.com", "cloudflare.com", "bing.com", "apple.com", "microsoft.com", "gstatic.com", "android.googleapis.com").random()
+                        val fakeHandshake = if (rnd.nextBoolean()) FakePacketHelper.buildFakeTlsClientHello(fakeSni) else FakePacketHelper.buildHttpChaosPacket()
                         
                         TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                         output.write(fakeHandshake)
@@ -840,29 +884,61 @@ object TcpTransportHandler {
                         TtlHelper.setTtl(socket, 64)
                     }
                     
-                    // 3. Fake TLS Heartbeat or TCP KeepAlive (if intensity is extreme)
-                    if (intensity > 85 && rnd.nextInt(100) < 30) {
-                        val heart = if (rnd.nextBoolean()) FakePacketHelper.buildTlsHeartbeat() else FakePacketHelper.buildFakeTcpKeepAlive()
-                        output.write(heart)
+                    // 3. Protocol-Compliant Noise (App-like traffic)
+                    if (intensity > 70 && rnd.nextInt(100) < 40) {
+                        val appNoise = when(rnd.nextInt(4)) {
+                            0 -> "{\"status\":\"ok\",\"t\":${System.currentTimeMillis()}}".toByteArray()
+                            1 -> byteArrayOf(0x00, 0x01, 0x00, 0x00, 0x00, 0x08) + ByteArray(8) { rnd.nextInt(256).toByte() } // Fake binary header
+                            2 -> "HTTP/1.1 100 Continue\r\n\r\n".toByteArray()
+                            else -> FakePacketHelper.buildTlsHeartbeat()
+                        }
+                        output.write(appNoise)
                         output.flush()
                     }
-                    
-                    // 4. Zero-Window Probe Simulation (perturb DPI TCP state)
-                    if (intensity > 75 && rnd.nextInt(100) < 20) {
-                        try {
-                             socket.setSendBufferSize(1)
-                             socket.sendUrgentData(0)
-                             delay(rnd.nextLong(5, 15))
-                             socket.setSendBufferSize(65536)
-                        } catch (e: Throwable) {}
+
+                    // 4. Advanced Zero-Window Probing (State Freeze)
+                    if (intensity > 65 && rnd.nextInt(100) < 30) {
+                        performZeroWindowProbe(socket, output)
                     }
                     
-                    Log.v("TcpTransport", "Advanced confusion pulse sent to $host (intensity $intensity)")
+                    Log.v("TcpTransport", "High-frequency confusion pulse sent to $host (intensity $intensity)")
                 } catch (e: Throwable) {
                     break
                 }
             }
         }
     }
+    private suspend fun performZeroWindowProbe(socket: Socket, out: java.io.OutputStream) {
+        try {
+            // 1. Freeze DPI state by setting window to 0
+            TtlHelper.setWindowSize(socket, 0)
+            
+            // 2. Send 1-byte "probe" data (Keep-Alive like)
+            out.write(byteArrayOf(ThreadLocalRandom.current().nextInt(256).toByte()))
+            out.flush()
+            
+            // 3. Wait for DPI to process the 0-window state
+            delay(ThreadLocalRandom.current().nextLong(50, 200))
+            
+            // 4. Restore window to a small value first to force small segments
+            TtlHelper.setWindowSize(socket, ThreadLocalRandom.current().nextInt(128, 512))
+            delay(10)
+            
+            // 5. Finally restore to normal
+            TtlHelper.setWindowSize(socket, 65535)
+        } catch (e: Throwable) {}
+    }
+
+    private fun oscillateWindowSize(socket: Socket, intensity: Int) {
+        if (intensity < 60) return
+        val rnd = ThreadLocalRandom.current()
+        if (rnd.nextInt(100) < 30) {
+            val smallWindow = rnd.nextInt(128, 2048)
+            TtlHelper.setWindowSize(socket, smallWindow)
+        } else {
+            TtlHelper.setWindowSize(socket, 65535)
+        }
+    }
+
     private var lastGlobalCleanup = System.currentTimeMillis()
 }

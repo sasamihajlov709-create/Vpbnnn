@@ -55,6 +55,7 @@ object DpiEngine {
             strategyScores[cat] = catScores
         }
         
+        initStrategyChains()
         loadScores(context)
 
         scope.launch {
@@ -177,6 +178,22 @@ object DpiEngine {
 
     private val strategyMaturity = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     private val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, BypassStrategy>>()
+    private val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
+
+    private fun initStrategyChains() {
+        // Define fallback chains for automated recovery
+        strategyChains[BypassStrategy.SNI_SPLIT] = BypassStrategy.TLS_SNI_FRAGMENT
+        strategyChains[BypassStrategy.TLS_SNI_FRAGMENT] = BypassStrategy.BYEBYEDPI_HYBRID
+        strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.ZAPRET_EXTREME
+        strategyChains[BypassStrategy.TCP_REORDER_DESYNC] = BypassStrategy.TCP_OOB_DESYNC
+        strategyChains[BypassStrategy.TCP_MSS_CLAMP] = BypassStrategy.TCP_RETRANS_FAKE
+        strategyChains[BypassStrategy.HTTP_HOST_SPACE] = BypassStrategy.HTTP_HOST_TAB_MANGLE
+        strategyChains[BypassStrategy.UDP_QUIC_SMART_SHADOW] = BypassStrategy.QUIC_INITIAL_FRAGMENTATION
+    }
+
+    fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {
+        return strategyChains[failedStrategy]
+    }
 
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
         if (success) {

@@ -996,14 +996,15 @@ object BypassConfig {
             BypassStrategy.UDP_OVERLAP_SKEW -> {
                 try {
                     val isIpv6 = targetAddr is java.net.Inet6Address
-                    // Send a slightly larger packet with low TTL, containing real data + noise
-                    val fakePayload = data.copyOfRange(offset, offset + length)
-                    rnd.nextBytes(fakePayload) // Randomize for the overlap
+                    // Advanced Overlap: Send partial real data mixed with noise at low TTL
+                    val overlapSize = (length / 4).coerceAtLeast(1).coerceAtMost(16)
+                    val fakePayload = data.copyOfRange(offset, offset + overlapSize)
+                    for (i in fakePayload.indices) fakePayload[i] = (fakePayload[i].toInt() xor 0xAA).toByte()
                     
                     TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
                     socket.send(DatagramPacket(fakePayload, fakePayload.size, targetAddr, targetPort))
                     
-                    delay(rnd.nextLong(1, 5))
+                    delay(rnd.nextLong(1, 3))
                     
                     TtlHelper.setUdpTtl(socket, 64, isIpv6)
                     socket.send(packet)
@@ -3259,6 +3260,24 @@ TtlHelper.setTtl(socket, 64)
                 output.write(data, split, length - split); output.flush()
                 delay(rnd.nextLong(2, 5))
                 output.write(data, 0, split); output.flush()
+            }
+            BypassStrategy.TCP_OVERLAP_SKEW -> {
+                try {
+                    // Send 1st byte with low TTL and fake content
+                    val fake = data.copyOf(length)
+                    fake[0] = (fake[0].toInt() xor 0xFF).toByte()
+                    TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                    output.write(fake, 0, 1); output.flush()
+                    delay(rnd.nextLong(1, 3))
+                    
+                    // Send real 1st byte with normal TTL
+                    TtlHelper.setTtl(socket, 64)
+                    output.write(data, 0, 1); output.flush()
+                    delay(rnd.nextLong(1, 3))
+                    
+                    // Send the rest
+                    output.write(data, 1, length - 1); output.flush()
+                } catch(e: Throwable) { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_TLS_SNI_CASE_MOD -> {
                 val offset: Int = TlsParser.findSniOffset(data, length)

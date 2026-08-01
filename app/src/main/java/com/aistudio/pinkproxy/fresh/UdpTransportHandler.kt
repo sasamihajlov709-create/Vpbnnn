@@ -79,14 +79,31 @@ object UdpTransportHandler {
                         
                         try {
                             for (work in udpOutChannels[i]) {
-                                val (packet, targetHost) = work
-                                activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
-                                try {
-                                    sendUdpPacket(outSocket, packet, targetHost)
-                                } catch (e: Throwable) {
-                                    if (e is CancellationException) throw e
-                                    Log.v("UdpTransport", "Send error: ${e.message}")
-                                }
+                    val (packet, targetHost) = work
+                                    activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
+                                    
+                                    var currentConfig = BypassConfig.getSessionConfig(targetHost, BypassConfig.getBestStrategyForHost(targetHost), BypassConfig.currentRttMs.value)
+                                    var attempts = 0
+                                    val maxAttempts = 2
+                                    
+                                    while (attempts < maxAttempts) {
+                                        try {
+                                            sendUdpPacket(outSocket, packet, targetHost, currentConfig, this)
+                                            break // Success
+                                        } catch (e: Throwable) {
+                                            if (e is CancellationException) throw e
+                                            attempts++
+                                            if (attempts < maxAttempts) {
+                                                val fallback = DpiEngine.getFallbackStrategy(currentConfig.strategy)
+                                                if (fallback != null) {
+                                                    currentConfig = currentConfig.copy(strategy = fallback)
+                                                    ProxyStats.logRecovery("UDP Auto-Autopilot: Falling back to ${fallback.name} for $targetHost")
+                                                }
+                                            } else {
+                                                Log.v("UdpTransport", "Send error after retries: ${e.message}")
+                                            }
+                                        }
+                                    }
                             }
                         } catch (e: Throwable) {
                             if (e is CancellationException) throw e
@@ -382,7 +399,7 @@ object UdpTransportHandler {
         return (firstByte and 0x80) != 0 && (firstByte and 0x40) != 0 && (firstByte and 0x30) == 0x00
     }
 
-    private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "") {
+    private suspend fun sendUdpPacket(socket: DatagramSocket, packet: DatagramPacket, targetHost: String = "", config: SessionConfig? = null, scope: CoroutineScope) {
         ensureGlobalMemoryEfficiency()
         
         val payload = packet.data
@@ -408,6 +425,7 @@ object UdpTransportHandler {
         // 0. Periodic Flow Noise Injection
         val counter = flowPacketCounter.getOrPut(flowKey) { java.util.concurrent.atomic.AtomicInteger(0) }
         val count = counter.incrementAndGet()
+        val rnd = ThreadLocalRandom.current()
         
         // Optimization: For high-volume flows (count > 50), bypass some heavy obfuscation to save CPU
         val isHighVolume = count > 50
@@ -415,12 +433,11 @@ object UdpTransportHandler {
         if (!isDns) {
             // Random Jitter/Delay - skip for high volume to maintain performance
             val intensity = ProxyStats.censorshipIntensity.value
-            if (!isHighVolume && intensity > 60 && ThreadLocalRandom.current().nextInt(100) < 5) {
-                delay(ThreadLocalRandom.current().nextLong(1, 5))
+            if (!isHighVolume && intensity > 60 && rnd.nextInt(100) < 5) {
+                delay(rnd.nextLong(1, 5))
             }
 
             if (!isHighVolume && count % 20 == 0) { // Every 20 packets, but only for initial burst
-                val rnd = ThreadLocalRandom.current()
                 if (rnd.nextInt(100) < (intensity / 2).coerceIn(10, 50)) {
                     val noiseSize = if (isQuic) rnd.nextInt(256, 1024) else rnd.nextInt(16, 64)
                     val noise = FakePacketHelper.buildUdpNoise(noiseSize)
@@ -430,7 +447,7 @@ object UdpTransportHandler {
             
             // UDP Reorder Simulation for certain flows (QUIC)
             if (!isHighVolume && isQuic && intensity > 70 && count < 10) {
-                 if (ThreadLocalRandom.current().nextInt(100) < 15) {
+                 if (rnd.nextInt(100) < 15) {
                      // Save this packet for a very short time and let next one pass first
                      val buffer = reorderBuffers.getOrPut(flowKey) { mutableListOf() }
                      if (buffer.size < 2) {
@@ -439,24 +456,33 @@ object UdpTransportHandler {
                      }
                  }
             }
+            
+            // Manual Fragmentation for large packets (DPI confusion)
+            if (!isHighVolume && intensity > 50 && length > 1200 && rnd.nextInt(100) < 15) {
+                val split = length / 2
+                socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
+                delay(rnd.nextLong(1, 3))
+                socket.send(DatagramPacket(payload, offset + split, length - split, targetInet, targetPort))
+                return
+            }
         }
         
         val now = System.currentTimeMillis()
-        val cached = hostStrategyCache[host]
-        
-        val config = if (cached == null || now - cached.second > 15000L) {
-            val strat = BypassConfig.getBestStrategyForHost(host)
-            val cfg = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
-            if (hostStrategyCache.size > 500) hostStrategyCache.clear() 
-            hostStrategyCache[host] = cfg to now
-            cfg
-        } else {
-            cached.first
+        val finalConfig = config ?: run {
+            val cached = hostStrategyCache[host]
+            if (cached == null || now - cached.second > 15000L) {
+                val strat = BypassConfig.getBestStrategyForHost(host)
+                val cfg = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
+                if (hostStrategyCache.size > 500) hostStrategyCache.clear() 
+                hostStrategyCache[host] = cfg to now
+                cfg
+            } else {
+                cached.first
+            }
         }
 
         // Adaptive Jitter and TTL randomization
         val intensity = ProxyStats.censorshipIntensity.value
-        val rnd = ThreadLocalRandom.current()
         
         // 1. Shadowing: occasionally send a fake UDP handshake before real data (Only for session start)
         if (!isHighVolume && intensity > 55 && count < 5 && rnd.nextInt(100) < 15) {
@@ -489,7 +515,7 @@ object UdpTransportHandler {
                      }
                  }
                  
-                  if (config.strategy == BypassStrategy.UDP_OVERLAP_SKEW) {
+                  if (finalConfig.strategy == BypassStrategy.UDP_OVERLAP_SKEW) {
                       val split = rnd.nextInt(50, 150)
                       val fake = FakePacketHelper.buildUdpNoise(split)
                       TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetInet is java.net.Inet6Address)
@@ -501,7 +527,7 @@ object UdpTransportHandler {
                   }
 
                  // Fragmented Initial strategy
-                 if (BypassConfig.strategy.value == BypassStrategy.UDP_FRAGMENT_SKEW || intensity > 90) {
+                 if (finalConfig.strategy == BypassStrategy.UDP_FRAGMENT_SKEW || intensity > 90) {
                      val split = rnd.nextInt(100, 300)
                      socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
                      delay(rnd.nextLong(1, 5))
@@ -525,7 +551,7 @@ object UdpTransportHandler {
         }
 
         // 3. Reordering Logic for QUIC or explicit UDP_REORDER
-        if (!isHighVolume && (config.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 80 && rnd.nextInt(100) < 20))) {
+        if (!isHighVolume && (finalConfig.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 80 && rnd.nextInt(100) < 20))) {
             val key = "${targetInet.hostAddress}:$targetPort"
             val buffer = reorderBuffers.getOrPut(key) { Collections.synchronizedList(mutableListOf<DatagramPacket>()) }
             
@@ -536,7 +562,7 @@ object UdpTransportHandler {
                 val toSend = buffer.toMutableList().apply { shuffle() }
                 buffer.clear()
                 for (p in toSend) {
-                    BypassConfig.applyUdpBypass(socket, p, config, host)
+                    BypassConfig.applyUdpBypass(socket, p, finalConfig, host)
                     if (rnd.nextInt(100) < 30) delay(rnd.nextLong(1, 3))
                 }
             }
@@ -563,7 +589,7 @@ object UdpTransportHandler {
             }
         }
         
-        if (config.strategy == BypassStrategy.UDP_STUTTER) {
+        if (finalConfig.strategy == BypassStrategy.UDP_STUTTER) {
             val chunks = rnd.nextInt(2, 5)
             var pos = 0
             for (i in 0 until chunks) {
@@ -577,7 +603,7 @@ object UdpTransportHandler {
             return
         }
 
-        if (config.strategy == BypassStrategy.UDP_PADDING_CHAOS) {
+        if (finalConfig.strategy == BypassStrategy.UDP_PADDING_CHAOS) {
             val targetSize = rnd.nextInt(1200, 1400)
             if (length < targetSize) {
                 val padded = ByteArray(targetSize)
@@ -604,7 +630,7 @@ object UdpTransportHandler {
 
         // 5. Packet-Level Mangle: Fragmentation, Padding and Reordering
         if (length > 200 && !isDns && intensity > 40) {
-            val shouldFrag = config.strategy == BypassStrategy.UDP_DATA_FRAG || (intensity > 60 && rnd.nextInt(100) < 25)
+            val shouldFrag = finalConfig.strategy == BypassStrategy.UDP_DATA_FRAG || (intensity > 60 && rnd.nextInt(100) < 25)
             if (shouldFrag) {
                 val split = rnd.nextInt(64, length - 64)
                 val shouldReorder = intensity > 80 && rnd.nextInt(100) < 30
@@ -636,6 +662,26 @@ object UdpTransportHandler {
         }
 
         // Apply centralized UDP bypass
-        BypassConfig.applyUdpBypass(socket, packet, config, host)
+        BypassConfig.applyUdpBypass(socket, packet, finalConfig, host)
+
+        // UDP Redundancy (FEC-like) for critical packets under heavy censorship
+        if (intensity > 85 && !isHighVolume && (isDns || (isQuic && count < 5))) {
+            if (rnd.nextInt(100) < 40) {
+                scope.launch {
+                    delay(rnd.nextLong(2, 10))
+                    try {
+                        // Send exact copy or slightly padded one
+                        val redundant = if (rnd.nextBoolean()) {
+                            val padded = ByteArray(length + rnd.nextInt(1, 8))
+                            System.arraycopy(payload, offset, padded, 0, length)
+                            DatagramPacket(padded, padded.size, targetInet, targetPort)
+                        } else {
+                            DatagramPacket(payload, offset, length, targetInet, targetPort)
+                        }
+                        socket.send(redundant)
+                    } catch (e: Throwable) {}
+                }
+            }
+        }
     }
 }
