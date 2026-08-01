@@ -107,18 +107,40 @@ object DpiEngine {
             )
             
             targets.forEach { host ->
-                probes.forEach { strat ->
-                    try {
-                        val ok = withTimeoutOrNull(5000) {
-                            RobustResolver.resolve(host)
-                        }
-                        if (ok != null && ok.isNotEmpty()) {
-                            recordResult(strat, true, HostClassifier.classify(host), latencyMs = 100)
-                        } else {
-                            recordResult(strat, false, HostClassifier.classify(host), reason = FailureReason.TIMEOUT)
-                        }
-                    } catch (e: Throwable) {}
-                    delay(500)
+                val resolved = try { RobustResolver.resolve(host) } catch (e: Throwable) { emptyList() }
+                if (resolved.isNotEmpty()) {
+                    val addr = resolved.first()
+                    probes.forEach { strat ->
+                        try {
+                            val start = System.currentTimeMillis()
+                            val ok = withTimeoutOrNull(3000) {
+                                val s = java.net.Socket()
+                                try {
+                                    s.connect(java.net.InetSocketAddress(addr, 443), 1500)
+                                    val out = s.getOutputStream()
+                                    // Make a fake packet using the strategy
+                                    val fake = FakePacketHelper.buildRealisticTlsHello(host)
+                                    val config = BypassConfig.getSessionConfig(host, strat, 50)
+                                    BypassConfig.applyBypass(s, out, fake, fake.size, config, host)
+                                    // Wait for some data to see if we survived DPI
+                                    s.soTimeout = 1500
+                                    val i = s.getInputStream().read()
+                                    i != -1
+                                } catch (e: Throwable) {
+                                    false
+                                } finally {
+                                    try { s.close() } catch (e: Throwable) {}
+                                }
+                            }
+                            val latency = System.currentTimeMillis() - start
+                            if (ok == true) {
+                                recordResult(strat, true, HostClassifier.classify(host), latencyMs = latency)
+                            } else {
+                                recordResult(strat, false, HostClassifier.classify(host), reason = FailureReason.CONNECTION_REFUSED)
+                            }
+                        } catch (e: Throwable) {}
+                        delay(200)
+                    }
                 }
             }
             
@@ -467,6 +489,14 @@ object DpiEngine {
     }
 
     private fun analyzeAndAdjust() {
+        // Cleanup memory
+        if (hostStrategyBlacklist.size > 500) {
+            val now = System.currentTimeMillis()
+            val toRemove = hostStrategyBlacklist.filterValues { map -> map.values.all { it < now } }.keys
+            toRemove.forEach { hostStrategyBlacklist.remove(it) }
+            if (hostStrategyBlacklist.size > 1000) hostStrategyBlacklist.clear() // Hard reset
+        }
+
         val totalSuccess = successHistory.values.sumOf { it.get() }
         val totalFailure = failureHistory.values.sumOf { it.get() }
         

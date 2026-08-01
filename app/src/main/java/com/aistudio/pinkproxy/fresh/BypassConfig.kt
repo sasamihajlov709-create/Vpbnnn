@@ -123,6 +123,25 @@ object BypassConfig {
         BypassStrategy.entries.forEach {
             strategyStats[it] = StratStats()
         }
+        ProxyDispatcher.mainScope.launch(ProxyDispatcher.io) {
+            while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true) {
+                kotlinx.coroutines.delay(10 * 60 * 1000L) // 10 minutes
+                val now = System.currentTimeMillis()
+                
+                // Cleanup memory
+                val toRemove = hostStrategyMemory.filterValues { it.second < now }.keys
+                toRemove.forEach { hostStrategyMemory.remove(it) }
+                
+                if (censorHeuristic.size > 2000) {
+                    val toKeep = censorHeuristic.entries.sortedByDescending { it.value }.take(1000).associate { it.key to it.value }
+                    censorHeuristic.clear()
+                    censorHeuristic.putAll(toKeep)
+                }
+                
+                val toRemoveLock = hostLockTime.filterValues { now - it > 300_000 }.keys
+                toRemoveLock.forEach { hostLockTime.remove(it) }
+            }
+        }
     }
 
     fun setMtu(mtu: Int) {
@@ -1851,11 +1870,11 @@ object BypassConfig {
                 if (ProxyStats.censorshipIntensity.value > 60) {
                     val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 4
                     val oldTtl = TtlHelper.getSocketTtl(socket)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
+                     TtlHelper.setTtl(socket, discoveredTtl)
                     val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
-                    output.write(fake); output.flush()
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     delay(rnd.nextLong(5, 15))
-//                     TtlHelper.setTtl(socket, oldTtl)
+                     TtlHelper.setTtl(socket, oldTtl)
                 }
                 
                 output.write(data, split2, length - split2); output.flush()
@@ -1870,13 +1889,13 @@ object BypassConfig {
                     
                     // 2. Send FAKE second half with low TTL (matches length)
                     val oldTtl = TtlHelper.getSocketTtl(socket)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
+                     TtlHelper.setTtl(socket, discoveredTtl)
                     val fakePart = FakePacketHelper.buildUdpNoise(length - split)
                     output.write(fakePart); output.flush()
                     delay(rnd.nextLong(20, 50))
                     
                     // 3. Send REAL second half with normal TTL
-//                     TtlHelper.setTtl(socket, oldTtl)
+                     TtlHelper.setTtl(socket, oldTtl)
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }
@@ -1892,12 +1911,12 @@ object BypassConfig {
                     // 2. Overlap with Fake (Low TTL) to poison DPI state
                     val fake = FakePacketHelper.buildTlsHeartbeat()
                     val oldTtl = TtlHelper.getSocketTtl(socket)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
-//                     output.write(fake); output.flush()
+                     TtlHelper.setTtl(socket, discoveredTtl)
+                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     
                     // 3. Part 2 (Real)
                     delay(rnd.nextLong(15, 50))
-//                     TtlHelper.setTtl(socket, oldTtl)
+                     TtlHelper.setTtl(socket, oldTtl)
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }
@@ -1978,13 +1997,13 @@ object BypassConfig {
                     if (ghostLen > 0) {
                         try {
                              val ghostData = FakePacketHelper.buildHandshakeCombo(ghostLen)
-//                              TtlHelper.setTtl(socket, rnd.nextInt(2, 6))
-//                              output.write(ghostData); output.flush()
+                              TtlHelper.setTtl(socket, rnd.nextInt(2, 6))
+                              output.write(ghostData); output.flush()
                         } catch(e: Throwable) {}
                     }
                     
                     // 3. Send Real Part 2 (Normal TTL)
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     delay(config.delay1)
                     output.write(data, split, length - split); output.flush()
                 } catch(e: Throwable) { output.write(data, 0, length); output.flush() }
@@ -1992,17 +2011,18 @@ object BypassConfig {
             BypassStrategy.TCP_REORDER_CHAOS -> {
                 val split = length / 2
                 if (split > 0) {
-                    // Симуляция изменения порядка: отправляем фейк на место начала, 
-                    // затем реальный хвост, затем реальное начало.
-                    try {
-                        try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
-                        delay(config.delay1)
-//                         TtlHelper.setTtl(socket, 64)
-                    } catch (e: Throwable) {}
+                    // TCP stream out-of-order write will corrupt TLS. Instead, overlap with low TTL noise.
+                    val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                    TtlHelper.setTtl(socket, discoveredTtl)
+                    output.write(FakePacketHelper.buildHandshakeCombo(split))
+                    output.flush()
                     
-                    output.write(data, split, length - split); output.flush()
                     delay(config.delay1)
+                    TtlHelper.setTtl(socket, 64)
+                    
                     output.write(data, 0, split); output.flush()
+                    delay(config.delay2)
+                    output.write(data, split, length - split); output.flush()
                 } else {
                     output.write(data, 0, length); output.flush()
                 }
@@ -2031,36 +2051,36 @@ object BypassConfig {
             }
             BypassStrategy.TLS_CHROME_HELLO_FAKE -> {
                 val fake = FakePacketHelper.buildChromeHello("google.com")
-//                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(fake); output.flush()
+                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 val split = config.frag1.coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay2)
                 output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.TLS_FIREFOX_HELLO_FAKE -> {
                 val fake = FakePacketHelper.buildFirefoxHello("cloudflare.com")
-//                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(fake); output.flush()
+                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 val split = config.frag1.coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay2)
                 output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.TLS_13_HELLO_FAKE -> {
                 val fake = FakePacketHelper.buildTls13Hello("microsoft.com")
-//                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(fake); output.flush()
+                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 val split = config.frag1.coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay2)
                 output.write(data, split, length - split); output.flush()
             }
             BypassStrategy.GHOST_PACKETS, BypassStrategy.FAKE_PACKET -> {
                 val fake = FakePacketHelper.buildFakeClientHello("bing.com", 80, 50, true)
-//                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(fake); output.flush()
+                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 
                 // Fragment the real packet to bypass SNI matching if the fake packet didn't fully fool the DPI
                 val offset = TlsParser.findSniOffset(data, length, host)
@@ -2240,9 +2260,9 @@ object BypassConfig {
                 // 2. Send Part 2 (Low TTL) - DPI sees 1+2
                 // 3. Send Part 2 (Normal TTL) - Receiver sees 1+2
                 output.write(data, 0, split); output.flush()
-//                 TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                 TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                 output.write(data, split, length - split); output.flush()
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 delay(config.delay1)
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
                 output.write(data, split, length - split); output.flush()
@@ -2313,9 +2333,9 @@ object BypassConfig {
             BypassStrategy.HTTP_METHOD_FAKE -> {
                 if (isProbableHttp(data, length)) {
                     val fake = "POST / HTTP/1.1\r\nHost: $host\r\nContent-Length: 10\r\nConnection: keep-alive\r\n\r\nFAKE_DATA\r\n".toByteArray()
-//                     TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(fake); output.flush()
+                     TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     val split = config.frag1.coerceIn(1, length - 1)
                     output.write(data, 0, split); output.flush(); delay(config.delay2)
                     output.write(data, split, length - split); output.flush()
@@ -2348,9 +2368,9 @@ object BypassConfig {
             BypassStrategy.TCP_RST_FAKE -> {
                 // Send some junk data with low TTL to poison DPI state
                 val ghost = FakePacketHelper.buildFakeTcpRst()
-//                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(ghost); output.flush()
+                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(ghost); output.flush()
 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-// TtlHelper.setTtl(socket, 64)
+ TtlHelper.setTtl(socket, 64)
                 val split = config.frag1.coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay2)
                 output.write(data, split, length - split); output.flush()
@@ -2358,9 +2378,9 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
             BypassStrategy.TCP_KEEP_ALIVE_FAKE -> {
                 // Send zero-length data segment with low TTL
                 val keep = FakePacketHelper.buildFakeTcpKeepAlive()
-//                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(keep); output.flush()
+                 TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(keep); output.flush()
 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-// TtlHelper.setTtl(socket, 64)
+ TtlHelper.setTtl(socket, 64)
                 val split = config.frag1.coerceIn(1, length - 1)
                 output.write(data, 0, split); output.flush(); delay(config.delay2)
                 output.write(data, split, length - split); output.flush()
@@ -2475,10 +2495,10 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
             }
             BypassStrategy.HTTP2_PREAMBLE_FAKE -> {
                 val fake = FakePacketHelper.buildHttp2PreambleFake()
-//                 TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
-//                 output.write(fake); output.flush()
+                 TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                 try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(config.delay1)
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, length); output.flush()
             }
 
@@ -2486,14 +2506,14 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                 try {
                     // 1. Initial fake handshake segment with Zero Window and low TTL
                     val fake = FakePacketHelper.buildHandshakeCombo(rnd.nextInt(32, 64))
-//                     TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                     TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                     try { TtlHelper.setWindowSize(socket, 0) } catch(e: Throwable) {}
-                    output.write(fake); output.flush()
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     
                     delay(config.delay1)
                     
                     // 2. Fragmented ClientHello with urgent data and window jitter
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     try { TtlHelper.setWindowSize(socket, rnd.nextInt(2, 10)) } catch(e: Throwable) {}
                     
                     val split = if (length > 10) 5 else 1
@@ -2520,13 +2540,13 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     output.write(data, 0, split); output.flush()
                     
                     // 2. Part 2 Overlap (Fake data with real sequence range, low TTL)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
-//                     output.write(FakePacketHelper.buildUdpNoise(length - split))
+                     TtlHelper.setTtl(socket, discoveredTtl)
+                     output.write(FakePacketHelper.buildUdpNoise(length - split))
                     output.flush()
                     
                     // 3. Part 2 (Real)
                     delay(config.delay1)
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) {
                     output.write(data, 0, length); output.flush()
@@ -2541,11 +2561,11 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
                     
                     // 1. Part 2 (Low TTL)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
+                     TtlHelper.setTtl(socket, discoveredTtl)
                     output.write(data, split, length - split); output.flush()
                     
                     // 2. Part 1 (Real)
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     output.write(data, 0, split); output.flush()
                     
                     // 3. Part 2 (Real)
@@ -2562,10 +2582,10 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
             BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.BYEBYEDPI_HYBRID -> {
                 val split = config.frag1.coerceIn(1, length - 1)
                 val fake = FakePacketHelper.buildHandshakeCombo(rnd.nextInt(32, 128))
-//                 TtlHelper.setTtl(socket, 2)
-//                 output.write(fake); output.flush()
+                 TtlHelper.setTtl(socket, 2)
+                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                 delay(config.delay1)
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, split); output.flush()
                 try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                 delay(config.delay2)
@@ -2633,10 +2653,10 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                 try {
                     socket.keepAlive = true
                     val fake = FakePacketHelper.buildUdpNoise(1)
-//                     TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); output.write(fake); output.flush()
+                     TtlHelper.setTtl(socket, java.util.concurrent.ThreadLocalRandom.current().nextInt(2, 5)); try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}; delay(1)
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     output.write(data, 0, length); output.flush()
                 } catch (e: Throwable) {
                     output.write(data, 0, length); output.flush()
@@ -2974,9 +2994,9 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
             BypassStrategy.HTTP_CONNECTION_CLOSE_SKEW -> {
                 if (isProbableHttp(data, length)) {
                     val fakeHeader = "Connection: close\r\n".toByteArray()
-//                     TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                     TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
                     injectHeaderAfterFirstLine(data, length, fakeHeader, output)
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     delay(config.delay1)
                     output.write(data, 0, length); output.flush()
                 } else { output.write(data, 0, length); output.flush() }
@@ -3033,13 +3053,13 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     output.write(data, 0, split); output.flush()
                     
                     // 2. Part 2 FAKE with low TTL (DPI thinks it's the end of request)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
-//                     output.write(FakePacketHelper.buildUdpNoise(length - split))
+                     TtlHelper.setTtl(socket, discoveredTtl)
+                     output.write(FakePacketHelper.buildUdpNoise(length - split))
                     output.flush()
                     
                     // 3. Part 2 REAL with normal TTL
                     delay(rnd.nextLong(10, 30))
-//                     TtlHelper.setTtl(socket, oldTtl)
+                     TtlHelper.setTtl(socket, oldTtl)
                     output.write(data, split, length - split); output.flush()
                 } catch(e: Throwable) { output.write(data, 0, length); output.flush() }
             }
@@ -3092,13 +3112,13 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     val oldWindow = socket.receiveBufferSize
                     
                     // 1. Send Decoy with low TTL
-//                     TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
-//                     output.write(decoy); output.flush()
+                     TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                     output.write(decoy); output.flush()
                     delay(rnd.nextLong(2, 10))
                     
                     // 2. Shrink window and send first byte
                     socket.receiveBufferSize = 1
-//                     TtlHelper.setTtl(socket, oldTtl)
+                     TtlHelper.setTtl(socket, oldTtl)
                     output.write(data[0].toInt()); output.flush()
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     
@@ -3120,7 +3140,7 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     output.write(data, 0, split); output.flush()
                     
                     // 2. Overlap: Send REAL Part 2 with low TTL first (DPI sees this)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
+                     TtlHelper.setTtl(socket, discoveredTtl)
                     output.write(data, split, length - split); output.flush()
                     
                     // 3. Send FAKE noise with low TTL (DPI sees this too)
@@ -3128,7 +3148,7 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     
                     // 4. Send REAL Part 2 with normal TTL
                     delay(rnd.nextLong(20, 50))
-//                     TtlHelper.setTtl(socket, oldTtl)
+                     TtlHelper.setTtl(socket, oldTtl)
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }
@@ -3145,7 +3165,7 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     if (rnd.nextInt(100) < 50) {
                         TtlHelper.setLowTtlTemporary(socket, rnd.nextInt(2, 4), 0)
                         val chaos = if (rnd.nextBoolean()) FakePacketHelper.buildDnsChaosPacket() else FakePacketHelper.buildTlsChaosPacket()
-                        output.write(chaos); output.flush()
+                        try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                         TtlHelper.setLowTtlTemporary(socket, 64, 1)
                     }
 
@@ -3173,7 +3193,7 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     // Phase 1: Heavy Noise Bombing (Low TTL)
                     TtlHelper.setLowTtlTemporary(socket, rnd.nextInt(2, 5), 0)
                     val chaos = if (rnd.nextBoolean()) FakePacketHelper.buildDnsChaosPacket() else FakePacketHelper.buildTlsChaosPacket()
-                    output.write(chaos); output.flush()
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable){}
                     TtlHelper.setLowTtlTemporary(socket, 64, 2)
                     
@@ -3356,14 +3376,14 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                             1 -> FakePacketHelper.buildHttpChaosPacket()
                             else -> FakePacketHelper.buildTlsChaosPacket()
                         }
-//                         TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
-//                         output.write(chaos); output.flush()
+                         TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                         try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                         if (rnd.nextBoolean()) try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                         delay(rnd.nextLong(2, 12))
                     }
                     
                     // 3. NUCLEAR Fragmentation: 1 byte, then ghost, then SNI parts
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
                     
                     // Send first bit of real data with tiny window
@@ -3373,10 +3393,10 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     
                     // Overlapping Ghost with Low TTL
                     val ghost = FakePacketHelper.buildHandshakeCombo(64)
-//                     TtlHelper.setTtl(socket, discoveredTtl)
-//                     output.write(ghost); output.flush()
+                     TtlHelper.setTtl(socket, discoveredTtl)
+                     output.write(ghost); output.flush()
                     delay(rnd.nextLong(10, 30))
-//                     TtlHelper.setTtl(socket, 64)
+                     TtlHelper.setTtl(socket, 64)
                     
                     if (offset != -1 && length > offset + 2) {
                         // First part of SNI
@@ -3418,15 +3438,15 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                         1 -> FakePacketHelper.buildHttpChaosPacket()
                         else -> FakePacketHelper.buildTlsChaosPacket()
                     }
-//                     TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
-//                     output.write(chaos); output.flush()
+                     TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+                     try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     if (rnd.nextBoolean()) try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
                     delay(rnd.nextLong(1, 5))
                 }
                 delay(config.delay1)
                 
                 // 2. SNI Split + Zero Window Stall + Advanced Fragmentation
-//                 TtlHelper.setTtl(socket, 64)
+                 TtlHelper.setTtl(socket, 64)
                 val sniOffset = TlsParser.findSniOffset(data, length)
                 if (sniOffset != -1) {
                     try { TtlHelper.setWindowSize(socket, 1) } catch(e: Throwable) {}

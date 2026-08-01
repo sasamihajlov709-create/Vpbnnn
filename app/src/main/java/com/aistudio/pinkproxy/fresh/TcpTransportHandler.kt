@@ -618,11 +618,11 @@ object TcpTransportHandler {
                                             if (currentIntensity > 85 && rnd.nextInt(100) < 40) {
                                                 val junk = FakePacketHelper.buildFakeRetransmission(buffer.copyOfRange(offset - sz, offset), sz)
                                                 try {
-//                                                     TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 4))
+                                                     TtlHelper.setTtl(remoteSocket!!, rnd.nextInt(2, 4))
                                                     remoteOut.write(junk)
                                                     remoteOut.flush()
                                                     delay(rnd.nextLong(1, 3))
-//                                                     TtlHelper.setTtl(remoteSocket!!, 64)
+                                                     TtlHelper.setTtl(remoteSocket!!, 64)
                                                 } catch (e: Throwable) {}
                                             }
 
@@ -892,11 +892,11 @@ object TcpTransportHandler {
                         val fakeSni = listOf("google.com", "cloudflare.com", "bing.com", "apple.com", "microsoft.com", "gstatic.com", "android.googleapis.com").random()
                         val fakeHandshake = if (rnd.nextBoolean()) FakePacketHelper.buildFakeTlsClientHello(fakeSni) else FakePacketHelper.buildHttpChaosPacket()
                         
-//                         TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
-//                         output.write(fakeHandshake)
+                         TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+                        output.write(fakeHandshake)
                         output.flush()
                         delay(rnd.nextLong(1, 4))
-//                         TtlHelper.setTtl(socket, 64)
+                         TtlHelper.setTtl(socket, 64)
                     }
                     
                     // 3. Protocol-Compliant Noise (App-like traffic)

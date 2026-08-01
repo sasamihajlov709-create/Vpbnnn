@@ -34,10 +34,12 @@ object AutoTtlProber {
             val canary = listOf("google.com", "facebook.com", "twitter.com", "youtube.com", "instagram.com", "t.me")
             while (isActive) {
                 for (host in canary) {
-                    if (discoveredTtls["global"] == null) {
+                    // Always probe periodically to adapt to routing changes
+                    val r = ThreadLocalRandom.current().nextInt(100)
+                    if (discoveredTtls["global"] == null || r < 20) {
                         probeDistance(host, 443, vpnService)
                     }
-                    if (discoveredMtus["global"] == null) {
+                    if (discoveredMtus["global"] == null || r < 10) {
                         probeBestMtu(host, 443, vpnService)
                     }
                     delay(5000)
