@@ -743,19 +743,11 @@ object TcpTransportHandler {
         scope.launch {
             val rnd = java.util.concurrent.ThreadLocalRandom.current()
             while (isActive && !socket.isClosed) {
-                delay(rnd.nextLong(15000, 45000)) // Every 15-45 seconds
+                delay(rnd.nextLong(20000, 50000)) // Every 20-50 seconds
                 if (socket.isClosed) break
                 try {
-                    // Send 1 byte of urgent data or a small noise packet with low TTL
-                    if (rnd.nextBoolean()) {
-                        socket.sendUrgentData(rnd.nextInt(256))
-                    } else {
-                        val oldTtl = TtlHelper.getSocketTtl(socket)
-                        TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
-                        output.write(FakePacketHelper.buildUdpNoise(rnd.nextInt(1, 16)))
-                        output.flush()
-                        TtlHelper.setTtl(socket, oldTtl)
-                    }
+                    // Send 1 byte of urgent data for TCP DPI desync
+                    socket.sendUrgentData(rnd.nextInt(256))
                     Log.v("TcpTransport", "Confusion pulse sent to $host")
                 } catch (e: Throwable) {
                     break
