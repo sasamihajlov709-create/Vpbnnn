@@ -91,25 +91,36 @@ object CensorshipExpert {
             strategiesToTest.forEach { strat ->
                 launch {
                     val start = System.currentTimeMillis()
-                    val socket = Socket()
+                    var probeSocket: Socket? = null
                     try {
-                        BypassConfig.activeVpnService?.protect(socket)
-                        socket.soTimeout = 5000
                         val ips = RobustResolver.resolve(testHost)
                         if (ips.isNotEmpty()) {
+                            val targetAddr = ips.random()
                             val config = BypassConfig.getSessionConfig(testHost, strat, 100)
-                            socket.connect(InetSocketAddress(ips.random(), testPort), 3000)
-                            // Simulate a tiny part of handshake to see if it's reset
-                            val hello = FakePacketHelper.buildChromeHello(testHost)
-                            BypassConfig.applyBypass(socket, socket.getOutputStream(), hello, hello.size, config, testHost)
+                            val hello = FakePacketHelper.buildRealisticTlsHello(testHost)
+                            
+                            probeSocket = Socket()
+                            BypassConfig.activeVpnService?.protect(probeSocket)
+                            probeSocket.soTimeout = 4000
+                            probeSocket.connect(InetSocketAddress(targetAddr, testPort), 3000)
+                            
+                            BypassConfig.applyBypass(probeSocket, probeSocket.getOutputStream(), hello, hello.size, config, testHost)
+                            
+                            // Check if connection is still alive after sending SNI (waiting for ServerHello or just checking socket state)
+                            val buffer = ByteArray(1)
+                            val read = withContext(Dispatchers.IO) {
+                                try { probeSocket.getInputStream().read(buffer) } catch(e: Throwable) { -1 }
+                            }
                             
                             val rtt = System.currentTimeMillis() - start
-                            DpiEngine.recordResult(strat, true, HostCategory.OTHER, latencyMs = rtt)
+                            val success = probeSocket.isConnected && (read != -1 || !probeSocket.isClosed)
+                            
+                            DpiEngine.recordResult(strat, success, HostCategory.OTHER, latencyMs = rtt)
                         }
                     } catch (e: Throwable) {
                         DpiEngine.recordResult(strat, false, HostCategory.OTHER)
                     } finally {
-                        try { socket.close() } catch (e: Throwable) {}
+                        try { probeSocket?.close() } catch (e: Throwable) {}
                     }
                 }
                 delay(500) // Staggered tests

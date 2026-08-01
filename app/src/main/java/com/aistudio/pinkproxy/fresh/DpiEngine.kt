@@ -216,6 +216,8 @@ object DpiEngine {
         strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.TCP_SEGMENT_OVERLAP
         strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.ZAPRET_EXTREME
         strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.WINDOW_SIZE_MANGLE] = BypassStrategy.TCP_WINDOW_SIZE_SKEW
+        strategyChains[BypassStrategy.TCP_WINDOW_SIZE_SKEW] = BypassStrategy.TCP_ZERO_WINDOW_STALL
         
         strategyChains[BypassStrategy.TCP_REORDER_DESYNC] = BypassStrategy.TCP_OOB_DESYNC
         strategyChains[BypassStrategy.TCP_MSS_CLAMP] = BypassStrategy.TCP_RETRANS_FAKE

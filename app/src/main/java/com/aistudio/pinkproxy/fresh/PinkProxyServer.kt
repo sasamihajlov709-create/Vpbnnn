@@ -113,13 +113,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
     }
 
     private suspend fun handleHttpProxy(client: Socket, firstByte: Int, input: InputStream, output: OutputStream, scope: CoroutineScope) {
-        val line = StringBuilder()
+        val line = java.lang.StringBuilder()
         line.append(firstByte.toChar())
         var b: Int
         while (true) {
             b = input.read()
             if (b == -1 || b == '\n'.code) break
-            line.append(b.toChar())
+            if (b != '\r'.code) line.append(b.toChar())
         }
         
         val firstLine = line.toString().trim()
@@ -137,13 +137,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             host = hostPort[0]
             port = if (hostPort.size > 1) hostPort[1].toIntOrNull() ?: 443 else 443
             
-            // Consume remaining headers
+            // Consume remaining headers byte by byte to avoid consuming body
             while (true) {
                 line.clear()
                 while (true) {
                     b = input.read()
                     if (b == -1 || b == '\n'.code) break
-                    line.append(b.toChar())
+                    if (b != '\r'.code) line.append(b.toChar())
                 }
                 if (line.toString().trim().isEmpty()) break
             }
@@ -151,7 +151,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
             output.flush()
         } else {
-            // Simplified: only CONNECT for tunneling. For GET/POST we'd need full proxy logic.
             client.close()
             return
         }
