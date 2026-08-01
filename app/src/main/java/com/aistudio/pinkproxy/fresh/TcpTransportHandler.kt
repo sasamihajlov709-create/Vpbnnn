@@ -289,10 +289,12 @@ object TcpTransportHandler {
                             } catch (e: Throwable) {}
                         }
 
-                        if (silentPeriods >= 4) { // 40s of silence
+                        if (silentPeriods >= (if (ProxyStats.censorshipIntensity.value > 85) 3 else 4)) { 
                              BypassConfig.recordFailure(strategy, targetHost)
                              if (BypassConfig.isHostCensored(targetHost)) {
                                  ProxyStats.recordDpiEvent(if (jobIsTls) DpiType.SSL_STALL else DpiType.TCP_STALL)
+                                 // Force higher intensity on stall
+                                 ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value + 10).coerceAtMost(100))
                              }
                              // Proactive disconnect
                              try { remoteSocket.close(); clientSocket.close() } catch (e: Throwable) {}

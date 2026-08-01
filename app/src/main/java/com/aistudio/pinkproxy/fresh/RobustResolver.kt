@@ -211,6 +211,11 @@ object RobustResolver {
         // 4. TCP with Shadow (For extreme evasion)
         queries.add { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
         
+        // 4.1 TCP Nuclear (For maximum resilience)
+        if (intensity > 85) {
+            queries.add { DnsProtocols.queryTcpDnsNuclear(host, "8.8.8.8", vpnService) }
+        }
+        
         // 4.5 DoH Smuggling (Experimental resilience)
         if (intensity > 60) {
             queries.add { DnsProtocols.queryDohSmuggling(host, vpnService) }

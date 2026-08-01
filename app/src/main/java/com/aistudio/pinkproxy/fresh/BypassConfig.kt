@@ -1120,6 +1120,41 @@ object BypassConfig {
                     socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
                 }
             }
+            BypassStrategy.UDP_COMBINED_NUCLEAR -> {
+                val isIpv6 = targetAddr is Inet6Address
+                val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                
+                // 1. Initial Handshake Camouflage (QUIC/DTLS)
+                if (ProxyStats.censorshipIntensity.value > 60) {
+                    val fake = if (rnd.nextBoolean()) FakePacketHelper.buildQuicCryptoFake() else FakePacketHelper.buildUdpNoise(rnd.nextInt(32, 128))
+                    TtlHelper.setUdpTtl(socket, discoveredTtl, isIpv6)
+                    socket.send(DatagramPacket(fake, fake.size, targetAddr, targetPort))
+                    delay(rnd.nextLong(1, 5))
+                    TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                }
+                
+                // 2. Nuclear Fragment/Stutter
+                val chunkSize = rnd.nextInt(64, 512)
+                var pos = offset
+                while (pos < offset + length) {
+                    val remaining = (offset + length) - pos
+                    val sz = chunkSize.coerceAtMost(remaining)
+                    
+                    // Injection of junk overlap
+                    if (remaining > 100 && rnd.nextInt(100) < 30) {
+                        val junk = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
+                        TtlHelper.setUdpTtl(socket, discoveredTtl, isIpv6)
+                        socket.send(DatagramPacket(junk, junk.size, targetAddr, targetPort))
+                        TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                        delay(1)
+                    }
+                    
+                    socket.send(DatagramPacket(data, pos, sz, targetAddr, targetPort))
+                    pos += sz
+                    // Stutter delay
+                    if (pos < offset + length) delay(rnd.nextLong(2, 12))
+                }
+            }
             BypassStrategy.UDP_COMBINED_HYBRID -> {
                 val isIpv6 = targetAddr is java.net.Inet6Address
                 // 1. Send Chaos/Noise Packet with low TTL
@@ -3393,6 +3428,63 @@ TtlHelper.setTtl(socket, 64)
                     output.write(data, split1 + split2, remaining - split2); output.flush()
                 } else if (remaining > 0) {
                     output.write(data, split1, remaining); output.flush()
+                }
+            }
+            BypassStrategy.TCP_COMBINED_NUCLEAR -> {
+                try {
+                    val rnd = ThreadLocalRandom.current()
+                    val originalSize = socket.receiveBufferSize
+                    val offset = TlsParser.findSniOffset(data, length, host)
+                    
+                    // 1. Zero-Window Pulse to confuse DPI state
+                    socket.receiveBufferSize = 1
+                    delay(rnd.nextLong(20, 80))
+                    
+                    // 2. OOB Injection
+                    try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
+                    
+                    if (offset != -1 && length > offset + 5) {
+                        // 3. NUCLEAR Fragmentation: 1 byte, then ghost, then SNI parts
+                        val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                        
+                        output.write(data, 0, 1); output.flush()
+                        delay(rnd.nextLong(2, 10))
+                        
+                        // Overlapping Ghost with Low TTL
+                        val ghost = FakePacketHelper.buildHandshakeCombo(32)
+                        val oldTtl = TtlHelper.getSocketTtl(socket)
+                        TtlHelper.setTtl(socket, discoveredTtl)
+                        output.write(ghost); output.flush()
+                        delay(rnd.nextLong(5, 15))
+                        TtlHelper.setTtl(socket, oldTtl)
+                        
+                        // First part of SNI
+                        val split1 = offset + 1
+                        output.write(data, 1, split1 - 1); output.flush()
+                        delay(rnd.nextLong(10, 30))
+                        
+                        // Jitter window during middle of send
+                        socket.receiveBufferSize = rnd.nextInt(2, 8)
+                        
+                        // Second part of SNI
+                        val split2 = offset + (host.length / 2).coerceAtLeast(2)
+                        output.write(data, split1, split2 - split1); output.flush()
+                        delay(rnd.nextLong(15, 45))
+                        
+                        // Final restore and send rest
+                        socket.receiveBufferSize = originalSize.coerceAtLeast(32768)
+                        output.write(data, split2, length - split2); output.flush()
+                    } else {
+                        // Generic Nuclear Fallback
+                        val s1 = (length / 4).coerceAtLeast(1)
+                        output.write(data, 0, s1); output.flush()
+                        delay(rnd.nextLong(20, 50))
+                        socket.receiveBufferSize = rnd.nextInt(2, 10)
+                        output.write(data, s1, length - s1); output.flush()
+                        socket.receiveBufferSize = originalSize
+                    }
+                } catch (e: Throwable) {
+                    try { output.write(data, 0, length); output.flush() } catch(e2: Throwable) {}
                 }
             }
             BypassStrategy.TCP_COMBINED_HYBRID -> {
