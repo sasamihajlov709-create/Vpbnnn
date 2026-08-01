@@ -196,7 +196,7 @@ object TcpTransportHandler {
                 }
 
                 // TCP Fast Open (TFO) support for API 30+
-                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
                     try {
                         val socketOptions = Class.forName("java.net.StandardSocketOptions")
                         val tfoField = socketOptions.getField("TCP_FAST_OPEN")
@@ -834,7 +834,7 @@ object TcpTransportHandler {
                             throw e
                         }
                         
-                        if (isActive && !channel.isClosedForSend && channel.trySend(s).isSuccess) {
+                        if (isActive && channel.trySend(s).isSuccess) {
                             // Won the race
                             nextSignal.trySend(Unit)
                         } else {

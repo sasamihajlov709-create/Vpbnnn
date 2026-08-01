@@ -1494,16 +1494,7 @@ object BypassConfig {
         }
 
         when (strategy) {
-            BypassStrategy.WINDOW_SIZE_MANGLE -> {
-                try {
-                    val originalSize = socket.receiveBufferSize
-                    // Set window to a very small value to force DPI to process in tiny chunks
-                    socket.receiveBufferSize = rnd.nextInt(1, 4)
-                    output.write(finalData, 0, finalLen); output.flush()
-                    delay(rnd.nextLong(10, 50))
-                    socket.receiveBufferSize = originalSize
-                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
-            }
+
             BypassStrategy.TCP_WINDOW_SIZE_SKEW -> {
                 try {
                     val split = (finalLen / 3).coerceAtLeast(1)
@@ -1638,27 +1629,6 @@ object BypassConfig {
                     }
                     socket.receiveBufferSize = originalSize
                 } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
-            }
-            BypassStrategy.TCP_ZERO_WINDOW_STALL -> {
-                try {
-                    val originalSize = socket.receiveBufferSize
-                    socket.receiveBufferSize = 0
-                    delay(rnd.nextLong(100, 300))
-                    socket.receiveBufferSize = 1
-                    output.write(finalData, 0, 1); output.flush()
-                    delay(rnd.nextLong(20, 50))
-                    socket.receiveBufferSize = 16384
-                    output.write(finalData, 1, finalLen - 1); output.flush()
-                } catch (e: Throwable) { output.write(finalData, 0, finalLen); output.flush() }
-            }
-            BypassStrategy.TCP_BYTE_FRAG -> {
-                try {
-                    for (i in 0 until finalLen) {
-                        output.write(finalData[i].toInt())
-                        output.flush()
-                        if (i < 5) delay(rnd.nextLong(2, 8)) // Slow down first bytes
-                    }
-                } catch (e: Throwable) { try { output.write(finalData, 0, finalLen); output.flush() } catch(e2: Throwable){} }
             }
             BypassStrategy.HTTP_HEADER_MANGLE -> {
                 if (isProbableHttp(finalData, finalLen)) {
@@ -2530,8 +2500,7 @@ TtlHelper.setTtl(socket, 64)
                 TtlHelper.setTtl(socket, 64)
                 output.write(data, 0, length); output.flush()
             }
-            BypassStrategy.TLS_MULTI_SNI -> {
-            }
+
             BypassStrategy.TCP_HANDSHAKE_CHAOS -> {
                 try {
                     // 1. Initial fake handshake segment with Zero Window and low TTL
@@ -2621,8 +2590,7 @@ TtlHelper.setTtl(socket, 64)
                 delay(config.delay2)
                 output.write(data, split, length - split); output.flush()
             }
-            BypassStrategy.HTTP_CHUNKED_FAKE -> {
-            }
+
             BypassStrategy.TLS_ECH_FAKE -> {
                 val fakeEch = FakePacketHelper.buildFakeEchExtension()
                 val mod = FakePacketHelper.injectExtension(data, length, 0xfe0d, fakeEch)

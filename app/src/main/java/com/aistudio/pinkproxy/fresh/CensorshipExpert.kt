@@ -84,7 +84,10 @@ object CensorshipExpert {
             BypassStrategy.BYEBYEDPI_HYBRID,
             BypassStrategy.TCP_SEGMENT_OVERLAP,
             BypassStrategy.ECH_GREASE,
-            BypassStrategy.TLS_SNI_SKEW
+            BypassStrategy.TLS_SNI_SKEW,
+            BypassStrategy.TCP_ZERO_WINDOW_STALL,
+            BypassStrategy.TCP_COMBINED_NUCLEAR,
+            BypassStrategy.TCP_WINDOW_SIZE_SKEW
         )
         
         coroutineScope {

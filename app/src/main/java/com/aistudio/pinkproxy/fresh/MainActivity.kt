@@ -1,5 +1,6 @@
 package com.aistudio.pinkproxy.fresh
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
@@ -179,6 +180,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("BatteryLife")
     private fun requestIgnoreBatteryOptimizations() {
         try {
             val packageName = packageName
@@ -1301,8 +1303,9 @@ fun AppSelectionDialog(
 
     LaunchedEffect(Unit) {
         val installedApps = withContext(ProxyDispatcher.io) {
-            pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
-                .filter { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName == "com.google.android.youtube" || it.packageName == "org.telegram.messenger" }
+            @Suppress("QueryPermissionsNeeded")
+            val packages = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
+            packages.filter { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 || it.packageName == "com.google.android.youtube" || it.packageName == "org.telegram.messenger" }
                 .map { app ->
                     val label = app.loadLabel(pm).toString()
                     AppEntry(app, label, app.packageName)

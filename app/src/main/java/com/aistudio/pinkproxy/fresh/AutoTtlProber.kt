@@ -83,7 +83,7 @@ object AutoTtlProber {
             
             while (low <= high) {
                 val mid = (low + high) / 2
-                if (tryMtu(target, port, mid, vpnService)) {
+                if (tryMtu(target, port, mid, vpnService, host)) {
                     best = mid
                     low = mid + 1
                 } else {
@@ -107,7 +107,7 @@ object AutoTtlProber {
         }
     }
 
-    private suspend fun tryMtu(addr: InetAddress, port: Int, mtu: Int, vpnService: VpnService?): Boolean {
+    private suspend fun tryMtu(addr: InetAddress, port: Int, mtu: Int, vpnService: VpnService?, host: String = ""): Boolean {
         return withContext(ProxyDispatcher.io) {
             var socket: Socket? = null
             try {
@@ -118,7 +118,16 @@ object AutoTtlProber {
                 socket.connect(InetSocketAddress(addr, port), 1500)
                 
                 val output = socket.getOutputStream()
-                val payload = ByteArray(mtu - 40) { 0 }
+                val payloadSize = mtu - 40
+                val payload = if (port == 443) {
+                    val hello = FakePacketHelper.buildRealisticTlsHello(if (host.isNotEmpty()) host else addr.hostAddress)
+                    val padded = ByteArray(payloadSize) { 0 }
+                    System.arraycopy(hello, 0, padded, 0, minOf(hello.size, payloadSize))
+                    padded
+                } else {
+                    ByteArray(payloadSize) { 0 }
+                }
+                
                 output.write(payload)
                 output.flush()
                 
