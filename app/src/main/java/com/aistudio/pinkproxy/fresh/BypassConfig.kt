@@ -33,6 +33,23 @@ object BypassConfig {
     private val _strategy = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
     
+    private val _testingStrategies = MutableStateFlow<List<BypassStrategy>>(
+        listOf(
+            BypassStrategy.SNI_SPLIT,
+            BypassStrategy.FAKE_PACKET,
+            BypassStrategy.TCP_OOB_DESYNC,
+            BypassStrategy.BYEBYEDPI_HYBRID,
+            BypassStrategy.ZAPRET_EXTREME
+        )
+    )
+    val testingStrategies: StateFlow<List<BypassStrategy>> = _testingStrategies.asStateFlow()
+
+    fun updateTestingStrategies(strategies: List<BypassStrategy>) {
+        if (strategies.isNotEmpty()) {
+            _testingStrategies.value = strategies.distinct().take(6)
+        }
+    }
+    
     private val CHAOS_POOL by lazy {
         BypassStrategy.entries.filter { 
             it != BypassStrategy.CHAOS && 
@@ -291,6 +308,7 @@ object BypassConfig {
         if (lastStrategies.size > 5) lastStrategies.removeFirst()
         
         _strategy.value = best
+        updateTestingStrategies(lastStrategies.toList() + best)
         VpnRuntimeState.updateStrategy(best.name)
         ProxyStats.logRecovery("Strategy rotated (Fingerprint Aware): ${best.name}")
     }

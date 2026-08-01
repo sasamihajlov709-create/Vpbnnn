@@ -316,6 +316,7 @@ object TcpTransportHandler {
             }
 
             val lastActivity = AtomicLong(System.currentTimeMillis())
+            var detectedSni: String? = null
 
             coroutineScope {
                 val inactivityJob = launch {
@@ -396,7 +397,8 @@ object TcpTransportHandler {
                                     val sent = totalWrittenClient.get().toInt()
                                     if (totalRead == 0L && sent > 0) {
                                         val duration = System.currentTimeMillis() - startTime
-                                        if (BypassConfig.detectBlackhole(targetHost, sent, 0, duration)) {
+                                        val activeHost = detectedSni ?: targetHost
+                                        if (BypassConfig.detectBlackhole(activeHost, sent, 0, duration)) {
                                             break // Exit loop, blackhole confirmed
                                         }
                                     }
@@ -404,7 +406,8 @@ object TcpTransportHandler {
                                     val maxTimeouts = if (totalRead == 0L) 2 else 5
                                     if (consecutiveTimeouts >= maxTimeouts || !isActive) {
                                         if (totalRead == 0L) {
-                                            BypassConfig.recordFailure(strategy, targetHost)
+                                            val activeHost = detectedSni ?: targetHost
+                                            BypassConfig.recordFailure(strategy, activeHost)
                                         }
                                         break
                                     }
@@ -418,8 +421,9 @@ object TcpTransportHandler {
                                 if (firstResponse) {
                                     firstResponse = false
                                     val rtt = System.currentTimeMillis() - start
-                                    BypassConfig.recordSuccess(strategy, rtt, targetHost)
-                                    DpiEngine.recordRtt(targetHost, rtt)
+                                    val activeHost = detectedSni ?: targetHost
+                                    BypassConfig.recordSuccess(strategy, rtt, activeHost)
+                                    DpiEngine.recordRtt(activeHost, rtt)
                                     
                                     // Deep Packet Inspection evasion: block marker detection
                                     if (n >= 7) {
@@ -427,7 +431,7 @@ object TcpTransportHandler {
                                         if (contentType == 0x15) { // TLS Alert
                                             val alertLevel = buffer[5].toInt() and 0xFF
                                             val alertDesc = buffer[6].toInt() and 0xFF
-                                            ProxyStats.logRecovery("DPI Alert Detected: TLS $alertLevel/$alertDesc on $targetHost")
+                                            ProxyStats.logRecovery("DPI Alert Detected: TLS $alertLevel/$alertDesc on $activeHost")
                                             
                                             val dpiType = when (alertDesc) {
                                                 112 -> DpiType.TLS_SNI_BLOCK // unrecognized_name
@@ -435,7 +439,7 @@ object TcpTransportHandler {
                                                 40 -> DpiType.TLS_SNI_BLOCK  // handshake_failure
                                                 else -> DpiType.TLS_SNI_BLOCK
                                             }
-                                            BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
+                                            BypassConfig.recordDpiFailure(strategy, activeHost, dpiType)
                                             throw java.io.IOException("TLS Alert (DPI Block: $alertDesc)")
                                         } else if (contentType == 0x16 || contentType == 0x17) {
                                             // Valid TLS Handshake or App Data
@@ -456,8 +460,8 @@ object TcpTransportHandler {
                                                            lowStr.contains("sonicwall")
 
                                             if (isBlocked) {
-                                                ProxyStats.logRecovery("DPI/Firewall Block Detected on $targetHost (Keywords found)")
-                                                BypassConfig.recordDpiFailure(strategy, targetHost, DpiType.HTTP_BLOCK)
+                                                ProxyStats.logRecovery("DPI/Firewall Block Detected on $activeHost (Keywords found)")
+                                                BypassConfig.recordDpiFailure(strategy, activeHost, DpiType.HTTP_BLOCK)
                                                 throw java.io.IOException("DPI Block Identified")
                                             }
                                         }
@@ -495,24 +499,25 @@ object TcpTransportHandler {
                         if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
                         val isEarly = totalRead < 32768L || (System.currentTimeMillis() - start < 15000)
+                        val activeHost = detectedSni ?: targetHost
                         
                         if (totalRead == 0L && System.currentTimeMillis() - start < 20000) {
-                            BypassConfig.recordFailure(strategy, targetHost)
+                            BypassConfig.recordFailure(strategy, activeHost)
                             if (msg.contains("reset") || msg.contains("pipe")) ProxyStats.recordMssFailure()
                         }
                         
                         if (isEarly && msg.contains("reset")) {
                              val dpiType = DpiType.TCP_RESET
                              ProxyStats.recordDpiEvent(dpiType)
-                             BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
-                             ProxyStats.logRecovery("Connection Reset by Peer/DPI: $targetHost")
+                             BypassConfig.recordDpiFailure(strategy, activeHost, dpiType)
+                             ProxyStats.logRecovery("Connection Reset by Peer/DPI: $activeHost")
                         } else if (isEarly && msg.contains("timeout")) {
                              val dpiType = DpiType.CONNECTION_TIMEOUT
                              ProxyStats.recordDpiEvent(dpiType)
-                             BypassConfig.recordDpiFailure(strategy, targetHost, dpiType)
+                             BypassConfig.recordDpiFailure(strategy, activeHost, dpiType)
                         } else if (isEarly) {
                              ProxyStats.recordCensorshipEvent(true)
-                             BypassConfig.recordFailure(strategy, targetHost, FailureReason.UNKNOWN)
+                             BypassConfig.recordFailure(strategy, activeHost, FailureReason.UNKNOWN)
                         }
                     } finally {
                         ProxyStats.releasePool(buffer)
@@ -554,11 +559,13 @@ object TcpTransportHandler {
                                 val currentIntensity = ProxyStats.censorshipIntensity.value
                                 packetsCount++
                                 
-                                if (packetsCount == 1) {
+                                if (packetsCount <= 2) {
                                     val sniOffset = TlsParser.findSniOffset(buffer, n)
                                     if (sniOffset != -1) {
                                         val realSni = TlsParser.extractHostname(buffer, n, sniOffset)
-                                        if (realSni != null) {
+                                        if (realSni != null && realSni.isNotBlank()) {
+                                            detectedSni = realSni
+                                            ProxyStats.addTraffic(realSni)
                                             if (BypassConfig.isHostCensored(realSni)) {
                                                 // High censorship host! Use EXTREME strategies for maximum effectiveness
                                                 val forceStrategy = if (currentIntensity > 80) BypassStrategy.ZAPRET_EXTREME else BypassStrategy.BYEBYEDPI_EXTREME
@@ -672,7 +679,7 @@ object TcpTransportHandler {
                         if (e !is CancellationException) {
                             BypassConfig.TrafficShaper.recordError()
                             if (System.currentTimeMillis() - start < 15000) {
-                                BypassConfig.recordFailure(strategy, targetHost)
+                                BypassConfig.recordFailure(strategy, detectedSni ?: targetHost)
                             }
                         }
                     } finally {

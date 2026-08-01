@@ -382,6 +382,7 @@ object ServiceChecker {
                 it != BypassStrategy.DIRECT && 
                 (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.UDP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING)
             }
+            BypassConfig.updateTestingStrategies(strategiesToTest.shuffled().take(6))
             
             val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
             

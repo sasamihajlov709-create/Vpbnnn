@@ -283,7 +283,8 @@ object UdpTransportHandler {
                                                 else if (pAtyp == 4) { System.arraycopy(data, 4, responseBytes, off, 16); off += 16 }
                                                 responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
                                                 System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
-                                                udpSocket.send(DatagramPacket(responseBytes, off + dnsReply.size, clientAddr, clientPort))
+                                                off += dnsReply.size
+                                                udpSocket.send(DatagramPacket(responseBytes, off, clientAddr, clientPort))
                                             } finally {
                                                 ProxyStats.release8k(responseBytes)
                                             }
@@ -309,7 +310,8 @@ object UdpTransportHandler {
                                                         else if (pAtyp == 4) { System.arraycopy(dnsReqCopy, 4, responseBytes, off, 16); off += 16 }
                                                         responseBytes[off++] = (targetPortNum shr 8).toByte(); responseBytes[off++] = (targetPortNum and 0xFF).toByte()
                                                         System.arraycopy(dnsReply, 0, responseBytes, off, dnsReply.size)
-                                                        udpSocket.send(DatagramPacket(responseBytes, off + dnsReply.size, clientAddr, clientPort))
+                                                        off += dnsReply.size
+                                                        udpSocket.send(DatagramPacket(responseBytes, off, clientAddr, clientPort))
                                                     } finally {
                                                         ProxyStats.release8k(responseBytes)
                                                     }
