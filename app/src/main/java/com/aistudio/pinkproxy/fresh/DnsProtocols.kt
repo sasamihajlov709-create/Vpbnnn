@@ -20,6 +20,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 
 object DnsProtocols {
 
@@ -627,51 +628,92 @@ TtlHelper.setTtl(socket, 64)
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
-        val targets = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
+        
+        // Use a rotating set of popular IPs that often host DoH or are on popular CDNs
+        val targets = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9", "104.16.249.249", "104.16.248.249", "149.112.112.112")
         val target = targets.random()
-        val socket = Socket()
+        
+        val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+        trustManagerFactory.init(null as java.security.KeyStore?)
+        val trustManagers = trustManagerFactory.trustManagers
+        val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
+        
+        val sc = SSLContext.getInstance("TLS")
+        sc.init(null, if (defaultTrustManager != null) arrayOf(defaultTrustManager) else null, null)
+        
+        val factory = ProtectedSSLSocketFactory(sc.socketFactory, vpnService)
+        val sslSocket = factory.createSocket() as? javax.net.ssl.SSLSocket ?: return emptyList()
+        
         try {
-            try { vpnService?.protect(socket) } catch(e: Throwable) {}
-            socket.tcpNoDelay = true
-            socket.connect(InetSocketAddress(target, 443), 4000)
-            socket.soTimeout = 4000
-            val output = socket.getOutputStream()
-            val input = socket.getInputStream()
+            sslSocket.connect(InetSocketAddress(target, 443), 4000)
+            sslSocket.soTimeout = 4000
+            
+            // Set SNI to a very common innocent domain to bypass SNI-based blocking
+            val innocentSni = listOf("google.com", "microsoft.com", "apple.com", "cloudflare.com").random()
+            try {
+                val sslParameters = sslSocket.sslParameters
+                sslParameters.serverNames = listOf(javax.net.ssl.SNIHostName(innocentSni))
+                sslSocket.sslParameters = sslParameters
+            } catch (e: Throwable) {}
+            
+            sslSocket.startHandshake()
+            
+            val output = sslSocket.getOutputStream()
+            val input = sslSocket.getInputStream()
+            
+            val hostHeader = if (target == "1.1.1.1" || target.startsWith("104.")) "cloudflare-dns.com" else "dns.google"
+            
             val sb = StringBuilder()
             sb.append("POST /dns-query HTTP/1.1\r\n")
-            sb.append("Host: ").append(listOf("dns.google", "cloudflare-dns.com").random()).append("\r\n")
+            sb.append("Host: ").append(hostHeader).append("\r\n")
             sb.append("Content-Type: application/dns-message\r\n")
             sb.append("Content-Length: ").append(query.size).append("\r\n")
             sb.append("Accept: application/dns-message\r\n")
             sb.append("User-Agent: ").append(FakePacketHelper.getRandomUserAgent()).append("\r\n")
-            sb.append("Transfer-Encoding: chunked\r\n")
-            sb.append("X-Forwarded-For: 127.0.0.1\r\n")
+            sb.append("Connection: close\r\n")
+            
+            // Add junk headers to confuse pattern matching
+            repeat(rnd.nextInt(2, 5)) {
+                sb.append("X-").append(UUID.randomUUID().toString().take(8)).append(": ").append(UUID.randomUUID().toString()).append("\r\n")
+            }
+            
             sb.append("\r\n")
-            val headers = sb.toString().toByteArray()
-            output.write(headers)
+            
+            output.write(sb.toString().toByteArray())
             output.flush()
-            output.write(query)
-            output.flush()
-            val buffer = ByteArray(4096)
-            val n = input.read(buffer)
-            if (n > 0) {
-                var bodyOffset = -1
-                for (i in 0 until n - 3) {
-                    if (buffer[i] == 0x0D.toByte() && buffer[i+1] == 0x0A.toByte() && 
-                        buffer[i+2] == 0x0D.toByte() && buffer[i+3] == 0x0A.toByte()) {
-                        bodyOffset = i + 4
-                        break
-                    }
-                }
-                if (bodyOffset != -1) {
-                    val bodyLen = n - bodyOffset
-                    val ips = DnsPacketEngine.parseDnsResponse(buffer.copyOfRange(bodyOffset, n), bodyLen, id)
+            
+            // Write query in fragments to avoid detection of DNS-over-HTTPS patterns in a single packet
+            val split = rnd.nextInt(1, query.size.coerceAtLeast(2))
+            output.write(query, 0, split); output.flush()
+            delay(rnd.nextLong(5, 20))
+            output.write(query, split, query.size - split); output.flush()
+            
+            val dis = DataInputStream(input)
+            val headerBuffer = StringBuilder()
+            var lastChar = ' '
+            while (true) {
+                val b = dis.read()
+                if (b == -1) break
+                val c = b.toChar()
+                headerBuffer.append(c)
+                if (c == '\n' && lastChar == '\r' && headerBuffer.endsWith("\r\n\r\n")) break
+                lastChar = c
+                if (headerBuffer.length > 4096) break
+            }
+            
+            // Simple check for 200 OK
+            if (headerBuffer.contains("200 OK")) {
+                // Find content length or read until EOF since we sent Connection: close
+                val body = dis.readBytes()
+                if (body.isNotEmpty()) {
+                    val ips = DnsPacketEngine.parseDnsResponse(body, body.size, id)
                     return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
                 }
             }
         } catch (e: Throwable) {
+            // Log.v("DnsProtocols", "Smuggling failed for $host: ${e.message}")
         } finally {
-            try { socket.close() } catch (e: Throwable) {}
+            try { sslSocket.close() } catch (e: Throwable) {}
         }
         return emptyList()
     }
