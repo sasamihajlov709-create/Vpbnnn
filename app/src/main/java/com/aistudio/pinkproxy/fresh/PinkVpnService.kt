@@ -64,7 +64,6 @@ class PinkVpnService : VpnService() {
     private var serviceScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
     fun getServiceScope(): CoroutineScope = serviceScope
     private var sessionScope: CoroutineScope? = null
-    private var mtuJob: Job? = null
     private val PROXY_PORT = 18080
     private var connectivityManager: android.net.ConnectivityManager? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
@@ -84,7 +83,7 @@ class PinkVpnService : VpnService() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PinkProxy:VpnLock").apply {
             setReferenceCounted(false)
-            acquire(10 * 60 * 1000L)
+            acquire() // Acquire indefinitely until service is destroyed
         }
         
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
@@ -102,18 +101,6 @@ class PinkVpnService : VpnService() {
         DnsCacheManager.load(this)
         BypassConfig.loadTuningSettings(this)
         loadFilterSettings(this)
-
-        mtuJob = serviceScope.launch {
-            BypassConfig.currentMtu.collect { newMtu ->
-                if (_isRunning.value && vpnInterface != null) {
-                    Log.i("PinkVpn", "Dynamic MTU changed to $newMtu. Hot-restarting interface.")
-                    withContext(Dispatchers.Main) {
-                        stopVpn()
-                        startVpn()
-                    }
-                }
-            }
-        }
         
         // Start proxy server with session secret
         proxyServer = PinkProxyServer(this, PROXY_PORT, proxySecret)

@@ -876,49 +876,30 @@ object BypassConfig {
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
             }
             BypassStrategy.UDP_DATA_FRAG -> {
+                // Cannot actually fragment UDP payload. Instead, inject low TTL noise to confuse DPI.
                 if (length > 200) {
-                    // Optional noise injection before sending the real packet
-                    if (ProxyStats.censorshipIntensity.value > 70) {
-                        val randomNoise = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
-                        try {
-                            TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
-                            socket.send(DatagramPacket(randomNoise, randomNoise.size, targetAddr, targetPort))
-                            delay(rnd.nextLong(1, 3))
-                        } catch (e: Throwable) {}
-                        TtlHelper.setUdpTtl(socket, 64, isIpv6)
-                    }
+                    val randomNoise = FakePacketHelper.buildUdpNoise(length)
+                    try {
+                        TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), isIpv6)
+                        socket.send(DatagramPacket(randomNoise, randomNoise.size, targetAddr, targetPort))
+                        delay(rnd.nextLong(1, 3))
+                    } catch (e: Throwable) {}
+                    TtlHelper.setUdpTtl(socket, 64, isIpv6)
                 }
                 
-                val chunkSize = rnd.nextInt(64, 256)
-                var pos = offset
-                while (pos < offset + length) {
-                    val remaining = (offset + length) - pos
-                    val sz = chunkSize.coerceAtMost(remaining)
-                    socket.send(DatagramPacket(data, pos, sz, targetAddr, targetPort))
-                    pos += sz
-                    if (pos < offset + length) delay(rnd.nextLong(1, 3))
-                }
+                socket.send(packet)
             }
             BypassStrategy.UDP_FRAGMENT_SKEW -> {
                 val isDns = targetPort == 53
                 if (length > 60 && !isDns) {
-                    // Hybrid: Send fake packet WITH low TTL, then reorder or send real parts
-                    val fake = ByteArray(length / 2) { rnd.nextInt(256).toByte() }
+                    // Send fake packet WITH low TTL that matches the real packet size to confuse stateful DPI
+                    val fake = ByteArray(length) { rnd.nextInt(256).toByte() }
                     TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
                     socket.send(DatagramPacket(fake, fake.size, targetAddr, targetPort))
                     delay(config.delay1)
                     TtlHelper.setUdpTtl(socket, 64, isIpv6)
                     
-                    val split = length / 2
-                    if (rnd.nextBoolean()) {
-                        socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
-                        delay(rnd.nextLong(1, 3))
-                        socket.send(DatagramPacket(data, offset, split, targetAddr, targetPort))
-                    } else {
-                        socket.send(DatagramPacket(data, offset, split, targetAddr, targetPort))
-                        delay(rnd.nextLong(1, 3))
-                        socket.send(DatagramPacket(data, offset + split, length - split, targetAddr, targetPort))
-                    }
+                    socket.send(packet)
                 } else {
                     socket.send(packet)
                 }
