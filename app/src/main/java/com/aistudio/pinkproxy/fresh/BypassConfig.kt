@@ -1951,6 +1951,8 @@ object BypassConfig {
                     if (length > finalSentPos) {
                         delay(rnd.nextLong(15, 45))
                         output.write(data, finalSentPos, length - finalSentPos); output.flush()
+                    } else {
+                        output.flush()
                     }
                 } catch (e: Throwable) { 
                     try { output.write(data, 0, length); output.flush() } catch(e2: Throwable) {}

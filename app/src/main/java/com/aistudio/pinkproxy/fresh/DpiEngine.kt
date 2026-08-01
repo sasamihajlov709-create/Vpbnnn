@@ -100,7 +100,10 @@ object DpiEngine {
             val probes = listOf(
                 BypassStrategy.TCP_RETRANS_FAKE,
                 BypassStrategy.TLS_SNI_FRAGMENT,
-                BypassStrategy.SNI_SPLIT
+                BypassStrategy.SNI_SPLIT,
+                BypassStrategy.TCP_SEGMENT_OVERLAP,
+                BypassStrategy.ECH_GREASE,
+                BypassStrategy.TCP_COMBINED_NUCLEAR
             )
             
             targets.forEach { host ->
@@ -210,11 +213,15 @@ object DpiEngine {
         // Define fallback chains for automated recovery
         strategyChains[BypassStrategy.SNI_SPLIT] = BypassStrategy.TLS_SNI_FRAGMENT
         strategyChains[BypassStrategy.TLS_SNI_FRAGMENT] = BypassStrategy.BYEBYEDPI_HYBRID
-        strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.ZAPRET_EXTREME
+        strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.TCP_SEGMENT_OVERLAP
+        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.ZAPRET_EXTREME
+        strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        
         strategyChains[BypassStrategy.TCP_REORDER_DESYNC] = BypassStrategy.TCP_OOB_DESYNC
         strategyChains[BypassStrategy.TCP_MSS_CLAMP] = BypassStrategy.TCP_RETRANS_FAKE
         strategyChains[BypassStrategy.HTTP_HOST_SPACE] = BypassStrategy.HTTP_HOST_TAB_MANGLE
         strategyChains[BypassStrategy.UDP_QUIC_SMART_SHADOW] = BypassStrategy.QUIC_INITIAL_FRAGMENTATION
+        strategyChains[BypassStrategy.QUIC_INITIAL_FRAGMENTATION] = BypassStrategy.UDP_COMBINED_NUCLEAR
     }
 
     fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {

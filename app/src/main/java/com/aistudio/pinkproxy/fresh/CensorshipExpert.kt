@@ -82,6 +82,8 @@ object CensorshipExpert {
             BypassStrategy.SNI_SPLIT,
             BypassStrategy.TCP_OOB_DESYNC,
             BypassStrategy.BYEBYEDPI_HYBRID,
+            BypassStrategy.TCP_SEGMENT_OVERLAP,
+            BypassStrategy.ECH_GREASE,
             BypassStrategy.TLS_SNI_SKEW
         )
         
