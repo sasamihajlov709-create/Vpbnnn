@@ -811,11 +811,69 @@ TtlHelper.setTtl(socket, 64)
                 }
             }
         } catch (e: Throwable) {
-            // Log.v("DnsProtocols", "Smuggling failed for $host: ${e.message}")
         } finally {
             try { sslSocket.close() } catch (e: Throwable) {}
         }
         return emptyList()
+    }
+
+    suspend fun queryDnsExtremeRacing(host: String, vpnService: VpnService?): List<InetAddress> {
+        return kotlinx.coroutines.withTimeoutOrNull(6000) {
+            kotlinx.coroutines.supervisorScope {
+                val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(10)
+                val completed = java.util.concurrent.atomic.AtomicInteger(0)
+                val totalTasks = 6
+                
+                // 1. DoH Racing (Top 3)
+                launch(ProxyDispatcher.io) {
+                    val res = queryDohRacing(host, vpnService)
+                    if (res.isNotEmpty()) channel.trySend(res)
+                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                }
+                
+                // 2. DoT Racing (Top 2)
+                launch(ProxyDispatcher.io) {
+                    val dotIp = DnsOptimizer.bestDotServer
+                    val res = queryDot(host, dotIp, vpnService)
+                    if (res.isNotEmpty()) channel.trySend(res)
+                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                }
+                
+                // 3. Shadow DoQ (UDP:443)
+                launch(ProxyDispatcher.io) {
+                    val res = queryDnsOverQuic(host, "8.8.8.8", vpnService)
+                    if (res.isNotEmpty()) channel.trySend(res)
+                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                }
+                
+                // 4. UDP Nuclear (DNS:53)
+                launch(ProxyDispatcher.io) {
+                    val res = queryUdpDnsNuclear(host, "1.1.1.1", vpnService)
+                    if (res.isNotEmpty()) channel.trySend(res)
+                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                }
+                
+                // 5. TCP Nuclear (DNS:53)
+                launch(ProxyDispatcher.io) {
+                    val res = queryTcpDnsNuclear(host, "8.8.4.4", vpnService)
+                    if (res.isNotEmpty()) channel.trySend(res)
+                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                }
+                
+                // 6. DoH Smuggling (HTTPS:443)
+                launch(ProxyDispatcher.io) {
+                    val res = queryDohSmuggling(host, vpnService)
+                    if (res.isNotEmpty()) channel.trySend(res)
+                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                }
+                
+                var result = emptyList<InetAddress>()
+                try {
+                    result = channel.receive()
+                } catch (e: Throwable) { }
+                result
+            }
+        } ?: emptyList()
     }
 }
 

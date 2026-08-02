@@ -72,7 +72,7 @@ object TcpTransportHandler {
             coroutineScope {
                 // Forward from Remote to Client (Direct)
                 launch(ProxyDispatcher.io) {
-                    val buffer = ByteArray(transportBufferSize)
+                    val buffer = ProxyStats.obtain16k()
                     try {
                         var n: Int
                         while (isActive) {
@@ -89,13 +89,14 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("TcpTransport", "RemoteToClient error: ${e.message}")
                     } finally {
+                        ProxyStats.release16k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
 
                 // Forward from Client to Remote (with Bypass & Advanced Evasion)
                 launch(ProxyDispatcher.io) {
-                    val buffer = ByteArray(transportBufferSize)
+                    val buffer = ProxyStats.obtain16k()
                     val rnd = ThreadLocalRandom.current()
                     var packetsCount = 0
                     try {
@@ -121,6 +122,11 @@ object TcpTransportHandler {
                                         }
                                     }
                                     
+                                    // Extreme evasion: Sequence Desync before critical packets
+                                    if (intensity > 80 && packetsCount < 5) {
+                                        sendSequenceDesync(remoteSocket, remoteOut, rnd)
+                                    }
+
                                     // Apply standard BypassConfig strategies
                                     writeMutex.lock()
                                     try {
@@ -132,7 +138,7 @@ object TcpTransportHandler {
                                     // Post-Handshake Evasion: Fragmentation and Chaos
                                     if (intensity > 40) {
                                         // Periodic Window Oscillation to confuse stateful DPI
-                                        if (packetsCount % 7 == 0) {
+                                        if (packetsCount % 13 == 0) {
                                             oscillateWindowSize(remoteSocket)
                                         }
 
@@ -141,14 +147,14 @@ object TcpTransportHandler {
                                             var offset = 0
                                             while (offset < n) {
                                                 val sz = if (intensity > 75) 
-                                                    rnd.nextInt(64, 384).coerceAtMost(n - offset)
+                                                    rnd.nextInt(32, 256).coerceAtMost(n - offset)
                                                 else 
                                                     rnd.nextInt(128, 768).coerceAtMost(n - offset)
                                                 
                                                 writeMutex.lock()
                                                 try {
                                                     // In extreme cases, inject a tiny junk segment with low TTL before the real fragment
-                                                    if (intensity > 85 && rnd.nextInt(100) < 25) {
+                                                    if (intensity > 85 && rnd.nextInt(100) < 35) {
                                                         injectGhostSegment(remoteSocket, remoteOut, rnd)
                                                     }
                                                     
@@ -158,7 +164,8 @@ object TcpTransportHandler {
                                                     writeMutex.unlock()
                                                 }
                                                 offset += sz
-                                                if (offset < n) delay(rnd.nextLong(1, 3))
+                                                // Staggered delay for high-intensity evasion
+                                                if (offset < n) delay(if (intensity > 80) rnd.nextLong(2, 8) else rnd.nextLong(1, 3))
                                             }
                                         } else {
                                             writeMutex.lock()
@@ -186,6 +193,7 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("TcpTransport", "ClientToRemote error: ${e.message}")
                     } finally {
+                        ProxyStats.release16k(buffer)
                         try { remoteSocket.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
@@ -411,6 +419,22 @@ object TcpTransportHandler {
             out.flush()
             delay(1)
             
+            TtlHelper.setTtl(socket, oldTtl)
+        } catch (e: Throwable) {}
+    }
+
+    private suspend fun sendSequenceDesync(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
+        try {
+            // Sequence Number Desync: Send 1 byte of urgent data or low-TTL junk
+            // This forces DPI to track sequence numbers more strictly, often leading to state exhaustion or bypass
+            val oldTtl = TtlHelper.getSocketTtl(socket)
+            val discoveredTtl = AutoTtlProber.getDiscoveredTtl("global") ?: 5
+            
+            TtlHelper.setTtl(socket, discoveredTtl)
+            socket.sendUrgentData(rnd.nextInt(256))
+            out.write(FakePacketHelper.buildUdpNoise(rnd.nextInt(4, 16)))
+            out.flush()
+            delay(1)
             TtlHelper.setTtl(socket, oldTtl)
         } catch (e: Throwable) {}
     }

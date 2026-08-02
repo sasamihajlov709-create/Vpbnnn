@@ -199,6 +199,11 @@ object RobustResolver {
         
         val queries = mutableListOf<suspend () -> List<InetAddress>>()
         
+        // 0. Extreme Racing (Combined DoH, DoT, DoQ, Smuggling)
+        if (intensity > 60) {
+            queries.add { DnsProtocols.queryDnsExtremeRacing(host, vpnService) }
+        }
+        
         // 1. Primary DoH (Very Reliable)
         queries.add { DnsProtocols.queryDohRacing(host, vpnService) }
         
