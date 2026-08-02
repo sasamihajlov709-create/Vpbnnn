@@ -162,17 +162,22 @@ object RecoveryManager {
                     ServiceChecker.runActiveProbing(null)
                 }
             }
-            RecoveryEvent.DNS_FAILURE -> {
-                Log.e("RecoveryManager", "Critical DNS failure detected. Escalation: $recoveryEscalation")
+            RecoveryEvent.DNS_FAILURE, RecoveryEvent.DNS_POISONED -> {
+                Log.e("RecoveryManager", "Critical DNS issue detected: $event. Escalation: $recoveryEscalation")
+                RobustResolver.clearCache()
+                DnsCacheManager.clearAll()
+                DnsOptimizer.forceRefresh()
+                
+                if (event == RecoveryEvent.DNS_POISONED) {
+                    // Force the app to use nuclear/smuggling DoH immediately
+                    BypassConfig.setPanicMode(true)
+                }
+
                 if (recoveryEscalation < 2) {
-                    RobustResolver.clearCache()
-                    DnsOptimizer.forceRefresh()
                     recoveryEscalation++
                 } else {
-                    RobustResolver.clearCache()
-                    DnsOptimizer.forceRefresh()
-                    triggerPanic("Repeated DNS failures")
-                    requestServiceRestart("Persistent DNS failures")
+                    triggerPanic("Repeated DNS issues")
+                    requestServiceRestart("Persistent DNS failures or poisoning")
                 }
             }
             RecoveryEvent.PROXY_UNREACHABLE -> {

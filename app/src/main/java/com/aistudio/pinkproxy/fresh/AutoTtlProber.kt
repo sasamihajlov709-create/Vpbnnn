@@ -30,11 +30,9 @@ object AutoTtlProber {
 
     fun startProbing(scope: CoroutineScope, vpnService: VpnService?) {
         scope.launch(ProxyDispatcher.io) {
-            // Background prober for common canary domains to find global censor distance
             val canary = listOf("google.com", "facebook.com", "twitter.com", "youtube.com", "instagram.com", "t.me")
             while (isActive) {
                 for (host in canary) {
-                    // Always probe periodically to adapt to routing changes
                     val r = ThreadLocalRandom.current().nextInt(100)
                     if (discoveredTtls["global"] == null || r < 20) {
                         probeDistance(host, 443, vpnService)
@@ -45,7 +43,6 @@ object AutoTtlProber {
                     delay(5000)
                 }
                 
-                // Cleanup overgrown caches to prevent memory leak
                 if (discoveredTtls.size > 1000) {
                     val globalTtl = discoveredTtls["global"]
                     discoveredTtls.clear()
@@ -57,7 +54,7 @@ object AutoTtlProber {
                     if (globalMtu != null) discoveredMtus["global"] = globalMtu
                 }
 
-                delay(TimeUnit.MINUTES.toMillis(15)) // Re-probe every 15 mins
+                delay(TimeUnit.MINUTES.toMillis(15)) 
             }
         }
     }
@@ -71,14 +68,14 @@ object AutoTtlProber {
     }
 
     suspend fun probeBestMtu(host: String, port: Int, vpnService: VpnService?): Int {
-        if (probingHosts.contains(host + "_mtu")) return discoveredMtus[host] ?: discoveredMtus["global"] ?: 1400
-        probingHosts.add(host + "_mtu")
+        val key = host + "_mtu"
+        if (probingHosts.contains(key)) return discoveredMtus[host] ?: discoveredMtus["global"] ?: 1400
+        probingHosts.add(key)
         try {
             val resolved = RobustResolver.resolve(host, vpnService)
             if (resolved.isEmpty()) return 1400
             val target = resolved.first()
             
-            // Binary search for MTU
             var low = 576
             var high = 1500
             var best = 1400
@@ -91,7 +88,7 @@ object AutoTtlProber {
                 } else {
                     high = mid - 1
                 }
-                delay(100)
+                delay(50)
             }
             
             discoveredMtus[host] = best
@@ -105,7 +102,7 @@ object AutoTtlProber {
         } catch (e: Throwable) {
             return 1400
         } finally {
-            probingHosts.remove(host + "_mtu")
+            probingHosts.remove(key)
         }
     }
 
@@ -117,23 +114,24 @@ object AutoTtlProber {
                 vpnService?.protect(socket)
                 socket.tcpNoDelay = true
                 TtlHelper.setMss(socket, (mtu - 40).coerceAtLeast(512))
-                socket.connect(InetSocketAddress(addr, port), 1500)
+                socket.connect(InetSocketAddress(addr, port), 1000)
                 
                 val output = socket.getOutputStream()
-                val payloadSize = mtu - 40
-                val payload = if (port == 443) {
-                    val hello = FakePacketHelper.buildRealisticTlsHello(if (host.isNotEmpty()) host else addr.hostAddress)
-                    val padded = ByteArray(payloadSize) { 0 }
-                    System.arraycopy(hello, 0, padded, 0, minOf(hello.size, payloadSize))
-                    padded
-                } else {
-                    ByteArray(payloadSize) { 0 }
+                val payloadSize = (mtu - 40).coerceAtLeast(0)
+                if (payloadSize > 0) {
+                   val payload = if (port == 443) {
+                       val hello = FakePacketHelper.buildRealisticTlsHello(if (host.isNotEmpty()) host else addr.hostAddress)
+                       val padded = ByteArray(payloadSize)
+                       System.arraycopy(hello, 0, padded, 0, minOf(hello.size, payloadSize))
+                       padded
+                   } else {
+                       ByteArray(payloadSize)
+                   }
+                   output.write(payload)
+                   output.flush()
                 }
                 
-                output.write(payload)
-                output.flush()
-                
-                socket.soTimeout = 1000
+                socket.soTimeout = 800
                 socket.getInputStream().read()
                 true
             } catch (e: Throwable) {
@@ -153,21 +151,16 @@ object AutoTtlProber {
             if (resolved.isEmpty()) return 64
             val target = resolved.first()
             
-            // 1. Estimate distance to server using ICMP or TCP SYN
             val serverDistance = estimateDistance(target, port, vpnService)
             if (serverDistance == -1) return 64
             
             Log.d("AutoTtlProber", "Server distance to $host: $serverDistance")
             
-            // 2. Identify censor distance
-            // We look for the first hop that returns a response when we send something "forbidden"
-            // but doesn't reach the server.
             val censorDistance = identifyCensorHop(target, port, serverDistance, vpnService)
             
             val finalTtl = if (censorDistance != -1) {
-                censorDistance // Target the censor exactly
+                censorDistance 
             } else {
-                // Fallback: stay safe, usually censors are close (2-10 hops)
                 (serverDistance - 4).coerceAtLeast(3).coerceAtMost(serverDistance - 1)
             }
             
@@ -189,95 +182,91 @@ object AutoTtlProber {
         if (currentGlobal == 0) {
             netMap["global"] = newTtl
         } else {
-            netMap["global"] = (currentGlobal * 0.6 + newTtl * 0.4).toInt().coerceIn(2, 30)
+            netMap["global"] = (currentGlobal * 0.7 + newTtl * 0.3).toInt().coerceIn(2, 30)
         }
         discoveredTtls["global"] = netMap["global"]!!
     }
 
-    private suspend fun identifyCensorHop(addr: InetAddress, port: Int, serverDist: Int, vpnService: VpnService?): Int {
-        // We try to trigger a RST or fake response from censor with increasing TTL
-        // starting from a very low value.
-        for (ttl in 2 until serverDist) {
-            if (isCensorTriggered(addr, port, ttl, vpnService)) {
-                return ttl
-            }
+    private suspend fun identifyCensorHop(addr: InetAddress, port: Int, serverDist: Int, vpnService: VpnService?): Int = coroutineScope {
+        // Parallelized probing for faster results
+        // We probe in chunks of 4 TTL values
+        val chunkSize = 4
+        for (baseTtl in 2 until serverDist step chunkSize) {
+            val endTtl = minOf(baseTtl + chunkSize, serverDist)
+            val ttls = (baseTtl until endTtl).toList()
+            
+            val results = ttls.map { ttl ->
+                async { if (isCensorTriggered(addr, port, ttl, vpnService)) ttl else -1 }
+            }.awaitAll()
+            
+            val firstTriggered = results.filter { it != -1 }.minOrNull()
+            if (firstTriggered != null) return@coroutineScope firstTriggered
         }
-        return -1
+        -1
     }
 
     private suspend fun isCensorTriggered(addr: InetAddress, port: Int, ttl: Int, vpnService: VpnService?): Boolean {
         return withContext(ProxyDispatcher.io) {
-            var socket: Socket? = null
-            try {
-                socket = Socket()
-                TtlHelper.setTtl(socket, ttl)
-                socket.connect(InetSocketAddress(addr, port), 1000)
-                
-                val output = socket.getOutputStream()
-                val input = socket.getInputStream()
-                
-                // Use a multi-stage trigger: TLS SNI + HTTP Host header
-                val rnd = ThreadLocalRandom.current()
-                val trigger = when(rnd.nextInt(3)) {
-                    0 -> FakePacketHelper.buildRealisticTlsHello("blocked.com")
-                    1 -> "GET / HTTP/1.1\r\nHost: blocked.com\r\n\r\n".toByteArray()
-                    else -> FakePacketHelper.buildHttpChaosPacket()
+            repeat(2) { // Double check to avoid false negatives due to packet loss
+                var socket: Socket? = null
+                try {
+                    socket = Socket()
+                    vpnService?.protect(socket)
+                    TtlHelper.setTtl(socket, ttl)
+                    socket.connect(InetSocketAddress(addr, port), 800)
+                    
+                    val output = socket.getOutputStream()
+                    val input = socket.getInputStream()
+                    
+                    val rnd = ThreadLocalRandom.current()
+                    val trigger = when(rnd.nextInt(3)) {
+                        0 -> FakePacketHelper.buildRealisticTlsHello("blocked.com")
+                        1 -> "GET / HTTP/1.1\r\nHost: blocked.com\r\n\r\n".toByteArray()
+                        else -> FakePacketHelper.buildHttpChaosPacket()
+                    }
+                    output.write(trigger); output.flush()
+                    
+                    val buffer = ByteArray(512)
+                    socket.soTimeout = 600
+                    val read = try { input.read(buffer) } catch(e: Throwable) { -2 }
+                    
+                    if (read > 0) {
+                        val content = String(buffer, 0, read.coerceAtMost(64), Charsets.US_ASCII).lowercase()
+                        if (content.contains("forbidden") || content.contains("block") || buffer[0] == 0x15.toByte()) return@withContext true
+                        // Any unexpected data at low TTL is suspicious
+                        return@withContext true
+                    }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // No response within TTL is normal for non-censor hop
+                } catch (e: Throwable) {
+                    val msg = e.message?.lowercase() ?: ""
+                    if (msg.contains("reset") || msg.contains("closed") || msg.contains("pipe")) return@withContext true
+                } finally {
+                    try { socket?.close() } catch (e: Throwable) {}
                 }
-                output.write(trigger); output.flush()
-                
-                // If we get data back despite low TTL, it's either the censor or we reached the server
-                // We check the first few bytes to see if it's a typical block page or TLS alert
-                val buffer = ByteArray(1024)
-                socket.soTimeout = 800
-                val read = try { input.read(buffer) } catch(e: Throwable) { -2 }
-                
-                if (read > 0) {
-                    val content = String(buffer, 0, read.coerceAtMost(128), Charsets.US_ASCII).lowercase()
-                    // If it's a block page or TLS Alert, it's definitely the censor
-                    content.contains("forbidden") || content.contains("block") || buffer[0] == 0x15.toByte() || read > 0
-                } else {
-                    false
-                }
-            } catch (e: java.net.SocketTimeoutException) {
-                false
-            } catch (e: Throwable) {
-                // RST/FIN from middlebox is a clear indicator
-                val msg = e.message?.lowercase() ?: ""
-                msg.contains("reset") || msg.contains("closed") || msg.contains("pipe")
-            } finally {
-                try { socket?.close() } catch (e: Throwable) {}
+                delay(ThreadLocalRandom.current().nextLong(10, 50))
             }
+            false
         }
     }
 
-    private suspend fun estimateDistance(addr: InetAddress, port: Int, vpnService: VpnService?): Int {
-        return kotlinx.coroutines.withContext(ProxyDispatcher.io) {
-            kotlinx.coroutines.coroutineScope {
-                val ttls = listOf(4, 8, 12, 16, 20, 24, 28, 32)
-                val deferreds = ttls.associateWith { ttl -> 
-                    async { tryConnect(addr, port, ttl, vpnService) }
-                }
+    private suspend fun estimateDistance(addr: InetAddress, port: Int, vpnService: VpnService?): Int = withContext(ProxyDispatcher.io) {
+        coroutineScope {
+            val coarseTtls = listOf(4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 64)
+            val coarseResults = coarseTtls.map { ttl ->
+                async { if (tryConnect(addr, port, ttl, vpnService)) ttl else -1 }
+            }.awaitAll()
             
-            var upperBound = -1
-            for (ttl in ttls) {
-                if (deferreds[ttl]?.await() == true) {
-                    upperBound = ttl
-                    break
-                }
-            }
+            val upperBound = coarseResults.filter { it != -1 }.minOrNull() ?: return@coroutineScope -1
             
-            if (upperBound != -1) {
-                val fineTtls = ((upperBound - 3) until upperBound).toList()
-                val fineDeferreds = fineTtls.associateWith { ttl -> 
-                    async { tryConnect(addr, port, ttl, vpnService) }
-                }
-                for (ttl in fineTtls) {
-                    if (fineDeferreds[ttl]?.await() == true) return@coroutineScope ttl
-                }
-                return@coroutineScope upperBound
-            }
-            return@coroutineScope -1
-            }
+            // Fine-grained search within the range
+            val lowerBound = coarseTtls.filter { it < upperBound }.maxOrNull() ?: 1
+            val fineTtls = (lowerBound until upperBound).toList()
+            val fineResults = fineTtls.map { ttl ->
+                async { if (tryConnect(addr, port, ttl, vpnService)) ttl else -1 }
+            }.awaitAll()
+            
+            fineResults.filter { it != -1 }.minOrNull() ?: upperBound
         }
     }
 
@@ -286,8 +275,9 @@ object AutoTtlProber {
             var socket: Socket? = null
             try {
                 socket = Socket()
+                vpnService?.protect(socket)
                 TtlHelper.setTtl(socket, ttl)
-                socket.connect(InetSocketAddress(addr, port), 2000)
+                socket.connect(InetSocketAddress(addr, port), 1200)
                 true
             } catch (e: Throwable) {
                 false

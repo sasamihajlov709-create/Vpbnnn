@@ -108,6 +108,15 @@ object DnsCacheManager {
         prefetchCommonHosts()
     }
 
+    fun clearAll() {
+        dnsCache.clear()
+        detailedDnsCache.clear()
+        echSupportCache.clear()
+        ipHeatmap.clear()
+        ipRtt.clear()
+        Log.i("DnsCacheManager", "All DNS caches force cleared")
+    }
+
     private fun prefetchCommonHosts() {
         val critical = listOf("google.com", "github.com", "telegram.org", "cloudflare.com", "1.1.1.1")
         // RobustResolver will handle the actual resolution logic safely

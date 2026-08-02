@@ -283,6 +283,8 @@ class PinkVpnService : VpnService() {
                 .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
+                .addDnsServer("8.8.4.4")
+                .addDnsServer("1.0.0.1")
                 .addDnsServer("2606:4700:4700::1111")
                 .addDnsServer("2001:4860:4860::8888")
 

@@ -575,12 +575,11 @@ object UdpTransportHandler {
             val jitter = rnd.nextLong(0, (intensity / 6).toLong() + 3)
             if (jitter > 0) delay(jitter)
             
-            // Pad UDP packets to prevent size fingerprinting
-            if (intensity > 65 && length < 1200 && !isDns) {
+            // Pad UDP packets to prevent size fingerprinting, but only for QUIC/DTLS (usually port 443)
+            if (intensity > 65 && length < 1200 && targetPort == 443) {
                 val targetSize = if (length < 512) 512 else if (length < 1024) 1024 else 1280
                 val paddedData = ByteArray(targetSize)
                 System.arraycopy(payload, offset, paddedData, 0, length)
-                // We don't really need to fill with noise if it's just for size, but some DPIs check entropy
                 if (intensity > 85) {
                     val noise = ByteArray(targetSize - length)
                     rnd.nextBytes(noise)

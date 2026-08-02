@@ -112,6 +112,22 @@ object TcpTransportHandler {
                                 
                                 val activeHost = detectedSni.get() ?: targetHost
                                 
+                                if (intensity > 85 && packetsCount == 1 && n > 5) {
+                                    // Extreme 1-byte fragmentation for the start of TLS/HTTP session
+                                    // This often bypasses DPI that waits for the full ClientHello
+                                    writeMutex.lock()
+                                    try {
+                                        remoteOut.write(buffer[0].toInt())
+                                        remoteOut.flush()
+                                        delay(rnd.nextLong(2, 10))
+                                        remoteOut.write(buffer, 1, n - 1)
+                                        remoteOut.flush()
+                                    } finally {
+                                        writeMutex.unlock()
+                                    }
+                                    continue
+                                }
+
                                 if (packetsCount <= 12) {
                                     // Try to extract SNI if it's a TLS handshake
                                     if (packetsCount <= 3) {
@@ -296,26 +312,38 @@ object TcpTransportHandler {
         }
 
         // Happy Eyeballs: Connect to multiple IPs in parallel and take the first one
-        val channel = kotlinx.coroutines.channels.Channel<Socket>(ips.size)
+        // We prioritize IPv6 if censorship intensity is high, as IPv6 is often less scrutinized
+        val intensity = ProxyStats.censorshipIntensity.value
+        val sortedIps = if (intensity > 70) {
+            ips.sortedByDescending { it is java.net.Inet6Address }
+        } else {
+            ips
+        }
+
+        val channel = kotlinx.coroutines.channels.Channel<Socket>(sortedIps.size)
         val jobs = mutableListOf<Job>()
         val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
         
-        ips.take(6).forEachIndexed { index, ip ->
+        sortedIps.take(8).forEachIndexed { index, ip ->
             jobs += launch {
                 try {
-                    // Stagger connections: 250ms delay between attempts to avoid network burst
-                    if (index > 0) delay(index * 250L)
+                    // Stagger connections: 200ms delay between attempts
+                    if (index > 0) delay(index * 200L)
                     val s = Socket()
                     vpnService?.protect(s)
                     s.tcpNoDelay = true
-                    s.connect(InetSocketAddress(ip, port), 6000)
-                    if (!channel.isClosedForSend) {
-                        channel.send(s)
+                    
+                    // Adaptive timeout: shorter for early attempts to trigger racing faster
+                    val timeout = if (index < 2) 4000 else 7000
+                    s.connect(InetSocketAddress(ip, port), timeout)
+                    
+                    if (true) {
+                        try { channel.send(s) } catch (e: Throwable) { s.close() }
                     } else {
                         s.close()
                     }
                 } catch (e: Throwable) {
-                    if (completedCount.incrementAndGet() == ips.size) {
+                    if (completedCount.incrementAndGet() == sortedIps.size) {
                         channel.close()
                     }
                 }
@@ -324,12 +352,14 @@ object TcpTransportHandler {
         
         var result: Socket? = null
         try {
-            result = withTimeoutOrNull(10000) { channel.receive() }
+            // Strategy Racing: If no connection in 1.5s, we might be hitting a heavy DPI drop.
+            // In a real implementation, we would try different strategies here,
+            // but since strategy is applied AFTER connect, we focus on IP racing.
+            result = withTimeoutOrNull(8000) { channel.receive() }
         } catch (e: Throwable) {
         } finally {
             jobs.forEach { it.cancel() }
             channel.close()
-            // Close any sockets that were received after we got our result
             while (true) {
                 val s = channel.tryReceive().getOrNull() ?: break
                 try { s.close() } catch (e: Throwable) {}

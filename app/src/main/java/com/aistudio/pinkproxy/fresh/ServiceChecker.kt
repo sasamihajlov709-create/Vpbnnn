@@ -374,15 +374,18 @@ object ServiceChecker {
         
         ProxyStats.logRecovery("Autopilot: Launching Parallel Strategy Tournament (Advanced Race)...")
         
-        val testHosts = listOf("googlevideo.com", "api.telegram.org", "discord.com")
+        val testHosts = listOf("googlevideo.com", "api.telegram.org", "discord.com", "instagram.com")
         
         scope.launch(ProxyDispatcher.io) {
             val originalStrategy = BypassConfig.strategy.value
+            val currentCensorship = ProxyStats.censorshipIntensity.value
+            
+            // Only test heavy strategies if censorship is high
             val strategiesToTest = BypassStrategy.entries.filter { 
                 it != BypassStrategy.DIRECT && 
-                (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.UDP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING)
-            }
-            BypassConfig.updateTestingStrategies(strategiesToTest.shuffled().take(6))
+                (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.UDP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING) &&
+                (if (currentCensorship < 30) it.group != StrategyGroup.EXTREME else true)
+            }.shuffled().take(8)
             
             val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
             

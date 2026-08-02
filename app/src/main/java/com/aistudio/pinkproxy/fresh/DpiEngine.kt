@@ -291,7 +291,8 @@ object DpiEngine {
         strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.TCP_SEGMENT_OVERLAP
         strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.TCP_DATA_DESYNC_OVERLAP
         strategyChains[BypassStrategy.TCP_DATA_DESYNC_OVERLAP] = BypassStrategy.TCP_TRIPLE_DESYNC
-        strategyChains[BypassStrategy.TCP_TRIPLE_DESYNC] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.TCP_TRIPLE_DESYNC] = BypassStrategy.TCP_FAKE_FIN
+        strategyChains[BypassStrategy.TCP_FAKE_FIN] = BypassStrategy.TCP_COMBINED_NUCLEAR
         
         strategyChains[BypassStrategy.TCP_FOOL_DPI] = BypassStrategy.ZAPRET_EXTREME
         strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
