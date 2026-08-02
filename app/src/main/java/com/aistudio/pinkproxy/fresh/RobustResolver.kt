@@ -197,45 +197,12 @@ object RobustResolver {
             }
         }
         
-        val queries = mutableListOf<suspend () -> List<InetAddress>>()
-        
-        // 0. Extreme Racing (Combined DoH, DoT, DoQ, Smuggling)
-        if (intensity > 60) {
-            queries.add { DnsProtocols.queryDnsExtremeRacing(host, vpnService) }
-        }
-        
-        // 1. Primary DoH (Very Reliable)
-        queries.add { DnsProtocols.queryDohRacing(host, vpnService) }
-        
-        // 2. DoT or fallback DoH
-        queries.add { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) }
-        
-        // 3. UDP with Shadow (Fast, evasion enabled)
-        queries.add { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) }
-        
-        // 3.1 UDP Nuclear (For maximum resilience)
-        if (intensity > 70) {
-            queries.add { DnsProtocols.queryUdpDnsNuclear(host, "8.8.8.8", vpnService) }
-        }
-        
-        // 4. TCP with Shadow (For extreme evasion)
-        queries.add { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
-        
-        // 4.1 TCP Nuclear (For maximum resilience)
-        if (intensity > 85) {
-            queries.add { DnsProtocols.queryTcpDnsNuclear(host, "8.8.8.8", vpnService) }
-        }
-        
-        // 4.3 DNS over QUIC (Shadow/Pseudo-QUIC for UDP:443 evasion)
-        queries.add { DnsProtocols.queryDnsOverQuic(host, "8.8.8.8", vpnService) }
-        
-        // 4.5 DoH Smuggling (Experimental resilience)
-        if (intensity > 60) {
-            queries.add { DnsProtocols.queryDohSmuggling(host, vpnService) }
-        }
-        
-        // 5. Background ECH check (does not block main resolution)
-        queries.add { 
+        val primaryDoH: suspend () -> List<InetAddress> = { DnsProtocols.queryDohRacing(host, vpnService) }
+        val primaryDoT: suspend () -> List<InetAddress> = { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) }
+        val shadowUdp: suspend () -> List<InetAddress> = { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) }
+        val shadowTcp: suspend () -> List<InetAddress> = { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
+        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDnsOverQuic(host, "8.8.8.8", vpnService) }
+        val echCheck: suspend () -> List<InetAddress> = {
             try {
                 val httpsRecords = DnsProtocols.queryHttpsRecord(host, vpnService)
                 if (httpsRecords.isNotEmpty()) {
@@ -244,48 +211,63 @@ object RobustResolver {
             } catch (e: Throwable) {}
             emptyList()
         }
-        
-        // 6. Emergency Fallback
-        queries.add { 
-            delay(1000) 
+        val fallbackDns: suspend () -> List<InetAddress> = {
+            delay(1000)
             DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
         }
-        
-        val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size)
+
+        val queries = mutableListOf<suspend () -> List<InetAddress>>()
+        queries.add(primaryDoH)
+        queries.add(primaryDoT)
+        queries.add(shadowUdp)
+        queries.add(shadowTcp)
+        queries.add(dnsQuic)
+        queries.add(echCheck)
+
+        if (intensity > 60) {
+            queries.add { DnsProtocols.queryDnsExtremeRacing(host, vpnService) }
+            queries.add { DnsProtocols.queryDohSmuggling(host, vpnService) }
+        }
+        if (intensity > 70) {
+            queries.add { DnsProtocols.queryUdpDnsNuclear(host, "8.8.8.8", vpnService) }
+        }
+        if (intensity > 85) {
+            queries.add { DnsProtocols.queryTcpDnsNuclear(host, "8.8.8.8", vpnService) }
+        }
+
+        val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size + 1)
         val activeJobs = mutableListOf<Job>()
-        
+
         // Grouped Happy Eyeballs-like staggered start
         val queryGroups = listOf(
-            listOf(queries[0], queries[2]), // Fast & Reliable: DoH + Shadow UDP
-            listOf(queries[1], queries[5]), // Next best: DoT + DNS over QUIC
-            listOf(queries[3], queries[6]), // More aggressive: TCP Shadow + DoH Smuggling
-            queries.drop(7).filter { it != queries.last() } // All others except Emergency Fallback
+            listOf(primaryDoH, shadowUdp),
+            listOf(primaryDoT, dnsQuic),
+            listOf(shadowTcp, echCheck),
+            queries.filter { it !in listOf(primaryDoH, primaryDoT, shadowUdp, shadowTcp, dnsQuic, echCheck) }
         )
 
         val staggerDelay = 250L // 250ms delay between groups if no result yet
-        
+
         activeJobs += launch {
             for (group in queryGroups) {
                 if (group.isEmpty()) continue
                 group.forEach { query ->
                     activeJobs += launch {
-                        val res = try { query() } catch (e: Throwable) { 
+                        val res = try { query() } catch (e: Throwable) {
                             if (e is CancellationException) throw e
-                            emptyList() 
+                            emptyList()
                         }
                         try { channel.send(res) } catch (e: Throwable) {}
                     }
                 }
-                
-                // Wait briefly before starting next group, unless we already got results (handled in receiving loop)
+
                 delay(staggerDelay)
             }
-            
+
             // Finally launch emergency fallback if nothing worked after staggered starts
             activeJobs += launch {
-                queries.last().invoke().let { res ->
-                    try { channel.send(res) } catch (e: Throwable) {}
-                }
+                val res = try { fallbackDns() } catch (e: Throwable) { emptyList() }
+                try { channel.send(res) } catch (e: Throwable) {}
             }
         }
         

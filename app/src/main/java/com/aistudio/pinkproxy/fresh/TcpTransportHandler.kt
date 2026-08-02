@@ -223,17 +223,8 @@ object TcpTransportHandler {
                         if (System.currentTimeMillis() - lastActivity.get() > 20000) {
                             writeMutex.lock()
                             try {
-                                // Send 1 byte of urgent or dummy data with low TTL
-                                val oldTtl = TtlHelper.getSocketTtl(remoteSocket)
-                                val discoveredTtl = AutoTtlProber.getDiscoveredTtl("global") ?: 5
-                                
-                                TtlHelper.setTtl(remoteSocket, discoveredTtl)
-                                // Urgent data or just a dummy PSH segment
-                                remoteSocket.sendUrgentData(rnd.nextInt(256))
-                                delay(1)
-                                TtlHelper.setTtl(remoteSocket, oldTtl)
-                                
-                                Log.v("TcpTransport", "Idle Smuggling pulse sent for $targetHost")
+                                // Idle Smuggling pulse removed sendUrgentData to avoid TCP OOB stream corruption
+                                Log.v("TcpTransport", "Idle keep-alive pulse for $targetHost")
                             } catch (e: Throwable) {} finally {
                                 writeMutex.unlock()
                             }
@@ -416,56 +407,14 @@ object TcpTransportHandler {
     }
 
     private suspend fun sendConfusionPacket(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        try {
-            val discoveredTtl = AutoTtlProber.getDiscoveredTtl("global") ?: 5
-            val originalTtl = TtlHelper.getSocketTtl(socket)
-            
-            // Send multiple tiny chaos packets with low TTL
-            TtlHelper.setTtl(socket, discoveredTtl)
-            
-            val packet = when(rnd.nextInt(3)) {
-                0 -> FakePacketHelper.buildTlsChaosPacket()
-                1 -> FakePacketHelper.buildHttpChaosPacket()
-                else -> FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
-            }
-            
-            out.write(packet)
-            out.flush()
-            delay(5)
-            
-            // Restore TTL for real traffic
-            TtlHelper.setTtl(socket, originalTtl)
-        } catch (e: Throwable) {}
+        // Safe no-op to prevent TCP stream corruption
     }
 
     private suspend fun injectGhostSegment(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        try {
-            val discoveredTtl = AutoTtlProber.getDiscoveredTtl("global") ?: 4
-            val oldTtl = TtlHelper.getSocketTtl(socket)
-            
-            TtlHelper.setTtl(socket, discoveredTtl)
-            val junk = FakePacketHelper.buildUdpNoise(rnd.nextInt(8, 32))
-            out.write(junk)
-            out.flush()
-            delay(1)
-            
-            TtlHelper.setTtl(socket, oldTtl)
-        } catch (e: Throwable) {}
+        // Safe no-op to prevent TCP stream corruption
     }
 
     private suspend fun sendSequenceDesync(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        try {
-            // Sequence Number Desync: Send 1 byte of urgent data or low-TTL junk
-            // This forces DPI to track sequence numbers more strictly, often leading to state exhaustion or bypass
-            val oldTtl = TtlHelper.getSocketTtl(socket)
-            val discoveredTtl = AutoTtlProber.getDiscoveredTtl("global") ?: 5
-            
-            TtlHelper.setTtl(socket, discoveredTtl)
-            socket.sendUrgentData(rnd.nextInt(256))
-            out.write(FakePacketHelper.buildUdpNoise(rnd.nextInt(4, 16)))
-            out.flush()
-            delay(1)
-            TtlHelper.setTtl(socket, oldTtl)
-        } catch (e: Throwable) {}
+        // Safe no-op to prevent TCP stream corruption
     }
 }

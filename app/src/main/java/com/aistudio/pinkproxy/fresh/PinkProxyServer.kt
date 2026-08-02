@@ -43,7 +43,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     // If semaphore is nearly empty, we might have leaked permits
                     if (activeCount > 750) {
                         Log.e("PinkProxy", "CRITICAL: Semaphore exhaustion. Force resetting permits.")
-                        activeConnectionSemaphore.release(800 - activeConnectionSemaphore.availablePermits())
+                        val needed = 800 - activeConnectionSemaphore.availablePermits()
+                        if (needed > 0) {
+                            activeConnectionSemaphore.release(needed)
+                        }
                     }
                 }
                 
