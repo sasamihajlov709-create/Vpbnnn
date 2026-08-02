@@ -238,6 +238,18 @@ object BypassConfig {
         } catch (e: Throwable) {
             _strategy.value = BypassStrategy.SNI_SPLIT
         }
+        
+        // Load censor heuristic
+        prefs.getString("censor_heuristic_data", null)?.let { data ->
+            data.split(";").forEach { entry ->
+                val parts = entry.split(",")
+                if (parts.size == 2) {
+                    try {
+                        censorHeuristic[parts[0]] = parts[1].toInt()
+                    } catch (e: Throwable) {}
+                }
+            }
+        }
     }
 
     fun saveTuningSettings(context: Context) {
@@ -253,6 +265,10 @@ object BypassConfig {
             putLong("delay2", delay2)
             putInt("fakeTtl", fakeTtl)
             putString("global_strategy", _strategy.value.name)
+            
+            // Save censor heuristic
+            val heuristicStr = censorHeuristic.entries.joinToString(";") { "${it.key},${it.value}" }
+            putString("censor_heuristic_data", heuristicStr)
         }
     }
 

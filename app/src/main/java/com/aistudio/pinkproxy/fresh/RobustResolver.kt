@@ -244,13 +244,38 @@ object RobustResolver {
         val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size)
         val activeJobs = mutableListOf<Job>()
         
-        queries.forEach { query ->
-            activeJobs += launch {
-                val res = try { query() } catch (e: Throwable) { 
-                    if (e is CancellationException) throw e
-                    emptyList() 
+        // Grouped Happy Eyeballs-like staggered start
+        val queryGroups = listOf(
+            listOf(queries[0], queries[2]), // Fast & Reliable: DoH + Shadow UDP
+            listOf(queries[1], queries[5]), // Next best: DoT + DNS over QUIC
+            listOf(queries[3], queries[6]), // More aggressive: TCP Shadow + DoH Smuggling
+            queries.drop(7).filter { it != queries.last() } // All others except Emergency Fallback
+        )
+
+        val staggerDelay = 250L // 250ms delay between groups if no result yet
+        
+        activeJobs += launch {
+            for (group in queryGroups) {
+                if (group.isEmpty()) continue
+                group.forEach { query ->
+                    activeJobs += launch {
+                        val res = try { query() } catch (e: Throwable) { 
+                            if (e is CancellationException) throw e
+                            emptyList() 
+                        }
+                        try { channel.send(res) } catch (e: Throwable) {}
+                    }
                 }
-                try { channel.send(res) } catch (e: Throwable) {}
+                
+                // Wait briefly before starting next group, unless we already got results (handled in receiving loop)
+                delay(staggerDelay)
+            }
+            
+            // Finally launch emergency fallback if nothing worked after staggered starts
+            activeJobs += launch {
+                queries.last().invoke().let { res ->
+                    try { channel.send(res) } catch (e: Throwable) {}
+                }
             }
         }
         

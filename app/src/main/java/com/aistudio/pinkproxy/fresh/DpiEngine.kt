@@ -27,6 +27,7 @@ object DpiEngine {
     private val MAX_RTT_HISTORY = 10
 
     private var lastGlobalReset = System.currentTimeMillis()
+    private var lastPanicTime = 0L
     private val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
     
     data class CensorshipFingerprint(
@@ -97,6 +98,48 @@ object DpiEngine {
         val lastScan = prefs.getLong("last_scan_time", 0L)
         if (System.currentTimeMillis() - lastScan > 86400000L) { // Daily scan or first time
             performInitialScan(context)
+        }
+    }
+
+    fun performQuickScan(context: android.content.Context) {
+        scope.launch {
+            Log.i("DpiEngine", "Starting QUICK automated censorship scan...")
+            val targets = listOf("google.com", "telegram.org")
+            val probes = listOf(
+                BypassStrategy.TLS_SNI_FRAGMENT,
+                BypassStrategy.SNI_SPLIT,
+                BypassStrategy.TCP_RETRANS_FAKE
+            )
+            
+            targets.forEach { host ->
+                val resolved = try { RobustResolver.resolve(host) } catch (e: Throwable) { emptyList() }
+                if (resolved.isNotEmpty()) {
+                    val addr = resolved.first()
+                    probes.forEach { strat ->
+                        try {
+                            withTimeoutOrNull(2500) {
+                                val s = java.net.Socket()
+                                try {
+                                    s.connect(java.net.InetSocketAddress(addr, 443), 1200)
+                                    val out = s.getOutputStream()
+                                    val fake = FakePacketHelper.buildRealisticTlsHello(host)
+                                    val config = BypassConfig.getSessionConfig(host, strat, 50)
+                                    BypassConfig.applyBypass(s, out, fake, fake.size, config, host)
+                                    s.soTimeout = 1200
+                                    val i = s.getInputStream().read()
+                                    if (i != -1) {
+                                        recordResult(strat, true, HostClassifier.classify(host), latencyMs = 100, host = host)
+                                    }
+                                } catch (e: Throwable) {
+                                } finally {
+                                    try { s.close() } catch (e: Throwable) {}
+                                }
+                            }
+                        } catch (e: Throwable) {}
+                    }
+                }
+            }
+            Log.i("DpiEngine", "Quick scan complete.")
         }
     }
 
@@ -236,6 +279,8 @@ object DpiEngine {
 
     private val strategyMaturity = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     private val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, BypassStrategy>>()
+    data class HostMemory(val strategy: BypassStrategy, val timestamp: Long)
+    private val hostSpecificMemory = ConcurrentHashMap<String, HostMemory>()
     private val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
 
     private fun initStrategyChains() {
@@ -304,6 +349,9 @@ object DpiEngine {
             if (host != null) {
                 hostStrategyBlacklist[host]?.remove(strategy)
                 
+                // Host-specific learning
+                hostSpecificMemory[host] = HostMemory(strategy, System.currentTimeMillis())
+                
                 // Store in network-specific memory
                 val netType = BypassConfig.currentNetworkType.value.toString()
                 val netMemory = networkStrategyMemory.getOrPut(netType) { ConcurrentHashMap() }
@@ -365,7 +413,20 @@ object DpiEngine {
         val now = System.currentTimeMillis()
         val netType = BypassConfig.currentNetworkType.value.toString()
         
-        // 0. Active Probing for high-priority host failure recovery
+        // 0. Primary: Host-specific memory (fastest path)
+        if (host != null) {
+            hostSpecificMemory[host]?.let { mem ->
+                val strat = mem.strategy
+                if ((circuitBreakers[strat] ?: 0L) < now) {
+                    val hostBlacklist = hostStrategyBlacklist[host]
+                    if (hostBlacklist?.get(strat) == null || hostBlacklist[strat]!! < now) {
+                        return strat
+                    }
+                }
+            }
+        }
+
+        // 1. Active Probing for high-priority host failure recovery
         if (host != null && ProxyStats.censorshipIntensity.value > 80) {
             val blacklist = hostStrategyBlacklist[host]
             if (blacklist != null && blacklist.size > 3) {
@@ -499,6 +560,10 @@ object DpiEngine {
 
     fun resetStrategyScoresForNetworkChange() {
         Log.i("DpiEngine", "Network change detected, performing partial score reset for faster adaptation.")
+        
+        // Trigger quick scan to assess new network immediately
+        PinkVpnService.instance?.let { performQuickScan(it) }
+
         strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
                 val s = score.get()
@@ -526,6 +591,12 @@ object DpiEngine {
         val totalSuccess = successHistory.values.sumOf { it.get() }
         val totalFailure = failureHistory.values.sumOf { it.get() }
         
+        if (hostSpecificMemory.size > 1000) {
+            val now = System.currentTimeMillis()
+            val expiry = 86400000L * 7 // 7 days
+            hostSpecificMemory.entries.removeIf { now - it.value.timestamp > expiry }
+        }
+
         if (totalSuccess + totalFailure == 0) {
             // Passive recovery when no data: slowly reduce intensity
             ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 2).coerceAtLeast(0))
@@ -534,12 +605,47 @@ object DpiEngine {
 
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
         
+        // --- PANIC MODE LOGIC ---
+        val calculatedIntensity = (
+            getCensorshipFingerprint().rstRate * 55 + 
+            getCensorshipFingerprint().sniBlockRate * 65 + 
+            getCensorshipFingerprint().timeoutRate * 20 + 
+            getCensorshipFingerprint().stallRate * 35
+        ).toInt()
+
+        if (globalSuccessRate < 15 && calculatedIntensity > 40) {
+            if (System.currentTimeMillis() - lastPanicTime > 300000) { // Throttle panic mode triggers
+                lastPanicTime = System.currentTimeMillis()
+                Log.e("DpiEngine", "CRITICAL: Global success rate is $globalSuccessRate%. TRIGGERING PANIC PROTOCOL.")
+                ProxyStats.logRecovery("CRITICAL: Network collapse detected. Triggering Panic Protocol.")
+                
+                // Nuclear reset of stale strategy data
+                hostSpecificMemory.clear()
+                hostStrategyBlacklist.clear()
+                circuitBreakers.clear()
+                
+                // Temporarily boost heavy strategies globally
+                strategyScores.forEach { (_, scores) ->
+                    scores.forEach { (strat, score) ->
+                        if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) {
+                            score.addAndGet(100)
+                        } else {
+                            score.set(50) // Reset others to low
+                        }
+                    }
+                }
+                
+                PinkVpnService.instance?.let { performQuickScan(it) }
+            }
+        }
+        // -----------------------
+
         // Calculate Network Stability Score: combination of success rate and reset frequency
         val fingerprint = getCensorshipFingerprint()
         
         // Automatic Censorship Intensity Calculation: Non-linear weighting
         // Resets and SNI blocks are much more indicative of DPI presence than simple timeouts
-        val calculatedIntensity = (
+        val intensityValue = (
             fingerprint.rstRate * 55 + 
             fingerprint.sniBlockRate * 65 + 
             fingerprint.timeoutRate * 20 + 
@@ -549,15 +655,15 @@ object DpiEngine {
         
         // Exponential smoothing for intensity updates to avoid jitter
         val currentIntensity = ProxyStats.censorshipIntensity.value
-        val targetIntensity = if (calculatedIntensity > currentIntensity) {
+        val targetIntensity = if (intensityValue > currentIntensity) {
             // React faster to blocking
-            (currentIntensity * 0.3 + calculatedIntensity * 0.7).toInt()
+            (currentIntensity * 0.3 + intensityValue * 0.7).toInt()
         } else {
             // Recover faster if everything is perfect for a while
             if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05) {
-                (currentIntensity * 0.7 + calculatedIntensity * 0.3).toInt()
+                (currentIntensity * 0.7 + intensityValue * 0.3).toInt()
             } else {
-                (currentIntensity * 0.9 + calculatedIntensity * 0.1).toInt()
+                (currentIntensity * 0.9 + intensityValue * 0.1).toInt()
             }
         }
         
@@ -689,7 +795,41 @@ object DpiEngine {
         return sb.toString()
     }
 
+    private fun saveHostMemory(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("dpi_engine_host_memory", android.content.Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        val now = System.currentTimeMillis()
+        val expiry = 86400000L * 7
+        hostSpecificMemory.forEach { (host, mem) ->
+            if (now - mem.timestamp < expiry) {
+                editor.putString(host, "${mem.strategy.name}|${mem.timestamp}")
+            }
+        }
+        editor.apply()
+    }
+
+    private fun loadHostMemory(context: android.content.Context) {
+        val prefs = context.getSharedPreferences("dpi_engine_host_memory", android.content.Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val expiry = 86400000L * 7
+        prefs.all.forEach { (host, value) ->
+            if (value is String) {
+                val parts = value.split("|")
+                if (parts.size == 2) {
+                    try {
+                        val strat = BypassStrategy.valueOf(parts[0])
+                        val ts = parts[1].toLong()
+                        if (now - ts < expiry) {
+                            hostSpecificMemory[host] = HostMemory(strat, ts)
+                        }
+                    } catch (e: Throwable) {}
+                }
+            }
+        }
+    }
+
     private fun saveScores(context: android.content.Context) {
+        saveHostMemory(context)
         val prefs = context.getSharedPreferences("dpi_engine_scores", android.content.Context.MODE_PRIVATE)
         val editor = prefs.edit()
         strategyScores.forEach { (cat, scores) ->
@@ -706,6 +846,7 @@ object DpiEngine {
     }
 
     private fun loadScores(context: android.content.Context) {
+        loadHostMemory(context)
         val prefs = context.getSharedPreferences("dpi_engine_scores", android.content.Context.MODE_PRIVATE)
         strategyScores.forEach { (cat, scores) ->
             scores.forEach { (strat, score) ->

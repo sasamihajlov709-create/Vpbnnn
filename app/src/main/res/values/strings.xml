@@ -61,4 +61,5 @@
     <string name="label_quality">QUALITY</string>
     <string name="label_mode">MODE</string>
     <string name="label_censorship">CENSORSHIP</string>
+    <string name="version_info">Version 1.2.0-PRO (Autonomous)</string>
 </resources>

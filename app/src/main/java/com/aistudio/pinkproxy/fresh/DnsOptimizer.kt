@@ -57,28 +57,38 @@ object DnsOptimizer {
         // 1. Basic Filter: Check for local/bogons and suspicious ranges
         if (ip.isLoopbackAddress || ip.isAnyLocalAddress || ip.isLinkLocalAddress || ip.isSiteLocalAddress) return false
         val host = ip.hostAddress ?: return false
-        if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("172.16.") || host.startsWith("0.")) return false
+        
+        // Bogon and Private Ranges
+        if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.") || 
+            host.startsWith("172.16.") || host.startsWith("0.") || host == "255.255.255.255") return false
+            
+        // Check for common censorship redirect targets (from DnsPacketEngine)
         if (DnsPacketEngine.isSuspicious(ip, domain)) return false
 
-        // 2. Connectivity Test: Try to connect to port 443 (if connection succeeds, confirmed valid; if blocked by DPI timeout, still accept if non-bogon)
-        val pingSuccess = withTimeoutOrNull(1200) {
-            ProxyDispatcher.io.run {
-                val socket = java.net.Socket()
-                try {
-                    try { vpnService?.protect(socket) } catch(e: Throwable) {}
-                    socket.tcpNoDelay = true
-                    socket.connect(java.net.InetSocketAddress(ip, 443), 1000)
-                    true
-                } catch (e: Throwable) {
-                    false
-                } finally {
-                    try { socket.close() } catch (e: Throwable) {}
-                }
+        // 2. Connectivity Test: Try to connect to port 443 (HTTPS)
+        // If it's a real IP for a global domain, it should usually respond.
+        // If it's a poisoned IP, it either won't respond or will reset.
+        return withContext(ProxyDispatcher.io) {
+            val socket = java.net.Socket()
+            try {
+                try { vpnService?.protect(socket) } catch(e: Throwable) {}
+                socket.tcpNoDelay = true
+                // We use a very short timeout for verification to avoid blocking the resolver
+                socket.connect(java.net.InetSocketAddress(ip, 443), 1200)
+                true
+            } catch (e: java.net.SocketTimeoutException) {
+                // If it's a timeout, it could be DPI blocking.
+                // We accept it ONLY IF it's not a known suspicious range and not a bogon.
+                // For critical domains (AI, Finance), we are stricter.
+                val cat = HostClassifier.classify(domain)
+                cat != HostCategory.AI && cat != HostCategory.FINANCE && cat != HostCategory.SECURITY
+            } catch (e: Throwable) {
+                // Connection refused or reset is a strong signal of poisoning or blocking
+                false
+            } finally {
+                try { socket.close() } catch (e: Throwable) {}
             }
-        } ?: false
-
-        // If ping/connect succeeded or if it's a valid non-bogon IP (which might be blocked by DPI), consider it valid
-        return true
+        }
     }
 
     fun getLatencyForUrl(url: String): Long = providerLatencies[url] ?: 500L

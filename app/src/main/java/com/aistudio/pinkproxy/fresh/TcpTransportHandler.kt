@@ -244,17 +244,57 @@ object TcpTransportHandler {
         config: SessionConfig,
         host: String
     ): Socket? = withContext(ProxyDispatcher.io) {
-        ips.forEach { ip ->
+        if (ips.isEmpty()) return@withContext null
+        if (ips.size == 1) {
             try {
                 val s = Socket()
                 vpnService?.protect(s)
-                // Adaptive connect timeout
-                val timeout = if (BypassConfig.currentRttMs.value > 150) 8000 else 4000
-                s.connect(InetSocketAddress(ip, port), timeout)
+                s.connect(InetSocketAddress(ips[0], port), 5000)
                 return@withContext s
-            } catch (e: Throwable) {}
+            } catch (e: Throwable) { return@withContext null }
         }
-        null
+
+        // Happy Eyeballs: Connect to multiple IPs in parallel and take the first one
+        val channel = kotlinx.coroutines.channels.Channel<Socket>(ips.size)
+        val jobs = mutableListOf<Job>()
+        val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
+        
+        ips.take(6).forEachIndexed { index, ip ->
+            jobs += launch {
+                try {
+                    // Stagger connections: 250ms delay between attempts to avoid network burst
+                    if (index > 0) delay(index * 250L)
+                    val s = Socket()
+                    vpnService?.protect(s)
+                    s.tcpNoDelay = true
+                    s.connect(InetSocketAddress(ip, port), 6000)
+                    if (!channel.isClosedForSend) {
+                        channel.send(s)
+                    } else {
+                        s.close()
+                    }
+                } catch (e: Throwable) {
+                    if (completedCount.incrementAndGet() == ips.size) {
+                        channel.close()
+                    }
+                }
+            }
+        }
+        
+        var result: Socket? = null
+        try {
+            result = withTimeoutOrNull(10000) { channel.receive() }
+        } catch (e: Throwable) {
+        } finally {
+            jobs.forEach { it.cancel() }
+            channel.close()
+            // Close any sockets that were received after we got our result
+            while (true) {
+                val s = channel.tryReceive().getOrNull() ?: break
+                try { s.close() } catch (e: Throwable) {}
+            }
+        }
+        result
     }
 
     private suspend fun performSniGhosting(host: String, vpnService: VpnService?) {

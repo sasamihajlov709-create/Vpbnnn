@@ -1,6 +1,6 @@
 {
   "name": "PinkProxy Pro",
-  "description": "Professional VPN Tunnel with Autonomous DPI Evasion and AI-Driven Strategy Optimization.",
+  "description": "Professional VPN Tunnel with Autonomous DPI Evasion, AI-Driven Strategy Optimization, and Multi-Protocol Stealth.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
