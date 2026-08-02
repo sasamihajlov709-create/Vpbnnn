@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "PinkProxy"
+rootProject.name = "PinkProxyPro"
 
 include(":app")

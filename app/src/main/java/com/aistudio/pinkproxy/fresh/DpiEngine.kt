@@ -551,10 +551,14 @@ object DpiEngine {
         val currentIntensity = ProxyStats.censorshipIntensity.value
         val targetIntensity = if (calculatedIntensity > currentIntensity) {
             // React faster to blocking
-            (currentIntensity * 0.4 + calculatedIntensity * 0.6).toInt()
+            (currentIntensity * 0.3 + calculatedIntensity * 0.7).toInt()
         } else {
-            // Recover slower to ensure stability
-            (currentIntensity * 0.85 + calculatedIntensity * 0.15).toInt()
+            // Recover faster if everything is perfect for a while
+            if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05) {
+                (currentIntensity * 0.7 + calculatedIntensity * 0.3).toInt()
+            } else {
+                (currentIntensity * 0.9 + calculatedIntensity * 0.1).toInt()
+            }
         }
         
         if (Math.abs(targetIntensity - currentIntensity) >= 1) {
@@ -565,13 +569,15 @@ object DpiEngine {
         val stability = (globalSuccessRate * 0.5 + (100 - (fingerprint.rstRate + fingerprint.sniBlockRate) * 100).coerceAtLeast(0.0) * 0.5).toInt().coerceIn(0, 100)
         ProxyStats.updateStabilityScore(stability)
         
-        // Adaptive MTU Adjustment (Handled also by CensorshipExpert, but kept here for double-layered safety)
-        if (fingerprint.timeoutRate > 0.4 || fingerprint.stallRate > 0.5 || fingerprint.jitter > 500) {
+        // Adaptive MTU Adjustment
+        if (fingerprint.timeoutRate > 0.4 || fingerprint.stallRate > 0.5 || fingerprint.jitter > 1000) {
              val mtu = BypassConfig.currentMtu.value
-             if (mtu > 1100) {
-                 BypassConfig.setMtu(mtu - 64)
+             if (mtu > 1000) {
+                 BypassConfig.setMtu(mtu - 32)
                  ProxyStats.logRecovery("Autonomous Engine: Critical packet drop detected. Down-scaling MTU.")
              }
+        } else if (stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
+             BypassConfig.setMtu(BypassConfig.currentMtu.value + 16)
         }
         
         // Jitter-based family boosting

@@ -1,6 +1,6 @@
 <resources>
-    <string name="app_name">PinkProxy</string>
-    <string name="title_pink_proxy">PINK PROXY</string>
+    <string name="app_name">PinkProxy Pro</string>
+    <string name="title_pink_proxy">PINK PROXY PRO</string>
     <string name="subtitle_secure_tunnel">SECURE TUNNEL</string>
     <string name="status_connected">CONNECTED</string>
     <string name="status_disconnected">DISCONNECTED</string>
