@@ -86,7 +86,11 @@ object CensorshipExpert {
             BypassStrategy.ECH_GREASE,
             BypassStrategy.TLS_SNI_SKEW,
             BypassStrategy.TCP_ZERO_WINDOW_STALL,
+            BypassStrategy.TCP_ZERO_WINDOW_DESYNC,
+            BypassStrategy.TCP_DATA_DESYNC,
             BypassStrategy.TCP_COMBINED_NUCLEAR,
+            BypassStrategy.UDP_FRAGMENT_SKEW,
+            BypassStrategy.UDP_NOISE_CHAOS,
             BypassStrategy.TCP_WINDOW_SIZE_SKEW
         )
         
@@ -166,16 +170,21 @@ object CensorshipExpert {
     private fun tuneMtu(fingerprint: DpiEngine.CensorshipFingerprint, stability: Int) {
         val currentMtu = BypassConfig.currentMtu.value
         var targetMtu = currentMtu
+        val mtuErrors = ProxyStats.dpiEvents[DpiType.MTU_EXCEEDED] ?: 0
         
-        if (fingerprint.timeoutRate > 0.5 || fingerprint.stallRate > 0.4 || stability < 40) {
-            targetMtu = (currentMtu - 64).coerceAtLeast(1000)
-        } else if (stability > 90 && successRateAbove(85) && currentMtu < 1400) {
-            targetMtu = (currentMtu + 32).coerceAtMost(1400)
+        if (mtuErrors > 2 || fingerprint.timeoutRate > 0.5 || fingerprint.stallRate > 0.4 || stability < 40) {
+            // Aggressive reduction if specific MTU errors or high instability detected
+            targetMtu = (currentMtu - 48).coerceAtLeast(1000)
+            if (mtuErrors > 5) targetMtu = 1280 // Standard "safe" MTU for many networks
+            ProxyStats.resetDpiEvent(DpiType.MTU_EXCEEDED)
+        } else if (stability > 90 && successRateAbove(88) && currentMtu < 1420) {
+            // Gradual increase for high performance
+            targetMtu = (currentMtu + 16).coerceAtMost(1450)
         }
         
         if (targetMtu != currentMtu) {
             BypassConfig.setMtu(targetMtu)
-            Log.i("CensorshipExpert", "Adaptive MTU adjusted to $targetMtu")
+            Log.i("CensorshipExpert", "Adaptive MTU intelligently tuned to $targetMtu (MTU Errors: $mtuErrors)")
         }
     }
 

@@ -117,12 +117,17 @@ class PinkVpnService : VpnService() {
         CensorshipExpert.start()
         
         serviceScope.launch {
+            var lastMtu = BypassConfig.currentMtu.value
             BypassConfig.currentMtu.collect { newMtu ->
                 if (_isRunning.value && vpnInterface != null) {
-                    ProxyStats.logRecovery("Network Optimization: MTU adjusted to $newMtu")
-                    // Note: In Android, changing MTU often requires re-establishing the VPN interface.
-                    // We only do this if the change is significant to avoid frequent drops.
-                    // For small changes, TcpTransportHandler's MSS clamping handles it.
+                    val diff = Math.abs(newMtu - lastMtu)
+                    if (diff >= 32) {
+                        ProxyStats.logRecovery("Network Optimization: MTU changed to $newMtu. Re-establishing tunnel.")
+                        lastMtu = newMtu
+                        // Trigger re-establishment of VPN interface
+                        stopVpn()
+                        startVpn()
+                    }
                 }
             }
         }

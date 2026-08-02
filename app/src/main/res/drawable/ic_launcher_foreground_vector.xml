@@ -3,10 +3,41 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    
+    <!-- Shield Outer Outline (Neon Pink) -->
     <path
-        android:fillColor="#FFC107"
-        android:pathData="M54,15 C35,15 24,25 24,45 C24,65 35,75 54,93 C73,75 84,65 84,45 C84,25 73,15 54,15 Z" />
+        android:strokeColor="#FF69B4"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,20 C42,20 32,25 28,35 C28,55 35,75 54,88 C73,75 80,55 80,35 C76,25 66,20 54,20 Z" />
+
+    <!-- Globe Inner (Neon Pink Outline) -->
     <path
-        android:fillColor="#E91E63"
-        android:pathData="M58,35 L42,55 L52,55 L48,75 L64,50 L54,50 L58,35 Z" />
+        android:strokeColor="#FF69B4"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,34 A20,20 0 1,0 54,74 A20,20 0 1,0 54,34" />
+    
+    <!-- Globe Vertical Lines -->
+    <path
+        android:strokeColor="#FF69B4"
+        android:strokeWidth="1.2"
+        android:pathData="M54,34 L54,74 M46,36 C42,42 42,66 46,72 M62,36 C66,42 66,66 62,72" />
+
+    <!-- Banner Background (Solid Dark) -->
+    <path
+        android:fillColor="#1A1A1A"
+        android:pathData="M32,50 L76,50 L76,58 L32,58 Z" />
+        
+    <!-- Banner Border (Neon Pink) -->
+    <path
+        android:strokeColor="#FF69B4"
+        android:strokeWidth="1.5"
+        android:pathData="M32,50 L76,50 L76,58 L32,58 Z" />
+
+    <!-- Text Representation (Proxy/Dot Indicators) -->
+    <path
+        android:fillColor="#FF69B4"
+        android:pathData="M38,54 L44,54 M48,54 L54,54 M58,54 L64,54 M68,54 L70,54" />
+        
 </vector>

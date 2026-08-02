@@ -924,6 +924,22 @@ object BypassConfig {
                 val fake = byteArrayOf(0x01, 0x00, 0x00, 0x00) + ByteArray(28) { rnd.nextInt(256).toByte() }
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
             }
+            BypassStrategy.UDP_NOISE_CHAOS -> {
+                // Chaotic mix of pre-noise, jitter, and post-noise with varying TTLs
+                repeat(rnd.nextInt(1, 3)) {
+                    val noiseSize = rnd.nextInt(20, 100)
+                    val noise = FakePacketHelper.buildUdpNoise(noiseSize)
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 6), isIpv6)
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch(e: Throwable) {}
+                }
+                if (rnd.nextBoolean()) delay(rnd.nextLong(1, 5))
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                socket.send(packet)
+                if (rnd.nextInt(100) < 50) {
+                    val postNoise = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 40))
+                    try { socket.send(DatagramPacket(postNoise, postNoise.size, targetAddr, targetPort)) } catch(e: Throwable) {}
+                }
+            }
             BypassStrategy.UDP_STUN_FAKE -> {
                 val fake = byteArrayOf(0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xa4.toByte(), 0x42) + ByteArray(12) { rnd.nextInt(256).toByte() }
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
@@ -3417,50 +3433,99 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     }
                     
                     // 3. NUCLEAR Fragmentation: 1 byte, then ghost, then SNI parts
-                     TtlHelper.setTtl(socket, 64)
+                    TtlHelper.setTtl(socket, 64)
                     val discoveredTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                    val rttFactor = (BypassConfig.currentRttMs.value / 50).coerceIn(1, 10).toLong()
                     
                     // Send first bit of real data with tiny window
                     try { TtlHelper.setWindowSize(socket, rnd.nextInt(1, 4)) } catch(e: Throwable) {}
                     output.write(data, 0, 1); output.flush()
-                    delay(rnd.nextLong(5, 15))
+                    delay(rnd.nextLong(5, 15) * rttFactor / 2)
                     
                     // Overlapping Ghost with Low TTL
-                    val ghost = FakePacketHelper.buildHandshakeCombo(64)
-                     TtlHelper.setTtl(socket, discoveredTtl)
-                     output.write(ghost); output.flush()
-                    delay(rnd.nextLong(10, 30))
-                     TtlHelper.setTtl(socket, 64)
+                    val ghostSize = rnd.nextInt(32, 128)
+                    val ghost = FakePacketHelper.buildHandshakeCombo(ghostSize)
+                    TtlHelper.setTtl(socket, discoveredTtl)
+                    output.write(ghost); output.flush()
+                    delay(rnd.nextLong(10, 30) * rttFactor)
+                    TtlHelper.setTtl(socket, 64)
                     
                     if (offset != -1 && length > offset + 2) {
-                        // First part of SNI
-                        val split1 = offset + 1
+                        // First part of SNI - up to middle of hostname
+                        val split1 = offset + (host.length / 3).coerceAtLeast(1)
                         output.write(data, 1, split1 - 1); output.flush()
-                        delay(rnd.nextLong(15, 40))
+                        delay(rnd.nextLong(15, 40) * rttFactor)
                         
-                        // Jitter window during middle of send
-                        try { TtlHelper.setWindowSize(socket, rnd.nextInt(2, 10)) } catch(e: Throwable) {}
+                        // Jitter window during middle of send to confuse stateful DPI
+                        try { TtlHelper.setWindowSize(socket, rnd.nextInt(2, 12)) } catch(e: Throwable) {}
                         
-                        // Second part of SNI
-                        val split2 = offset + (host.length / 2).coerceAtLeast(2)
-                        output.write(data, split1, split2 - split1); output.flush()
-                        delay(rnd.nextLong(20, 60))
+                        // Second part of SNI - rest of hostname + a bit more
+                        val split2 = offset + host.length + rnd.nextInt(1, 5)
+                        val actualSplit2 = split2.coerceAtMost(length - 1)
+                        output.write(data, split1, actualSplit2 - split1); output.flush()
+                        delay(rnd.nextLong(20, 60) * rttFactor)
                         
                         // Final restore and send rest
                         try { TtlHelper.setWindowSize(socket, 65535) } catch(e: Throwable) {}
-                        output.write(data, split2, length - split2); output.flush()
+                        output.write(data, actualSplit2, length - actualSplit2); output.flush()
                     } else {
-                        // Generic Nuclear Fallback
-                        val s1 = (length / 4).coerceAtLeast(1)
-                        output.write(data, 1, s1); output.flush()
-                        delay(rnd.nextLong(30, 80))
-                        try { TtlHelper.setWindowSize(socket, rnd.nextInt(4, 32)) } catch(e: Throwable) {}
-                        output.write(data, s1 + 1, length - s1 - 1); output.flush()
+                        // Generic Nuclear Fallback with multiple small fragments
+                        val fragments = rnd.nextInt(3, 6)
+                        var current = 1
+                        repeat(fragments) { i ->
+                            val remaining = length - current
+                            if (remaining > 0) {
+                                val sz = if (i == fragments - 1) remaining else rnd.nextInt(1, (remaining / (fragments - i)).coerceAtLeast(2))
+                                output.write(data, current, sz); output.flush()
+                                current += sz
+                                delay(rnd.nextLong(10, 30) * rttFactor)
+                            }
+                        }
                         try { TtlHelper.setWindowSize(socket, 65535) } catch(e: Throwable) {}
                     }
                 } catch (e: Throwable) {
                     try { output.write(data, 0, length); output.flush() } catch(e2: Throwable) {}
                 }
+            }
+            BypassStrategy.TCP_DATA_DESYNC -> {
+                try {
+                    val split = if (length > 10) rnd.nextInt(1, 10) else 1
+                    val oldTtl = TtlHelper.getSocketTtl(socket)
+                    val ghostTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                    
+                    // Send first part
+                    output.write(data, 0, split); output.flush()
+                    delay(rnd.nextLong(5, 15))
+                    
+                    // Send ghost/fake data with low TTL to desync DPI state
+                    TtlHelper.setTtl(socket, ghostTtl)
+                    output.write(FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 32)))
+                    output.flush()
+                    
+                    // Send second part with normal TTL
+                    delay(rnd.nextLong(10, 30))
+                    TtlHelper.setTtl(socket, oldTtl)
+                    output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_ZERO_WINDOW_DESYNC -> {
+                try {
+                    val sniOffset = TlsParser.findSniOffset(data, length, host)
+                    val split = if (sniOffset != -1) sniOffset else (length / 2).coerceAtLeast(1)
+                    
+                    // 1. Zero Window Stall
+                    TtlHelper.setWindowSize(socket, 0)
+                    delay(rnd.nextLong(50, 200))
+                    
+                    // 2. Send Part 1 with tiny window
+                    TtlHelper.setWindowSize(socket, rnd.nextInt(1, 10))
+                    output.write(data, 0, split); output.flush()
+                    delay(rnd.nextLong(20, 50))
+                    
+                    // 3. Restore window and send rest
+                    TtlHelper.setWindowSize(socket, 65535)
+                    output.write(data, split, length - split); output.flush()
+                } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
             }
             BypassStrategy.TCP_COMBINED_HYBRID -> {
                 // The ultimate "Nuclear" option for TCP

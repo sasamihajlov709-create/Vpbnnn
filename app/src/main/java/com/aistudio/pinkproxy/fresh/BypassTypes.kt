@@ -126,6 +126,7 @@ enum class BypassStrategy(
     TLS_RECORD_PADDING(StrategyFamily.TLS, 2, 2, StrategyGroup.MEDIUM),
     UDP_HIGH_VOL_PACING(StrategyFamily.UDP, 2, 1, StrategyGroup.LIGHT),
     UDP_ZERO_LEN_SKEW(StrategyFamily.UDP, 2, 1, StrategyGroup.LIGHT),
+    UDP_NOISE_CHAOS(StrategyFamily.UDP, 3, 3, StrategyGroup.HEAVY),
     TCP_MSS_CLUMPING(StrategyFamily.TCP, 3, 2, StrategyGroup.HEAVY),
     TLS_CLIENT_HELLO_GREASE_RANDOM(StrategyFamily.TLS, 2, 2, StrategyGroup.LIGHT),
     HTTP_HOST_TAB_MANGLE(StrategyFamily.HTTP, 2, 3, StrategyGroup.MEDIUM),
@@ -263,7 +264,8 @@ enum class DpiType {
     BLACKHOLE,
     TCP_STALL,
     SSL_STALL,
-    DNS_VERIFICATION_FAILURE
+    DNS_VERIFICATION_FAILURE,
+    MTU_EXCEEDED
 }
 
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())
@@ -287,6 +289,7 @@ object ProxyStats {
     }
     
     val dpiEvents = ConcurrentHashMap<DpiType, Int>()
+    fun resetDpiEvent(type: DpiType) { dpiEvents[type] = 0 }
     
     fun recordDnsFailure() {
         _dnsFailureCount.update { it + 1 }

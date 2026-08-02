@@ -606,7 +606,8 @@ object UdpTransportHandler {
         }
 
         if (finalConfig.strategy == BypassStrategy.UDP_PADDING_CHAOS) {
-            val targetSize = rnd.nextInt(1200, 1400)
+            val mtu = BypassConfig.currentMtu.value
+            val targetSize = rnd.nextInt(mtu - 200, mtu - 40).coerceAtLeast(600)
             if (length < targetSize) {
                 val padded = ByteArray(targetSize)
                 System.arraycopy(payload, offset, padded, 0, length)
