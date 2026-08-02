@@ -325,7 +325,7 @@ object UdpTransportHandler {
                                 val cached = RobustResolver.getCached(targetHost)
                                 if (cached != null && cached.isNotEmpty()) {
                                     val hash = (targetHost.hashCode() xor targetPortNum)
-                                    val workerIdx = Math.abs(hash) % 8
+                                    val workerIdx = (hash and 0x7FFFFFFF) % 8
                                     udpOutChannels[workerIdx].trySend(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
                                 } else {
                                     launch(ProxyDispatcher.io) {
@@ -333,7 +333,7 @@ object UdpTransportHandler {
                                             val res = RobustResolver.resolve(targetHost, vpnService)
                                             if (res.isNotEmpty()) {
                                                 val hash2 = (targetHost.hashCode() xor targetPortNum)
-                                                val workerIdx2 = Math.abs(hash2) % 8
+                                                val workerIdx2 = (hash2 and 0x7FFFFFFF) % 8
                                                 udpOutChannels[workerIdx2].trySend(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
                                             }
                                         } catch (e: Throwable) {}
