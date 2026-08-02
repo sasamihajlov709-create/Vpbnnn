@@ -1,0 +1,1 @@
+sed -i -e 's/BypassConfig.applyBypass(remoteSocket, remoteOut, buffer, n, config, activeHost)/BypassConfig.applyBypass(remoteSocket, remoteOut, buffer, n, config, activeHost)/' app/src/main/java/com/aistudio/pinkproxy/fresh/TcpTransportHandler.kt

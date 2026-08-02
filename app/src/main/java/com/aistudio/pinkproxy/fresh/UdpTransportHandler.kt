@@ -451,9 +451,10 @@ object UdpTransportHandler {
             if (!isHighVolume && isQuic && intensity > 70 && count < 10) {
                  if (rnd.nextInt(100) < 15) {
                      // Save this packet for a very short time and let next one pass first
-                     val buffer = reorderBuffers.getOrPut(flowKey) { mutableListOf() }
+                     val buffer = reorderBuffers.getOrPut(flowKey) { java.util.Collections.synchronizedList(mutableListOf()) }
                      if (buffer.size < 2) {
                          buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort))
+                        scope.launch { delay(25); val toSend = synchronized(buffer) { val c = buffer.toList(); buffer.clear(); c }; toSend.forEach { try { socket.send(it) } catch(e: Throwable){} } }
                          return
                      }
                  }
@@ -555,7 +556,7 @@ object UdpTransportHandler {
         // 3. Reordering Logic for QUIC or explicit UDP_REORDER
         if (!isHighVolume && (finalConfig.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 80 && rnd.nextInt(100) < 20))) {
             val key = "${targetInet.hostAddress}:$targetPort"
-            val buffer = reorderBuffers.getOrPut(key) { Collections.synchronizedList(mutableListOf<DatagramPacket>()) }
+            val buffer = reorderBuffers.getOrPut(key) { java.util.Collections.synchronizedList(mutableListOf<DatagramPacket>()) }
             
             val pCopy = DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort)
             buffer.add(pCopy)

@@ -19,19 +19,19 @@ class StrategyRankingTest {
         // Reset scores
         BypassConfig.clearScores(context)
         
-        val initialScore = BypassConfig.getScore(BypassStrategy.SNI_SPLIT)
+        val initialScore = DpiEngine.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
         println("initialScore: $initialScore")
         assertEquals(100, initialScore)
         
         // Record failure
         BypassConfig.recordFailure(BypassStrategy.SNI_SPLIT, "example.com")
-        val scoreAfterFailure = BypassConfig.getScore(BypassStrategy.SNI_SPLIT)
+        val scoreAfterFailure = DpiEngine.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
         println("scoreAfterFailure: $scoreAfterFailure")
         assertTrue("Score should decrease after failure", scoreAfterFailure < 100)
         
         // Record success
         BypassConfig.recordSuccess(BypassStrategy.SNI_SPLIT, 50, "example.com")
-        val scoreAfterSuccess = BypassConfig.getScore(BypassStrategy.SNI_SPLIT)
+        val scoreAfterSuccess = DpiEngine.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
         println("scoreAfterSuccess: $scoreAfterSuccess")
         assertTrue("Score should increase after success", scoreAfterSuccess > scoreAfterFailure)
     }
