@@ -940,6 +940,24 @@ object BypassConfig {
                     try { socket.send(DatagramPacket(postNoise, postNoise.size, targetAddr, targetPort)) } catch(e: Throwable) {}
                 }
             }
+            BypassStrategy.UDP_BURST_CHAOS -> {
+                // High-intensity UDP burst to overwhelm DPI classifiers
+                val burstSize = rnd.nextInt(3, 6)
+                repeat(burstSize) {
+                    val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(32, 128))
+                    // Alternate between low TTL and normal TTL to create "phantom" session state
+                    TtlHelper.setUdpTtl(socket, if (it % 2 == 0) rnd.nextInt(2, 6) else 64, isIpv6)
+                    try { socket.send(DatagramPacket(noise, noise.size, targetAddr, targetPort)) } catch(e: Throwable) {}
+                    if (rnd.nextBoolean()) delay(1)
+                }
+                
+                TtlHelper.setUdpTtl(socket, 64, isIpv6)
+                socket.send(packet)
+                
+                // Add a final "trailing" noise packet to obscure the end of the real payload
+                val tail = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
+                try { socket.send(DatagramPacket(tail, tail.size, targetAddr, targetPort)) } catch(e: Throwable) {}
+            }
             BypassStrategy.UDP_STUN_FAKE -> {
                 val fake = byteArrayOf(0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xa4.toByte(), 0x42) + ByteArray(12) { rnd.nextInt(256).toByte() }
                 writeUdpWithFake(socket, targetAddr, targetPort, fake, packet, config)
@@ -1219,6 +1237,17 @@ object BypassConfig {
                 if ((data[offset].toInt() and 0xC0) == 0xC0) {
                     val pad = FakePacketHelper.buildUdpNoise(rnd.nextInt(100, 300))
                     try { socket.send(DatagramPacket(pad, pad.size, targetAddr, targetPort)) } catch(e: Throwable) {}
+                }
+            }
+            BypassStrategy.UDP_REPLICATION -> {
+                // Replication is handled in UdpTransportHandler, 
+                // but we add phantom padding here for extra obfuscation
+                if (rnd.nextInt(100) < 60) {
+                    val padded = ByteArray(length + rnd.nextInt(4, 32))
+                    System.arraycopy(data, offset, padded, 0, length)
+                    socket.send(DatagramPacket(padded, padded.size, targetAddr, targetPort))
+                } else {
+                    socket.send(packet)
                 }
             }
             BypassStrategy.UDP_DISCORD_FAKE -> {
@@ -3526,6 +3555,47 @@ try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nex
                     TtlHelper.setWindowSize(socket, 65535)
                     output.write(data, split, length - split); output.flush()
                 } catch (e: Throwable) { output.write(data, 0, length); output.flush() }
+            }
+            BypassStrategy.TCP_TRIPLE_DESYNC -> {
+                // The ultimate TCP desync: Zero-Window + Fragmentation + Low-TTL Overlap
+                try {
+                    val sniOffset = TlsParser.findSniOffset(data, length, host)
+                    if (sniOffset == -1 || length < sniOffset + 10) {
+                         output.write(data, 0, length); output.flush()
+                         return
+                    }
+                    
+                    val split1 = sniOffset + 1
+                    val split2 = sniOffset + (host.length / 2).coerceAtLeast(2)
+                    val ghostTtl = AutoTtlProber.getDiscoveredTtl(host) ?: 3
+                    
+                    // Phase 1: Zero Window Freeze
+                    TtlHelper.setWindowSize(socket, 0)
+                    delay(rnd.nextLong(40, 100))
+                    
+                    // Phase 2: Tiny initial fragment
+                    TtlHelper.setWindowSize(socket, 1)
+                    output.write(data, 0, split1); output.flush()
+                    delay(rnd.nextLong(10, 30))
+                    
+                    // Phase 3: Fake Overlap with Low TTL
+                    TtlHelper.setTtl(socket, ghostTtl)
+                    val overlapFake = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 48))
+                    output.write(overlapFake); output.flush()
+                    delay(5)
+                    TtlHelper.setTtl(socket, 64)
+                    
+                    // Phase 4: Second fragment with small window
+                    TtlHelper.setWindowSize(socket, rnd.nextInt(2, 8))
+                    output.write(data, split1, split2 - split1); output.flush()
+                    delay(rnd.nextLong(20, 50))
+                    
+                    // Phase 5: Final restoration
+                    TtlHelper.setWindowSize(socket, 65535)
+                    output.write(data, split2, length - split2); output.flush()
+                } catch (e: Throwable) { 
+                    try { output.write(data, 0, length); output.flush() } catch(e2: Throwable) {}
+                }
             }
             BypassStrategy.TCP_COMBINED_HYBRID -> {
                 // The ultimate "Nuclear" option for TCP

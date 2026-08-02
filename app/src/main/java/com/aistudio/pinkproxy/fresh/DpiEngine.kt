@@ -289,27 +289,24 @@ object DpiEngine {
         strategyChains[BypassStrategy.TLS_SNI_FRAGMENT] = BypassStrategy.TLS_APP_DATA_SPLIT
         strategyChains[BypassStrategy.TLS_APP_DATA_SPLIT] = BypassStrategy.BYEBYEDPI_HYBRID
         strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.TCP_SEGMENT_OVERLAP
-        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.TCP_FOOL_DPI
+        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.TCP_DATA_DESYNC_OVERLAP
+        strategyChains[BypassStrategy.TCP_DATA_DESYNC_OVERLAP] = BypassStrategy.TCP_TRIPLE_DESYNC
+        strategyChains[BypassStrategy.TCP_TRIPLE_DESYNC] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        
         strategyChains[BypassStrategy.TCP_FOOL_DPI] = BypassStrategy.ZAPRET_EXTREME
         strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
         
         strategyChains[BypassStrategy.WINDOW_SIZE_MANGLE] = BypassStrategy.TCP_WINDOW_SIZE_SKEW
         strategyChains[BypassStrategy.TCP_WINDOW_SIZE_SKEW] = BypassStrategy.TCP_WINDOW_CLAMPING
         strategyChains[BypassStrategy.TCP_WINDOW_CLAMPING] = BypassStrategy.TCP_ZERO_WINDOW_STALL
+        strategyChains[BypassStrategy.TCP_ZERO_WINDOW_STALL] = BypassStrategy.TCP_ZERO_WINDOW_DESYNC
         
         strategyChains[BypassStrategy.TCP_REORDER_DESYNC] = BypassStrategy.TCP_OOB_DESYNC
         strategyChains[BypassStrategy.TCP_OOB_DESYNC] = BypassStrategy.TCP_OOB_SEGMENTATION
         strategyChains[BypassStrategy.TCP_OOB_SEGMENTATION] = BypassStrategy.TCP_DATA_DESYNC_OVERLAP
         
-        strategyChains[BypassStrategy.TCP_MSS_CLAMP] = BypassStrategy.TCP_MSS_CLUMPING
-        strategyChains[BypassStrategy.TCP_MSS_CLUMPING] = BypassStrategy.TCP_RETRANS_FAKE
-        
-        strategyChains[BypassStrategy.HTTP_HOST_SPACE] = BypassStrategy.HTTP_HOST_TAB_MANGLE
-        strategyChains[BypassStrategy.HTTP_HOST_TAB_MANGLE] = BypassStrategy.HTTP_HOST_SMUGGLE
-        
-        strategyChains[BypassStrategy.UDP_QUIC_SMART_SHADOW] = BypassStrategy.QUIC_INITIAL_FRAGMENTATION
-        strategyChains[BypassStrategy.QUIC_INITIAL_FRAGMENTATION] = BypassStrategy.UDP_SKEW_ADVANCED
-        strategyChains[BypassStrategy.UDP_SKEW_ADVANCED] = BypassStrategy.UDP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.UDP_NOISE_CHAOS] = BypassStrategy.UDP_BURST_CHAOS
+        strategyChains[BypassStrategy.UDP_BURST_CHAOS] = BypassStrategy.UDP_COMBINED_NUCLEAR
     }
 
     fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {
@@ -341,13 +338,14 @@ object DpiEngine {
             
             strategyScores[category]?.get(strategy)?.let { score ->
                 // Fast recovery for successful strategies
-                val bonus = if (latencyMs in 1..300) 25 else 10
+                val bonus = if (latencyMs in 1..300) 35 else 15
                 score.addAndGet(bonus)
                 if (score.get() > 3000) score.set(3000)
             }
             
             if (host != null) {
                 hostStrategyBlacklist[host]?.remove(strategy)
+                consecutiveFailuresByHost[host]?.set(0)
                 
                 // Host-specific learning
                 hostSpecificMemory[host] = HostMemory(strategy, System.currentTimeMillis())
@@ -376,19 +374,26 @@ object DpiEngine {
         } else {
             failureHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             
+            if (host != null) {
+                val hostFails = consecutiveFailuresByHost.getOrPut(host) { AtomicInteger(0) }.incrementAndGet()
+                if (hostFails > 4) {
+                    Log.w("DpiEngine", "Host $host has $hostFails consecutive failures. Escalating strategy.")
+                }
+            }
+
             val penalty = when (reason) {
-                FailureReason.TCP_RESET -> 80 // High confidence DPI block
-                FailureReason.CENSORSHIP_STALL -> 100
-                FailureReason.DNS_POISONED -> 40
-                FailureReason.SSL_HANDSHAKE_ERROR -> 50
-                FailureReason.MTU_EXCEEDED -> 30
-                FailureReason.TIMEOUT -> 20
-                else -> 25
+                FailureReason.TCP_RESET -> 100 // High confidence DPI block
+                FailureReason.CENSORSHIP_STALL -> 120
+                FailureReason.DNS_POISONED -> 50
+                FailureReason.SSL_HANDSHAKE_ERROR -> 60
+                FailureReason.MTU_EXCEEDED -> 40
+                FailureReason.TIMEOUT -> 30
+                else -> 35
             }
             
             strategyScores[category]?.get(strategy)?.let { score ->
                 score.addAndGet(-penalty)
-                if (score.get() < 10) score.set(10)
+                if (score.get() < 5) score.set(5)
             }
             
             val fails = consecutiveFailures.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
@@ -402,27 +407,32 @@ object DpiEngine {
                 val hostBlacklist = hostStrategyBlacklist.getOrPut(host) { ConcurrentHashMap() }
                 // Progressive backoff for blacklisted host-strategy pairs
                 val currentLevel = hostBlacklist[strategy] ?: 0L
-                val waitTime = if (System.currentTimeMillis() > currentLevel) 600_000L else 1_800_000L // 10m then 30m
+                val waitTime = if (System.currentTimeMillis() > currentLevel) 900_000L else 3_600_000L // 15m then 60m
                 hostBlacklist[strategy] = System.currentTimeMillis() + waitTime
                 Log.d("DpiEngine", "Host $host blacklisted for strategy $strategy for ${waitTime/60000} min")
             }
         }
     }
 
+    private val consecutiveFailuresByHost = ConcurrentHashMap<String, AtomicInteger>()
+
     fun getBestStrategy(category: HostCategory, host: String? = null): BypassStrategy {
         val now = System.currentTimeMillis()
         val netType = BypassConfig.currentNetworkType.value.toString()
         
-        // 0. Primary: Host-specific memory (fastest path)
+        // Host-based escalation: If too many failures, use chain
         if (host != null) {
-            hostSpecificMemory[host]?.let { mem ->
-                val strat = mem.strategy
-                if ((circuitBreakers[strat] ?: 0L) < now) {
-                    val hostBlacklist = hostStrategyBlacklist[host]
-                    if (hostBlacklist?.get(strat) == null || hostBlacklist[strat]!! < now) {
-                        return strat
+            val hostFails = consecutiveFailuresByHost[host]?.get() ?: 0
+            if (hostFails > 4) {
+                val lastMem = hostSpecificMemory[host]
+                if (lastMem != null) {
+                    val escalated = getFallbackStrategy(lastMem.strategy)
+                    if (escalated != null && (circuitBreakers[escalated] ?: 0L) < now) {
+                        return escalated
                     }
                 }
+                // If no specific memory or chain failed, use EXTREME version of category preference
+                return getBestExtremeStrategy(host)
             }
         }
 

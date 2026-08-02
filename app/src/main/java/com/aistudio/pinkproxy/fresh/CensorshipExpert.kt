@@ -158,7 +158,15 @@ object CensorshipExpert {
             hardenDns()
         }
         
-        // 4. Panic Mode Prediction (Early Warning System)
+        // 4. Probing Reaction: Check if we are being actively probed
+        detectAndReactToProbing(fingerprint, successRate)
+
+        // 5. CDN Warmup: If success rate is dropping, warm up common CDN paths
+        if (successRate < 60 && ProxyStats.activeConnections.value > 0) {
+            scope.launch { performCdnGhostingWarmup() }
+        }
+        
+        // 6. Panic Mode Prediction (Early Warning System)
         if (successRate < 45 && fingerprint.intensity > 70) {
             if (!BypassConfig.isPanicModeFlow.value) {
                 Log.w("CensorshipExpert", "Predictive Panic Mode: Triggering pre-emptive defense")
@@ -166,6 +174,51 @@ object CensorshipExpert {
             }
         }
     }
+
+    private fun detectAndReactToProbing(fingerprint: DpiEngine.CensorshipFingerprint, successRate: Int) {
+        // Active Probing detection: High RST rate combined with specific stall patterns
+        if (fingerprint.rstRate > 0.35 || (fingerprint.stallRate > 0.4 && successRate < 50)) {
+            Log.w("CensorshipExpert", "ACTIVE PROBING DETECTED. Forcing extreme desynchronization.")
+            // Boost all desync and EXTREME strategies
+            DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
+            DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+            
+            // Mark global state as "Probed" to influence DpiEngine's softmax selection
+            ProxyStats.recordDpiEvent(DpiType.TCP_STALL) // Use as a trigger
+        }
+    }
+
+    private suspend fun performCdnGhostingWarmup() {
+        val cdnInnocentHosts = listOf(
+            "ajax.googleapis.com", 
+            "fonts.gstatic.com", 
+            "cdnjs.cloudflare.com", 
+            "s.ytimg.com",
+            "static.xx.fbcdn.net"
+        )
+        val host = cdnInnocentHosts.random()
+        Log.d("CensorshipExpert", "CDN Ghosting Warmup: $host")
+        try {
+            val ips = RobustResolver.resolve(host)
+            if (ips.isNotEmpty()) {
+                val s = Socket()
+                BypassConfig.activeVpnService?.protect(s)
+                s.soTimeout = 3000
+                withContext(Dispatchers.IO) {
+                    s.connect(InetSocketAddress(ips.random(), 443), 2000)
+                    val out = s.getOutputStream()
+                    val hello = FakePacketHelper.buildRealisticTlsHello(host)
+                    // Use light bypass to look like a real browser
+                    val config = BypassConfig.getSessionConfig(host, BypassStrategy.TLS_SNI_FRAGMENT, 50)
+                    BypassConfig.applyBypass(s, out, hello, hello.size, config, host)
+                    delay(rnd.nextLong(100, 500))
+                    s.close()
+                }
+            }
+        } catch (e: Throwable) {}
+    }
+
+    private val rnd = java.util.concurrent.ThreadLocalRandom.current()
 
     private fun tuneMtu(fingerprint: DpiEngine.CensorshipFingerprint, stability: Int) {
         val currentMtu = BypassConfig.currentMtu.value

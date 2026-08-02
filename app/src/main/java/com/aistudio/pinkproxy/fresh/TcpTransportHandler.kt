@@ -60,11 +60,19 @@ object TcpTransportHandler {
             val lastActivity = AtomicLong(System.currentTimeMillis())
             val detectedSni = AtomicReference<String?>(null)
             val writeMutex = Mutex()
+            
+            // Adaptive buffer size based on RTT
+            val rtt = BypassConfig.currentRttMs.value
+            val transportBufferSize = when {
+                rtt > 500 -> 4096
+                rtt > 200 -> 8192
+                else -> 16384
+            }
 
             coroutineScope {
                 // Forward from Remote to Client (Direct)
                 launch(ProxyDispatcher.io) {
-                    val buffer = ProxyStats.obtain16k()
+                    val buffer = ByteArray(transportBufferSize)
                     try {
                         var n: Int
                         while (isActive) {
@@ -81,14 +89,13 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("TcpTransport", "RemoteToClient error: ${e.message}")
                     } finally {
-                        ProxyStats.release16k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
 
                 // Forward from Client to Remote (with Bypass & Advanced Evasion)
                 launch(ProxyDispatcher.io) {
-                    val buffer = ProxyStats.obtain64k()
+                    val buffer = ByteArray(transportBufferSize)
                     val rnd = ThreadLocalRandom.current()
                     var packetsCount = 0
                     try {
@@ -125,23 +132,23 @@ object TcpTransportHandler {
                                     // Post-Handshake Evasion: Fragmentation and Chaos
                                     if (intensity > 40) {
                                         // Periodic Window Oscillation to confuse stateful DPI
-                                        if (packetsCount % 5 == 0) {
+                                        if (packetsCount % 7 == 0) {
                                             oscillateWindowSize(remoteSocket)
                                         }
 
                                         // Advanced fragmentation for large payloads
-                                        if (n > 1000) {
+                                        if (n > 800) {
                                             var offset = 0
                                             while (offset < n) {
-                                                val sz = if (intensity > 70) 
-                                                    rnd.nextInt(128, 512).coerceAtMost(n - offset)
+                                                val sz = if (intensity > 75) 
+                                                    rnd.nextInt(64, 384).coerceAtMost(n - offset)
                                                 else 
-                                                    rnd.nextInt(256, 1024).coerceAtMost(n - offset)
+                                                    rnd.nextInt(128, 768).coerceAtMost(n - offset)
                                                 
                                                 writeMutex.lock()
                                                 try {
                                                     // In extreme cases, inject a tiny junk segment with low TTL before the real fragment
-                                                    if (intensity > 85 && rnd.nextInt(100) < 30) {
+                                                    if (intensity > 85 && rnd.nextInt(100) < 25) {
                                                         injectGhostSegment(remoteSocket, remoteOut, rnd)
                                                     }
                                                     
@@ -151,7 +158,7 @@ object TcpTransportHandler {
                                                     writeMutex.unlock()
                                                 }
                                                 offset += sz
-                                                if (offset < n) delay(rnd.nextLong(1, 5))
+                                                if (offset < n) delay(rnd.nextLong(1, 3))
                                             }
                                         } else {
                                             writeMutex.lock()
@@ -179,8 +186,34 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("TcpTransport", "ClientToRemote error: ${e.message}")
                     } finally {
-                        ProxyStats.release64k(buffer)
                         try { remoteSocket.shutdownOutput() } catch (e: Throwable) {}
+                    }
+                }
+
+                // Idle Smuggling (PSH-1): Send 1-byte PSH during inactivity to keep DPI state active
+                launch {
+                    val rnd = ThreadLocalRandom.current()
+                    while (isActive) {
+                        delay(rnd.nextLong(25000, 40000))
+                        
+                        if (System.currentTimeMillis() - lastActivity.get() > 20000) {
+                            writeMutex.lock()
+                            try {
+                                // Send 1 byte of urgent or dummy data with low TTL
+                                val oldTtl = TtlHelper.getSocketTtl(remoteSocket)
+                                val discoveredTtl = AutoTtlProber.getDiscoveredTtl("global") ?: 5
+                                
+                                TtlHelper.setTtl(remoteSocket, discoveredTtl)
+                                // Urgent data or just a dummy PSH segment
+                                remoteSocket.sendUrgentData(rnd.nextInt(256))
+                                delay(1)
+                                TtlHelper.setTtl(remoteSocket, oldTtl)
+                                
+                                Log.v("TcpTransport", "Idle Smuggling pulse sent for $targetHost")
+                            } catch (e: Throwable) {} finally {
+                                writeMutex.unlock()
+                            }
+                        }
                     }
                 }
 
@@ -190,14 +223,14 @@ object TcpTransportHandler {
                     while (isActive) {
                         // Adaptive delay based on censorship intensity
                         val delayMs = when {
-                            ProxyStats.censorshipIntensity.value > 80 -> rnd.nextLong(10000, 25000)
-                            ProxyStats.censorshipIntensity.value > 40 -> rnd.nextLong(20000, 45000)
-                            else -> rnd.nextLong(40000, 90000)
+                            ProxyStats.censorshipIntensity.value > 85 -> rnd.nextLong(12000, 20000)
+                            ProxyStats.censorshipIntensity.value > 50 -> rnd.nextLong(18000, 35000)
+                            else -> rnd.nextLong(35000, 70000)
                         }
                         delay(delayMs)
                         
                         // Only pulse if the connection has been idle for a while, to avoid interference
-                        if (System.currentTimeMillis() - lastActivity.get() > 15000) {
+                        if (System.currentTimeMillis() - lastActivity.get() > 12000) {
                             writeMutex.lock()
                             try {
                                 sendConfusionPacket(remoteSocket, remoteOut, rnd)

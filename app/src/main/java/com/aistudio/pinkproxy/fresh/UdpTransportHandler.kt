@@ -667,21 +667,35 @@ object UdpTransportHandler {
         // Apply centralized UDP bypass
         BypassConfig.applyUdpBypass(socket, packet, finalConfig, host)
 
-        // UDP Redundancy (FEC-like) for critical packets under heavy censorship
-        if (intensity > 85 && !isHighVolume && (isDns || (isQuic && count < 5))) {
-            if (rnd.nextInt(100) < 40) {
+        // UDP Redundancy (FEC-like) for critical packets under heavy censorship or explicit strategy
+        val stability = ProxyStats.stabilityScore.value
+        val shouldReplicate = finalConfig.strategy == BypassStrategy.UDP_REPLICATION || 
+                             (intensity > 80 && stability < 40 && !isHighVolume)
+                             
+        if (shouldReplicate) {
+            val repeatCount = if (stability < 25) 2 else 1
+            repeat(repeatCount) {
                 scope.launch {
-                    delay(rnd.nextLong(2, 10))
+                    delay(rnd.nextLong(1, 15))
                     try {
                         // Send exact copy or slightly padded one
                         val redundant = if (rnd.nextBoolean()) {
-                            val padded = ByteArray(length + rnd.nextInt(1, 8))
+                            val padded = ByteArray(length + rnd.nextInt(2, 12))
                             System.arraycopy(payload, offset, padded, 0, length)
                             DatagramPacket(padded, padded.size, targetInet, targetPort)
                         } else {
                             DatagramPacket(payload, offset, length, targetInet, targetPort)
                         }
                         socket.send(redundant)
+                    } catch (e: Throwable) {}
+                }
+            }
+        } else if (intensity > 85 && !isHighVolume && (isDns || (isQuic && count < 5))) {
+            if (rnd.nextInt(100) < 40) {
+                scope.launch {
+                    delay(rnd.nextLong(2, 10))
+                    try {
+                        socket.send(packet)
                     } catch (e: Throwable) {}
                 }
             }

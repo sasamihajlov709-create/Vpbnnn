@@ -184,6 +184,60 @@ object DnsProtocols {
         }
     }
 
+    suspend fun queryUdpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+        val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val socket = DatagramSocket()
+        val buffer = ProxyStats.obtain8k()
+        val rnd = java.util.concurrent.ThreadLocalRandom.current()
+        try {
+            try { vpnService?.protect(socket) } catch(e: Throwable) {}
+            socket.soTimeout = 2500
+            val targetAddr = InetAddress.getByName(dnsIp)
+            socket.connect(targetAddr, 53)
+            val isIpv6 = targetAddr is java.net.Inet6Address
+            
+            // The "Nuclear" UDP Strategy:
+            // 1. Multiple Low-TTL Ghost queries to saturate DPI state for this session
+            repeat(rnd.nextInt(2, 4)) {
+                TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), isIpv6)
+                val ghost = DnsPacketEngine.buildDnsQuery("internal.test.ghost", 1, rnd.nextInt(0x10000))
+                socket.send(DatagramPacket(ghost, ghost.size))
+            }
+            
+            // 2. High-intensity noise burst
+            repeat(rnd.nextInt(3, 6)) {
+                val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
+                TtlHelper.setUdpTtl(socket, 1, isIpv6)
+                socket.send(DatagramPacket(noise, noise.size))
+            }
+            
+            TtlHelper.setUdpTtl(socket, 64, isIpv6)
+            
+            // 3. Duplicate real queries with slight delay to beat censorship race
+            socket.send(DatagramPacket(query, query.size))
+            delay(rnd.nextLong(2, 8))
+            socket.send(DatagramPacket(query, query.size))
+            
+            val start = System.currentTimeMillis()
+            while (System.currentTimeMillis() - start < 2500) {
+                val respPacket = DatagramPacket(buffer, buffer.size)
+                try { socket.receive(respPacket) } catch (e: Throwable) { break }
+                val resId = ((respPacket.data[0].toInt() and 0xFF) shl 8) or (respPacket.data[1].toInt() and 0xFF)
+                if (resId == id) {
+                    val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
+                    val clean = res.filter { !DnsCacheManager.isPoisoned(it, host) }
+                    if (clean.isNotEmpty()) return clean
+                }
+            }
+        } catch (e: Throwable) {
+        } finally {
+            ProxyStats.release8k(buffer)
+            try { socket.close() } catch (e: Throwable) {}
+        }
+        return emptyList()
+    }
+
     suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
         val strategy = BypassConfig.getBestStrategyForHost(host)
         val mangle = strategy == BypassStrategy.DNS_CASE_MANGLE || ProxyStats.censorshipIntensity.value > 60
@@ -593,8 +647,14 @@ TtlHelper.setTtl(socket, 64)
                 urls.forEachIndexed { index, url ->
                     jobs += launch(ProxyDispatcher.io) {
                         try {
-                            // Staggered racing: give top 2 providers a head start
-                            if (index >= 2) delay(120L * (index - 1))
+                            // Staggered racing: give top providers a small head start
+                            val delayMs = when {
+                                index == 0 -> 0L
+                                index == 1 -> 50L
+                                else -> 100L * (index - 1)
+                            }
+                            if (delayMs > 0) delay(delayMs)
+                            
                             val res = queryDoh(host, url, vpnService)
                             if (res.isNotEmpty()) {
                                 channel.trySend(res)

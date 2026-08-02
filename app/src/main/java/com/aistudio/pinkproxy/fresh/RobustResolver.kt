@@ -208,6 +208,11 @@ object RobustResolver {
         // 3. UDP with Shadow (Fast, evasion enabled)
         queries.add { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) }
         
+        // 3.1 UDP Nuclear (For maximum resilience)
+        if (intensity > 70) {
+            queries.add { DnsProtocols.queryUdpDnsNuclear(host, "8.8.8.8", vpnService) }
+        }
+        
         // 4. TCP with Shadow (For extreme evasion)
         queries.add { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
         
