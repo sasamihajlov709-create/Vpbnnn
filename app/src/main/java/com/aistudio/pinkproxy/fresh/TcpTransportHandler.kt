@@ -316,7 +316,7 @@ object TcpTransportHandler {
             }
 
             val lastActivity = AtomicLong(System.currentTimeMillis())
-            var detectedSni: String? = null
+            val detectedSni = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
             coroutineScope {
                 val inactivityJob = launch {
@@ -397,7 +397,7 @@ object TcpTransportHandler {
                                     val sent = totalWrittenClient.get().toInt()
                                     if (totalRead == 0L && sent > 0) {
                                         val duration = System.currentTimeMillis() - startTime
-                                        val activeHost = detectedSni ?: targetHost
+                                        val activeHost = detectedSni.get() ?: targetHost
                                         if (BypassConfig.detectBlackhole(activeHost, sent, 0, duration)) {
                                             break // Exit loop, blackhole confirmed
                                         }
@@ -406,7 +406,7 @@ object TcpTransportHandler {
                                     val maxTimeouts = if (totalRead == 0L) 2 else 5
                                     if (consecutiveTimeouts >= maxTimeouts || !isActive) {
                                         if (totalRead == 0L) {
-                                            val activeHost = detectedSni ?: targetHost
+                                            val activeHost = detectedSni.get() ?: targetHost
                                             BypassConfig.recordFailure(strategy, activeHost)
                                         }
                                         break
@@ -421,7 +421,7 @@ object TcpTransportHandler {
                                 if (firstResponse) {
                                     firstResponse = false
                                     val rtt = System.currentTimeMillis() - start
-                                    val activeHost = detectedSni ?: targetHost
+                                    val activeHost = detectedSni.get() ?: targetHost
                                     BypassConfig.recordSuccess(strategy, rtt, activeHost)
                                     DpiEngine.recordRtt(activeHost, rtt)
                                     
@@ -499,7 +499,7 @@ object TcpTransportHandler {
                         if (e is CancellationException) throw e
                         val msg = e.message?.lowercase() ?: ""
                         val isEarly = totalRead < 32768L || (System.currentTimeMillis() - start < 15000)
-                        val activeHost = detectedSni ?: targetHost
+                        val activeHost = detectedSni.get() ?: targetHost
                         
                         if (totalRead == 0L && System.currentTimeMillis() - start < 20000) {
                             BypassConfig.recordFailure(strategy, activeHost)
@@ -529,7 +529,6 @@ object TcpTransportHandler {
                 val clientToRemote = launch(ProxyDispatcher.io) {
                     val buffer = ProxyStats.obtain64k()
                     val rnd = ThreadLocalRandom.current()
-                    var detectedSni: String? = null
                     val isMssClamp = strategy == BypassStrategy.TCP_MSS_CLAMP
                     
                     try {
@@ -564,7 +563,7 @@ object TcpTransportHandler {
                                     if (sniOffset != -1) {
                                         val realSni = TlsParser.extractHostname(buffer, n, sniOffset)
                                         if (realSni != null && realSni.isNotBlank()) {
-                                            detectedSni = realSni
+                                            detectedSni.set(realSni)
                                             ProxyStats.addTraffic(realSni)
                                             if (BypassConfig.isHostCensored(realSni)) {
                                                 // High censorship host! Use EXTREME strategies for maximum effectiveness
@@ -597,7 +596,7 @@ object TcpTransportHandler {
                                 val stability = ProxyStats.stabilityScore.value
                                 if (packetsCount <= 3 || (currentIntensity > 85 && packetsCount <= 12) || (stability < 50 && packetsCount <= 20)) {
                                     // Apply full bypass to initial handshake/header packets
-                                    val activeHost = detectedSni ?: targetHost
+                                    val activeHost = detectedSni.get() ?: targetHost
                                     try {
                                         BypassConfig.applyBypass(remoteSocket!!, remoteOut, buffer, n, config, activeHost)
                                     } catch (e: Throwable) {
@@ -679,7 +678,7 @@ object TcpTransportHandler {
                         if (e !is CancellationException) {
                             BypassConfig.TrafficShaper.recordError()
                             if (System.currentTimeMillis() - start < 15000) {
-                                BypassConfig.recordFailure(strategy, detectedSni ?: targetHost)
+                                BypassConfig.recordFailure(strategy, detectedSni.get() ?: targetHost)
                             }
                         }
                     } finally {
