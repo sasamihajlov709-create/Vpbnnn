@@ -134,16 +134,6 @@ object BypassConfig {
         if (old != new) {
             _currentMtu.value = new
             Log.i("BypassConfig", "MTU changed from $old to $new. Triggering VPN restart.")
-            activeVpnService?.let { service ->
-                try {
-                    val intent = android.content.Intent(service, PinkVpnService::class.java).apply { 
-                        action = "RESTART" 
-                    }
-                    service.startService(intent)
-                } catch (e: Throwable) {
-                    Log.e("BypassConfig", "Failed to trigger VPN restart for MTU change: ${e.message}")
-                }
-            }
         }
     }
 
