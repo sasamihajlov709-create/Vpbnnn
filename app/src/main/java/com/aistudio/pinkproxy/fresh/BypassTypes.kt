@@ -312,9 +312,9 @@ object ProxyStats {
         _lastLatency.value = ms
     }
 
-    private val bufferPool8k = LinkedBlockingQueue<ByteArray>(256)
-    private val bufferPool16k = LinkedBlockingQueue<ByteArray>(128)
-    private val bufferPool64k = LinkedBlockingQueue<ByteArray>(64)
+    private val bufferPool8k = LinkedBlockingQueue<ByteArray>(1024)
+    private val bufferPool16k = LinkedBlockingQueue<ByteArray>(512)
+    private val bufferPool64k = LinkedBlockingQueue<ByteArray>(128)
 
     fun obtain8k(): ByteArray = bufferPool8k.poll() ?: ByteArray(8192)
     fun release8k(buf: ByteArray) { if (buf.size >= 8192) bufferPool8k.offer(buf) }
