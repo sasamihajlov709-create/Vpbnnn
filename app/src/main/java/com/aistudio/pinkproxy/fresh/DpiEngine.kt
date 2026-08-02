@@ -42,6 +42,13 @@ object DpiEngine {
     fun getCensorshipFingerprint(): CensorshipFingerprint {
         val total = eventHistory.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
         
+        // Decay event history so fingerprint is recent
+        if (total > 500) {
+            eventHistory.forEach { (_, count) ->
+                count.updateAndGet { (it * 0.9).toInt() }
+            }
+        }
+        
         // Calculate global jitter from RTT history
         val allHistory = rttHistory.values.flatten()
         val jitter = if (allHistory.size > 2) {
@@ -234,18 +241,30 @@ object DpiEngine {
     private fun initStrategyChains() {
         // Define fallback chains for automated recovery
         strategyChains[BypassStrategy.SNI_SPLIT] = BypassStrategy.TLS_SNI_FRAGMENT
-        strategyChains[BypassStrategy.TLS_SNI_FRAGMENT] = BypassStrategy.BYEBYEDPI_HYBRID
+        strategyChains[BypassStrategy.TLS_SNI_FRAGMENT] = BypassStrategy.TLS_APP_DATA_SPLIT
+        strategyChains[BypassStrategy.TLS_APP_DATA_SPLIT] = BypassStrategy.BYEBYEDPI_HYBRID
         strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.TCP_SEGMENT_OVERLAP
-        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.ZAPRET_EXTREME
+        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.TCP_FOOL_DPI
+        strategyChains[BypassStrategy.TCP_FOOL_DPI] = BypassStrategy.ZAPRET_EXTREME
         strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        
         strategyChains[BypassStrategy.WINDOW_SIZE_MANGLE] = BypassStrategy.TCP_WINDOW_SIZE_SKEW
-        strategyChains[BypassStrategy.TCP_WINDOW_SIZE_SKEW] = BypassStrategy.TCP_ZERO_WINDOW_STALL
+        strategyChains[BypassStrategy.TCP_WINDOW_SIZE_SKEW] = BypassStrategy.TCP_WINDOW_CLAMPING
+        strategyChains[BypassStrategy.TCP_WINDOW_CLAMPING] = BypassStrategy.TCP_ZERO_WINDOW_STALL
         
         strategyChains[BypassStrategy.TCP_REORDER_DESYNC] = BypassStrategy.TCP_OOB_DESYNC
-        strategyChains[BypassStrategy.TCP_MSS_CLAMP] = BypassStrategy.TCP_RETRANS_FAKE
+        strategyChains[BypassStrategy.TCP_OOB_DESYNC] = BypassStrategy.TCP_OOB_SEGMENTATION
+        strategyChains[BypassStrategy.TCP_OOB_SEGMENTATION] = BypassStrategy.TCP_DATA_DESYNC_OVERLAP
+        
+        strategyChains[BypassStrategy.TCP_MSS_CLAMP] = BypassStrategy.TCP_MSS_CLUMPING
+        strategyChains[BypassStrategy.TCP_MSS_CLUMPING] = BypassStrategy.TCP_RETRANS_FAKE
+        
         strategyChains[BypassStrategy.HTTP_HOST_SPACE] = BypassStrategy.HTTP_HOST_TAB_MANGLE
+        strategyChains[BypassStrategy.HTTP_HOST_TAB_MANGLE] = BypassStrategy.HTTP_HOST_SMUGGLE
+        
         strategyChains[BypassStrategy.UDP_QUIC_SMART_SHADOW] = BypassStrategy.QUIC_INITIAL_FRAGMENTATION
-        strategyChains[BypassStrategy.QUIC_INITIAL_FRAGMENTATION] = BypassStrategy.UDP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.QUIC_INITIAL_FRAGMENTATION] = BypassStrategy.UDP_SKEW_ADVANCED
+        strategyChains[BypassStrategy.UDP_SKEW_ADVANCED] = BypassStrategy.UDP_COMBINED_NUCLEAR
     }
 
     fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {
@@ -405,24 +424,31 @@ object DpiEngine {
             var s = score.get().toDouble()
             
             // Maturity Bonus
-            s += (strategyMaturity[strat]?.get() ?: 0) / 8.0
+            s += (strategyMaturity[strat]?.get() ?: 0) / 6.0
             
             // Contextual Boosts
             when (currentDpi) {
                 DpiType.TLS_SNI_BLOCK -> {
-                    if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
+                    if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
                 }
                 DpiType.TCP_RESET -> {
-                    if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
+                    if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
                 }
-                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 1.5
-                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.0
+                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 1.8
+                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.5
+                else -> {}
+            }
+            
+            // Host Category Specific Prios
+            when (category) {
+                HostCategory.STREAMING, HostCategory.SOCIAL -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 1.4
+                HostCategory.AI, HostCategory.FINANCE -> if (strat.family == StrategyFamily.FRAGMENTATION) s *= 1.3
                 else -> {}
             }
             
             val latency = strategyLatency[strat]?.get() ?: 200L
-            val latencyPenalty = (latency / 20.0).coerceAtMost(50.0)
-            (s - latencyPenalty).coerceAtLeast(10.0)
+            val latencyPenalty = (latency / 15.0).coerceAtMost(60.0)
+            (s - latencyPenalty).coerceAtLeast(5.0)
         }
 
         var randomPivot = rnd.nextDouble() * totalScore
@@ -514,21 +540,21 @@ object DpiEngine {
         // Automatic Censorship Intensity Calculation: Non-linear weighting
         // Resets and SNI blocks are much more indicative of DPI presence than simple timeouts
         val calculatedIntensity = (
-            fingerprint.rstRate * 45 + 
-            fingerprint.sniBlockRate * 55 + 
-            fingerprint.timeoutRate * 15 + 
-            fingerprint.stallRate * 25 +
-            (fingerprint.jitter / 200).coerceAtMost(10.0)
+            fingerprint.rstRate * 55 + 
+            fingerprint.sniBlockRate * 65 + 
+            fingerprint.timeoutRate * 20 + 
+            fingerprint.stallRate * 35 +
+            (fingerprint.jitter / 150).coerceAtMost(15.0)
         ).toInt().coerceIn(0, 100)
         
         // Exponential smoothing for intensity updates to avoid jitter
         val currentIntensity = ProxyStats.censorshipIntensity.value
         val targetIntensity = if (calculatedIntensity > currentIntensity) {
             // React faster to blocking
-            (currentIntensity * 0.6 + calculatedIntensity * 0.4).toInt()
+            (currentIntensity * 0.4 + calculatedIntensity * 0.6).toInt()
         } else {
             // Recover slower to ensure stability
-            (currentIntensity * 0.9 + calculatedIntensity * 0.1).toInt()
+            (currentIntensity * 0.85 + calculatedIntensity * 0.15).toInt()
         }
         
         if (Math.abs(targetIntensity - currentIntensity) >= 1) {
@@ -599,13 +625,33 @@ object DpiEngine {
         val probes = BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME || it.group == StrategyGroup.HEAVY }
             .shuffled().take(3)
             
+        val resolved = try { RobustResolver.resolve(host) } catch (e: Throwable) { emptyList() }
+        if (resolved.isEmpty()) return
+        val addr = resolved.first()
+
         for (strat in probes) {
             try {
+                val start = System.currentTimeMillis()
                 val ok = withTimeoutOrNull(3000) {
-                    RobustResolver.resolve(host)
+                    val s = java.net.Socket()
+                    try {
+                        s.connect(java.net.InetSocketAddress(addr, 443), 1500)
+                        val out = s.getOutputStream()
+                        val fake = FakePacketHelper.buildRealisticTlsHello(host)
+                        val config = BypassConfig.getSessionConfig(host, strat, 50)
+                        BypassConfig.applyBypass(s, out, fake, fake.size, config, host)
+                        s.soTimeout = 1500
+                        val i = s.getInputStream().read()
+                        i != -1
+                    } catch (e: Throwable) {
+                        false
+                    } finally {
+                        try { s.close() } catch (e: Throwable) {}
+                    }
                 }
-                if (ok != null && ok.isNotEmpty()) {
-                    recordResult(strat, true, category, latencyMs = 200, host = host)
+                val latency = System.currentTimeMillis() - start
+                if (ok == true) {
+                    recordResult(strat, true, category, latencyMs = latency, host = host)
                     Log.i("DpiEngine", "Micro-probe SUCCESS for $host using ${strat.name}")
                     return
                 }
