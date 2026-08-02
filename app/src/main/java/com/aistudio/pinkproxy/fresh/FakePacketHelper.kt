@@ -80,9 +80,10 @@ object FakePacketHelper {
             if (length < pos + 1) return data.copyOf(length)
             val compLen = data[pos].toInt() and 0xFF
             pos += 1 + compLen
-            if (pos >= length - 1) return data.copyOf(length)
+            if (pos + 1 >= length) return data.copyOf(length)
             
             val oldExtLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos+1].toInt() and 0xFF)
+            if (pos + 2 + oldExtLen > length) return data.copyOf(length)
             
             val result = ByteArray(pos + 2 + oldExtLen + 4 + extData.size)
             System.arraycopy(data, 0, result, 0, pos)
@@ -405,7 +406,8 @@ object FakePacketHelper {
     fun buildFakeClientHello(host: String, sidLen: Int): ByteArray {
         val rnd = ThreadLocalRandom.current()
         val sni = buildSniExtension(host)
-        val extsLen = sni.size + 35 // Estimate for other exts
+        val otherExtsLen = 6 + 6 + 6 // Signature (6) + Groups (6) + Versions (6)
+        val extsLen = sni.size + otherExtsLen
         val innerLen = 1 + 3 + 2 + 32 + 1 + sidLen + 2 + 2 + 1 + 1 + 2 + extsLen
         val totalSize = 5 + innerLen
         

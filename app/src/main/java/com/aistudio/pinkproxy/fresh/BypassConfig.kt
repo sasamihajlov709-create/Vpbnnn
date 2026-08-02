@@ -244,7 +244,7 @@ object BypassConfig {
         return best
     }
 
-    private val lastStrategies = java.util.LinkedList<BypassStrategy>()
+    private val lastStrategies = java.util.concurrent.CopyOnWriteArrayList<BypassStrategy>()
     
     fun rotateGlobalStrategy() {
         val fingerprint = DpiEngine.getCensorshipFingerprint()
@@ -265,7 +265,9 @@ object BypassConfig {
             } ?: BypassStrategy.SNI_SPLIT
         
         lastStrategies.add(best)
-        if (lastStrategies.size > 5) lastStrategies.removeFirst()
+        if (lastStrategies.size > 5) {
+            try { lastStrategies.removeAt(0) } catch (e: Throwable) {}
+        }
         
         _strategy.value = best
         updateTestingStrategies(lastStrategies.toList() + best)

@@ -20,8 +20,7 @@ object RobustResolver {
         resolverScope = scope
     }
 
-    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-    private fun getScope(): CoroutineScope = resolverScope ?: GlobalScope
+    private fun getScope(): CoroutineScope = resolverScope ?: CoroutineScope(ProxyDispatcher.io + SupervisorJob())
 
     fun loadDnsSettings(context: android.content.Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)

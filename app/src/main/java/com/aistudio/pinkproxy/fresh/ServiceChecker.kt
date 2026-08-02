@@ -3,6 +3,7 @@ package com.aistudio.pinkproxy.fresh
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.content.Context
+import android.util.Log
 import androidx.core.content.edit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -377,109 +378,116 @@ object ServiceChecker {
         val testHosts = listOf("googlevideo.com", "api.telegram.org", "discord.com", "instagram.com")
         
         scope.launch(ProxyDispatcher.io) {
-            val originalStrategy = BypassConfig.strategy.value
-            val currentCensorship = ProxyStats.censorshipIntensity.value
-            
-            // Only test heavy strategies if censorship is high
-            val strategiesToTest = BypassStrategy.entries.filter { 
-                it != BypassStrategy.DIRECT && 
-                (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.UDP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING) &&
-                (if (currentCensorship < 30) it.group != StrategyGroup.EXTREME else true)
-            }.shuffled().take(8)
-            
-            val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
-            
-            val strategyJobs = strategiesToTest.map { strategy ->
-                launch {
-                    var successCount = 0
-                    var totalDuration = 0L
-                    
-                    for (host in testHosts) {
-                        var success = false
-                        val start = System.currentTimeMillis()
+            try {
+                val originalStrategy = BypassConfig.strategy.value
+                val currentCensorship = ProxyStats.censorshipIntensity.value
+                
+                // Only test heavy strategies if censorship is high
+                val strategiesToTest = BypassStrategy.entries.filter { 
+                    it != BypassStrategy.DIRECT && 
+                    (it.family == StrategyFamily.TLS || it.family == StrategyFamily.TCP || it.family == StrategyFamily.UDP || it.family == StrategyFamily.ADAPTIVE || it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TIMING) &&
+                    (if (currentCensorship < 30) it.group != StrategyGroup.EXTREME else true)
+                }.shuffled().take(8)
+                
+                BypassConfig.updateTestingStrategies(strategiesToTest)
+                
+                val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
+                
+                val strategyJobs = strategiesToTest.map { strategy ->
+                    launch {
+                        var successCount = 0
+                        var totalDuration = 0L
                         
-                        if (strategy.family == StrategyFamily.UDP) {
-                            // Test UDP strategy using a DNS query as a proxy for UDP connectivity
-                            val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", BypassConfig.activeVpnService)
-                            if (res.isNotEmpty()) {
-                                success = true
-                            }
-                        } else {
-                            var socket: java.net.Socket? = null
-                            try {
-                                val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
-                                if (ips.isNotEmpty()) {
-                                    socket = java.net.Socket()
-                                    try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
-                                    socket.soTimeout = 1500
-                                    withTimeout(2500) {
-                                        socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
-                                        val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
-                                        BypassConfig.applyBypass(
-                                            socket, 
-                                            socket.getOutputStream(), 
-                                            hello, 
-                                            hello.size, 
-                                            BypassConfig.getSessionConfig(host, strategy, 150L), 
-                                            host
-                                        )
-                                        socket.getOutputStream().flush()
-                                        val response = ByteArray(5)
-                                        val readCount = socket.getInputStream().read(response)
-                                        if (readCount >= 1 && (response[0] == 0x16.toByte() || response[0] == 0x17.toByte() || response[0] == 0x14.toByte() || response[0] == 'H'.code.toByte())) {
-                                            success = true
+                        for (host in testHosts) {
+                            var success = false
+                            val start = System.currentTimeMillis()
+                            
+                            if (strategy.family == StrategyFamily.UDP) {
+                                // Test UDP strategy using a DNS query as a proxy for UDP connectivity
+                                val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", BypassConfig.activeVpnService)
+                                if (res.isNotEmpty()) {
+                                    success = true
+                                }
+                            } else {
+                                var socket: java.net.Socket? = null
+                                try {
+                                    val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
+                                    if (ips.isNotEmpty()) {
+                                        socket = java.net.Socket()
+                                        try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
+                                        socket.soTimeout = 1500
+                                        withTimeout(2500) {
+                                            socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
+                                            val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
+                                            BypassConfig.applyBypass(
+                                                socket, 
+                                                socket.getOutputStream(), 
+                                                hello, 
+                                                hello.size, 
+                                                BypassConfig.getSessionConfig(host, strategy, 150L), 
+                                                host
+                                            )
+                                            socket.getOutputStream().flush()
+                                            val response = ByteArray(5)
+                                            val readCount = socket.getInputStream().read(response)
+                                            if (readCount >= 1 && (response[0] == 0x16.toByte() || response[0] == 0x17.toByte() || response[0] == 0x14.toByte() || response[0] == 'H'.code.toByte())) {
+                                                success = true
+                                            }
                                         }
                                     }
+                                } catch (e: Throwable) {
+                                } finally {
+                                    try { socket?.close() } catch (e: Throwable) {}
                                 }
-                            } catch (e: Throwable) {
-                            } finally {
-                                try { socket?.close() } catch (e: Throwable) {}
                             }
+                            
+                            if (success) {
+                                successCount++
+                                totalDuration += (System.currentTimeMillis() - start)
+                            }
+                            BypassConfig.recordStrategyResult(host, strategy, success)
                         }
                         
-                        if (success) {
-                            successCount++
-                            totalDuration += (System.currentTimeMillis() - start)
+                        if (successCount > 0) {
+                            val avgDuration = totalDuration / successCount
+                            resultsChannel.add(Triple(strategy, avgDuration, successCount))
+                            ProxyStats.logRecovery("Tournament: ${strategy.name} scored $successCount/${testHosts.size} (avg ${avgDuration}ms)")
                         }
-                        BypassConfig.recordStrategyResult(host, strategy, success)
                     }
+                }
+                
+                // Wait for tournament to complete
+                withTimeoutOrNull(6000) {
+                    strategyJobs.forEach { it.join() }
+                }
+                
+                val best = resultsChannel
+                    .sortedWith(compareByDescending<Triple<BypassStrategy, Long, Int>> { it.third }.thenBy { it.second })
+                    .firstOrNull()
                     
-                    if (successCount > 0) {
-                        val avgDuration = totalDuration / successCount
-                        resultsChannel.add(Triple(strategy, avgDuration, successCount))
-                        ProxyStats.logRecovery("Tournament: ${strategy.name} scored $successCount/${testHosts.size} (avg ${avgDuration}ms)")
+                if (best != null && best.third > 0) {
+                    // Do not hardcode the global strategy based on a single background smoke test.
+                    // Just let the optimizer know this strategy had a successful probe.
+                    BypassConfig.recordStrategyResult("global_probe", best.first, true, best.second)
+                    ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} (${best.third}/${testHosts.size} hosts ok)! Logged for ranking.")
+                    
+                    // If the winner is very stable, maybe reduce intensity slightly
+                    if (best.third == testHosts.size && best.second < 400) {
+                        ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 5).coerceAtLeast(0))
                     }
+                } else {
+                    ProxyStats.logRecovery("CRITICAL: Autopilot failed to find a working strategy in tournament!")
+                    ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value + 15).coerceAtMost(100))
+                    BypassConfig.setPanicMode(true)
                 }
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+                Log.e("ServiceChecker", "Error during active probing tournament", e)
+            } finally {
+                isProbing.set(false)
+                _isProbingState.value = false
+                triggerCheck()
             }
-            
-            // Wait for tournament to complete
-            withTimeoutOrNull(6000) {
-                strategyJobs.forEach { it.join() }
-            }
-            
-            val best = resultsChannel
-                .sortedWith(compareByDescending<Triple<BypassStrategy, Long, Int>> { it.third }.thenBy { it.second })
-                .firstOrNull()
-                
-            if (best != null && best.third > 0) {
-                // Do not hardcode the global strategy based on a single background smoke test.
-                // Just let the optimizer know this strategy had a successful probe.
-                BypassConfig.recordStrategyResult("global_probe", best.first, true, best.second)
-                ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} (${best.third}/${testHosts.size} hosts ok)! Logged for ranking.")
-                
-                // If the winner is very stable, maybe reduce intensity slightly
-                if (best.third == testHosts.size && best.second < 400) {
-                    ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 5).coerceAtLeast(0))
-                }
-            } else {
-                ProxyStats.logRecovery("CRITICAL: Autopilot failed to find a working strategy in tournament!")
-                ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value + 15).coerceAtMost(100))
-                BypassConfig.setPanicMode(true)
-            }
-            
-            isProbing.set(false)
-            _isProbingState.value = false
-            triggerCheck()
         }
     }
 

@@ -2604,8 +2604,9 @@ fun OptFlowRow(
             maxRowHeight = maxOf(maxRowHeight, placeable.height)
         }
 
-        val totalHeight = currentY + maxRowHeight
-        layout(constraints.maxWidth, totalHeight) {
+        val totalHeight = (currentY + maxRowHeight).coerceIn(constraints.minHeight, constraints.maxHeight)
+        val totalWidth = constraints.maxWidth
+        layout(totalWidth, totalHeight) {
             for ((placeable, position) in placeables) {
                 placeable.place(position.first, position.second)
             }

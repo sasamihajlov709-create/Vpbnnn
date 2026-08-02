@@ -311,11 +311,12 @@ object TcpTransportHandler {
             ips
         }
 
-        val channel = kotlinx.coroutines.channels.Channel<Socket>(sortedIps.size)
+        val targetIps = sortedIps.take(8)
+        val channel = kotlinx.coroutines.channels.Channel<Socket>(targetIps.size)
         val jobs = mutableListOf<Job>()
         val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
         
-        sortedIps.take(8).forEachIndexed { index, ip ->
+        targetIps.forEachIndexed { index, ip ->
             jobs += launch {
                 try {
                     // Stagger connections: 200ms delay between attempts
@@ -328,13 +329,10 @@ object TcpTransportHandler {
                     val timeout = if (index < 2) 4000 else 7000
                     s.connect(InetSocketAddress(ip, port), timeout)
                     
-                    if (true) {
-                        try { channel.send(s) } catch (e: Throwable) { s.close() }
-                    } else {
-                        s.close()
-                    }
+                    try { channel.send(s) } catch (e: Throwable) { try { s.close() } catch (ex: Throwable) {} }
                 } catch (e: Throwable) {
-                    if (completedCount.incrementAndGet() == sortedIps.size) {
+                } finally {
+                    if (completedCount.incrementAndGet() == targetIps.size) {
                         channel.close()
                     }
                 }
@@ -343,9 +341,6 @@ object TcpTransportHandler {
         
         var result: Socket? = null
         try {
-            // Strategy Racing: If no connection in 1.5s, we might be hitting a heavy DPI drop.
-            // In a real implementation, we would try different strategies here,
-            // but since strategy is applied AFTER connect, we focus on IP racing.
             result = withTimeoutOrNull(8000) { channel.receive() }
         } catch (e: Throwable) {
         } finally {
@@ -407,14 +402,34 @@ object TcpTransportHandler {
     }
 
     private suspend fun sendConfusionPacket(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        // Safe no-op to prevent TCP stream corruption
+        try {
+            val fakeTtl = rnd.nextInt(2, 5)
+            TtlHelper.setTtl(socket, fakeTtl)
+            val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
+            out.write(noise)
+            out.flush()
+            delay(rnd.nextLong(1, 4))
+            TtlHelper.setTtl(socket, 64)
+        } catch (e: Throwable) {}
     }
 
     private suspend fun injectGhostSegment(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        // Safe no-op to prevent TCP stream corruption
+        try {
+            val fakeTtl = rnd.nextInt(2, 4)
+            TtlHelper.setTtl(socket, fakeTtl)
+            val ghost = FakePacketHelper.buildRealisticTlsHello("ghost.internal")
+            out.write(ghost)
+            out.flush()
+            delay(rnd.nextLong(1, 3))
+            TtlHelper.setTtl(socket, 64)
+        } catch (e: Throwable) {}
     }
 
     private suspend fun sendSequenceDesync(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        // Safe no-op to prevent TCP stream corruption
+        try {
+            TtlHelper.setWindowSize(socket, 0)
+            delay(rnd.nextLong(2, 10))
+            TtlHelper.setWindowSize(socket, 65535)
+        } catch (e: Throwable) {}
     }
 }
