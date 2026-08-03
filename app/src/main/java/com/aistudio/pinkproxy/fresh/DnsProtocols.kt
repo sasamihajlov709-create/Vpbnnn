@@ -826,45 +826,63 @@ TtlHelper.setTtl(socket, 64)
                 
                 // 1. DoH Racing (Top 3)
                 launch(ProxyDispatcher.io) {
-                    val res = queryDohRacing(host, vpnService)
-                    if (res.isNotEmpty()) channel.trySend(res)
-                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                    try {
+                        val res = queryDohRacing(host, vpnService)
+                        if (res.isNotEmpty()) channel.trySend(res)
+                    } finally {
+                        if (completed.incrementAndGet() == totalTasks) channel.close()
+                    }
                 }
                 
                 // 2. DoT Racing (Top 2)
                 launch(ProxyDispatcher.io) {
-                    val dotIp = DnsOptimizer.bestDotServer
-                    val res = queryDot(host, dotIp, vpnService)
-                    if (res.isNotEmpty()) channel.trySend(res)
-                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                    try {
+                        val dotIp = DnsOptimizer.bestDotServer
+                        val res = queryDot(host, dotIp, vpnService)
+                        if (res.isNotEmpty()) channel.trySend(res)
+                    } finally {
+                        if (completed.incrementAndGet() == totalTasks) channel.close()
+                    }
                 }
                 
                 // 3. Shadow DoQ (UDP:443)
                 launch(ProxyDispatcher.io) {
-                    val res = queryDnsOverQuic(host, "8.8.8.8", vpnService)
-                    if (res.isNotEmpty()) channel.trySend(res)
-                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                    try {
+                        val res = queryDnsOverQuic(host, "8.8.8.8", vpnService)
+                        if (res.isNotEmpty()) channel.trySend(res)
+                    } finally {
+                        if (completed.incrementAndGet() == totalTasks) channel.close()
+                    }
                 }
                 
                 // 4. UDP Nuclear (DNS:53)
                 launch(ProxyDispatcher.io) {
-                    val res = queryUdpDnsNuclear(host, "1.1.1.1", vpnService)
-                    if (res.isNotEmpty()) channel.trySend(res)
-                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                    try {
+                        val res = queryUdpDnsNuclear(host, "1.1.1.1", vpnService)
+                        if (res.isNotEmpty()) channel.trySend(res)
+                    } finally {
+                        if (completed.incrementAndGet() == totalTasks) channel.close()
+                    }
                 }
                 
                 // 5. TCP Nuclear (DNS:53)
                 launch(ProxyDispatcher.io) {
-                    val res = queryTcpDnsNuclear(host, "8.8.4.4", vpnService)
-                    if (res.isNotEmpty()) channel.trySend(res)
-                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                    try {
+                        val res = queryTcpDnsNuclear(host, "8.8.4.4", vpnService)
+                        if (res.isNotEmpty()) channel.trySend(res)
+                    } finally {
+                        if (completed.incrementAndGet() == totalTasks) channel.close()
+                    }
                 }
                 
                 // 6. DoH Smuggling (HTTPS:443)
                 launch(ProxyDispatcher.io) {
-                    val res = queryDohSmuggling(host, vpnService)
-                    if (res.isNotEmpty()) channel.trySend(res)
-                    if (completed.incrementAndGet() == totalTasks) channel.close()
+                    try {
+                        val res = queryDohSmuggling(host, vpnService)
+                        if (res.isNotEmpty()) channel.trySend(res)
+                    } finally {
+                        if (completed.incrementAndGet() == totalTasks) channel.close()
+                    }
                 }
                 
                 var result = emptyList<InetAddress>()
@@ -901,27 +919,33 @@ class ProtectedSSLSocketFactory(private val base: SSLSocketFactory, private val 
     }
 
     override fun createSocket(host: String, port: Int): Socket {
-        val s = base.createSocket(host, port)
+        val s = Socket()
         try { vpnService?.protect(s) } catch(e: Throwable) {}
-        return s
+        s.connect(InetSocketAddress(host, port), 10000)
+        return base.createSocket(s, host, port, true)
     }
 
     override fun createSocket(host: String, port: Int, localHost: java.net.InetAddress, localPort: Int): Socket {
-        val s = base.createSocket(host, port, localHost, localPort)
+        val s = Socket()
         try { vpnService?.protect(s) } catch(e: Throwable) {}
-        return s
+        s.bind(java.net.InetSocketAddress(localHost, localPort))
+        s.connect(InetSocketAddress(host, port), 10000)
+        return base.createSocket(s, host, port, true)
     }
 
     override fun createSocket(host: java.net.InetAddress, port: Int): Socket {
-        val s = base.createSocket(host, port)
+        val s = Socket()
         try { vpnService?.protect(s) } catch(e: Throwable) {}
-        return s
+        s.connect(InetSocketAddress(host, port), 10000)
+        return base.createSocket(s, host.hostAddress, port, true)
     }
 
     override fun createSocket(address: java.net.InetAddress, port: Int, localAddress: java.net.InetAddress, localPort: Int): Socket {
-        val s = base.createSocket(address, port, localAddress, localPort)
+        val s = Socket()
         try { vpnService?.protect(s) } catch(e: Throwable) {}
-        return s
+        s.bind(java.net.InetSocketAddress(localAddress, localPort))
+        s.connect(InetSocketAddress(address, port), 10000)
+        return base.createSocket(s, address.hostAddress, port, true)
     }
 }
 

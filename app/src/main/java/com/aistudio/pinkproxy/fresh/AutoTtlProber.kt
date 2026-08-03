@@ -184,7 +184,11 @@ object AutoTtlProber {
         } else {
             netMap["global"] = (currentGlobal * 0.7 + newTtl * 0.3).toInt().coerceIn(2, 30)
         }
-        discoveredTtls["global"] = netMap["global"]!!
+        netMap["global"]?.let { globalTtl ->
+            discoveredTtls["global"] = globalTtl
+        } ?: run {
+            discoveredTtls["global"] = newTtl
+        }
     }
 
     private suspend fun identifyCensorHop(addr: InetAddress, port: Int, serverDist: Int, vpnService: VpnService?): Int = coroutineScope {

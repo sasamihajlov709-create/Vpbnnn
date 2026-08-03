@@ -171,6 +171,8 @@ object RecoveryManager {
                 if (event == RecoveryEvent.DNS_POISONED) {
                     // Force the app to use nuclear/smuggling DoH immediately
                     BypassConfig.setPanicMode(true)
+                    // Force the app to use nuclear/smuggling DoH immediately
+                    RobustResolver.dnsMode = "Smart DoH"
                 }
 
                 if (recoveryEscalation < 2) {
@@ -218,13 +220,6 @@ object RecoveryManager {
                     triggerPanic("Critical stall detected ($event)")
                     requestServiceRestart("Persistent stalling")
                 }
-            }
-            RecoveryEvent.DNS_POISONED -> {
-                Log.e("RecoveryManager", "DNS Poisoning detected! Switching to DoH-only mode.")
-                RobustResolver.clearCache()
-                RobustResolver.dnsMode = "Smart DoH"
-                DnsOptimizer.forceRefresh()
-                recoveryEscalation++
             }
             RecoveryEvent.MTU_EXCEEDED -> {
                 val currentMtu = BypassConfig.currentMtu.value

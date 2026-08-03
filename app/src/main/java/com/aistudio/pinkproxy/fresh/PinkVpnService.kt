@@ -234,7 +234,9 @@ class PinkVpnService : VpnService() {
                     BypassConfig.updateNetworkType(if (isWifi) NetworkType.WIFI else if (isMobile) NetworkType.MOBILE else NetworkType.UNKNOWN)
                 }
             }
-            connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
+            networkCallback?.let {
+                connectivityManager?.registerDefaultNetworkCallback(it)
+            }
         } catch (e: Throwable) {
             Log.e("PinkVpnService", "Failed to register network monitor", e)
         }
@@ -333,7 +335,9 @@ class PinkVpnService : VpnService() {
             _isRunning.value = true
             
             // Start tun2socks
-            startTun2Socks(vpnInterface!!, PROXY_PORT)
+        vpnInterface?.let {
+            startTun2Socks(it, PROXY_PORT)
+        } ?: Log.e("PinkVpnService", "VPN interface is null, cannot start tun2socks")
             
             // Monitor engine status
             engineMonitorJob?.cancel()
@@ -535,5 +539,6 @@ class PinkVpnService : VpnService() {
         serviceScope.cancel()
         instance = null
         BypassConfig.activeVpnService = null
+        ProxyDispatcher.context = null
     }
 }

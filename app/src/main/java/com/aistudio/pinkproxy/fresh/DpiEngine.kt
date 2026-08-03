@@ -566,7 +566,9 @@ object DpiEngine {
     }
 
     fun getAverageScore(strategy: BypassStrategy): Double {
-        return strategyScores.values.map { it[strategy]?.get() ?: 0 }.map { it.toDouble() }.average()
+        val scores = strategyScores.values.map { it[strategy]?.get() ?: 0 }.map { it.toDouble() }
+        if (scores.isEmpty()) return 0.0
+        return scores.average()
     }
 
     fun resetStrategyScoresForNetworkChange() {
@@ -739,7 +741,7 @@ object DpiEngine {
         BypassConfig.delay1 = getRecommendedDelay()
         
         pruneStrategies()
-        saveScores(ProxyDispatcher.context!!)
+        ProxyDispatcher.context?.let { saveScores(it) }
 
         if (totalSuccess + totalFailure > 1000) {
             successHistory.clear()

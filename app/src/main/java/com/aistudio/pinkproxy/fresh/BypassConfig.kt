@@ -190,10 +190,10 @@ object BypassConfig {
         delay2 = prefs.getLong("delay2", 100L)
         fakeTtl = prefs.getInt("fakeTtl", 3)
         val savedStrat = prefs.getString("global_strategy", BypassStrategy.SNI_SPLIT.name)
-        try {
-            _strategy.value = BypassStrategy.valueOf(savedStrat!!)
-        } catch (e: Throwable) {
-            _strategy.value = BypassStrategy.SNI_SPLIT
+        _strategy.value = try {
+            BypassStrategy.valueOf(savedStrat ?: BypassStrategy.SNI_SPLIT.name)
+        } catch (e: Exception) {
+            BypassStrategy.SNI_SPLIT
         }
         
         prefs.getString("censor_heuristic_data", null)?.let { data ->

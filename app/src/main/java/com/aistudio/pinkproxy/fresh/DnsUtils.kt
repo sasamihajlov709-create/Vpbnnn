@@ -18,8 +18,8 @@ object DnsUtils {
                 val len = payload[pos].toInt() and 0xFF
                 if (len == 0) break
                 if (sb.isNotEmpty()) sb.append(".")
-                if (pos + 1 + len > limit) return null
-                sb.append(String(payload, pos + 1, len))
+                if (pos + 1 + len > limit || pos + 1 + len > payload.size) return null
+                sb.append(String(payload, pos + 1, len, Charsets.US_ASCII))
                 pos += (len + 1)
             }
             if (pos + 2 < limit) {
@@ -41,10 +41,11 @@ object DnsUtils {
         }
 
         val bos = java.io.ByteArrayOutputStream()
-        val limit = queryOffset + queryLength
+        val limit = (queryOffset + queryLength).coerceAtMost(query.size)
+        val safeQuerySize = query.size
         // ID
-        bos.write(if (queryOffset < limit) query[queryOffset].toInt() else 0)
-        bos.write(if (queryOffset + 1 < limit) query[queryOffset + 1].toInt() else 0)
+        bos.write(if (queryOffset < safeQuerySize && queryOffset < limit) query[queryOffset].toInt() else 0)
+        bos.write(if (queryOffset + 1 < safeQuerySize && queryOffset + 1 < limit) query[queryOffset + 1].toInt() else 0)
         // Flags: Standard query response, No error
         bos.write(0x81)
         bos.write(0x80)
