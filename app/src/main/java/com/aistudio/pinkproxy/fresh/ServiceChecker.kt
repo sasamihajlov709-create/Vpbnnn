@@ -430,8 +430,9 @@ object ServiceChecker {
                                                 socket = java.net.Socket()
                                                 try { vpn.protect(socket) } catch(e: Throwable) {}
                                                 socket.soTimeout = 1500
-                                                withTimeout(3000) {
-                                                    socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
+                                                withTimeoutOrNull(3000) {
+                                                    val targetIp = ips.firstOrNull() ?: return@withTimeoutOrNull
+                                                    socket.connect(java.net.InetSocketAddress(targetIp, 443), 1500)
                                                     val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
                                                     
                                                     val out = socket.getOutputStream()

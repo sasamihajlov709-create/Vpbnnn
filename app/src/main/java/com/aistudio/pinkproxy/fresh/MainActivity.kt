@@ -896,6 +896,94 @@ fun ExpandableSection(
 }
 
 @Composable
+fun StrategySelectionDialog(
+    currentStrategy: BypassStrategy,
+    onDismiss: () -> Unit,
+    onSelect: (BypassStrategy) -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .fillMaxHeight(0.8f),
+            shape = RoundedCornerShape(24.dp),
+            color = PureBlack,
+            border = BorderStroke(1.dp, GentleMediumPink.copy(alpha = 0.2f))
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = "ВЫБОР СТРАТЕГИИ ОБХОДА",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Black,
+                    color = GentleLightPink,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(BypassStrategy.entries) { strategy ->
+                        val isSelected = strategy == currentStrategy
+                        val color = when (strategy.group) {
+                            StrategyGroup.LIGHT -> Color(0xFF81C784)
+                            StrategyGroup.MEDIUM -> GentleLightPink
+                            StrategyGroup.HEAVY -> Color(0xFFFFB74D)
+                            StrategyGroup.EXTREME -> Color(0xFFE57373)
+                        }
+
+                        Surface(
+                            onClick = { onSelect(strategy) },
+                            color = if (isSelected) color.copy(alpha = 0.15f) else Color.Transparent,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, if (isSelected) color.copy(alpha = 0.5f) else GentleMediumPink.copy(alpha = 0.1f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = strategy.name.replace("_", " "),
+                                        color = if (isSelected) color else GentleLightPink,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "${strategy.family.name} • Кост: ${strategy.cost} • Риск: ${strategy.risk}",
+                                        color = GentleLightPink.copy(alpha = 0.4f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(Icons.Default.CheckCircle, null, tint = color, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.1f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("ЗАКРЫТЬ", color = GentleLightPink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+@Composable
 fun CompactActionButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
@@ -1985,12 +2073,12 @@ fun ExpertSettingsCard(
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
                 
-                var showStrategyMenuLocal by remember { mutableStateOf(false) }
+                var showStrategyDialog by remember { mutableStateOf(false) }
                 val currentStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
                 
                 Box {
                     Button(
-                        onClick = { showStrategyMenuLocal = true },
+                        onClick = { showStrategyDialog = true },
                         colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.1f)),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth().height(40.dp),
@@ -2002,33 +2090,27 @@ fun ExpertSettingsCard(
                             Icon(Icons.Default.ArrowDropDown, null, tint = GentleMediumPink, modifier = Modifier.size(16.dp))
                         }
                     }
-                    
-                    DropdownMenu(
-                        expanded = showStrategyMenuLocal,
-                        onDismissRequest = { showStrategyMenuLocal = false },
-                        modifier = Modifier.background(PureBlack).border(1.dp, GentleMediumPink.copy(alpha = 0.2f))
-                    ) {
-                        BypassStrategy.entries.forEach { strategy ->
-                            DropdownMenuItem(
-                                text = { Text(strategy.name.replace("_", " "), color = GentleLightPink, fontSize = 11.sp) },
-                                onClick = {
-                                    showStrategyMenuLocal = false
-                                    BypassConfig.setGlobalStrategy(strategy)
-                                    BypassConfig.saveTuningSettings(context)
-                                    // Trigger immediate change if VPN is running
-                                    if (isVpnActive) {
-                                        try {
-                                            val intent = Intent(context, PinkVpnService::class.java).apply {
-                                                action = "CHANGE_STRATEGY"
-                                            }
-                                            androidx.core.content.ContextCompat.startForegroundService(context, intent)
-                                        } catch (e: Throwable) {
-                                            Log.e("MainActivity", "Failed to change strategy: ${e.message}")
+
+                    if (showStrategyDialog) {
+                        StrategySelectionDialog(
+                            currentStrategy = currentStrategy,
+                            onDismiss = { showStrategyDialog = false },
+                            onSelect = { strategy ->
+                                showStrategyDialog = false
+                                BypassConfig.setGlobalStrategy(strategy)
+                                BypassConfig.saveTuningSettings(context)
+                                if (isVpnActive) {
+                                    try {
+                                        val intent = Intent(context, PinkVpnService::class.java).apply {
+                                            action = "CHANGE_STRATEGY"
                                         }
+                                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                                    } catch (e: Throwable) {
+                                        Log.e("MainActivity", "Failed to change strategy: ${e.message}")
                                     }
                                 }
-                            )
-                        }
+                            }
+                        )
                     }
                 }
                 

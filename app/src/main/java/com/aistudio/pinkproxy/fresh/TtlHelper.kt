@@ -37,7 +37,7 @@ object TtlHelper {
                 // Some versions might have different name or not have it
             }
         } catch (e: Throwable) {
-            Log.e("TtlHelper", "Reflection failed", e)
+            Log.d("TtlHelper", "Reflection failed (expected on some Android versions): ${e.message}")
         }
     }
 

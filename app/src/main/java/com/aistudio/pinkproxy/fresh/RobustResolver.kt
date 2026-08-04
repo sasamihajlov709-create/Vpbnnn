@@ -20,7 +20,7 @@ object RobustResolver {
         resolverScope = scope
     }
 
-    private fun getScope(): CoroutineScope = resolverScope ?: CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
+    private fun getScope(): CoroutineScope = resolverScope ?: ProxyDispatcher.mainScope
 
     fun loadDnsSettings(context: android.content.Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
@@ -134,18 +134,17 @@ object RobustResolver {
                     val sorted = DnsCacheManager.getSortedIps(par)
                     DnsCacheManager.put(host, sorted)
                     
-                    // Smart Prefetch common subdomains
+                    // Smart Prefetch common subdomains with throttling
                     if (!host.startsWith("www.") && host.split(".").size == 2) {
                         getScope().launch {
                             listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
                                 try { 
+                                    delay(500) // Stagger prefetch to avoid overwhelming the system
                                     val preHost = prefix + host
                                     if (DnsCacheManager.getCached(preHost) == null) {
                                         performParallelResolution(preHost, vpnService) 
                                     }
-                                } catch (e: Throwable) { 
-                                    // if (e is CancellationException) throw e 
-                                }
+                                } catch (e: Throwable) { }
                             }
                         }
                     }

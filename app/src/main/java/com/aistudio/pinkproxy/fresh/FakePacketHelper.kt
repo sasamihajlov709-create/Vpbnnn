@@ -8,6 +8,8 @@ import java.nio.ByteBuffer
 import android.util.Base64
 
 object FakePacketHelper {
+    private val staticNoiseCache = ByteArray(32768).apply { java.util.concurrent.ThreadLocalRandom.current().nextBytes(this) }
+    
     private var cachedQuicInitial = buildQuicInitial()
     private var cachedStun = buildStunBindingRequest()
     private var cachedDtls = buildFakeDtlsClientHello()
@@ -264,8 +266,6 @@ object FakePacketHelper {
         return copy
     }
 
-    private val staticNoiseCache = ByteArray(32768).apply { java.util.concurrent.ThreadLocalRandom.current().nextBytes(this) }
-    
     fun buildUdpNoise(size: Int): ByteArray {
         val result = ByteArray(size)
         if (size <= 32768) {

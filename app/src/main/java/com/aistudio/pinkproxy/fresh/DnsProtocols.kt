@@ -504,7 +504,7 @@ object DnsProtocols {
                 if (sslSocket == null || sslSocket.isClosed || !sslSocket.isConnected) {
                     synchronized(poolLock) {
                         sslSocket = dotPool[dotIp]
-                        if (sslSocket == null || sslSocket!!.isClosed || !sslSocket!!.isConnected) {
+                        if (sslSocket == null || sslSocket?.isClosed == true || sslSocket?.isConnected == false) {
                             val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
                             trustManagerFactory.init(null as java.security.KeyStore?)
                             val trustManagers = trustManagerFactory.trustManagers
@@ -531,7 +531,7 @@ object DnsProtocols {
                     }
                 }
 
-                val socket = sslSocket!!
+                val socket = sslSocket ?: throw Exception("SSLSocket initialization failed")
                 val dos = DataOutputStream(socket.getOutputStream())
                 dos.writeShort(query.size)
                 dos.write(query)
@@ -786,11 +786,14 @@ object DnsProtocols {
         val sc = SSLContext.getInstance("TLS")
         sc.init(null, if (defaultTrustManager != null) arrayOf(defaultTrustManager) else null, null)
         
-        val factory = ProtectedSSLSocketFactory(sc.socketFactory, vpnService)
-        val sslSocket = factory.createSocket() as? javax.net.ssl.SSLSocket ?: return emptyList()
+        val plainSocket = Socket()
+        try { vpnService?.protect(plainSocket) } catch(e: Throwable) {}
         
+        var sslSocket: javax.net.ssl.SSLSocket? = null
         try {
-            sslSocket.connect(InetSocketAddress(target, 443), 4000)
+            plainSocket.connect(InetSocketAddress(target, 443), 4000)
+            sslSocket = sc.socketFactory.createSocket(plainSocket, target, 443, true) as javax.net.ssl.SSLSocket
+            
             sslSocket.soTimeout = 4000
             
             // Set SNI to a very common innocent domain to bypass SNI-based blocking
@@ -893,7 +896,8 @@ object DnsProtocols {
             }
         } catch (e: Throwable) {
         } finally {
-            try { sslSocket.close() } catch (e: Throwable) {}
+            try { sslSocket?.close() } catch (e: Throwable) {}
+            try { plainSocket.close() } catch (e: Throwable) {}
         }
         return emptyList()
     }
@@ -1003,6 +1007,18 @@ class ProtectedSocketFactory(private val vpnService: VpnService?) : javax.net.So
 class ProtectedSSLSocketFactory(private val base: SSLSocketFactory, private val vpnService: VpnService?) : SSLSocketFactory() {
     override fun getDefaultCipherSuites() = base.defaultCipherSuites
     override fun getSupportedCipherSuites() = base.supportedCipherSuites
+
+    override fun createSocket(): Socket {
+        return try {
+            val s = base.createSocket()
+            try { vpnService?.protect(s) } catch(e: Throwable) {}
+            s
+        } catch (e: Throwable) {
+            val s = Socket()
+            try { vpnService?.protect(s) } catch(e: Throwable) {}
+            s
+        }
+    }
 
     override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket {
         try { vpnService?.protect(s) } catch(e: Throwable) {}

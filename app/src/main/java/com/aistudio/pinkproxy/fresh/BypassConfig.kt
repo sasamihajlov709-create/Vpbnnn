@@ -39,7 +39,7 @@ object BypassConfig {
 
     fun updateTestingStrategies(strategies: List<BypassStrategy>) {
         if (strategies.isNotEmpty()) {
-            _testingStrategies.value = strategies.distinct().take(6)
+            _testingStrategies.value = strategies.distinct().take(6).toList()
         }
     }
     
