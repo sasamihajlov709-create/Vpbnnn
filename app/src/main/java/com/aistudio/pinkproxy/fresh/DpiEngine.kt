@@ -777,6 +777,7 @@ object DpiEngine {
                 val ok = withTimeoutOrNull(3000) {
                     val s = java.net.Socket()
                     try {
+                        BypassConfig.activeVpnService?.protect(s)
                         s.connect(java.net.InetSocketAddress(addr, 443), 1500)
                         val out = s.getOutputStream()
                         val fake = FakePacketHelper.buildRealisticTlsHello(host)

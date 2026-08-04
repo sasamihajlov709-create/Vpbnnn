@@ -140,7 +140,7 @@ object TcpTransportHandler {
                                     
                                     // Extreme evasion: Sequence Desync before critical packets
                                     if (intensity > 80 && packetsCount < 5) {
-                                        sendSequenceDesync(remoteSocket, remoteOut, rnd)
+                                        sendSequenceDesync(remoteSocket, rnd)
                                     }
 
                                     // Apply standard BypassConfig strategies
@@ -433,7 +433,7 @@ object TcpTransportHandler {
         } catch (e: Throwable) {}
     }
 
-    private suspend fun sendSequenceDesync(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
+    private suspend fun sendSequenceDesync(socket: Socket, rnd: ThreadLocalRandom) {
         try {
             TtlHelper.setWindowSize(socket, 0)
             delay(rnd.nextLong(2, 10))
