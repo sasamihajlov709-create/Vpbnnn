@@ -372,7 +372,7 @@ object TcpTransportHandler {
                 val hello = FakePacketHelper.buildRealisticTlsHello(decoy)
                 
                 // Target the censor hop exactly if known, else use a very low TTL
-                val discoveredTtl = AutoTtlProber.getDiscoveredTtl(decoy) ?: 4
+                val discoveredTtl = BypassConfig.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(decoy) ?: 4
                 TtlHelper.setTtl(s, discoveredTtl)
                 
                 out.write(hello)
@@ -395,13 +395,12 @@ object TcpTransportHandler {
         } catch (e: Throwable) {}
     }
 
-    private fun applyWindowPulse(socket: Socket) {
+    private suspend fun applyWindowPulse(socket: Socket) {
         try {
-            val rnd = ThreadLocalRandom.current()
             val original = socket.receiveBufferSize
             socket.receiveBufferSize = 1
-            // Small delay is not possible in blocking IO without a read/write, 
-            // but changing the buffer size affects future ACKs sent by the kernel.
+            // Delay to allow kernel to potentially advertise smaller window on ACKs
+            delay(10)
             socket.receiveBufferSize = original
         } catch (e: Throwable) {}
     }

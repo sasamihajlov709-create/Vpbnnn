@@ -355,8 +355,12 @@ object DnsProtocols {
                 val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
                 try {
                     try { socket.sendUrgentData(java.util.concurrent.ThreadLocalRandom.current().nextInt(256)) } catch(e: Throwable) {}
-delay(1)
-TtlHelper.setTtl(socket, 64)
+                    val fakeTtl = BypassConfig.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(dnsIp) ?: rnd.nextInt(2, 6)
+                    TtlHelper.setTtl(socket, fakeTtl)
+                    output.write(fake)
+                    output.flush()
+                    delay(2)
+                    TtlHelper.setTtl(socket, 64)
                 } catch(e: Throwable) {}
             }
             
@@ -410,7 +414,8 @@ TtlHelper.setTtl(socket, 64)
             try { socket.sendUrgentData(rnd.nextInt(256)) } catch(e: Throwable) {}
             
             // Fake Segment (Low TTL)
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            val fakeTtl = BypassConfig.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(dnsIp) ?: rnd.nextInt(2, 6)
+            TtlHelper.setTtl(socket, fakeTtl)
             output.write(FakePacketHelper.buildUdpNoise(16))
             output.flush()
             delay(2)

@@ -1937,7 +1937,7 @@ fun ExpertSettingsCard(
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("IP TTL для фейк-пакетов (fakeTtl):", fontSize = 10.sp, color = GentleLightPink.copy(alpha = 0.8f))
-                            Text("${fakeTtl.toInt()}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
+                            Text(if (fakeTtl.toInt() == 0) "Auto" else "${fakeTtl.toInt()}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
                         }
                         Slider(
                             value = fakeTtl,
@@ -1946,7 +1946,7 @@ fun ExpertSettingsCard(
                                 BypassConfig.fakeTtl = it.toInt()
                                 BypassConfig.saveTuningSettings(context)
                             },
-                            valueRange = 1f..30f,
+                            valueRange = 0f..30f,
                             colors = SliderDefaults.colors(
                                 thumbColor = GentleMediumPink,
                                 activeTrackColor = GentleDarkPink

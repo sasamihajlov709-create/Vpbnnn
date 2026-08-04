@@ -74,7 +74,7 @@ object BypassConfig {
     @Volatile var frag3 = 2
     @Volatile var delay1 = 20L
     @Volatile var delay2 = 100L
-    @Volatile var fakeTtl = 3
+    @Volatile var fakeTtl = 0
     @Volatile var isDiagnosticMode = false
     @Volatile var blockQuic = false
     @Volatile var isCharging = true
@@ -195,7 +195,7 @@ object BypassConfig {
         frag3 = prefs.getInt("frag3", 2)
         delay1 = prefs.getLong("delay1", 20L)
         delay2 = prefs.getLong("delay2", 100L)
-        fakeTtl = prefs.getInt("fakeTtl", 3)
+        fakeTtl = prefs.getInt("fakeTtl", 0)
         val savedStrat = prefs.getString("global_strategy", BypassStrategy.SNI_SPLIT.name)
         _strategy.value = try {
             BypassStrategy.valueOf(savedStrat ?: BypassStrategy.SNI_SPLIT.name)

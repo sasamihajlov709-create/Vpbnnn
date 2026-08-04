@@ -33,21 +33,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         
         ProxyStats.startSpeedMonitor(scope)
         
-        // Connection Watchdog to prevent leaks and stuck workers
+        // Connection Watchdog to monitor connections
         scope.launch {
             while (isActive) {
                 delay(60000)
                 val activeCount = 800 - activeConnectionSemaphore.availablePermits()
                 if (activeCount > 600) {
-                    Log.i("PinkProxy", "Watchdog: $activeCount active connections. Cleaning up...")
-                    // If semaphore is nearly empty, we might have leaked permits
-                    if (activeCount > 750) {
-                        Log.e("PinkProxy", "CRITICAL: Semaphore exhaustion. Force resetting permits.")
-                        val needed = 800 - activeConnectionSemaphore.availablePermits()
-                        if (needed > 0) {
-                            activeConnectionSemaphore.release(needed)
-                        }
-                    }
+                    Log.i("PinkProxy", "Watchdog: $activeCount active connections.")
                 }
                 
                 // Force memory cleanup if needed

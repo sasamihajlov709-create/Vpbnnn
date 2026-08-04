@@ -241,7 +241,7 @@ object StrategyHandlers {
         repeat(rnd.nextInt(1, 4)) {
             val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 100))
             val p = DatagramPacket(noise, noise.size, dest, port)
-            TtlHelper.setUdpTtl(socket, AutoTtlProber.getDiscoveredTtl("") ?: rnd.nextInt(2, 6)) // Low TTL decoy
+            TtlHelper.setUdpTtl(socket, AutoTtlProber.getDiscoveredTtl(dest.hostAddress ?: "") ?: rnd.nextInt(2, 6)) // Low TTL decoy
             try { socket.send(p) } catch (e: Throwable) {}
         }
         
