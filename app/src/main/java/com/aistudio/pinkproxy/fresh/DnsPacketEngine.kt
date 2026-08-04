@@ -116,11 +116,11 @@ object DnsPacketEngine {
 
     fun buildDnsQueryTcp(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000), mangleCase: Boolean = false): ByteArray {
         val udpQuery = buildDnsQuery(host, type, id, mangleCase)
-        val bos = ByteArrayOutputStream()
-        val dos = java.io.DataOutputStream(bos)
-        dos.writeShort(udpQuery.size)
-        dos.write(udpQuery)
-        return bos.toByteArray()
+        val result = ByteArray(udpQuery.size + 2)
+        result[0] = (udpQuery.size shr 8).toByte()
+        result[1] = (udpQuery.size and 0xFF).toByte()
+        System.arraycopy(udpQuery, 0, result, 2, udpQuery.size)
+        return result
     }
 
     fun parseDnsResponse(data: ByteArray, length: Int, expectedId: Int = -1): List<InetAddress> {
