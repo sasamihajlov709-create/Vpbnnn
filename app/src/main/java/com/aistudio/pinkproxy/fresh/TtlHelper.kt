@@ -170,7 +170,7 @@ object TtlHelper {
             result = if (isIpv6) {
                 getsockoptInt(fd, 41, 16)
             } else {
-                getsockoptInt(fd, 0, 4)
+                getsockoptInt(fd, 0, 2)
             }
         }
         return result

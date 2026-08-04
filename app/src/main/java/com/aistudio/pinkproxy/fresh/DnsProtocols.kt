@@ -30,7 +30,7 @@ object DnsProtocols {
             .readTimeout(5, TimeUnit.SECONDS)
             .writeTimeout(5, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
-            .connectionPool(ConnectionPool(15, 5, TimeUnit.MINUTES))
+            .connectionPool(ConnectionPool(64, 5, TimeUnit.MINUTES))
             .build()
     }
 

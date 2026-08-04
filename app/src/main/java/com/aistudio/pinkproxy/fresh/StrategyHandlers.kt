@@ -51,7 +51,7 @@ object StrategyHandlers {
         if (strategy == BypassStrategy.HTTP_HOST_REORDER && str != null) {
             val hostHeader = "Host: $host\r\n"
             if (str.contains(hostHeader)) {
-                val smuggled = str.replace(hostHeader, "")
+                val smuggled = str.replaceFirst(hostHeader, "")
                 val endOfHeaders = smuggled.indexOf("\r\n\r\n")
                 if (endOfHeaders != -1) {
                     val reordered = smuggled.substring(0, endOfHeaders + 2) + hostHeader + smuggled.substring(endOfHeaders + 2)
@@ -145,7 +145,7 @@ object StrategyHandlers {
 
         if (finalLen > 44 && finalData[0] == 0x16.toByte() && finalData[5] == 0x01.toByte()) {
             // Find SNI position if possible
-            val sniPos = TlsParser.findSniOffset(finalData, finalLen)
+            val sniPos = TlsParser.findSniOffset(finalData, finalLen, host)
             if (sniPos > 0) {
                 // Split exactly at SNI or just before
                 val split = if (rnd.nextBoolean()) sniPos else sniPos - 1
@@ -171,7 +171,7 @@ object StrategyHandlers {
     suspend fun handleFragmentationStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, effectiveDelay: Long) {
         if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE) {
             if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
-                val sniPos = TlsParser.findSniOffset(data, length)
+                val sniPos = TlsParser.findSniOffset(data, length, host)
                 if (sniPos > 0) {
                     val split1 = sniPos - rnd.nextInt(1, 3)
                     if (split1 > 0) {
@@ -237,7 +237,7 @@ object StrategyHandlers {
     private suspend fun handleNuclearStrategy(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
         // Multi-stage fragmentation with desync, window oscillation and fake retransmissions
         val intensity = ProxyStats.censorshipIntensity.value
-        val splitPos = TlsParser.findSniOffset(data, length).coerceAtLeast(length / 2).coerceAtMost(length - 1)
+        val splitPos = TlsParser.findSniOffset(data, length, host).coerceAtLeast(length / 2).coerceAtMost(length - 1)
         
         // 1. Initial desync: Set tiny window
         TtlHelper.setWindowSize(socket, rnd.nextInt(1, 10))

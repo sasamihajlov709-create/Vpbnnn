@@ -607,9 +607,6 @@ object DpiEngine {
     }
 
     fun analyzeAndAdjust() {
-        // Apply score decay to allow for adaptation to new censorship patterns
-        decayScores()
-        
         // Cleanup memory
         if (hostStrategyBlacklist.size > 500) {
             val now = System.currentTimeMillis()
@@ -824,22 +821,6 @@ object DpiEngine {
             }
         }
         return sb.toString()
-    }
-
-    private fun decayScores() {
-        // Slowly move all scores towards a baseline (e.g., 500)
-        // This ensures that strategies that worked long ago but no longer work
-        // eventually lose their high score, and new strategies get a chance.
-        strategyScores.values.forEach { catScores ->
-            catScores.values.forEach { score ->
-                val s = score.get()
-                if (s > 500) {
-                    score.addAndGet(-(s - 500) / 100 - 1)
-                } else if (s < 500) {
-                    score.addAndGet((500 - s) / 50 + 1)
-                }
-            }
-        }
     }
 
     private fun saveHostMemory(context: android.content.Context) {
