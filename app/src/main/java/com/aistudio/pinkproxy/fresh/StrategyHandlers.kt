@@ -46,6 +46,31 @@ object StrategyHandlers {
             }
         }
 
+        
+        if (strategy == BypassStrategy.HTTP_HOST_REORDER) {
+            val str = String(data, 0, length, Charsets.US_ASCII)
+            val hostHeader = "Host: $host\r\n"
+            if (str.contains(hostHeader)) {
+                val smuggled = str.replace(hostHeader, "")
+                val endOfHeaders = smuggled.indexOf("\r\n\r\n")
+                if (endOfHeaders != -1) {
+                    val reordered = smuggled.substring(0, endOfHeaders + 2) + hostHeader + smuggled.substring(endOfHeaders + 2)
+                    val outData = reordered.toByteArray()
+                    output.write(outData, 0, outData.size)
+                    output.flush()
+                    return
+                }
+            }
+        }
+
+        if (strategy == BypassStrategy.HTTP_KEEP_ALIVE_FAKE) {
+             val str = String(data, 0, length, Charsets.US_ASCII)
+             val modified = str.replace("Connection: keep-alive", "Connection: keep-alive, Upgrade")
+             val outData = modified.toByteArray()
+             output.write(outData, 0, outData.size)
+             output.flush()
+             return
+        }
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_HTTP) {
             // Prepend fake binary data that looks like a TLS handshake, then the HTTP request
             val fakeTls = FakePacketHelper.buildRealisticTlsHello(host)
