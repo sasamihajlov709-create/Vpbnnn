@@ -23,7 +23,7 @@ object IcmpHelper {
 
     fun createIcmpEchoReplyPacket(originalPacket: ByteArray, originalLength: Int, ipHeaderLength: Int): ByteArray {
         if (ipHeaderLength < 20 || originalLength < ipHeaderLength + 8 || originalLength > 65535 || originalPacket.size < originalLength) return ByteArray(0)
-        val buffer = bufferTL.get()!!
+        val buffer = bufferTL.get() ?: ByteBuffer.allocate(65535).also { bufferTL.set(it) }
         buffer.clear()
         buffer.put(originalPacket, 0, originalLength)
         
@@ -50,7 +50,7 @@ object IcmpHelper {
     
     fun createIcmpv6EchoReplyPacket(originalPacket: ByteArray, originalLength: Int): ByteArray {
         if (originalLength < 48 || originalLength > 65535 || originalPacket.size < originalLength) return ByteArray(0)
-        val buffer = bufferTL.get()!!
+        val buffer = bufferTL.get() ?: ByteBuffer.allocate(65535).also { bufferTL.set(it) }
         buffer.clear()
         buffer.put(originalPacket, 0, originalLength)
         
@@ -263,7 +263,7 @@ object IcmpHelper {
         val actualIcmpPayloadLen = minOf(icmpPayloadLen, originalLength)
         
         val totalLength = 20 + 8 + actualIcmpPayloadLen
-        val buffer = bufferTL.get()!!
+        val buffer = bufferTL.get() ?: ByteBuffer.allocate(65535).also { bufferTL.set(it) }
         buffer.clear()
         
         // IPv4 Header
@@ -307,7 +307,7 @@ object IcmpHelper {
         val actualIcmpPayloadLen = minOf(icmpPayloadLen, originalLength)
         
         val totalLength = 40 + 8 + actualIcmpPayloadLen // IPv6 Header + ICMPv6 Header + Payload
-        val buffer = bufferTL.get()!!
+        val buffer = bufferTL.get() ?: ByteBuffer.allocate(65535).also { bufferTL.set(it) }
         buffer.clear()
         
         // IPv6 Header

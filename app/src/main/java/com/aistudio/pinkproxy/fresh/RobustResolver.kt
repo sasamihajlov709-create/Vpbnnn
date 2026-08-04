@@ -20,7 +20,7 @@ object RobustResolver {
         resolverScope = scope
     }
 
-    private fun getScope(): CoroutineScope = resolverScope ?: CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+    private fun getScope(): CoroutineScope = resolverScope ?: CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
 
     fun loadDnsSettings(context: android.content.Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
@@ -200,7 +200,7 @@ object RobustResolver {
         val primaryDoT: suspend () -> List<InetAddress> = { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) }
         val shadowUdp: suspend () -> List<InetAddress> = { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) }
         val shadowTcp: suspend () -> List<InetAddress> = { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
-        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDnsOverQuic(host, "8.8.8.8", vpnService) }
+        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDnsOverQuic(host, DnsOptimizer.bestDoqServer, vpnService) }
         val echCheck: suspend () -> List<InetAddress> = {
             try {
                 val httpsRecords = DnsProtocols.queryHttpsRecord(host, vpnService)
@@ -235,7 +235,7 @@ object RobustResolver {
         }
 
         val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size + 1)
-        val activeJobs = mutableListOf<Job>()
+        val activeJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
 
         // Grouped Happy Eyeballs-like staggered start
         val queryGroups = listOf(

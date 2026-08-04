@@ -371,7 +371,8 @@ object ServiceChecker {
         val actualContext = context ?: appContext ?: return
         if (!isProbing.compareAndSet(false, true)) return
         _isProbingState.value = true
-        val scope = if (internalScope?.isActive == true) internalScope!! else CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+        val currentScope = internalScope
+        val scope = if (currentScope?.isActive == true) currentScope else CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
         
         ProxyStats.logRecovery("Autopilot: Launching Parallel Strategy Tournament (Advanced Race)...")
         
@@ -379,6 +380,7 @@ object ServiceChecker {
         
         scope.launch(ProxyDispatcher.io) {
             try {
+                _isProbingState.value = true
                 val originalStrategy = BypassConfig.strategy.value
                 val currentCensorship = ProxyStats.censorshipIntensity.value
                 
@@ -393,72 +395,94 @@ object ServiceChecker {
                 
                 val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
                 
-                val strategyJobs = strategiesToTest.map { strategy ->
-                    launch {
-                        var successCount = 0
-                        var totalDuration = 0L
-                        
-                        for (host in testHosts) {
-                            var success = false
-                            val start = System.currentTimeMillis()
+                // Group strategies to avoid overwhelming the system with concurrent DNS/Socket calls
+                val chunks = strategiesToTest.chunked(2) 
+                
+                for (chunk in chunks) {
+                    val chunkJobs = chunk.map { strategy ->
+                        launch {
+                            var successCount = 0
+                            var totalDuration = 0L
                             
-                            if (strategy.family == StrategyFamily.UDP) {
-                                // Test UDP strategy using a DNS query as a proxy for UDP connectivity
-                                val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", BypassConfig.activeVpnService)
-                                if (res.isNotEmpty()) {
-                                    success = true
+                            for (host in testHosts) {
+                                if (!isActive) break
+                                var success = false
+                                val start = System.currentTimeMillis()
+                                
+                                val vpn = BypassConfig.activeVpnService
+                                if (vpn == null) {
+                                    ProxyStats.logRecovery("Probing: VPN service lost, aborting chunk.")
+                                    return@launch
                                 }
-                            } else {
-                                var socket: java.net.Socket? = null
+
                                 try {
-                                    val ips = RobustResolver.resolve(host, BypassConfig.activeVpnService)
-                                    if (ips.isNotEmpty()) {
-                                        socket = java.net.Socket()
-                                        try { BypassConfig.activeVpnService?.protect(socket) } catch(e: Throwable) {}
-                                        socket.soTimeout = 1500
-                                        withTimeout(2500) {
-                                            socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
-                                            val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
-                                            BypassConfig.applyBypass(
-                                                socket, 
-                                                socket.getOutputStream(), 
-                                                hello, 
-                                                hello.size, 
-                                                BypassConfig.getSessionConfig(host, strategy, 150L), 
-                                                host
-                                            )
-                                            socket.getOutputStream().flush()
-                                            val response = ByteArray(5)
-                                            val readCount = socket.getInputStream().read(response)
-                                            if (readCount >= 1 && (response[0] == 0x16.toByte() || response[0] == 0x17.toByte() || response[0] == 0x14.toByte() || response[0] == 'H'.code.toByte())) {
-                                                success = true
+                                    if (strategy.family == StrategyFamily.UDP) {
+                                        // Test UDP strategy using a DNS query as a proxy for UDP connectivity
+                                        val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpn)
+                                        if (res.isNotEmpty()) {
+                                            success = true
+                                        }
+                                    } else {
+                                        var socket: java.net.Socket? = null
+                                        try {
+                                            val ips = RobustResolver.resolve(host, vpn)
+                                            if (ips.isNotEmpty()) {
+                                                socket = java.net.Socket()
+                                                try { vpn.protect(socket) } catch(e: Throwable) {}
+                                                socket.soTimeout = 1500
+                                                withTimeout(3000) {
+                                                    socket.connect(java.net.InetSocketAddress(ips.first(), 443), 1500)
+                                                    val hello = FakePacketHelper.buildFakeClientHello(host, java.util.concurrent.ThreadLocalRandom.current().nextInt(50, 95))
+                                                    
+                                                    val out = socket.getOutputStream()
+                                                    if (out != null) {
+                                                        BypassConfig.applyBypass(
+                                                            socket, 
+                                                            out, 
+                                                            hello, 
+                                                            hello.size, 
+                                                            BypassConfig.getSessionConfig(host, strategy, 150L), 
+                                                            host
+                                                        )
+                                                        out.flush()
+                                                        
+                                                        val input = socket.getInputStream()
+                                                        if (input != null) {
+                                                            val response = ByteArray(5)
+                                                            val readCount = input.read(response)
+                                                            if (readCount >= 1 && (response[0] == 0x16.toByte() || response[0] == 0x17.toByte() || response[0] == 0x14.toByte() || response[0] == 'H'.code.toByte())) {
+                                                                success = true
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
+                                        } catch (e: Throwable) {
+                                            // Ignore probe failures
+                                        } finally {
+                                            try { socket?.close() } catch (e: Throwable) {}
                                         }
                                     }
                                 } catch (e: Throwable) {
-                                } finally {
-                                    try { socket?.close() } catch (e: Throwable) {}
+                                    if (e is CancellationException) throw e
                                 }
+                                
+                                if (success) {
+                                    successCount++
+                                    totalDuration += (System.currentTimeMillis() - start)
+                                }
+                                BypassConfig.recordStrategyResult(host, strategy, success)
                             }
                             
-                            if (success) {
-                                successCount++
-                                totalDuration += (System.currentTimeMillis() - start)
+                            if (successCount > 0) {
+                                val avgDuration = totalDuration / successCount
+                                resultsChannel.add(Triple(strategy, avgDuration, successCount))
+                                ProxyStats.logRecovery("Tournament: ${strategy.name} scored $successCount/${testHosts.size} (avg ${avgDuration}ms)")
                             }
-                            BypassConfig.recordStrategyResult(host, strategy, success)
-                        }
-                        
-                        if (successCount > 0) {
-                            val avgDuration = totalDuration / successCount
-                            resultsChannel.add(Triple(strategy, avgDuration, successCount))
-                            ProxyStats.logRecovery("Tournament: ${strategy.name} scored $successCount/${testHosts.size} (avg ${avgDuration}ms)")
                         }
                     }
-                }
-                
-                // Wait for tournament to complete
-                withTimeoutOrNull(6000) {
-                    strategyJobs.forEach { it.join() }
+                    chunkJobs.forEach { it.join() }
+                    if (!isActive) break
                 }
                 
                 val best = resultsChannel
@@ -511,7 +535,7 @@ object ServiceChecker {
             return withTimeout(3000) {
                 socket.connect(java.net.InetSocketAddress(ips.first(), 443), 2000)
                 val baseHello = FakePacketHelper.buildFakeClientHello(host, 32)
-                val paddingNeeded = size - baseHello.size - 5 
+                val paddingNeeded = (size - baseHello.size - 5).coerceAtLeast(0)
                 val paddedHello = if (paddingNeeded > 0) {
                     FakePacketHelper.injectTlsPadding(baseHello, baseHello.size, paddingNeeded)
                 } else baseHello

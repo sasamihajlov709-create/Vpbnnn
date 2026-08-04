@@ -18,9 +18,16 @@ enum class RecoveryEvent {
 }
 
 object RecoveryManager {
+    fun stopHealthCheck() {
+        healthCheckJob?.cancel()
+        healthCheckJob = null
+        stallMonitorJob?.cancel()
+        stallMonitorJob = null
+    }
+
     private var lastRestartTime = 0L
     private var restartCooldown = 60000L
-    private var recoveryEscalation = 0
+    private val recoveryEscalation = java.util.concurrent.atomic.AtomicInteger(0)
     private var healthCheckJob: Job? = null
     private var stallMonitorJob: Job? = null
 
@@ -41,11 +48,13 @@ object RecoveryManager {
                     // Strategy Cooling: Periodically try to reduce escalation if things are stable
                     if (now - lastCoolDown > 600000) { // Every 10 minutes
                         val rate = ProxyStats.getSuccessRate()
-                        if (recoveryEscalation > 0 && rate > 80) {
+                        val currentEsc = recoveryEscalation.get()
+                        if (currentEsc > 0 && rate > 80) {
                             val reduction = if (rate > 95) 2 else 1
-                            recoveryEscalation = (recoveryEscalation - reduction).coerceAtLeast(0)
-                            Log.i("RecoveryManager", "Strategy cooling: Escalation reduced by $reduction to $recoveryEscalation")
-                            if (recoveryEscalation == 0) BypassConfig.setPanicMode(false)
+                            val newVal = (currentEsc - reduction).coerceAtLeast(0)
+                            recoveryEscalation.set(newVal)
+                            Log.i("RecoveryManager", "Strategy cooling: Escalation reduced by $reduction to $newVal")
+                            if (newVal == 0) BypassConfig.setPanicMode(false)
                         }
                         lastCoolDown = now
                     }
@@ -140,7 +149,7 @@ object RecoveryManager {
                     DpiType.CONNECTION_TIMEOUT -> {
                         val candidates = listOf(BypassStrategy.TLS_REC_SPLIT, BypassStrategy.TCP_ACK_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS)
                         BypassConfig.setGlobalStrategy(candidates.random())
-                        if (recoveryEscalation >= 2) triggerPanic("DPI Timeout Escalation")
+                        if (recoveryEscalation.get() >= 2) triggerPanic("DPI Timeout Escalation")
                     }
                     DpiType.UDP_BLOCK -> {
                         val candidates = listOf(
@@ -155,7 +164,7 @@ object RecoveryManager {
                         BypassConfig.rotateGlobalStrategy()
                     }
                 }
-                recoveryEscalation = (recoveryEscalation + 1).coerceAtMost(3)
+                recoveryEscalation.set((recoveryEscalation.get() + 1).coerceAtMost(3))
                 // Schedule an active probe to find better strategy soon
                 PinkVpnService.instance?.getServiceScope()?.launch {
                     delay(3000)
@@ -163,7 +172,7 @@ object RecoveryManager {
                 }
             }
             RecoveryEvent.DNS_FAILURE, RecoveryEvent.DNS_POISONED -> {
-                Log.e("RecoveryManager", "Critical DNS issue detected: $event. Escalation: $recoveryEscalation")
+                Log.e("RecoveryManager", "Critical DNS issue detected: $event. Escalation: ${recoveryEscalation.get()}")
                 RobustResolver.clearCache()
                 DnsCacheManager.clearAll()
                 DnsOptimizer.forceRefresh()
@@ -175,30 +184,37 @@ object RecoveryManager {
                     RobustResolver.dnsMode = "Smart DoH"
                 }
 
-                if (recoveryEscalation < 2) {
-                    recoveryEscalation++
+                if (recoveryEscalation.get() < 2) {
+                    recoveryEscalation.incrementAndGet()
                 } else {
                     triggerPanic("Repeated DNS issues")
                     requestServiceRestart("Persistent DNS failures or poisoning")
                 }
             }
             RecoveryEvent.PROXY_UNREACHABLE -> {
-                recoveryEscalation = 3
+                recoveryEscalation.set(3)
                 triggerPanic("Proxy unreachable")
                 requestServiceRestart("Proxy crash or unreachable")
             }
             RecoveryEvent.TUNNEL_STALL, RecoveryEvent.TCP_STALL, RecoveryEvent.SSL_STALL, RecoveryEvent.CENSORSHIP_STALL -> {
-                if (recoveryEscalation < 3) {
+                val currentEsc = recoveryEscalation.get()
+                if (currentEsc < 3) {
                     BypassConfig.rotateGlobalStrategy()
-                    if (recoveryEscalation > 0) {
+                    if (currentEsc > 0) {
                         val currentMtu = BypassConfig.currentMtu.value
                         if (currentMtu > 1100) {
                             val reduction = if (event == RecoveryEvent.SSL_STALL || event == RecoveryEvent.CENSORSHIP_STALL) 150 else 80
                             BypassConfig.setMtu(currentMtu - reduction)
                             ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to $event")
                         }
+                        
+                        // Dynamic TTL shifting
+                        val currentTtl = BypassConfig.currentTtl.value
+                        val newTtl = if (currentTtl == 64) 128 else if (currentTtl == 128) 255 else 64
+                        BypassConfig.setTtl(newTtl)
+                        ProxyStats.logRecovery("Watchdog: Shifting TTL to $newTtl due to $event")
                     }
-                    recoveryEscalation++
+                    recoveryEscalation.incrementAndGet()
                     
                     // Specific boost for SSL or Censorship stalling
                     if (event == RecoveryEvent.SSL_STALL || event == RecoveryEvent.CENSORSHIP_STALL) {
@@ -229,7 +245,7 @@ object RecoveryManager {
             }
             RecoveryEvent.HIGH_RTT, RecoveryEvent.HANDSHAKE_FAILURE -> {
                 BypassConfig.rotateGlobalStrategy()
-                recoveryEscalation = (recoveryEscalation + 1).coerceAtMost(2)
+                recoveryEscalation.set((recoveryEscalation.get() + 1).coerceAtMost(2))
             }
         }
     }
@@ -245,7 +261,7 @@ object RecoveryManager {
         restartCooldown = (restartCooldown * 1.5).toLong().coerceAtMost(300000L)
         
         Log.e("RecoveryManager", "Requesting Service Restart: $reason")
-        recoveryEscalation = 0
+        recoveryEscalation.set(0)
         
         val context = PinkVpnService.instance ?: return
         val intent = android.content.Intent(context, PinkVpnService::class.java).apply {

@@ -11,16 +11,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Orchestrates DpiEngine, BypassConfig, and RobustResolver for maximum bypass effectiveness.
  */
 object CensorshipExpert {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
     private val isRunning = AtomicBoolean(false)
     
     private var lastIntelligenceUpdate = 0L
     private const val UPDATE_INTERVAL_MS = 60_000L // 1 minute
     
+    private var analysisJob: Job? = null
+    private var eventsJob: Job? = null
+    
     fun start() {
         if (isRunning.getAndSet(true)) return
         
-        scope.launch {
+        analysisJob = scope.launch {
             while (isActive) {
                 try {
                     performDeepAnalysis()
@@ -29,6 +32,7 @@ object CensorshipExpert {
                         performLightBackgroundScan()
                     }
                 } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
                     Log.e("CensorshipExpert", "Analysis loop error", e)
                 }
                 delay(UPDATE_INTERVAL_MS)
@@ -36,13 +40,21 @@ object CensorshipExpert {
         }
         
         // Listen to global DPI events to trigger immediate reactions
-        scope.launch {
+        eventsJob = scope.launch {
             ProxyStats.censorshipIntensity.collect { intensity ->
                 if (intensity > 90) {
                     onExtremeCensorshipDetected()
                 }
             }
         }
+    }
+
+    fun stop() {
+        if (!isRunning.getAndSet(false)) return
+        analysisJob?.cancel()
+        analysisJob = null
+        eventsJob?.cancel()
+        eventsJob = null
     }
 
     private suspend fun performLightBackgroundScan() {

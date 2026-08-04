@@ -10,7 +10,7 @@ import java.util.LinkedList
 import java.util.Collections
 
 object DpiEngine {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
     private val successHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     private val failureHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     
@@ -51,7 +51,7 @@ object DpiEngine {
         }
         
         // Calculate global jitter from RTT history
-        val allHistory = rttHistory.values.flatten()
+        val allHistory = rttHistory.values.flatMap { synchronized(it) { it.toList() } }
         val jitter = if (allHistory.size > 2) {
             val diffs = allHistory.zipWithNext { a, b -> Math.abs(a - b) }
             diffs.average()
@@ -68,6 +68,8 @@ object DpiEngine {
         )
     }
 
+    private var optimizerJob: Job? = null
+    
     fun start(context: android.content.Context) {
         // Initialize scores
         HostCategory.entries.forEach { cat ->
@@ -81,13 +83,14 @@ object DpiEngine {
         initStrategyChains()
         loadScores(context)
 
-        scope.launch {
+        optimizerJob = scope.launch {
             while (isActive) {
                 delay(30000)
                 try {
                     analyzeAndAdjust()
                     checkGlobalStall()
                 } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
                     Log.e("DpiEngine", "Optimizer error", e)
                 }
             }
@@ -99,6 +102,11 @@ object DpiEngine {
         if (System.currentTimeMillis() - lastScan > 86400000L) { // Daily scan or first time
             performInitialScan(context)
         }
+    }
+
+    fun stop() {
+        optimizerJob?.cancel()
+        optimizerJob = null
     }
 
     fun performQuickScan(context: android.content.Context) {
@@ -316,14 +324,19 @@ object DpiEngine {
 
     fun recordRtt(host: String, rtt: Long) {
         val cat = HostClassifier.classify(host)
-        val history = rttHistory.getOrPut(cat) { Collections.synchronizedList(LinkedList()) }
+        val history = rttHistory.getOrPut(cat) { Collections.synchronizedList(LinkedList<Long>()) }
         
-        history.add(rtt)
-        if (history.size > MAX_RTT_HISTORY) history.removeAt(0)
+        synchronized(history) {
+            history.add(rtt)
+            if (history.size > MAX_RTT_HISTORY) {
+                history.removeAt(0)
+            }
+        }
         
         // Detect throttling: if current RTT is > 2.5x the average of previous ones
         if (history.size >= 5) {
-            val avg = history.take(history.size - 1).average()
+            val list = synchronized(history) { history.toList() }
+            val avg = list.take(list.size - 1).average()
             if (rtt > avg * 2.5 && rtt > 300) {
                 Log.w("DpiEngine", "THROTTLING DETECTED for $cat (RTT: $rtt, Avg: $avg). Boosting strategy family.")
                 boostStrategyFamily(StrategyFamily.ADAPTIVE, host)
@@ -461,7 +474,8 @@ object DpiEngine {
         networkStrategyMemory[netType]?.get(category)?.let { strat ->
             if ((circuitBreakers[strat] ?: 0L) < now) {
                 val hostBlacklist = host?.let { hostStrategyBlacklist[it] }
-                if (hostBlacklist?.get(strat) == null || hostBlacklist[strat]!! < now) {
+                val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
+                if (blacklistedUntil < now) {
                     return strat
                 }
             }

@@ -153,24 +153,26 @@ object DnsPacketEngine {
             
             // Skip questions
             for (i in 0 until qCount) {
-                if (bb.position() >= length) break
+                if (!bb.hasRemaining()) break
                 skipName(bb)
-                if (bb.position() + 4 <= length) {
+                if (bb.remaining() >= 4) {
                     bb.position(bb.position() + 4) // Type and Class
+                } else {
+                    bb.position(length)
                 }
             }
             
             // Parse answers
             for (i in 0 until aCount) {
-                if (bb.position() >= length) break
+                if (!bb.hasRemaining()) break
                 skipName(bb)
-                if (bb.position() + 10 > length) break
+                if (bb.remaining() < 10) break
                 val type = bb.short.toInt() and 0xFFFF
                 bb.position(bb.position() + 2) // Class
                 bb.position(bb.position() + 4) // TTL
                 val rdLen = bb.short.toInt() and 0xFFFF
                 
-                if (bb.position() + rdLen > length) break
+                if (bb.remaining() < rdLen) break
                 if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
                     val rData = ByteArray(rdLen)
                     bb.get(rData)
@@ -199,16 +201,23 @@ object DnsPacketEngine {
             bb.position(bb.position() + 4) // Skip Authority and Additional counts
             
             for (i in 0 until qCount) {
+                if (!bb.hasRemaining()) break
                 skipName(bb)
-                bb.position(bb.position() + 4)
+                if (bb.remaining() >= 4) {
+                    bb.position(bb.position() + 4)
+                }
             }
             
             for (i in 0 until aCount) {
+                if (!bb.hasRemaining()) break
                 skipName(bb)
+                if (bb.remaining() < 10) break
                 val type = bb.short.toInt() and 0xFFFF
                 bb.position(bb.position() + 2) // Class
                 val ttl = bb.int.toLong() and 0xFFFFFFFFL
                 val rdLen = bb.short.toInt() and 0xFFFF
+                
+                if (bb.remaining() < rdLen) break
                 
                 if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
                     val rData = ByteArray(rdLen)
@@ -217,23 +226,29 @@ object DnsPacketEngine {
                 } else if (type == 65) { // HTTPS Record
                     val startPos = bb.position()
                     try {
-                        bb.position(bb.position() + 2) // Skip SvcPriority
-                        skipName(bb) // Skip TargetName
-                        
-                        var paramsProcessed = 0
-                        while (bb.position() < startPos + rdLen && paramsProcessed < 20) {
-                            val paramKey = bb.short.toInt() and 0xFFFF
-                            val paramLen = bb.short.toInt() and 0xFFFF
-                            if (paramKey == 5) { // ECH (Encrypted Client Hello)
-                                records.add(DnsRecord(InetAddress.getByName("0.0.0.1"), ttl, 65)) // Use special IP as flag
-                                bb.position(bb.position() + paramLen)
-                            } else {
-                                bb.position(bb.position() + paramLen)
+                        if (bb.remaining() >= 2) {
+                            bb.position(bb.position() + 2) // Skip SvcPriority
+                            skipName(bb) // Skip TargetName
+                            
+                            var paramsProcessed = 0
+                            while (bb.position() < startPos + rdLen && paramsProcessed < 20) {
+                                if (bb.remaining() < 4) break
+                                val paramKey = bb.short.toInt() and 0xFFFF
+                                val paramLen = bb.short.toInt() and 0xFFFF
+                                if (bb.remaining() < paramLen) break
+                                
+                                if (paramKey == 5) { // ECH (Encrypted Client Hello)
+                                    records.add(DnsRecord(InetAddress.getByName("0.0.0.1"), ttl, 65)) // Use special IP as flag
+                                    bb.position(bb.position() + paramLen)
+                                } else {
+                                    bb.position(bb.position() + paramLen)
+                                }
+                                paramsProcessed++
                             }
-                            paramsProcessed++
                         }
                     } catch (e: Throwable) {
-                        bb.position(startPos + rdLen)
+                    } finally {
+                        bb.position(minOf(startPos + rdLen, length))
                     }
                 } else {
                     bb.position(bb.position() + rdLen)
@@ -297,13 +312,12 @@ object DnsPacketEngine {
         val limit = bb.limit()
         var depth = 0
         while (depth < 40) {
-            val pos = bb.position()
-            if (pos >= limit) break
+            if (!bb.hasRemaining()) break
             val b = bb.get().toInt() and 0xFF
             if (b == 0) break
             
             if ((b and 0xC0) == 0xC0) { // Pointer
-                if (bb.position() < limit) {
+                if (bb.hasRemaining()) {
                     bb.get() 
                 }
                 break

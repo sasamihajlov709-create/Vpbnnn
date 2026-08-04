@@ -175,6 +175,35 @@ object AutoTtlProber {
         }
     }
 
+    suspend fun probeUdpDistance(addr: InetAddress, port: Int, vpnService: VpnService?): Int {
+        val coarseTtls = listOf(4, 8, 12, 16, 20, 24, 32, 64)
+        for (ttl in coarseTtls) {
+            if (tryUdpConnect(addr, port, ttl, vpnService)) return ttl
+        }
+        return 64
+    }
+
+    private suspend fun tryUdpConnect(addr: InetAddress, port: Int, ttl: Int, vpnService: VpnService?): Boolean {
+        return withContext(ProxyDispatcher.io) {
+            var socket: java.net.DatagramSocket? = null
+            try {
+                socket = java.net.DatagramSocket()
+                vpnService?.protect(socket)
+                TtlHelper.setUdpTtl(socket, ttl, addr is java.net.Inet6Address)
+                socket.soTimeout = 1000
+                val data = if (port == 53) DnsPacketEngine.buildDnsQuery("google.com", 1, 123) else ByteArray(16)
+                socket.send(java.net.DatagramPacket(data, data.size, addr, port))
+                val buffer = ByteArray(512)
+                socket.receive(java.net.DatagramPacket(buffer, buffer.size))
+                true
+            } catch (e: Throwable) {
+                false
+            } finally {
+                try { socket?.close() } catch (e: Throwable) {}
+            }
+        }
+    }
+
     private fun updateGlobalConsensus(newTtl: Int) {
         val netType = BypassConfig.getNetworkType().toString()
         val netMap = networkTtls.getOrPut(netType) { ConcurrentHashMap() }

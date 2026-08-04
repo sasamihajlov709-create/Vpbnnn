@@ -248,6 +248,7 @@ enum class BypassStrategy(
     UDP_COMBINED_NUCLEAR(StrategyFamily.ADAPTIVE, 12, 10, StrategyGroup.EXTREME),
     ECH_GREASE(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
     TCP_SEGMENT_OVERLAP(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
+    UDP_QUIC_CHAOS(StrategyFamily.QUIC, 6, 5, StrategyGroup.EXTREME),
     TCP_SEGMENT_REVERSE(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
     DNS_OVER_QUIC(StrategyFamily.DNS, 4, 3, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)

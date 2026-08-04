@@ -125,6 +125,7 @@ class MainActivity : ComponentActivity() {
         
         setContent {
             val isVpnActive by PinkVpnService.isRunning.collectAsStateWithLifecycle(initialValue = false)
+            val context = androidx.compose.ui.platform.LocalContext.current
             
             LaunchedEffect(Unit) {
                 if (autoConnect && !PinkVpnService.isRunning.value) {
@@ -138,10 +139,14 @@ class MainActivity : ComponentActivity() {
                     onToggle = { toggleVpn(isVpnActive) },
                     onRestart = { 
                         if (isVpnActive) {
-                            stopVpnService()
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                startVpnService()
-                            }, 1000)
+                            try {
+                                val intent = Intent(context, PinkVpnService::class.java).apply {
+                                    action = "RESTART"
+                                }
+                                androidx.core.content.ContextCompat.startForegroundService(context, intent)
+                            } catch (e: Throwable) {
+                                android.util.Log.e("MainActivity", "Quick restart failed: ${e.message}")
+                            }
                         }
                     }
                 )

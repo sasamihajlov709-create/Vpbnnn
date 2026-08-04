@@ -57,53 +57,59 @@ object UdpTransportHandler {
                         // Heartbeat job for this worker's sessions
                         val hbJob = launch {
                             val rnd = ThreadLocalRandom.current()
-                            while (isActive) {
-                                delay(rnd.nextLong(20000, 45000))
-                                val now = System.currentTimeMillis()
-                                activeSessions.entries.removeIf { now - it.value > 60000 }
-                                
-                                for (session in activeSessions.keys) {
-                                    val parts = session.split(":")
-                                    if (parts.size == 2) {
-                                        try {
-                                            val addr = InetAddress.getByName(parts[0])
-                                            val port = parts[1].toInt()
-                                            // Send realistic noise instead of 0x00
-                                            val noise = if (port == 443) FakePacketHelper.buildUdpNoise(rnd.nextInt(1, 10)) else byteArrayOf(0x00)
-                                            outSocket.send(DatagramPacket(noise, noise.size, addr, port))
-                                        } catch (e: Throwable) {}
+                            try {
+                                while (isActive) {
+                                    delay(rnd.nextLong(20000, 45000))
+                                    val now = System.currentTimeMillis()
+                                    activeSessions.entries.removeIf { now - it.value > 60000 }
+                                    
+                                    for (session in activeSessions.keys) {
+                                        val parts = session.split(":")
+                                        if (parts.size == 2) {
+                                            try {
+                                                if (outSocket.isClosed) break
+                                                val addr = InetAddress.getByName(parts[0])
+                                                val port = parts[1].toInt()
+                                                // Send realistic noise instead of 0x00
+                                                val noise = if (port == 443) FakePacketHelper.buildUdpNoise(rnd.nextInt(1, 10)) else byteArrayOf(0x00)
+                                                outSocket.send(DatagramPacket(noise, noise.size, addr, port))
+                                            } catch (e: Throwable) {}
+                                        }
                                     }
                                 }
+                            } catch (e: CancellationException) {
+                                // Expected
+                            } catch (e: Throwable) {
+                                Log.v("UdpTransport", "HB error: ${e.message}")
                             }
                         }
                         
                         try {
                             for (work in udpOutChannels[i]) {
-                    val (packet, targetHost) = work
-                                    activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
-                                    
-                                    var currentConfig = BypassConfig.getSessionConfig(targetHost, BypassConfig.getBestStrategyForHost(targetHost), BypassConfig.currentRttMs.value)
-                                    var attempts = 0
-                                    val maxAttempts = 2
-                                    
-                                    while (attempts < maxAttempts) {
-                                        try {
-                                            sendUdpPacket(outSocket, packet, targetHost, currentConfig, this)
-                                            break // Success
-                                        } catch (e: Throwable) {
-                                            if (e is CancellationException) throw e
-                                            attempts++
-                                            if (attempts < maxAttempts) {
-                                                val fallback = DpiEngine.getFallbackStrategy(currentConfig.strategy)
-                                                if (fallback != null) {
-                                                    currentConfig = currentConfig.copy(strategy = fallback)
-                                                    ProxyStats.logRecovery("UDP Auto-Autopilot: Falling back to ${fallback.name} for $targetHost")
-                                                }
-                                            } else {
-                                                Log.v("UdpTransport", "Send error after retries: ${e.message}")
+                                if (outSocket.isClosed) break
+                                val (packet, targetHost) = work
+                                activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
+                                
+                                var currentConfig = BypassConfig.getSessionConfig(targetHost, BypassConfig.getBestStrategyForHost(targetHost), BypassConfig.currentRttMs.value)
+                                var attempts = 0
+                                val maxAttempts = 2
+                                
+                                while (attempts < maxAttempts) {
+                                    try {
+                                        sendUdpPacket(outSocket, packet, targetHost, currentConfig, this)
+                                        break // Success
+                                    } catch (e: Throwable) {
+                                        if (e is CancellationException) throw e
+                                        attempts++
+                                        if (attempts < maxAttempts) {
+                                            val fallback = DpiEngine.getFallbackStrategy(currentConfig.strategy)
+                                            if (fallback != null) {
+                                                currentConfig = currentConfig.copy(strategy = fallback)
+                                                ProxyStats.logRecovery("UDP Auto-Autopilot: Falling back to ${fallback.name} for $targetHost")
                                             }
                                         }
                                     }
+                                }
                             }
                         } catch (e: Throwable) {
                             if (e is CancellationException) throw e
@@ -124,14 +130,13 @@ object UdpTransportHandler {
                         val outPacket = DatagramPacket(respBuffer, respBuffer.size)
                         try {
                             outSocket.soTimeout = 2000
-                            while (isActive) {
+                            while (isActive && !outSocket.isClosed) {
                                 packet.setData(buffer)
                                 try {
                                     outSocket.receive(packet)
                                 } catch (e: java.net.SocketTimeoutException) {
                                     continue
                                 } catch (e: Throwable) {
-                                    if (e is CancellationException) throw e
                                     break
                                 }
 
@@ -148,16 +153,18 @@ object UdpTransportHandler {
                                     outPacket.port = clientUdpPort
                                     outPacket.setData(respBuffer, 0, offset)
                                     try {
-                                        udpSocket.send(outPacket)
-                                        ProxyStats.updateBytes(packet.length.toLong())
+                                        if (!udpSocket.isClosed) {
+                                            udpSocket.send(outPacket)
+                                            ProxyStats.updateBytes(packet.length.toLong())
+                                        }
                                     } catch (e: Throwable) {}
                                 }
                             }
                         } catch (e: Throwable) {
                             if (e !is CancellationException) Log.v("UdpTransport", "Target->Client error: ${e.message}")
                         } finally {
-                            when (buffer.size) { 8192 -> ProxyStats.release8k(buffer); 16384 -> ProxyStats.release16k(buffer); 65536 -> ProxyStats.release64k(buffer); else -> {} }
-                            when (respBuffer.size) { 8192 -> ProxyStats.release8k(respBuffer); 16384 -> ProxyStats.release16k(respBuffer); 65536 -> ProxyStats.release64k(respBuffer); else -> {} }
+                            ProxyStats.release64k(buffer)
+                            ProxyStats.release64k(respBuffer)
                         }
                     }
                 }
@@ -424,6 +431,25 @@ object UdpTransportHandler {
         val host = if (targetHost.isNotEmpty()) targetHost else targetInet.hostAddress ?: ""
         val flowKey = "${targetInet.hostAddress}:$targetPort"
         
+        val now = System.currentTimeMillis()
+        val finalConfig = config ?: run {
+            val cached = hostStrategyCache[host]
+            if (cached == null || now - cached.second > 15000L) {
+                val strat = BypassConfig.getBestStrategyForHost(host)
+                val cfg = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
+                if (hostStrategyCache.size > 500) hostStrategyCache.clear() 
+                hostStrategyCache[host] = cfg to now
+                cfg
+            } else {
+                cached.first
+            }
+        }
+
+        if (finalConfig.strategy == BypassStrategy.UDP_QUIC_CHAOS) {
+            BypassConfig.applyUdpBypass(socket, packet, finalConfig, host)
+            return
+        }
+
         // 0. Periodic Flow Noise Injection
         val counter = flowPacketCounter.getOrPut(flowKey) { java.util.concurrent.atomic.AtomicInteger(0) }
         val count = counter.incrementAndGet()
@@ -470,20 +496,6 @@ object UdpTransportHandler {
             }
         }
         
-        val now = System.currentTimeMillis()
-        val finalConfig = config ?: run {
-            val cached = hostStrategyCache[host]
-            if (cached == null || now - cached.second > 15000L) {
-                val strat = BypassConfig.getBestStrategyForHost(host)
-                val cfg = BypassConfig.getSessionConfig(host, strat, BypassConfig.currentRttMs.value)
-                if (hostStrategyCache.size > 500) hostStrategyCache.clear() 
-                hostStrategyCache[host] = cfg to now
-                cfg
-            } else {
-                cached.first
-            }
-        }
-
         // Adaptive Jitter and TTL randomization
         val intensity = ProxyStats.censorshipIntensity.value
         
@@ -519,7 +531,7 @@ object UdpTransportHandler {
                  }
                  
                   if (finalConfig.strategy == BypassStrategy.UDP_OVERLAP_SKEW) {
-                      val split = rnd.nextInt(50, 150)
+                      val split = if (length > 20) rnd.nextInt(2, length / 2) else 1
                       val fake = FakePacketHelper.buildUdpNoise(split)
                       TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5), targetInet is java.net.Inet6Address)
                       socket.send(DatagramPacket(fake, fake.size, targetInet, targetPort))
@@ -531,7 +543,7 @@ object UdpTransportHandler {
 
                  // Fragmented Initial strategy
                  if (finalConfig.strategy == BypassStrategy.UDP_FRAGMENT_SKEW || intensity > 90) {
-                     val split = rnd.nextInt(100, 300)
+                     val split = if (length > 20) rnd.nextInt(2, length / 2) else 1
                      socket.send(DatagramPacket(payload, offset, split, targetInet, targetPort))
                      delay(rnd.nextLong(1, 5))
                      socket.send(DatagramPacket(payload, offset + split, length - split, targetInet, targetPort))
@@ -635,7 +647,8 @@ object UdpTransportHandler {
         if (length > 200 && !isDns && intensity > 40) {
             val shouldFrag = finalConfig.strategy == BypassStrategy.UDP_DATA_FRAG || (intensity > 60 && rnd.nextInt(100) < 25)
             if (shouldFrag) {
-                val split = rnd.nextInt(64, length - 64)
+                val bound = length - 64
+                val split = if (bound > 64) rnd.nextInt(64, bound) else length / 2
                 val shouldReorder = intensity > 80 && rnd.nextInt(100) < 30
                 
                 if (shouldReorder) {

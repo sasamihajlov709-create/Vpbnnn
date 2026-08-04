@@ -30,6 +30,13 @@ object BypassConfig {
     )
     val testingStrategies: StateFlow<List<BypassStrategy>> = _testingStrategies.asStateFlow()
 
+    private val _currentTtl = MutableStateFlow(64)
+    val currentTtl: StateFlow<Int> = _currentTtl.asStateFlow()
+
+    fun setTtl(ttl: Int) {
+        _currentTtl.value = ttl
+    }
+
     fun updateTestingStrategies(strategies: List<BypassStrategy>) {
         if (strategies.isNotEmpty()) {
             _testingStrategies.value = strategies.distinct().take(6)
@@ -244,7 +251,7 @@ object BypassConfig {
         return best
     }
 
-    private val lastStrategies = java.util.concurrent.CopyOnWriteArrayList<BypassStrategy>()
+    private val lastStrategies = Collections.synchronizedList(LinkedList<BypassStrategy>())
     
     fun rotateGlobalStrategy() {
         val fingerprint = DpiEngine.getCensorshipFingerprint()
@@ -264,13 +271,15 @@ object BypassConfig {
                 baseScore
             } ?: BypassStrategy.SNI_SPLIT
         
-        lastStrategies.add(best)
-        if (lastStrategies.size > 5) {
-            try { lastStrategies.removeAt(0) } catch (e: Throwable) {}
+        synchronized(lastStrategies) {
+            lastStrategies.add(best)
+            if (lastStrategies.size > 5) {
+                lastStrategies.removeAt(0)
+            }
         }
         
         _strategy.value = best
-        updateTestingStrategies(lastStrategies.toList() + best)
+        updateTestingStrategies(synchronized(lastStrategies) { lastStrategies.toList() } + best)
         VpnRuntimeState.updateStrategy(best.name)
         ProxyStats.logRecovery("Strategy rotated: ${best.name}")
     }

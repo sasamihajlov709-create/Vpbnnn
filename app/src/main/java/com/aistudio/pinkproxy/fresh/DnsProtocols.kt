@@ -38,8 +38,9 @@ object DnsProtocols {
     private var lastVpnService: VpnService? = null
 
     private fun getProtectedClient(vpnService: VpnService?): OkHttpClient {
-        if (cachedProtectedClient != null && lastVpnService == vpnService) {
-            return cachedProtectedClient!!
+        val cached = cachedProtectedClient
+        if (cached != null && lastVpnService == vpnService) {
+            return cached
         }
         
         val builder = baseOkHttpClient.newBuilder()
@@ -93,12 +94,19 @@ object DnsProtocols {
             val respPacket = DatagramPacket(buffer, buffer.size)
             socket.receive(respPacket)
             
-            // Note: A real DoQ server would respond with QUIC packet. 
-            // If it's a "simple" shadow proxy on the other end, it might just return raw DNS.
-            // If it's real QUIC, parsing would be needed. 
-            // For now, we assume the other end is our "Shadow Proxy" or it's a lucky transparent pass.
-            val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
-            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+            val data = respPacket.data
+            val len = respPacket.length
+            
+            // Try to extract DNS response from potential shadow QUIC response
+            if (len > 12) {
+                // Heuristic: search for the Transaction ID in the packet if not at the start
+                for (i in 0..len - 12) {
+                    if (((data[i].toInt() and 0xFF) shl 8 or (data[i+1].toInt() and 0xFF)) == id) {
+                         val ips = DnsPacketEngine.parseDnsResponse(data.copyOfRange(i, len), len - i, id.toInt() and 0xFFFF)
+                         return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+                    }
+                }
+            }
         } catch (e: Throwable) {
         } finally {
             ProxyStats.release8k(buffer)
@@ -124,6 +132,8 @@ object DnsProtocols {
             socket.receive(respPacket)
             val records = DnsPacketEngine.parseDnsResponseDetailed(respPacket.data, respPacket.length, id)
             return records.filter { !DnsCacheManager.isPoisoned(it.address, host) }
+        } catch (e: Throwable) {
+            return emptyList()
         } finally {
             ProxyStats.release8k(buffer)
             try { socket.close() } catch (e: Throwable) {}
@@ -154,6 +164,8 @@ object DnsProtocols {
             socket.receive(respPacket)
             val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+        } catch (e: Throwable) {
+            return emptyList()
         } finally {
             ProxyStats.release8k(buffer)
             try { socket.close() } catch (e: Throwable) {}
@@ -178,6 +190,8 @@ object DnsProtocols {
             // No need to check address anymore as connect() filters it
             val ips = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+        } catch (e: Throwable) {
+            return emptyList()
         } finally {
             ProxyStats.release8k(buffer)
             try { socket.close() } catch (e: Throwable) {}
@@ -223,6 +237,7 @@ object DnsProtocols {
             while (System.currentTimeMillis() - start < 2500) {
                 val respPacket = DatagramPacket(buffer, buffer.size)
                 try { socket.receive(respPacket) } catch (e: Throwable) { break }
+                if (respPacket.length < 12) continue
                 val resId = ((respPacket.data[0].toInt() and 0xFF) shl 8) or (respPacket.data[1].toInt() and 0xFF)
                 if (resId == id) {
                     val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, id)
@@ -288,6 +303,7 @@ object DnsProtocols {
                 } catch (e: Throwable) { break }
                 
                 // Deep validation of response ID
+                if (respPacket.length < 12) continue
                 val resId = ((respPacket.data[0].toInt() and 0xFF) shl 8) or (respPacket.data[1].toInt() and 0xFF)
                 if (resId == idReal) {
                     val res = DnsPacketEngine.parseDnsResponse(respPacket.data, respPacket.length, idReal)
@@ -320,7 +336,7 @@ object DnsProtocols {
             System.arraycopy(query, 0, fullQuery, 2, query.size)
             
             // Fragmented send with fake padding
-            val split = rnd.nextInt(2, fullQuery.size - 2)
+            val split = if (fullQuery.size > 4) rnd.nextInt(2, fullQuery.size - 2) else 1
             
             // Zero-Window Stall to freeze DPI buffer
             TtlHelper.setWindowSize(socket, 0)
@@ -439,6 +455,8 @@ TtlHelper.setTtl(socket, 64)
             dis.readFully(resp)
             val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
             return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+        } catch (e: Throwable) {
+            return emptyList()
         } finally {
             try { socket.close() } catch (e: Throwable) {}
         }
@@ -523,7 +541,7 @@ TtlHelper.setTtl(socket, 64)
             System.arraycopy(query, 0, fullQuery, 2, query.size)
             
             // Fragment the TCP stream for the DNS query with Zero-Window pulses
-            val split = rnd.nextInt(2, fullQuery.size - 1)
+            val split = if (fullQuery.size > 3) rnd.nextInt(2, fullQuery.size - 1) else 1
             
             if (ProxyStats.censorshipIntensity.value > 70) {
                 TtlHelper.setWindowSize(socket, 0)
@@ -783,7 +801,8 @@ TtlHelper.setTtl(socket, 64)
             output.flush()
             
             // Write query in fragments to avoid detection of DNS-over-HTTPS patterns in a single packet
-            val split = rnd.nextInt(1, query.size.coerceAtLeast(2))
+            if (query.size <= 1) return emptyList()
+            val split = rnd.nextInt(1, query.size)
             output.write(query, 0, split); output.flush()
             delay(rnd.nextLong(5, 20))
             output.write(query, split, query.size - split); output.flush()

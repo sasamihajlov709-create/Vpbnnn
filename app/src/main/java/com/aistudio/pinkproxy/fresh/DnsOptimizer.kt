@@ -35,13 +35,18 @@ object DnsOptimizer {
         "45.90.28.0", "8.8.4.4", "1.0.0.1", "185.222.222.222"
     )
 
+    private val doqServers = listOf(
+        "94.140.14.14", "94.140.15.15", "45.90.28.0", "176.103.130.130", "1.1.1.1"
+    )
+
     private val providerLatencies = ConcurrentHashMap<String, Long>()
     private val providerFailures = ConcurrentHashMap<String, Int>()
     @Volatile var bestDohUrl = "https://dns.google/dns-query"
     @Volatile var bestDotServer = "8.8.8.8"
+    @Volatile var bestDoqServer = "94.140.14.14"
     
     private var lastProbeTime = 0L
-    private val optimizerScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+    private val optimizerScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
     
     private val criticalDomains = listOf(
         "google.com", "dns.google", "cloudflare.com", "telegram.org", "github.com",
@@ -124,8 +129,9 @@ object DnsOptimizer {
         lastProbeTime = System.currentTimeMillis()
         val testDomains = listOf("google.com", "bing.com", "cloudflare.com")
         coroutineScope {
-            val dohJobs = dohUrls.map { url ->
+            val dohJobs = dohUrls.mapIndexed { index, url ->
                 async {
+                    if (index > 0) delay(index * 30L) // 30ms stagger
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
                     val res = try { withTimeout(4000) { DnsProtocols.queryDoh(domain, url, vpnService) } } catch (e: Throwable) { 
@@ -141,8 +147,9 @@ object DnsOptimizer {
                     }
                 }
             }
-            val dotJobs = dotServers.map { server ->
+            val dotJobs = dotServers.mapIndexed { index, server ->
                 async {
+                    if (index > 0) delay(index * 30L) // 30ms stagger
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
                     val res = try { withTimeout(4000) { DnsProtocols.queryDot(domain, server, vpnService) } } catch (e: Throwable) { 
@@ -158,12 +165,33 @@ object DnsOptimizer {
                     }
                 }
             }
+            val doqJobs = doqServers.mapIndexed { index, server ->
+                async {
+                    if (index > 0) delay(index * 30L)
+                    val start = System.currentTimeMillis()
+                    val domain = testDomains.random()
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDnsOverQuic(domain, server, vpnService) } } catch (e: Throwable) {
+                        if (e !is TimeoutCancellationException && e is CancellationException) throw e
+                        emptyList()
+                    }
+                    if (res.isNotEmpty()) {
+                        providerLatencies["doq://$server"] = System.currentTimeMillis() - start
+                        providerFailures["doq://$server"] = 0
+                    } else {
+                        providerLatencies["doq://$server"] = 9999L
+                        providerFailures["doq://$server"] = (providerFailures["doq://$server"] ?: 0) + 1
+                    }
+                }
+            }
             dohJobs.awaitAll()
             dotJobs.awaitAll()
+            doqJobs.awaitAll()
             
             bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dohUrls[0]
-            bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dotServers[0]
-            Log.i("DnsOptimizer", "Probing completed. Best DoH: $bestDohUrl, Best DoT: $bestDotServer")
+            bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") && !it.startsWith("doq://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dotServers[0]
+            bestDoqServer = providerLatencies.filterKeys { it.startsWith("doq://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key?.substringAfter("doq://") ?: doqServers[0]
+            
+            Log.i("DnsOptimizer", "Probing completed. Best DoH: $bestDohUrl, Best DoT: $bestDotServer, Best DoQ: $bestDoqServer")
         }
     }
 

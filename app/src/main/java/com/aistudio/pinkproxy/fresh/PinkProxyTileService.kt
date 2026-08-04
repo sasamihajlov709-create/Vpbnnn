@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class PinkProxyTileService : TileService() {
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + ProxyDispatcher.globalHandler)
     private var listenJob: Job? = null
 
     override fun onStartListening() {

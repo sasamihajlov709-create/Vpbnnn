@@ -23,7 +23,7 @@ object FakePacketHelper {
     }
 
     private fun getBuffer(): ByteBuffer {
-        val buf = threadLocalBuffer.get()!!
+        val buf = threadLocalBuffer.get() ?: ByteBuffer.allocate(65536).also { threadLocalBuffer.set(it) }
         buf.clear()
         return buf
     }
@@ -80,7 +80,7 @@ object FakePacketHelper {
             if (length < pos + 1) return data.copyOf(length)
             val compLen = data[pos].toInt() and 0xFF
             pos += 1 + compLen
-            if (pos + 1 >= length) return data.copyOf(length)
+            if (length < pos + 2) return data.copyOf(length)
             
             val oldExtLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos+1].toInt() and 0xFF)
             if (pos + 2 + oldExtLen > length) return data.copyOf(length)
@@ -257,7 +257,7 @@ object FakePacketHelper {
             val sidLenOffset = 5 + 1 + 3 + 2 + 32
             if (length > sidLenOffset + 32) {
                 val sidLen = copy[sidLenOffset].toInt() and 0xFF
-                if (sidLen > 0 && sidLen <= 32) {
+                if (sidLen > 0 && sidLen <= 32 && sidLenOffset + 1 + sidLen <= length) {
                     val rnd = ThreadLocalRandom.current()
                     for (i in 0 until sidLen) copy[sidLenOffset + 1 + i] = rnd.nextInt(256).toByte()
                 }
@@ -618,5 +618,20 @@ object FakePacketHelper {
     fun injectTlsPadding(data: ByteArray, length: Int, padSize: Int): ByteArray {
         val padding = buildUdpNoise(padSize)
         return injectExtension(data, length, 0x0015, padding)
+    }
+
+    fun buildTelegramFake(): ByteArray {
+        val bytes = ByteArray(64)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(bytes)
+        bytes[56] = 0xef.toByte()
+        return bytes
+    }
+
+    fun buildDiscordFake(): ByteArray {
+        val bytes = ByteArray(120)
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(bytes)
+        bytes[0] = 0x80.toByte()
+        bytes[1] = 0x78.toByte()
+        return bytes
     }
 }

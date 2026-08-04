@@ -184,4 +184,65 @@ object TlsParser {
         
         return (((buffer[offset + 3].toInt() and 0xFF) shl 8) or (buffer[offset + 4].toInt() and 0xFF)) + 5
     }
+
+    /**
+     * Injects a fake ECH extension (Grease) into ClientHello to bypass ECH-aware filters.
+     */
+    fun injectEchGrease(buffer: ByteArray, length: Int): ByteArray {
+        if (!isClientHello(buffer, length)) return buffer.copyOf(length)
+        
+        try {
+            val sessionIdLen = buffer[43].toInt() and 0xFF
+            var pos = 44 + sessionIdLen
+            val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherSuitesLen
+            pos += 1 + (buffer[pos].toInt() and 0xFF) // Compression
+            
+            // Extensions position
+            val extLenPos = pos
+            val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+            pos += 2
+            
+            // Build Grease ECH extension: Type=0xfe0d (randomized), Length=random
+            val rnd = java.util.concurrent.ThreadLocalRandom.current()
+            val greaseType = if (rnd.nextBoolean()) 0xfe0d else 0xff0d
+            val greaseLen = rnd.nextInt(16, 64)
+            val greaseData = ByteArray(greaseLen)
+            rnd.nextBytes(greaseData)
+            
+            val newExt = ByteArray(4 + greaseLen)
+            newExt[0] = (greaseType shr 8).toByte()
+            newExt[1] = (greaseType and 0xFF).toByte()
+            newExt[2] = (greaseLen shr 8).toByte()
+            newExt[3] = (greaseLen and 0xFF).toByte()
+            System.arraycopy(greaseData, 0, newExt, 4, greaseLen)
+            
+            // Reconstruct the packet
+            val newLen = length + newExt.size
+            val result = ByteArray(newLen)
+            System.arraycopy(buffer, 0, result, 0, pos) // Header + part of extensions
+            System.arraycopy(newExt, 0, result, pos, newExt.size) // Inject grease at the start of extensions
+            System.arraycopy(buffer, pos, result, pos + newExt.size, length - pos) // Rest
+            
+            // Update lengths
+            val totalHandshakeLen = ((result[6].toInt() and 0xFF) shl 16) or ((result[7].toInt() and 0xFF) shl 8) or (result[8].toInt() and 0xFF)
+            val newHandshakeLen = totalHandshakeLen + newExt.size
+            result[6] = (newHandshakeLen shr 16).toByte()
+            result[7] = (newHandshakeLen shr 8).toByte()
+            result[8] = (newHandshakeLen and 0xFF).toByte()
+            
+            val recordLen = ((result[3].toInt() and 0xFF) shl 8) or (result[4].toInt() and 0xFF)
+            val newRecordLen = recordLen + newExt.size
+            result[3] = (newRecordLen shr 8).toByte()
+            result[4] = (newRecordLen and 0xFF).toByte()
+            
+            val newExtensionsLen = extensionsLen + newExt.size
+            result[extLenPos] = (newExtensionsLen shr 8).toByte()
+            result[extLenPos + 1] = (newExtensionsLen and 0xFF).toByte()
+            
+            return result
+        } catch (e: Throwable) {
+            return buffer.copyOf(length)
+        }
+    }
 }

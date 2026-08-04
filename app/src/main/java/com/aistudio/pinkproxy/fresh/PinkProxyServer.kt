@@ -28,7 +28,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         if (serverJob?.isActive == true) return
         
         val parentJob = SupervisorJob()
-        val scope = CoroutineScope(ProxyDispatcher.io + parentJob)
+        val scope = CoroutineScope(ProxyDispatcher.io + parentJob + ProxyDispatcher.globalHandler)
         serverJob = parentJob
         
         ProxyStats.startSpeedMonitor(scope)
@@ -119,47 +119,58 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         val line = java.lang.StringBuilder()
         line.append(firstByte.toChar())
         var b: Int
-        while (true) {
-            b = input.read()
-            if (b == -1 || b == '\n'.code) break
-            if (b != '\r'.code) line.append(b.toChar())
-        }
         
-        val firstLine = line.toString().trim()
-        val parts = firstLine.split(" ")
-        if (parts.size < 2) { client.close(); return }
+        // Use a short timeout for the initial request line to prevent hanging workers
+        client.soTimeout = 5000
         
-        val method = parts[0].uppercase()
-        val target = parts[1]
-        
-        var host: String
-        var port: Int
-        
-        if (method == "CONNECT") {
-            val hostPort = target.split(":")
-            host = hostPort[0]
-            port = if (hostPort.size > 1) hostPort[1].toIntOrNull() ?: 443 else 443
-            
-            // Consume remaining headers byte by byte to avoid consuming body
-            while (true) {
-                line.clear()
-                while (true) {
-                    b = input.read()
-                    if (b == -1 || b == '\n'.code) break
-                    if (b != '\r'.code) line.append(b.toChar())
-                }
-                if (line.toString().trim().isEmpty()) break
+        try {
+            while (line.length < 4096) {
+                b = input.read()
+                if (b == -1 || b == '\n'.code) break
+                if (b != '\r'.code) line.append(b.toChar())
             }
             
-            output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
-            output.flush()
-        } else {
-            client.close()
-            return
+            val firstLine = line.toString().trim()
+            val parts = firstLine.split(" ")
+            if (parts.size < 2) { client.close(); return }
+            
+            val method = parts[0].uppercase()
+            val target = parts[1]
+            
+            var host: String
+            var port: Int
+            
+            if (method == "CONNECT") {
+                val hostPort = target.split(":")
+                host = hostPort[0]
+                port = if (hostPort.size > 1) hostPort[1].toIntOrNull() ?: 443 else 443
+                
+                // Consume remaining headers with a hard limit to prevent OOM
+                var totalRead = 0
+                while (totalRead < 64 * 1024) {
+                    line.clear()
+                    while (line.length < 4096) {
+                        b = input.read()
+                        totalRead++
+                        if (b == -1 || b == '\n'.code) break
+                        if (b != '\r'.code) line.append(b.toChar())
+                    }
+                    if (line.toString().trim().isEmpty()) break
+                }
+                
+                output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+                output.flush()
+            } else {
+                client.close()
+                return
+            }
+            
+            client.soTimeout = 0
+            TcpTransportHandler.handleTcpSession(client, host, port, vpnService, scope)
+        } catch (e: Throwable) {
+            Log.v("PinkProxy", "HTTP Proxy error: ${e.message}")
+            try { client.close() } catch (ex: Throwable) {}
         }
-        
-        client.soTimeout = 0
-        TcpTransportHandler.handleTcpSession(client, host, port, vpnService, scope)
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.DelicateCoroutinesApi::class)

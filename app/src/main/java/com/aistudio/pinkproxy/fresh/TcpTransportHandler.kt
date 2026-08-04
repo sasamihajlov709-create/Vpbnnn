@@ -294,16 +294,18 @@ object TcpTransportHandler {
     ): Socket? = withContext(ProxyDispatcher.io) {
         if (ips.isEmpty()) return@withContext null
         if (ips.size == 1) {
+            val s = Socket()
             try {
-                val s = Socket()
                 vpnService?.protect(s)
                 s.connect(InetSocketAddress(ips[0], port), 5000)
                 return@withContext s
-            } catch (e: Throwable) { return@withContext null }
+            } catch (e: Throwable) {
+                try { s.close() } catch (ex: Throwable) {}
+                return@withContext null
+            }
         }
 
         // Happy Eyeballs: Connect to multiple IPs in parallel and take the first one
-        // We prioritize IPv6 if censorship intensity is high, as IPv6 is often less scrutinized
         val intensity = ProxyStats.censorshipIntensity.value
         val sortedIps = if (intensity > 70) {
             ips.sortedByDescending { it is java.net.Inet6Address }
@@ -318,10 +320,10 @@ object TcpTransportHandler {
         
         targetIps.forEachIndexed { index, ip ->
             jobs += launch {
+                val s = Socket()
                 try {
                     // Stagger connections: 200ms delay between attempts
                     if (index > 0) delay(index * 200L)
-                    val s = Socket()
                     vpnService?.protect(s)
                     s.tcpNoDelay = true
                     
@@ -329,8 +331,11 @@ object TcpTransportHandler {
                     val timeout = if (index < 2) 4000 else 7000
                     s.connect(InetSocketAddress(ip, port), timeout)
                     
-                    try { channel.send(s) } catch (e: Throwable) { try { s.close() } catch (ex: Throwable) {} }
+                    if (!channel.trySend(s).isSuccess) {
+                        try { s.close() } catch (ex: Throwable) {}
+                    }
                 } catch (e: Throwable) {
+                    try { s.close() } catch (ex: Throwable) {}
                 } finally {
                     if (completedCount.incrementAndGet() == targetIps.size) {
                         channel.close()
@@ -403,7 +408,9 @@ object TcpTransportHandler {
 
     private suspend fun sendConfusionPacket(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
         try {
-            val fakeTtl = rnd.nextInt(2, 5)
+            val host = socket.inetAddress?.hostAddress ?: ""
+            val configuredTtl = BypassConfig.fakeTtl
+            val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 6)
             TtlHelper.setTtl(socket, fakeTtl)
             val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
             out.write(noise)
@@ -415,7 +422,9 @@ object TcpTransportHandler {
 
     private suspend fun injectGhostSegment(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
         try {
-            val fakeTtl = rnd.nextInt(2, 4)
+            val host = socket.inetAddress?.hostAddress ?: ""
+            val configuredTtl = BypassConfig.fakeTtl
+            val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 6)
             TtlHelper.setTtl(socket, fakeTtl)
             val ghost = FakePacketHelper.buildRealisticTlsHello("ghost.internal")
             out.write(ghost)

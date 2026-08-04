@@ -50,9 +50,23 @@ object TtlHelper {
             }
             if (impl != null) {
                 fdField?.get(impl) as? FileDescriptor
-            } else null
+            } else {
+                when (socket) {
+                    is Socket -> ParcelFileDescriptor.fromSocket(socket).fileDescriptor
+                    is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket).fileDescriptor
+                    else -> null
+                }
+            }
         } catch (e: Throwable) {
-            null
+            try {
+                when (socket) {
+                    is Socket -> ParcelFileDescriptor.fromSocket(socket).fileDescriptor
+                    is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket).fileDescriptor
+                    else -> null
+                }
+            } catch (ex: Throwable) {
+                null
+            }
         }
     }
 
