@@ -323,64 +323,37 @@ object ProxyStats {
         _lastLatency.value = ms
     }
 
-    private val bufferPool8k = java.util.ArrayDeque<ByteArray>(256)
-    private val bufferPool16k = java.util.ArrayDeque<ByteArray>(128)
-    private val bufferPool64k = java.util.ArrayDeque<ByteArray>(32)
+    private val bufferPool8k = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+    private val bufferPool16k = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+    private val bufferPool64k = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
 
     fun obtain8k(): ByteArray {
-        synchronized(bufferPool8k) {
-            if (!bufferPool8k.isEmpty()) {
-                return bufferPool8k.poll()!!
-            }
-        }
-        return ByteArray(8192)
+        return bufferPool8k.poll() ?: ByteArray(8192)
     }
 
     fun release8k(buf: ByteArray) {
-        if (buf.size >= 8192) {
-            synchronized(bufferPool8k) {
-                if (bufferPool8k.size < 512) {
-                    bufferPool8k.offer(buf)
-                }
-            }
+        if (buf.size >= 8192 && bufferPool8k.size < 512) {
+            bufferPool8k.offer(buf)
         }
     }
 
     fun obtain16k(): ByteArray {
-        synchronized(bufferPool16k) {
-            if (!bufferPool16k.isEmpty()) {
-                return bufferPool16k.poll()!!
-            }
-        }
-        return ByteArray(16384)
+        return bufferPool16k.poll() ?: ByteArray(16384)
     }
 
     fun release16k(buf: ByteArray) {
-        if (buf.size >= 16384) {
-            synchronized(bufferPool16k) {
-                if (bufferPool16k.size < 256) {
-                    bufferPool16k.offer(buf)
-                }
-            }
+        if (buf.size >= 16384 && bufferPool16k.size < 256) {
+            bufferPool16k.offer(buf)
         }
     }
 
     fun obtain64k(): ByteArray {
-        synchronized(bufferPool64k) {
-            if (!bufferPool64k.isEmpty()) {
-                return bufferPool64k.poll()!!
-            }
-        }
-        return ByteArray(65536)
+        return bufferPool64k.poll() ?: ByteArray(65536)
     }
 
     fun release64k(buf: ByteArray) {
-        if (buf.size >= 65536) {
-            synchronized(bufferPool64k) {
-                if (bufferPool64k.size < 64) {
-                    bufferPool64k.offer(buf)
-                }
-            }
+        if (buf.size >= 65536 && bufferPool64k.size < 64) {
+            bufferPool64k.offer(buf)
         }
     }
 
@@ -393,9 +366,9 @@ object ProxyStats {
     }
 
     fun releaseAllPools() {
-        synchronized(bufferPool8k) { bufferPool8k.clear() }
-        synchronized(bufferPool16k) { bufferPool16k.clear() }
-        synchronized(bufferPool64k) { bufferPool64k.clear() }
+        bufferPool8k.clear()
+        bufferPool16k.clear()
+        bufferPool64k.clear()
     }
 
     private val _bytesTransferred = MutableStateFlow(0L)

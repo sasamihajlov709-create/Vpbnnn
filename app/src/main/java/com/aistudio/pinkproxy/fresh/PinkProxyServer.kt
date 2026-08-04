@@ -42,9 +42,9 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     Log.i("PinkProxy", "Watchdog: $activeCount active connections.")
                 }
                 
-                // Force memory cleanup if needed
-                if (activeCount > 400) {
-                    System.gc()
+                // Trim buffer pools on low connection load to free RAM smoothly
+                if (activeCount < 50) {
+                    ProxyStats.releaseAllPools()
                 }
             }
         }
@@ -69,7 +69,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     }
                                 
                     ProxyStats.updateConnections(1)
-                    ProxyStats.updateConnections(1)
                     val clientJob = scope.launch {
                         try {
                             client.tcpNoDelay = true
@@ -77,9 +76,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                             try { client.receiveBufferSize = 64 * 1024 } catch (e: Throwable) {}
                             handleClient(client, this)
                         } finally {
-                            try { client.close() } catch (e: Throwable) {}
-                            ProxyStats.updateConnections(-1)
-                            ProxyStats.updateConnections(-1)
                             try { client.close() } catch (e: Throwable) {}
                             ProxyStats.updateConnections(-1)
                             activeConnectionSemaphore.release()

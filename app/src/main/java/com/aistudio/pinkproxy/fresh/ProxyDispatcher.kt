@@ -6,18 +6,22 @@ import java.util.concurrent.Executors
 object ProxyDispatcher {
     @Volatile var context: android.content.Context? = null
 
+    private val cpuCores = Runtime.getRuntime().availableProcessors()
+    private val corePoolSize = Math.max(16, cpuCores * 4)
+    private val maxPoolSize = Math.max(128, cpuCores * 16)
+
     val io = java.util.concurrent.ThreadPoolExecutor(
-        16, // Core threads always kept alive
-        128, // Hard ceiling to prevent thread explosion under peak traffic
+        corePoolSize,
+        maxPoolSize,
         60L, java.util.concurrent.TimeUnit.SECONDS,
         java.util.concurrent.SynchronousQueue<Runnable>(),
         { r ->
             Thread(r, "PinkProxyWorker").apply { 
                 isDaemon = true
-                priority = Thread.NORM_PRIORITY + 1
+                priority = Thread.MAX_PRIORITY - 1
             }
         },
-        java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy() // Graceful backpressure/throttling when pool is completely saturated
+        java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
     ).asCoroutineDispatcher()
     
     val scheduler = Executors.newSingleThreadScheduledExecutor { r ->

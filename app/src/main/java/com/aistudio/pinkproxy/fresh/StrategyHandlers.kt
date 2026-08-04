@@ -11,6 +11,26 @@ import kotlinx.coroutines.delay
 object StrategyHandlers {
 
     suspend fun handleHttpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
+        if (strategy == BypassStrategy.DIRECT) {
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_HEADER_CASE_CHAOS) {
+            val fuzzed = FakePacketHelper.randomizeHeaderCase(data, length)
+            output.write(fuzzed, 0, fuzzed.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_METHOD_CASE_MANGLE) {
+            val fuzzed = FakePacketHelper.mangleHttpMethodCase(data, length)
+            output.write(fuzzed, 0, fuzzed.size)
+            output.flush()
+            return
+        }
+
         if (strategy == BypassStrategy.HTTP_CHUNKED_FAKE) {
             var pos = 0
             while (pos < length) {

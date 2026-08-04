@@ -173,9 +173,9 @@ object TcpTransportHandler {
                             ProxyStats.updateBytes(firstRemoteResponseLen.toLong())
                         }
                         
+                        remoteSocket.soTimeout = 60000
                         var n: Int
                         while (isActive) {
-                            remoteSocket.soTimeout = 60000
                             n = remoteIn!!.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
@@ -201,9 +201,9 @@ object TcpTransportHandler {
                     val rnd = ThreadLocalRandom.current()
                     var packetsCount = 1
                     try {
+                        clientSocket.soTimeout = 60000
                         var n: Int
                         while (isActive) {
-                            clientSocket.soTimeout = 60000
                             n = clientIn.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
