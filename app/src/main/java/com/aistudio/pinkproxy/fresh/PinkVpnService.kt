@@ -534,6 +534,8 @@ class PinkVpnService : VpnService() {
             ServiceChecker.stopChecking()
             DpiEngine.stop()
             CensorshipExpert.stop()
+            DnsProtocols.clearPool()
+            UdpTransportHandler.clearBuffers()
             RecoveryManager.stopHealthCheck()
             
             try {

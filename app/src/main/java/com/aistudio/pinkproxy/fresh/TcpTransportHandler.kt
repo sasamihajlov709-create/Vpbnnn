@@ -52,6 +52,7 @@ object TcpTransportHandler {
             }
 
             remoteSocket.tcpNoDelay = true
+            TtlHelper.setTtl(remoteSocket, BypassConfig.currentTtl.value)
             val clientIn = clientSocket.getInputStream()
             val clientOut = clientSocket.getOutputStream()
             val remoteIn = remoteSocket.getInputStream()

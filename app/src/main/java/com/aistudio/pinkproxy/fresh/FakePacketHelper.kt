@@ -317,7 +317,7 @@ object FakePacketHelper {
         val sni = buildSniExtension(listOf("google.com", "cloudflare.com").random())
         val ech = buildUdpNoise(rnd.nextInt(128, 256))
         
-        val extsLen = sni.size + 4 + ech.size
+        val extsLen = (sni.size + 4) + (ech.size + 4)
         val innerLen = 1 + 3 + 2 + 32 + 1 + 3 + 1 + 1 + 2 + extsLen
         val totalSize = 5 + innerLen
         
@@ -335,7 +335,13 @@ object FakePacketHelper {
         buf.put(1.toByte()); buf.put(0.toByte()) // Compression
         
         buf.putShort(extsLen.toShort())
+        
+        // SNI Header
+        buf.putShort(0x0000.toShort())
+        buf.putShort(sni.size.toShort())
         buf.put(sni)
+        
+        // ECH Header
         buf.putShort(0xfe0d.toShort()); buf.putShort(ech.size.toShort()); buf.put(ech)
         
         return data

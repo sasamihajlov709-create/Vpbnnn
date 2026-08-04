@@ -380,6 +380,11 @@ object UdpTransportHandler {
     }
 
     private val reorderBuffers = ConcurrentHashMap<String, MutableList<Pair<DatagramPacket, Long>>>()
+
+    fun clearBuffers() {
+        reorderBuffers.clear()
+        hostStrategyCache.clear()
+    }
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
     private var lastGlobalCleanup = System.currentTimeMillis()
     private val REORDER_TTL_MS = 5000L 

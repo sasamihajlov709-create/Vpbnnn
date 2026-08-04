@@ -483,6 +483,15 @@ object DnsProtocols {
     private val dotPool = java.util.concurrent.ConcurrentHashMap<String, javax.net.ssl.SSLSocket>()
     private val poolLock = Any()
 
+    fun clearPool() {
+        synchronized(poolLock) {
+            dotPool.forEach { (_, socket) ->
+                try { socket.close() } catch (e: Throwable) {}
+            }
+            dotPool.clear()
+        }
+    }
+
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
