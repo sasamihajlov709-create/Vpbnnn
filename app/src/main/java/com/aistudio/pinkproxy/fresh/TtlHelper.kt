@@ -126,9 +126,9 @@ object TtlHelper {
             val isIpv6 = if (socket is Socket) socket.inetAddress is Inet6Address 
                          else (socket as? DatagramSocket)?.inetAddress is Inet6Address
             if (isIpv6) {
-                setsockoptInt(fd, 41, 16, ttl)
+                setsockoptInt(fd, 41, 16, ttl) // IPPROTO_IPV6=41, IPV6_UNICAST_HOPS=16
             } else {
-                setsockoptInt(fd, 0, 4, ttl)
+                setsockoptInt(fd, 0, 2, ttl) // IPPROTO_IP=0, IP_TTL=2
             }
         }
     }
@@ -138,7 +138,7 @@ object TtlHelper {
             if (isIpv6) {
                 setsockoptInt(fd, 41, 16, ttl)
             } else {
-                setsockoptInt(fd, 0, 4, ttl)
+                setsockoptInt(fd, 0, 2, ttl)
             }
         }
     }

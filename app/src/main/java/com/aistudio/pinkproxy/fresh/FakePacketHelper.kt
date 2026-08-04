@@ -57,9 +57,7 @@ object FakePacketHelper {
 
     fun buildSniExtension(host: String): ByteArray {
         val hostBytes = host.toByteArray(StandardCharsets.UTF_8)
-        val buf = ByteBuffer.allocate(hostBytes.size + 9)
-        buf.putShort(0x0000) // Extension type: Server Name
-        buf.putShort((hostBytes.size + 5).toShort()) // Extension length
+        val buf = ByteBuffer.allocate(hostBytes.size + 5)
         buf.putShort((hostBytes.size + 3).toShort()) // Server Name List length
         buf.put(0) // Name type: host_name
         buf.putShort(hostBytes.size.toShort()) // Host name length
@@ -418,7 +416,7 @@ object FakePacketHelper {
         val rnd = ThreadLocalRandom.current()
         val sni = buildSniExtension(host)
         val otherExtsLen = 6 + 6 + 6 // Signature (6) + Groups (6) + Versions (6)
-        val extsLen = sni.size + otherExtsLen
+        val extsLen = (sni.size + 4) + otherExtsLen
         val innerLen = 1 + 3 + 2 + 32 + 1 + sidLen + 2 + 2 + 1 + 1 + 2 + extsLen
         val totalSize = 5 + innerLen
         
@@ -437,6 +435,10 @@ object FakePacketHelper {
         buf.put(1.toByte()); buf.put(0.toByte())
         
         buf.putShort(extsLen.toShort())
+        
+        // SNI Header (Manual)
+        buf.putShort(0x0000.toShort())
+        buf.putShort(sni.size.toShort())
         buf.put(sni)
         
         // Add some common extensions
