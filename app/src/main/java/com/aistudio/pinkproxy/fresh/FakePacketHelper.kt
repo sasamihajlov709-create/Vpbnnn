@@ -19,7 +19,7 @@ object FakePacketHelper {
     
     // Pre-allocated reusable buffer for common packet construction to avoid GC
     private val threadLocalBuffer = object : ThreadLocal<ByteBuffer>() {
-        override fun initialValue(): ByteBuffer = ByteBuffer.allocate(2048)
+        override fun initialValue(): ByteBuffer = ByteBuffer.allocate(65536)
     }
 
     private fun getBuffer(): ByteBuffer {

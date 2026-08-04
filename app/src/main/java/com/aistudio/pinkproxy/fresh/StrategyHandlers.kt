@@ -147,6 +147,32 @@ object StrategyHandlers {
     }
 
     suspend fun handleFragmentationStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, effectiveDelay: Long) {
+        if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE) {
+            if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
+                val sniPos = TlsParser.findSniOffset(data, length)
+                if (sniPos > 0) {
+                    val split1 = sniPos - rnd.nextInt(1, 3)
+                    if (split1 > 0) {
+                        output.write(data, 0, split1)
+                        output.flush()
+                        delay(effectiveDelay.coerceAtLeast(1L))
+                        
+                        if (strategy == BypassStrategy.SNI_TRIPLE) {
+                            val split2 = split1 + rnd.nextInt(2, 6).coerceAtMost(length - split1)
+                            output.write(data, split1, split2 - split1)
+                            output.flush()
+                            delay(effectiveDelay.coerceAtLeast(1L))
+                            output.write(data, split2, length - split2)
+                        } else {
+                            output.write(data, split1, length - split1)
+                        }
+                        output.flush()
+                        return
+                    }
+                }
+            }
+        }
+        
         var pos = 0
         while (pos < length) {
             val sz = rnd.nextInt(5, 20).coerceAtMost(length - pos)

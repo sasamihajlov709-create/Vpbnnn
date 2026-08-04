@@ -131,8 +131,9 @@ object TtlHelper {
 
     fun setWindowSize(socket: Any, size: Int) {
         try {
-            if (socket is Socket) socket.receiveBufferSize = size
-            else if (socket is DatagramSocket) socket.receiveBufferSize = size
+            val safeSize = if (size <= 0) 1 else size
+            if (socket is Socket) socket.receiveBufferSize = safeSize
+            else if (socket is DatagramSocket) socket.receiveBufferSize = safeSize
         } catch (e: Throwable) {}
     }
 
