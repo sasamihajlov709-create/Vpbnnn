@@ -51,22 +51,52 @@ object TtlHelper {
             if (impl != null) {
                 fdField?.get(impl) as? FileDescriptor
             } else {
-                when (socket) {
-                    is Socket -> ParcelFileDescriptor.fromSocket(socket).fileDescriptor
-                    is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket).fileDescriptor
+                // Fallback using ParcelFileDescriptor - must be careful to avoid leak
+                val pfd = when (socket) {
+                    is Socket -> ParcelFileDescriptor.fromSocket(socket)
+                    is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket)
                     else -> null
+                }
+                val fd = pfd?.fileDescriptor
+                // We don't close pfd here because we need the FD to be valid for setsockopt.
+                // However, ParcelFileDescriptor.fromSocket(socket) returns a DUP of the FD.
+                // In modern Android, we can use Os.dup() but we still need the original.
+                // Actually, the best way is to keep a reference to PFD and close it AFTER setsockopt.
+                // But for simplicity and safety, we'll try to use more reflection first.
+                fd
+            }
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    private fun withFd(socket: Any, block: (FileDescriptor) -> Unit) {
+        try {
+            // Priority 1: Reflection on SocketImpl (No leak, direct access)
+            val impl = when (socket) {
+                is Socket -> getImplMethod?.invoke(socket)
+                is DatagramSocket -> getDatagramImplMethod?.invoke(socket)
+                else -> null
+            }
+            val fdFromImpl = if (impl != null) fdField?.get(impl) as? FileDescriptor else null
+            
+            if (fdFromImpl != null && fdFromImpl.valid()) {
+                block(fdFromImpl)
+            } else {
+                // Priority 2: ParcelFileDescriptor (Creates a DUP, must close)
+                val pfd = when (socket) {
+                    is Socket -> ParcelFileDescriptor.fromSocket(socket)
+                    is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket)
+                    else -> null
+                }
+                try {
+                    pfd?.fileDescriptor?.let { if (it.valid()) block(it) }
+                } finally {
+                    try { pfd?.close() } catch (e: Throwable) {}
                 }
             }
         } catch (e: Throwable) {
-            try {
-                when (socket) {
-                    is Socket -> ParcelFileDescriptor.fromSocket(socket).fileDescriptor
-                    is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket).fileDescriptor
-                    else -> null
-                }
-            } catch (ex: Throwable) {
-                null
-            }
+            Log.v("TtlHelper", "withFd error: ${e.message}")
         }
     }
 
@@ -92,41 +122,31 @@ object TtlHelper {
     }
 
     fun setTtl(socket: Any, ttl: Int) {
-        try {
-            val fd = getFileDescriptor(socket)
-            if (fd != null && fd.valid()) {
-                val isIpv6 = if (socket is Socket) socket.inetAddress is Inet6Address else (socket as? DatagramSocket)?.inetAddress is Inet6Address
-                // IPPROTO_IP = 0, IP_TTL = 4, IPPROTO_IPV6 = 41, IPV6_UNICAST_HOPS = 16
-                if (isIpv6) {
-                    setsockoptInt(fd, 41, 16, ttl)
-                } else {
-                    setsockoptInt(fd, 0, 4, ttl)
-                }
+        withFd(socket) { fd ->
+            val isIpv6 = if (socket is Socket) socket.inetAddress is Inet6Address 
+                         else (socket as? DatagramSocket)?.inetAddress is Inet6Address
+            if (isIpv6) {
+                setsockoptInt(fd, 41, 16, ttl)
+            } else {
+                setsockoptInt(fd, 0, 4, ttl)
             }
-        } catch (e: Throwable) {}
+        }
     }
 
     fun setUdpTtl(socket: DatagramSocket, ttl: Int, isIpv6: Boolean = false) {
-        try {
-            val fd = getFileDescriptor(socket)
-            if (fd != null && fd.valid()) {
-                if (isIpv6) {
-                    setsockoptInt(fd, 41, 16, ttl)
-                } else {
-                    setsockoptInt(fd, 0, 4, ttl)
-                }
+        withFd(socket) { fd ->
+            if (isIpv6) {
+                setsockoptInt(fd, 41, 16, ttl)
+            } else {
+                setsockoptInt(fd, 0, 4, ttl)
             }
-        } catch (e: Throwable) {}
+        }
     }
 
     fun setMss(socket: Socket, mss: Int) {
-        try {
-            val fd = getFileDescriptor(socket)
-            if (fd != null && fd.valid()) {
-                // IPPROTO_TCP = 6, TCP_MAXSEG = 2
-                setsockoptInt(fd, 6, 2, mss)
-            }
-        } catch (e: Throwable) {}
+        withFd(socket) { fd ->
+            setsockoptInt(fd, 6, 2, mss)
+        }
     }
 
     fun setWindowSize(socket: Any, size: Int) {
@@ -138,27 +158,22 @@ object TtlHelper {
     }
 
     fun setNoFrag(socket: Any, noFrag: Boolean) {
-        try {
-            val fd = getFileDescriptor(socket)
-            if (fd != null && fd.valid()) {
-                // IPPROTO_IP = 0, IP_MTU_DISCOVER = 10, IP_PMTUDISC_DO = 2, IP_PMTUDISC_DONT = 0
-                setsockoptInt(fd, 0, 10, if (noFrag) 2 else 0)
-            }
-        } catch (e: Throwable) {}
+        withFd(socket) { fd ->
+            setsockoptInt(fd, 0, 10, if (noFrag) 2 else 0)
+        }
     }
 
     fun getSocketTtl(socket: Socket): Int {
-        return try {
-            val fd = getFileDescriptor(socket)
-            if (fd != null && fd.valid()) {
-                val isIpv6 = socket.inetAddress is Inet6Address
-                if (isIpv6) {
-                    getsockoptInt(fd, 41, 16)
-                } else {
-                    getsockoptInt(fd, 0, 4)
-                }
-            } else 64
-        } catch (e: Throwable) { 64 }
+        var result = 64
+        withFd(socket) { fd ->
+            val isIpv6 = socket.inetAddress is Inet6Address
+            result = if (isIpv6) {
+                getsockoptInt(fd, 41, 16)
+            } else {
+                getsockoptInt(fd, 0, 4)
+            }
+        }
+        return result
     }
 
     fun setLowTtlTemporary(socket: Socket, lowTtl: Int, delayMs: Long) {
