@@ -858,28 +858,33 @@ object DnsProtocols {
                     contentLength = clMatch.groupValues[1].toInt()
                 }
                 
-                if (contentLength > 0 && contentLength < 8192) {
+                if (contentLength > 0 && contentLength < 65536) {
                     val resp = ByteArray(contentLength)
                     dis.readFully(resp)
                     return DnsPacketEngine.parseDnsResponse(resp, contentLength, id).filter { !DnsCacheManager.isPoisoned(it, host) }
                 } else if (headers.contains("Transfer-Encoding: chunked")) {
-                    // Simple chunked reader
                     val outStream = ByteArrayOutputStream()
-                    while (true) {
-                        val line = readLineFromStream(dis) ?: break
-                        val size = line.trim().toIntOrNull(16) ?: 0
-                        if (size == 0) break
-                        val buf = ByteArray(size)
-                        dis.readFully(buf)
-                        outStream.write(buf)
-                        dis.read() // \r
-                        dis.read() // \n
+                    try {
+                        while (true) {
+                            val line = readLineFromStream(dis) ?: break
+                            val size = line.trim().split(";")[0].toIntOrNull(16) ?: 0
+                            if (size == 0) break
+                            val buf = ByteArray(size)
+                            dis.readFully(buf)
+                            outStream.write(buf)
+                            dis.read() // \r
+                            dis.read() // \n
+                        }
+                    } catch (e: Throwable) {
+                        // Partial data might be useful
                     }
                     val resp = outStream.toByteArray()
-                    return DnsPacketEngine.parseDnsResponse(resp, resp.size, id).filter { !DnsCacheManager.isPoisoned(it, host) }
+                    if (resp.isNotEmpty()) {
+                        return DnsPacketEngine.parseDnsResponse(resp, resp.size, id).filter { !DnsCacheManager.isPoisoned(it, host) }
+                    }
                 } else {
-                    // Fallback to reading until EOF
-                    val body = dis.readBytes()
+                    // Fallback for bodies without length info (read until EOF)
+                    val body = try { dis.readBytes() } catch (e: Throwable) { byteArrayOf() }
                     if (body.isNotEmpty()) {
                         val ips = DnsPacketEngine.parseDnsResponse(body, body.size, id)
                         return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
