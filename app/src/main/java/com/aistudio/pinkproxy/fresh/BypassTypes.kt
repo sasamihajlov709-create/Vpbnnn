@@ -615,7 +615,7 @@ object ProxyStats {
     }
 
     fun updateConnections(delta: Int) {
-        _activeConnections.update { it + delta }
+        _activeConnections.update { (it + delta).coerceAtLeast(0) }
     }
 
     fun getSuccessRate() = _successRate.value

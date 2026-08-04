@@ -238,7 +238,8 @@ object UdpTransportHandler {
                             val payloadOffset = headerLen
                             
                             // Proactive QUIC rejection to force fallback to TCP
-                            if (BypassConfig.blockQuic && targetPortNum == 443 && payloadLen > 20) {
+                            val shouldBlockQuic = BypassConfig.blockQuic || (BypassConfig.isAutoTuning && ProxyStats.censorshipIntensity.value > 85)
+                            if (shouldBlockQuic && targetPortNum == 443 && payloadLen > 20) {
                                 if (isQuicInitial(data, payloadOffset, payloadLen)) {
                                     // Extract DCID/SCID to build a convincing VN packet
                                     val dcidLen = data[payloadOffset + 5].toInt() and 0xFF
@@ -333,7 +334,7 @@ object UdpTransportHandler {
                                 if (cached != null && cached.isNotEmpty()) {
                                     val hash = (targetHost.hashCode() xor targetPortNum)
                                     val workerIdx = (hash and 0x7FFFFFFF) % 8
-                                    udpOutChannels[workerIdx].trySend(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
+                                    udpOutChannels[workerIdx].send(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
                                 } else {
                                     launch(ProxyDispatcher.io) {
                                         try {
@@ -341,7 +342,7 @@ object UdpTransportHandler {
                                             if (res.isNotEmpty()) {
                                                 val hash2 = (targetHost.hashCode() xor targetPortNum)
                                                 val workerIdx2 = (hash2 and 0x7FFFFFFF) % 8
-                                                udpOutChannels[workerIdx2].trySend(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
+                                                udpOutChannels[workerIdx2].send(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
                                             }
                                         } catch (e: Throwable) {}
                                     }
@@ -420,8 +421,10 @@ object UdpTransportHandler {
         val isQuic = targetPort == 443 && length > 0 && ((payload[offset].toInt() and 0xC0) == 0xC0 || (payload[offset].toInt() and 0x80) != 0)
         val isDns = targetPort == 53 || targetPort == 853 || targetPort == 784
         
+        val shouldBlockQuic = BypassConfig.blockQuic || (BypassConfig.isAutoTuning && ProxyStats.censorshipIntensity.value > 85)
+        
         // Basic filtering
-        if (BypassConfig.blockQuic && isQuic) {
+        if (shouldBlockQuic && isQuic) {
             // PROACTIVE QUIC BLOCKING: We can't easily send to client from here without the client socket
             // However, we can send a "Public Reset" or "Version Negotiation" to the TARGET
             // to confuse the remote state if it's already established.
