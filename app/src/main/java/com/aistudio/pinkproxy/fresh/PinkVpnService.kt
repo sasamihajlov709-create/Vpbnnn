@@ -255,11 +255,23 @@ class PinkVpnService : VpnService() {
             return START_NOT_STICKY
         }
         
-        if (action == "RESTART" || action == "CHANGE_STRATEGY") {
+        if (action == "CHANGE_STRATEGY") {
+            engineScope.launch {
+                try {
+                    ProxyStats.logRecovery("Strategy Changed: Applied dynamically & instantly")
+                    showNotification()
+                } catch (e: Throwable) {
+                    Log.e("PinkVpnService", "Change strategy error", e)
+                }
+            }
+            return START_STICKY
+        }
+        
+        if (action == "RESTART") {
             engineScope.launch {
                 serviceLock.withLock {
                     try {
-                        ProxyStats.logRecovery(if (action == "RESTART") "Core System Re-Started" else "Strategy Changed: Restarting engine")
+                        ProxyStats.logRecovery("Core System Re-Started")
                         stopVpnInternal()
                         delay(500) // Gap for OS cleanup
                         showNotification()
@@ -346,9 +358,22 @@ class PinkVpnService : VpnService() {
                 }
             }
 
-            vpnInterface = builder.establish()
+            try {
+                vpnInterface = builder.establish()
+            } catch (e: SecurityException) {
+                Log.e("PinkVpnService", "SecurityException: VPN is not prepared or permission was revoked", e)
+                VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
+                stopVpnInternal()
+                return@withContext
+            } catch (e: Throwable) {
+                Log.e("PinkVpnService", "Failed to establish VPN interface due to system error", e)
+                VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
+                stopVpnInternal()
+                return@withContext
+            }
+
             if (vpnInterface == null) {
-                Log.e("PinkVpnService", "Failed to establish VPN interface")
+                Log.e("PinkVpnService", "Failed to establish VPN interface (returned null)")
                 stopVpnInternal()
                 return@withContext
             }
@@ -541,6 +566,20 @@ class PinkVpnService : VpnService() {
                 if (wakeLock?.isHeld == true) wakeLock?.release()
                 if (wifiLock?.isHeld == true) wifiLock?.release()
             } catch (e: Throwable) {}
+
+            try {
+                if (Build.VERSION.SDK_INT >= 33) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            } catch (e: Throwable) {
+                try {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                } catch (ex: Throwable) {}
+            }
             
             updateTile(this@PinkVpnService)
         } finally {

@@ -472,6 +472,7 @@ object BypassConfig {
     }
 
     fun clearScores(context: Context) {
+        DpiEngine.clearScores()
         DpiEngine.clearCircuitBreakers()
     }
     
@@ -559,6 +560,7 @@ object BypassConfig {
             StrategyFamily.TCP -> StrategyHandlers.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
             StrategyFamily.FRAGMENTATION -> StrategyHandlers.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, effectiveDelay)
             StrategyFamily.ADAPTIVE -> StrategyHandlers.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
+            StrategyFamily.TIMING -> StrategyHandlers.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
             else -> {
                 if (strategy == BypassStrategy.CHAOS) {
                     val picked = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TCP_WINDOW_SHRINK, BypassStrategy.FRAGMENT_MULTI).random()

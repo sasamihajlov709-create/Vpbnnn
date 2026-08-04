@@ -8,14 +8,31 @@ import java.nio.ByteBuffer
 import android.util.Base64
 
 object FakePacketHelper {
-    private val staticNoiseCache = ByteArray(32768).apply { java.util.concurrent.ThreadLocalRandom.current().nextBytes(this) }
+    private var _staticNoiseCache: ByteArray? = null
+    private fun getStaticNoise(): ByteArray {
+        var res = _staticNoiseCache
+        if (res == null) {
+            val newCache = ByteArray(32768)
+            java.util.concurrent.ThreadLocalRandom.current().nextBytes(newCache)
+            _staticNoiseCache = newCache
+            res = newCache
+        }
+        return res
+    }
     
-    private var cachedQuicInitial = buildQuicInitial()
-    private var cachedStun = buildStunBindingRequest()
-    private var cachedDtls = buildFakeDtlsClientHello()
-    private var cachedWg = buildWireGuardHandshake()
-    private var cachedIke = buildIkeHandshake()
-    private var cachedDhcp = buildDhcpRequest()
+    private var _cachedQuicInitial: ByteArray? = null
+    private var _cachedStun: ByteArray? = null
+    private var _cachedDtls: ByteArray? = null
+    private var _cachedWg: ByteArray? = null
+    private var _cachedIke: ByteArray? = null
+    private var _cachedDhcp: ByteArray? = null
+    
+    private fun getQuicInitial() = _cachedQuicInitial ?: buildQuicInitial().also { _cachedQuicInitial = it }
+    private fun getStun() = _cachedStun ?: buildStunBindingRequest().also { _cachedStun = it }
+    private fun getDtls() = _cachedDtls ?: buildFakeDtlsClientHello().also { _cachedDtls = it }
+    private fun getWg() = _cachedWg ?: buildWireGuardHandshake().also { _cachedWg = it }
+    private fun getIke() = _cachedIke ?: buildIkeHandshake().also { _cachedIke = it }
+    private fun getDhcp() = _cachedDhcp ?: buildDhcpRequest().also { _cachedDhcp = it }
     
     private var cacheTime = System.currentTimeMillis()
     
@@ -32,22 +49,22 @@ object FakePacketHelper {
 
     private fun checkCacheRefresh() {
         if (System.currentTimeMillis() - cacheTime > 30000) {
-            cachedQuicInitial = buildQuicInitial()
-            cachedStun = buildStunBindingRequest()
-            cachedDtls = buildFakeDtlsClientHello()
-            cachedWg = buildWireGuardHandshake()
-            cachedIke = buildIkeHandshake()
-            cachedDhcp = buildDhcpRequest()
+            _cachedQuicInitial = buildQuicInitial()
+            _cachedStun = buildStunBindingRequest()
+            _cachedDtls = buildFakeDtlsClientHello()
+            _cachedWg = buildWireGuardHandshake()
+            _cachedIke = buildIkeHandshake()
+            _cachedDhcp = buildDhcpRequest()
             cacheTime = System.currentTimeMillis()
         }
     }
     
-    fun getCachedQuicInitial() = run { checkCacheRefresh(); cachedQuicInitial }
-    fun getCachedStun() = run { checkCacheRefresh(); cachedStun }
-    fun getCachedDtls() = run { checkCacheRefresh(); cachedDtls }
-    fun getCachedWg() = run { checkCacheRefresh(); cachedWg }
-    fun getCachedIke() = run { checkCacheRefresh(); cachedIke }
-    fun getCachedDhcp() = run { checkCacheRefresh(); cachedDhcp }
+    fun getCachedQuicInitial() = synchronized(this) { checkCacheRefresh(); getQuicInitial() }
+    fun getCachedStun() = synchronized(this) { checkCacheRefresh(); getStun() }
+    fun getCachedDtls() = synchronized(this) { checkCacheRefresh(); getDtls() }
+    fun getCachedWg() = synchronized(this) { checkCacheRefresh(); getWg() }
+    fun getCachedIke() = synchronized(this) { checkCacheRefresh(); getIke() }
+    fun getCachedDhcp() = synchronized(this) { checkCacheRefresh(); getDhcp() }
 
     fun buildExtension(type: Int, data: ByteArray): ByteArray {
         val buf = ByteBuffer.allocate(4 + data.size)
@@ -268,9 +285,10 @@ object FakePacketHelper {
 
     fun buildUdpNoise(size: Int): ByteArray {
         val result = ByteArray(size)
+        val cache = getStaticNoise()
         if (size <= 32768) {
             val offset = java.util.concurrent.ThreadLocalRandom.current().nextInt(0, 32768 - size + 1)
-            System.arraycopy(staticNoiseCache, offset, result, 0, size)
+            System.arraycopy(cache, offset, result, 0, size)
         } else {
             java.util.concurrent.ThreadLocalRandom.current().nextBytes(result)
         }

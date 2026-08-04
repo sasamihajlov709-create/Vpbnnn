@@ -8,72 +8,44 @@ import java.net.Socket
 import java.net.DatagramSocket
 import java.io.FileDescriptor
 
-@android.annotation.SuppressLint("SoonBlockedPrivateApi")
 object TtlHelper {
-    private var setsockoptIntMethod: java.lang.reflect.Method? = null
-    private var getsockoptIntMethod: java.lang.reflect.Method? = null
-    private var setsockoptByteMethod: java.lang.reflect.Method? = null
-    
-    // Fallback reflection for FD if PFD fails (older versions)
-    private var fdField: java.lang.reflect.Field? = null
 
     init {
         try {
-            val osClass = Class.forName("android.system.Os")
-            setsockoptIntMethod = osClass.getDeclaredMethod("setsockoptInt", FileDescriptor::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-            getsockoptIntMethod = osClass.getDeclaredMethod("getsockoptInt", FileDescriptor::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-            
-            try {
-                setsockoptByteMethod = osClass.getDeclaredMethod("setsockoptBytes", FileDescriptor::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, ByteArray::class.java)
-            } catch (e: Throwable) {}
-            
-            // Still try to get FD field from FileDescriptor class if needed, or from SocketImpl
-            try {
-                fdField = FileDescriptor::class.java.getDeclaredField("descriptor")
-                fdField?.isAccessible = true
-            } catch (e: Throwable) {
-                try {
-                    fdField = java.net.SocketImpl::class.java.getDeclaredField("fd")
-                    fdField?.isAccessible = true
-                } catch (e2: Throwable) {}
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("")
+                Log.v("TtlHelper", "Successfully bypassed hidden API restrictions")
             }
         } catch (e: Throwable) {
-            Log.d("TtlHelper", "Core reflection failed: ${e.message}")
+            Log.e("TtlHelper", "Failed to bypass hidden API restrictions", e)
         }
     }
 
     private fun withFd(socket: Any, block: (FileDescriptor) -> Unit) {
+        var pfd: ParcelFileDescriptor? = null
         try {
-            // Priority: ParcelFileDescriptor (Public API, safe)
-            val pfd = when (socket) {
+            pfd = when (socket) {
                 is Socket -> ParcelFileDescriptor.fromSocket(socket)
                 is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket)
                 else -> null
             }
-            
-            try {
-                val fd = pfd?.fileDescriptor
-                if (fd != null && fd.valid()) {
-                    block(fd)
-                }
-            } finally {
-                try { pfd?.close() } catch (e: Throwable) {}
+            val fd = pfd?.fileDescriptor
+            if (fd != null && fd.valid()) {
+                block(fd)
             }
         } catch (e: Throwable) {
             Log.v("TtlHelper", "withFd error: ${e.message}")
+        } finally {
+            try { pfd?.close() } catch (e: Throwable) {}
         }
     }
 
     private fun setsockoptInt(fd: FileDescriptor, level: Int, option: Int, value: Int) {
         try {
-            setsockoptIntMethod?.invoke(null, fd, level, option, value)
-        } catch (e: Throwable) {}
-    }
-
-    private fun getsockoptInt(fd: FileDescriptor, level: Int, option: Int): Int {
-        return try {
-            getsockoptIntMethod?.invoke(null, fd, level, option) as? Int ?: 64
-        } catch (e: Throwable) { 64 }
+            android.system.Os.setsockoptInt(fd, level, option, value)
+        } catch (e: Throwable) {
+            Log.v("TtlHelper", "setsockoptInt failed: ${e.message}")
+        }
     }
 
     fun tuneSocket(socket: Socket) {
@@ -128,16 +100,7 @@ object TtlHelper {
     }
 
     fun getSocketTtl(socket: Socket): Int {
-        var result = 64
-        withFd(socket) { fd ->
-            val isIpv6 = socket.inetAddress is Inet6Address
-            result = if (isIpv6) {
-                getsockoptInt(fd, 41, 16)
-            } else {
-                getsockoptInt(fd, 0, 2)
-            }
-        }
-        return result
+        return 64
     }
 
     fun setLowTtlTemporary(socket: Socket, lowTtl: Int, delayMs: Long) {

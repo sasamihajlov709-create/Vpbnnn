@@ -90,8 +90,10 @@ import androidx.compose.material.icons.filled.Cancel
 class MainActivity : ComponentActivity() {
     private fun formatBytes(bytes: Long) = ProxyStats.formatBytes(bytes)
     private val vpnLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
+        if (result.resultCode == Activity.RESULT_OK || android.net.VpnService.prepare(this) == null) {
             startVpnService()
+        } else {
+            android.widget.Toast.makeText(this, "VPN permission is required to run", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 

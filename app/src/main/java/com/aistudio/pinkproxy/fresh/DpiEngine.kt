@@ -17,7 +17,15 @@ object DpiEngine {
     private val _currentDpiLevel = MutableStateFlow(0)
     val currentDpiLevel = _currentDpiLevel.asStateFlow()
 
-    private val strategyScores = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
+    private val strategyScores = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>().apply {
+        HostCategory.entries.forEach { cat ->
+            val catScores = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+            BypassStrategy.entries.forEach { strat ->
+                catScores[strat] = AtomicInteger(100) // Base score
+            }
+            put(cat, catScores)
+        }
+    }
     private val strategyLatency = ConcurrentHashMap<BypassStrategy, java.util.concurrent.atomic.AtomicLong>()
     private val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
     private val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
@@ -71,13 +79,11 @@ object DpiEngine {
     private var optimizerJob: Job? = null
     
     fun start(context: android.content.Context) {
-        // Initialize scores
-        HostCategory.entries.forEach { cat ->
-            val catScores = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
-            BypassStrategy.entries.forEach { strat ->
-                catScores[strat] = AtomicInteger(100) // Base score
+        // Reset scores to base of 100 before loading
+        strategyScores.forEach { (_, catScores) ->
+            catScores.forEach { (_, score) ->
+                score.set(100)
             }
-            strategyScores[cat] = catScores
         }
         
         initStrategyChains()
@@ -128,6 +134,7 @@ object DpiEngine {
                             withTimeoutOrNull(2500) {
                                 val s = java.net.Socket()
                                 try {
+                                    try { BypassConfig.activeVpnService?.protect(s) } catch (e: Throwable) {}
                                     s.connect(java.net.InetSocketAddress(addr, 443), 1200)
                                     val out = s.getOutputStream()
                                     val fake = FakePacketHelper.buildRealisticTlsHello(host)
@@ -174,6 +181,7 @@ object DpiEngine {
                             val ok = withTimeoutOrNull(3000) {
                                 val s = java.net.Socket()
                                 try {
+                                    try { BypassConfig.activeVpnService?.protect(s) } catch (e: Throwable) {}
                                     s.connect(java.net.InetSocketAddress(addr, 443), 1500)
                                     val out = s.getOutputStream()
                                     // Make a fake packet using the strategy
@@ -571,6 +579,14 @@ object DpiEngine {
                 }
                 score.addAndGet(boost)
                 if (score.get() > 3000) score.set(3000)
+            }
+        }
+    }
+
+    fun clearScores() {
+        strategyScores.forEach { (_, catScores) ->
+            catScores.forEach { (_, score) ->
+                score.set(100)
             }
         }
     }

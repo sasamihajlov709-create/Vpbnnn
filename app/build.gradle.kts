@@ -13,7 +13,7 @@ android {
   namespace = "com.aistudio.pinkproxy.fresh"
   compileSdk = 36
   defaultConfig {
-    applicationId = "com.aistudio.pinkproxy.fresh"
+    applicationId = "com.aistudio.pinkproxy"
     minSdk = 29
     targetSdk = 35
     versionCode = 1
@@ -115,6 +115,7 @@ dependencies {
   // implementation(libs.firebase.appcheck.recaptcha)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
+  implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
   implementation(libs.logging.interceptor)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)

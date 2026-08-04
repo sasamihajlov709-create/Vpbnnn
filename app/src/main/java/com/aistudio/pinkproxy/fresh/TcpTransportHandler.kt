@@ -23,6 +23,8 @@ object TcpTransportHandler {
         scope: CoroutineScope
     ) {
         var remoteSocket: Socket? = null
+        var remoteIn: InputStream? = null
+        var remoteOut: OutputStream? = null
         try {
             val resolved = RobustResolver.resolve(targetHost, vpnService)
             if (resolved.isEmpty()) {
@@ -45,18 +47,8 @@ object TcpTransportHandler {
                 }
             }
 
-            remoteSocket = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
-            if (remoteSocket == null) {
-                clientSocket.close()
-                return
-            }
-
-            remoteSocket.tcpNoDelay = true
-            TtlHelper.setTtl(remoteSocket, BypassConfig.currentTtl.value)
             val clientIn = clientSocket.getInputStream()
             val clientOut = clientSocket.getOutputStream()
-            val remoteIn = remoteSocket.getInputStream()
-            val remoteOut = remoteSocket.getOutputStream()
             
             val lastActivity = AtomicLong(System.currentTimeMillis())
             val detectedSni = AtomicReference<String?>(null)
@@ -70,22 +62,123 @@ object TcpTransportHandler {
                 else -> 16384
             }
 
+            val firstClientPacket = ByteArray(transportBufferSize)
+            clientSocket.soTimeout = 2000 // Short timeout to read the first client hello
+            var firstClientPacketLen = 0
+            try {
+                firstClientPacketLen = clientIn.read(firstClientPacket)
+            } catch (e: Throwable) {
+                Log.w("TcpTransport", "Failed to read first packet from client: ${e.message}")
+            }
+
+            var firstRemoteResponse: ByteArray? = null
+            var firstRemoteResponseLen = 0
+
+            if (firstClientPacketLen > 0 && (targetPort == 443 || targetPort == 80 || targetPort == 8443)) {
+                var attempt = 0
+                val maxAttempts = 3
+                while (attempt < maxAttempts) {
+                    attempt++
+                    if (attempt > 1) {
+                        // Record previous failure and pick fallback or better strategy
+                        DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CENSORSHIP_STALL, host = targetHost)
+                        val fallback = DpiEngine.getFallbackStrategy(strategy)
+                        strategy = fallback ?: DpiEngine.getBestStrategy(HostClassifier.classify(targetHost), targetHost)
+                        config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
+                        Log.i("TcpTransport", "Transparent fallback: Retrying connection to $targetHost (attempt $attempt/$maxAttempts) using strategy $strategy")
+                    }
+
+                    val rs = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
+                    if (rs == null) {
+                        delay(100)
+                        continue
+                    }
+
+                    rs.tcpNoDelay = true
+                    try { rs.sendBufferSize = 64 * 1024 } catch(e: Throwable) {}
+                    try { rs.receiveBufferSize = 64 * 1024 } catch(e: Throwable) {}
+                    TtlHelper.setTtl(rs, BypassConfig.currentTtl.value)
+
+                    val rsOut = rs.getOutputStream()
+                    val rsIn = rs.getInputStream()
+
+                    try {
+                        // Apply bypass on the first client packet
+                        BypassConfig.applyBypass(rs, rsOut, firstClientPacket, firstClientPacketLen, config, targetHost)
+                        
+                        // Read first response packet with short adaptive timeout to verify bypass
+                        val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 800).coerceAtMost(3000).toInt()
+                        rs.soTimeout = verifyTimeout
+                        
+                        val responseBuf = ByteArray(transportBufferSize)
+                        val readBytes = rsIn.read(responseBuf)
+                        if (readBytes > 0) {
+                            // Handshake succeeded!
+                            DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
+                            
+                            remoteSocket = rs
+                            remoteIn = rsIn
+                            remoteOut = rsOut
+                            firstRemoteResponse = responseBuf
+                            firstRemoteResponseLen = readBytes
+                            break // Exit retry loop
+                        } else if (readBytes == -1) {
+                            throw java.io.IOException("EOF received during handshake verification")
+                        }
+                    } catch (e: Throwable) {
+                        Log.w("TcpTransport", "Handshake attempt $attempt failed for $targetHost with strategy $strategy: ${e.message}")
+                        try { rs.close() } catch (ex: Throwable) {}
+                        
+                        if (attempt == maxAttempts) {
+                            DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CONNECTION_REFUSED, host = targetHost)
+                        }
+                    }
+                }
+            }
+
+            // Direct fallback connection if the retry loop didn't succeed, or if there was no first client packet
+            if (remoteSocket == null) {
+                Log.w("TcpTransport", "Bypass attempts failed or skipped for $targetHost. Connecting directly.")
+                remoteSocket = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
+                if (remoteSocket == null) {
+                    clientSocket.close()
+                    return
+                }
+                remoteSocket.tcpNoDelay = true
+                remoteIn = remoteSocket.getInputStream()
+                remoteOut = remoteSocket.getOutputStream()
+                
+                // If we have client data, write it direct
+                if (firstClientPacketLen > 0) {
+                    try {
+                        remoteOut.write(firstClientPacket, 0, firstClientPacketLen)
+                        remoteOut.flush()
+                    } catch (e: Throwable) {
+                        Log.w("TcpTransport", "Failed to write first packet directly: ${e.message}")
+                        clientSocket.close()
+                        remoteSocket.close()
+                        return
+                    }
+                }
+            }
+
             coroutineScope {
                 // Forward from Remote to Client (Direct)
                 launch(ProxyDispatcher.io) {
                     val buffer = if (transportBufferSize > 8192) ProxyStats.obtain16k() else ProxyStats.obtain8k()
-                    var successRecorded = false
                     try {
+                        if (firstRemoteResponse != null && firstRemoteResponseLen > 0) {
+                            clientOut.write(firstRemoteResponse, 0, firstRemoteResponseLen)
+                            clientOut.flush()
+                            ProxyStats.updateBytes(firstRemoteResponseLen.toLong())
+                        }
+                        
                         var n: Int
                         while (isActive) {
                             remoteSocket.soTimeout = 60000
-                            n = remoteIn.read(buffer)
+                            n = remoteIn!!.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
-                                if (!successRecorded) {
-                                    DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
-                                    successRecorded = true
-                                }
                                 lastActivity.set(System.currentTimeMillis())
                                 clientOut.write(buffer, 0, n)
                                 clientOut.flush()
@@ -95,14 +188,6 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) {
                             Log.v("TcpTransport", "RemoteToClient error: ${e.message}")
-                            if (!successRecorded) {
-                                val reason = when {
-                                    e.message?.contains("reset", ignoreCase = true) == true -> FailureReason.TCP_RESET
-                                    e is java.net.SocketTimeoutException -> FailureReason.TIMEOUT
-                                    else -> FailureReason.UNKNOWN
-                                }
-                                DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = reason, host = targetHost)
-                            }
                         }
                     } finally {
                         if (buffer.size > 8192) ProxyStats.release16k(buffer) else ProxyStats.release8k(buffer)
@@ -114,7 +199,7 @@ object TcpTransportHandler {
                 launch(ProxyDispatcher.io) {
                     val buffer = if (transportBufferSize > 8192) ProxyStats.obtain16k() else ProxyStats.obtain8k()
                     val rnd = ThreadLocalRandom.current()
-                    var packetsCount = 0
+                    var packetsCount = 1
                     try {
                         var n: Int
                         while (isActive) {
@@ -140,7 +225,7 @@ object TcpTransportHandler {
                                         // Fragmentation is safer than padding for standard TCP streams
                                         if (intensity > 65 && n > 100 && packetsCount < 10) {
                                             val split = n / 2
-                                            remoteOut.write(buffer, 0, split)
+                                            remoteOut!!.write(buffer, 0, split)
                                             remoteOut.flush()
                                             delay(rnd.nextLong(2, 20))
                                             remoteOut.write(buffer, split, n - split)
@@ -161,7 +246,7 @@ object TcpTransportHandler {
 
                                     writeMutex.lock()
                                     try {
-                                        BypassConfig.applyBypass(remoteSocket, remoteOut, buffer, n, config, activeHost)
+                                        BypassConfig.applyBypass(remoteSocket, remoteOut!!, buffer, n, config, activeHost)
                                     } finally {
                                         writeMutex.unlock()
                                     }
@@ -184,10 +269,10 @@ object TcpTransportHandler {
                                                 try {
                                                     // In extreme cases, inject a tiny junk segment with low TTL before the real fragment
                                                     if (intensity > 85 && rnd.nextInt(100) < 35) {
-                                                        injectGhostSegment(remoteSocket, remoteOut, rnd)
+                                                        injectGhostSegment(remoteSocket, remoteOut!!, rnd)
                                                     }
                                                     
-                                                    remoteOut.write(buffer, offset, sz)
+                                                    remoteOut!!.write(buffer, offset, sz)
                                                     remoteOut.flush()
                                                 } finally {
                                                     writeMutex.unlock()
@@ -199,7 +284,7 @@ object TcpTransportHandler {
                                         } else {
                                             writeMutex.lock()
                                             try {
-                                                remoteOut.write(buffer, 0, n)
+                                                remoteOut!!.write(buffer, 0, n)
                                                 remoteOut.flush()
                                             } finally {
                                                 writeMutex.unlock()
@@ -209,7 +294,7 @@ object TcpTransportHandler {
                                         // Standard direct forwarding
                                         writeMutex.lock()
                                         try {
-                                            remoteOut.write(buffer, 0, n)
+                                            remoteOut!!.write(buffer, 0, n)
                                             remoteOut.flush()
                                         } finally {
                                             writeMutex.unlock()
@@ -261,7 +346,7 @@ object TcpTransportHandler {
                         if (System.currentTimeMillis() - lastActivity.get() > 12000) {
                             writeMutex.lock()
                             try {
-                                sendConfusionPacket(remoteSocket, remoteOut, rnd)
+                                sendConfusionPacket(remoteSocket!!, remoteOut!!, rnd)
                             } catch (e: Throwable) {} finally {
                                 writeMutex.unlock()
                             }
@@ -274,7 +359,7 @@ object TcpTransportHandler {
                     while (isActive) {
                         delay(30000)
                         if (ProxyStats.censorshipIntensity.value > 30) {
-                            applyWindowPulse(remoteSocket)
+                            applyWindowPulse(remoteSocket!!)
                         }
                     }
                 }

@@ -4,6 +4,7 @@ import android.util.Log
 import java.net.InetAddress
 import java.net.Inet6Address
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.launch
 
 object DnsCacheManager {
     private const val CACHE_TTL_MS = 10 * 60 * 1000L // 10 minutes
@@ -118,8 +119,17 @@ object DnsCacheManager {
     }
 
     private fun prefetchCommonHosts() {
-        val critical = listOf("google.com", "github.com", "telegram.org", "cloudflare.com", "1.1.1.1")
-        // RobustResolver will handle the actual resolution logic safely
+        val critical = listOf("google.com", "github.com", "telegram.org", "cloudflare-dns.com", "dns.google", "youtube.com")
+        val scope = ProxyDispatcher.mainScope
+        critical.forEach { host ->
+            scope.launch {
+                try {
+                    RobustResolver.resolve(host, null)
+                } catch (e: Throwable) {
+                    Log.v("DnsCache", "Prefetch failed for $host: ${e.message}")
+                }
+            }
+        }
     }
 
     fun ensureEfficiency() {
