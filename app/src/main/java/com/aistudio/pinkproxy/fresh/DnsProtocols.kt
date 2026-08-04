@@ -480,52 +480,64 @@ object DnsProtocols {
         "94.140.15.15" to "dns.adguard.com"
     )
 
+    private val dotPool = java.util.concurrent.ConcurrentHashMap<String, javax.net.ssl.SSLSocket>()
+    private val poolLock = Any()
+
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
         
-        val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
-        trustManagerFactory.init(null as java.security.KeyStore?)
-        val trustManagers = trustManagerFactory.trustManagers
-        val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
-        
-        val sc = SSLContext.getInstance("TLS")
-        sc.init(null, if (defaultTrustManager != null) arrayOf(defaultTrustManager) else null, null)
-        
-        val factory = ProtectedSSLSocketFactory(sc.socketFactory, vpnService)
-        val sslSocket = factory.createSocket() as? javax.net.ssl.SSLSocket ?: return emptyList()
-        
-        try {
-            sslSocket.connect(InetSocketAddress(dotIp, 853), 3000)
-            sslSocket.soTimeout = 3000
-            sslSocket.startHandshake()
+        return withContext(ProxyDispatcher.io) {
+            runCatching {
+                var sslSocket: javax.net.ssl.SSLSocket? = dotPool[dotIp]
+                
+                if (sslSocket == null || sslSocket.isClosed || !sslSocket.isConnected) {
+                    synchronized(poolLock) {
+                        sslSocket = dotPool[dotIp]
+                        if (sslSocket == null || sslSocket!!.isClosed || !sslSocket!!.isConnected) {
+                            val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+                            trustManagerFactory.init(null as java.security.KeyStore?)
+                            val trustManagers = trustManagerFactory.trustManagers
+                            val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
+                            
+                            val sc = SSLContext.getInstance("TLS")
+                            sc.init(null, if (defaultTrustManager != null) arrayOf(defaultTrustManager) else null, null)
+                            
+                            val factory = ProtectedSSLSocketFactory(sc.socketFactory, vpnService)
+                            val s = factory.createSocket() as javax.net.ssl.SSLSocket
+                            s.connect(InetSocketAddress(dotIp, 853), 4000)
+                            s.soTimeout = 5000
+                            s.tcpNoDelay = true
+                            s.startHandshake()
+                            
+                            val expectedHost = dotHostnames[dotIp] ?: dotIp
+                            if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(expectedHost, s.session)) {
+                                s.close()
+                                throw Exception("DoT hostname verification failed")
+                            }
+                            dotPool[dotIp] = s
+                            sslSocket = s
+                        }
+                    }
+                }
 
-            val session = sslSocket.session
-            val verifier = HttpsURLConnection.getDefaultHostnameVerifier()
-            val expectedHost = dotHostnames[dotIp] ?: dotIp
-            
-            if (!verifier.verify(expectedHost, session)) {
-                Log.w("DnsProtocols", "DoT hostname verification failed for $dotIp (expected $expectedHost)")
-                return emptyList()
+                val socket = sslSocket!!
+                val dos = DataOutputStream(socket.getOutputStream())
+                dos.writeShort(query.size)
+                dos.write(query)
+                dos.flush()
+                
+                val dis = DataInputStream(socket.getInputStream())
+                val len = dis.readUnsignedShort()
+                if (len > 8192) throw Exception("Packet too large")
+                val resp = ByteArray(len)
+                dis.readFully(resp)
+                DnsPacketEngine.parseDnsResponse(resp, len, id).filter { !DnsCacheManager.isPoisoned(it, host) }
+            }.getOrElse { 
+                dotPool.remove(dotIp)?.let { try { it.close() } catch(e: Throwable) {} }
+                emptyList() 
             }
-
-            val dos = DataOutputStream(sslSocket.getOutputStream())
-            dos.writeShort(query.size)
-            dos.write(query)
-            dos.flush()
-            
-            val dis = DataInputStream(sslSocket.getInputStream())
-            val len = dis.readUnsignedShort()
-            if (len > 8192) return emptyList()
-            val resp = ByteArray(len)
-            dis.readFully(resp)
-            val ips = DnsPacketEngine.parseDnsResponse(resp, len, id)
-            return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
-        } catch (e: Throwable) {
-        } finally {
-            try { sslSocket.close() } catch (e: Throwable) {}
         }
-        return emptyList()
     }
 
     suspend fun queryDnsOverTcp(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {

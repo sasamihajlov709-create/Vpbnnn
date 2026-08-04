@@ -291,6 +291,7 @@ object ProxyStats {
         dpiEvents[type] = (dpiEvents[type] ?: 0) + 1
         VpnRuntimeState.updateDpi(type.name)
         recordCensorshipEvent(true)
+        DpiEngine.recordEvent(type)
         logRecovery("Detected censorship type: $type")
     }
     
@@ -300,6 +301,7 @@ object ProxyStats {
     fun recordDnsFailure() {
         _dnsFailureCount.update { it + 1 }
         recordCensorshipEvent(true)
+        DpiEngine.recordEvent(DpiType.DNS_POISONING)
     }
     
     fun clearDpiType() {

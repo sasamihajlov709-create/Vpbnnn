@@ -73,6 +73,7 @@ object TcpTransportHandler {
                 // Forward from Remote to Client (Direct)
                 launch(ProxyDispatcher.io) {
                     val buffer = if (transportBufferSize > 8192) ProxyStats.obtain16k() else ProxyStats.obtain8k()
+                    var successRecorded = false
                     try {
                         var n: Int
                         while (isActive) {
@@ -80,6 +81,10 @@ object TcpTransportHandler {
                             n = remoteIn.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
+                                if (!successRecorded) {
+                                    DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
+                                    successRecorded = true
+                                }
                                 lastActivity.set(System.currentTimeMillis())
                                 clientOut.write(buffer, 0, n)
                                 clientOut.flush()
@@ -87,7 +92,17 @@ object TcpTransportHandler {
                             }
                         }
                     } catch (e: Throwable) {
-                        if (e !is CancellationException) Log.v("TcpTransport", "RemoteToClient error: ${e.message}")
+                        if (e !is CancellationException) {
+                            Log.v("TcpTransport", "RemoteToClient error: ${e.message}")
+                            if (!successRecorded) {
+                                val reason = when {
+                                    e.message?.contains("reset", ignoreCase = true) == true -> FailureReason.TCP_RESET
+                                    e is java.net.SocketTimeoutException -> FailureReason.TIMEOUT
+                                    else -> FailureReason.UNKNOWN
+                                }
+                                DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = reason, host = targetHost)
+                            }
+                        }
                     } finally {
                         if (buffer.size > 8192) ProxyStats.release16k(buffer) else ProxyStats.release8k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Throwable) {}
