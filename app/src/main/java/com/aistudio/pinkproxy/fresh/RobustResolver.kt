@@ -38,21 +38,21 @@ object RobustResolver {
         DnsCacheManager.clear()
     }
 
-    fun getCached(host: String): List<InetAddress>? = DnsCacheManager.getCached(host)
-    fun getCachedDetailed(host: String): List<DnsPacketEngine.DnsRecord>? = DnsCacheManager.getCachedDetailed(host)
+    fun getCached(host: String, type: Int = 1): List<InetAddress>? = DnsCacheManager.getCached(host, type)
+    fun getCachedDetailed(host: String, type: Int = 1): List<DnsPacketEngine.DnsRecord>? = DnsCacheManager.getCachedDetailed(host, type)
 
     fun clearCache() = DnsCacheManager.clearAll()
     
-    suspend fun resolveDnsOverTcpOnly(host: String, vpnService: VpnService? = null): List<InetAddress> {
-        val cached = DnsCacheManager.getCached(host)
+    suspend fun resolveDnsOverTcpOnly(host: String, vpnService: VpnService? = null, type: Int = 1): List<InetAddress> {
+        val cached = DnsCacheManager.getCached(host, type)
         if (cached != null) return cached
         
         val servers = if (dnsMode == "Custom") listOf(customDnsIp) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
         for (dns in servers) {
             try {
-                val res = DnsProtocols.queryDnsOverTcp(host, dns, vpnService)
+                val res = DnsProtocols.queryDnsOverTcp(host, dns, vpnService, type)
                 if (res.isNotEmpty()) {
-                    DnsCacheManager.put(host, res)
+                    DnsCacheManager.put(host, res, type = type)
                     return res
                 }
             } catch (e: Throwable) {}
@@ -61,21 +61,21 @@ object RobustResolver {
     }
 
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-    suspend fun resolve(host: String, vpnService: VpnService? = null): List<InetAddress> {
+    suspend fun resolve(host: String, vpnService: VpnService? = null, type: Int = 1): List<InetAddress> {
         if (DnsCacheManager.isIpAddress(host)) {
             return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { emptyList() }
         }
         if (DnsCacheManager.isNegative(host)) return emptyList()
 
-        val cached = DnsCacheManager.getCached(host)
+        val cached = DnsCacheManager.getCached(host, type)
         if (cached != null) return cached
 
-        val cacheKey = host.lowercase()
+        val cacheKey = if (type == 1) host.lowercase() else "${host.lowercase()}:$type"
         val scope = getScope()
         val deferred = pendingResolutions.computeIfAbsent(cacheKey) {
             scope.async {
                 try {
-                    performResolution(host, vpnService)
+                    performResolution(host, vpnService, type)
                 } finally {
                     pendingResolutions.remove(cacheKey)
                 }
@@ -97,10 +97,10 @@ object RobustResolver {
         }
     }
 
-    private suspend fun performResolution(host: String, vpnService: VpnService?): List<InetAddress> {
+    private suspend fun performResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val censorship = BypassConfig.censorshipLevel.value
         if (censorship > 50) {
-            return performParallelResolution(host, vpnService)
+            return performParallelResolution(host, vpnService, type)
         }
         
         val isCensored = BypassConfig.isHostCensored(host)
@@ -109,40 +109,40 @@ object RobustResolver {
         // 1. Try Direct if not censored
         if (isDirect && !isCensored) {
             try {
-                val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService)
+                val res = DnsProtocols.queryUdpDnsShadow(host, "8.8.8.8", vpnService, type)
                 if (res.isNotEmpty() && !DnsCacheManager.isPoisoned(res.first(), host)) {
-                    DnsCacheManager.put(host, res)
+                    DnsCacheManager.put(host, res, type = type)
                     return res
                 }
             } catch (e: Throwable) {
-                // if (e is CancellationException) throw e
+                // // if (e is CancellationException) throw e
             }
         }
 
         // 2. Try Smart Parallel Resolution (DoH, DoT, Shadow UDP)
         try {
             if (ProxyStats.censorshipIntensity.value > 95) {
-                val cached = DnsCacheManager.getCached(host) ?: DnsCacheManager.getEmergencyFallback(host)
+                val cached = DnsCacheManager.getCached(host, type) ?: DnsCacheManager.getEmergencyFallback(host)
                 if (cached != null) return cached
             }
             
-            val par = performParallelResolution(host, vpnService)
+            val par = performParallelResolution(host, vpnService, type)
             if (par.isNotEmpty()) {
                 if (DnsCacheManager.isSuspicious(host, par)) {
                     ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
                 } else {
                     val sorted = DnsCacheManager.getSortedIps(par)
-                    DnsCacheManager.put(host, sorted)
+                    DnsCacheManager.put(host, sorted, type = type)
                     
                     // Smart Prefetch common subdomains with throttling
-                    if (!host.startsWith("www.") && host.split(".").size == 2) {
+                    if (type == 1 && !host.startsWith("www.") && host.split(".").size == 2) {
                         getScope().launch {
                             listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
                                 try { 
                                     delay(500) // Stagger prefetch to avoid overwhelming the system
                                     val preHost = prefix + host
                                     if (DnsCacheManager.getCached(preHost) == null) {
-                                        performParallelResolution(preHost, vpnService) 
+                                        performParallelResolution(preHost, vpnService, 1) 
                                     }
                                 } catch (e: Throwable) { }
                             }
@@ -152,12 +152,12 @@ object RobustResolver {
                 }
             }
         } catch (e: Throwable) {
-            // if (e is CancellationException) throw e
+            // // if (e is CancellationException) throw e
         }
 
         // 3. Emergency Fallback
         DnsCacheManager.getEmergencyFallback(host)?.let {
-            DnsCacheManager.put(host, it)
+            DnsCacheManager.put(host, it, type = type)
             return it
         }
 
@@ -165,13 +165,13 @@ object RobustResolver {
         val servers = if (dnsMode == "Custom") listOf(customDnsIp) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
         for (dns in servers) {
             try {
-                val res = DnsProtocols.queryUdpDnsShadow(host, dns, vpnService)
+                val res = DnsProtocols.queryUdpDnsShadow(host, dns, vpnService, type)
                 if (res.isNotEmpty()) {
-                    DnsCacheManager.put(host, res)
+                    DnsCacheManager.put(host, res, type = type)
                     return res
                 }
             } catch (e: Throwable) {
-                // if (e is CancellationException) throw e
+                // // if (e is CancellationException) throw e
             }
         }
 
@@ -179,7 +179,7 @@ object RobustResolver {
         throw java.net.UnknownHostException("Resolution failed for $host")
     }
 
-    private suspend fun performParallelResolution(host: String, vpnService: VpnService?): List<InetAddress> = coroutineScope {
+    private suspend fun performParallelResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> = coroutineScope {
         val intensity = ProxyStats.censorshipIntensity.value
         // Obfuscation: send fake queries for popular domains to hide the real one
         if (ProxyStats.censorshipIntensity.value > 40 && !host.contains("google") && !host.contains("facebook")) {
@@ -195,11 +195,11 @@ object RobustResolver {
             }
         }
         
-        val primaryDoH: suspend () -> List<InetAddress> = { DnsProtocols.queryDohRacing(host, vpnService) }
-        val primaryDoT: suspend () -> List<InetAddress> = { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService) }
-        val shadowUdp: suspend () -> List<InetAddress> = { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService) }
-        val shadowTcp: suspend () -> List<InetAddress> = { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService) }
-        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDnsOverQuic(host, DnsOptimizer.bestDoqServer, vpnService) }
+        val primaryDoH: suspend () -> List<InetAddress> = { DnsProtocols.queryDohRacing(host, vpnService, type) }
+        val primaryDoT: suspend () -> List<InetAddress> = { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService, type) }
+        val shadowUdp: suspend () -> List<InetAddress> = { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService, type) }
+        val shadowTcp: suspend () -> List<InetAddress> = { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService, type) }
+        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDnsOverQuic(host, DnsOptimizer.bestDoqServer, vpnService, type) }
         val echCheck: suspend () -> List<InetAddress> = {
             try {
                 val httpsRecords = DnsProtocols.queryHttpsRecord(host, vpnService)
@@ -223,14 +223,14 @@ object RobustResolver {
         queries.add(echCheck)
 
         if (intensity > 60) {
-            queries.add { DnsProtocols.queryDnsExtremeRacing(host, vpnService) }
-            queries.add { DnsProtocols.queryDohSmuggling(host, vpnService) }
+            queries.add { DnsProtocols.queryDnsExtremeRacing(host, vpnService, type) }
+            queries.add { DnsProtocols.queryDohSmuggling(host, vpnService, type) }
         }
         if (intensity > 70) {
-            queries.add { DnsProtocols.queryUdpDnsNuclear(host, "8.8.8.8", vpnService) }
+            queries.add { DnsProtocols.queryUdpDnsNuclear(host, "8.8.8.8", vpnService, type) }
         }
         if (intensity > 85) {
-            queries.add { DnsProtocols.queryTcpDnsNuclear(host, "8.8.8.8", vpnService) }
+            queries.add { DnsProtocols.queryTcpDnsNuclear(host, "8.8.8.8", vpnService, type) }
         }
 
         val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size + 1)
@@ -251,7 +251,7 @@ object RobustResolver {
                 group.forEach { query ->
                     launch {
                         val res = try { query() } catch (e: Throwable) {
-                            if (e is CancellationException) throw e
+                            // if (e is CancellationException) throw e
                             emptyList()
                         }
                         try { channel.send(res) } catch (e: Throwable) {}
@@ -264,7 +264,7 @@ object RobustResolver {
             // Finally launch emergency fallback if nothing worked after staggered starts
             launch {
                 val res = try { fallbackDns() } catch (e: Throwable) {
-                    if (e is CancellationException) throw e
+                    // if (e is CancellationException) throw e
                     emptyList()
                 }
                 try { channel.send(res) } catch (e: Throwable) {}
@@ -283,7 +283,7 @@ object RobustResolver {
                 }
                 if (res.isNotEmpty()) {
                     // Check if any of these were detailed records with TTL
-                    val detailed = DnsCacheManager.getCachedDetailed(host)
+                    val detailed = DnsCacheManager.getCachedDetailed(host, type)
                     val cleanRes = res.filter { ip ->
                         val recordTtl = detailed?.find { it.address == ip }?.ttlSeconds ?: -1L
                         !DnsPacketEngine.isSuspicious(ip, host, recordTtl)
@@ -329,7 +329,7 @@ object RobustResolver {
         
         if (result.isNotEmpty()) {
             val sorted = DnsCacheManager.getSortedIps(result)
-            DnsCacheManager.put(host, sorted)
+            DnsCacheManager.put(host, sorted, type = type)
             return@coroutineScope sorted
         }
         

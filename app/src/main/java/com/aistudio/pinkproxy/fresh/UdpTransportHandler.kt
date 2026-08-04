@@ -277,7 +277,7 @@ object UdpTransportHandler {
                                     val host = query.qname
                                     val clientAddr = packet.address
                                     val clientPort = packet.port
-                                    val cached = RobustResolver.getCached(host)
+                                    val cached = RobustResolver.getCached(host, query.qtype)
                                     if (cached != null) {
                                         val ipStrs = cached.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }
                                         if (ipStrs.isNotEmpty()) {
@@ -302,9 +302,9 @@ object UdpTransportHandler {
                                         launch(ProxyDispatcher.io) {
                                             try {
                                                 val res = if (strategy == BypassStrategy.DNS_OVER_TCP_FORCE) {
-                                                    RobustResolver.resolveDnsOverTcpOnly(host, vpnService)
+                                                    RobustResolver.resolveDnsOverTcpOnly(host, vpnService, query.qtype)
                                                 } else {
-                                                    RobustResolver.resolve(host, vpnService)
+                                                    RobustResolver.resolve(host, vpnService, query.qtype)
                                                 }
                                                 if (res.isNotEmpty()) {
                                                     val ipStrs = res.map { it.hostAddress ?: "" }.filter { it.isNotEmpty() }

@@ -97,7 +97,7 @@ object TcpTransportHandler {
                     rs.tcpNoDelay = true
                     try { rs.sendBufferSize = 64 * 1024 } catch(e: Throwable) {}
                     try { rs.receiveBufferSize = 64 * 1024 } catch(e: Throwable) {}
-                    TtlHelper.setTtl(rs, BypassConfig.currentTtl.value)
+//                     TtlHelper.setTtl(rs, BypassConfig.currentTtl.value)
 
                     val rsOut = rs.getOutputStream()
                     val rsIn = rs.getInputStream()
@@ -471,7 +471,7 @@ object TcpTransportHandler {
                 
                 // Target the censor hop exactly if known, else use a very low TTL
                 val discoveredTtl = BypassConfig.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(decoy) ?: 4
-                TtlHelper.setTtl(s, discoveredTtl)
+//                 TtlHelper.setTtl(s, discoveredTtl)
                 
                 out.write(hello)
                 out.flush()
@@ -508,12 +508,12 @@ object TcpTransportHandler {
             val host = socket.inetAddress?.hostAddress ?: ""
             val configuredTtl = BypassConfig.fakeTtl
             val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 6)
-            TtlHelper.setTtl(socket, fakeTtl)
+//             TtlHelper.setTtl(socket, fakeTtl)
             val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
             out.write(noise)
             out.flush()
             delay(rnd.nextLong(1, 4))
-            TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
+//             TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
         } catch (e: Throwable) {}
     }
 
@@ -522,12 +522,12 @@ object TcpTransportHandler {
             val host = socket.inetAddress?.hostAddress ?: ""
             val configuredTtl = BypassConfig.fakeTtl
             val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 6)
-            TtlHelper.setTtl(socket, fakeTtl)
+//             TtlHelper.setTtl(socket, fakeTtl)
             val ghost = FakePacketHelper.buildRealisticTlsHello("ghost.internal")
             out.write(ghost)
             out.flush()
             delay(rnd.nextLong(1, 3))
-            TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
+//             TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
         } catch (e: Throwable) {}
     }
 
@@ -535,11 +535,11 @@ object TcpTransportHandler {
         try {
             // Send a tiny packet with very low TTL to confuse DPI state
             val out = socket.getOutputStream()
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+//             TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
             out.write(byteArrayOf(rnd.nextInt(256).toByte()))
             out.flush()
             delay(rnd.nextLong(2, 8))
-            TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
+//             TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
         } catch (e: Throwable) {}
     }
 

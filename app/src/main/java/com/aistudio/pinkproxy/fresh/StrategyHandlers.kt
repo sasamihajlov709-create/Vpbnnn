@@ -44,6 +44,37 @@ object StrategyHandlers {
             return
         }
 
+        if (strategy == BypassStrategy.HTTP2_PREAMBLE_FAKE) {
+            val preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
+            output.write(preface)
+            output.flush()
+            delay(rnd.nextLong(1, 4))
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_FRAGMENT) {
+            var pos = 0
+            while (pos < length) {
+                output.write(data, pos, 1)
+                output.flush()
+                pos += 1
+                if (pos < length) delay(rnd.nextLong(1, 5))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.WS_HANDSHAKE_FAKE) {
+            val handshake = "GET /chat HTTP/1.1\r\nHost: $host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".toByteArray()
+            output.write(handshake)
+            output.flush()
+            delay(rnd.nextLong(1, 4))
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
         val str = if (strategy == BypassStrategy.HTTP_HOST_SMUGGLE || 
                       strategy == BypassStrategy.HTTP_HOST_REORDER || 
                       strategy == BypassStrategy.HTTP_KEEP_ALIVE_FAKE ||
@@ -53,9 +84,99 @@ object StrategyHandlers {
                       strategy == BypassStrategy.HTTP_MULTI_LINE_MANGLE ||
                       strategy == BypassStrategy.HTTP_HOST_FOLDING ||
                       strategy == BypassStrategy.HTTP_HOST_MANGLE ||
-                      strategy == BypassStrategy.HTTP_HOST_CASE_MANGLE) {
+                      strategy == BypassStrategy.HTTP_HOST_CASE_MANGLE ||
+                      strategy == BypassStrategy.HTTP_AUTH_RANDOM ||
+                      strategy == BypassStrategy.HTTP_CONNECTION_CLOSE_SKEW ||
+                      strategy == BypassStrategy.HTTP_HEADER_FUZZING ||
+                      strategy == BypassStrategy.HTTP_HEADER_MANGLE ||
+                      strategy == BypassStrategy.HTTP_HOST_DOT_MANGLE ||
+                      strategy == BypassStrategy.HTTP_HOST_REVERSE ||
+                      strategy == BypassStrategy.HTTP_LINE_SPLIT ||
+                      strategy == BypassStrategy.HTTP_METHOD_SPACE_MANGLE ||
+                      strategy == BypassStrategy.HTTP_RANGE_SKEW ||
+                      strategy == BypassStrategy.HTTP_USER_AGENT_SKEW) {
             String(data, 0, length, Charsets.US_ASCII)
         } else null
+
+        if (strategy == BypassStrategy.HTTP_AUTH_RANDOM && str != null) {
+            val modified = str.replace("Host: $host", "Host: $host\r\nAuthorization: Basic " + android.util.Base64.encodeToString(FakePacketHelper.buildUdpNoise(12), android.util.Base64.NO_WRAP))
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_CONNECTION_CLOSE_SKEW && str != null) {
+            val modified = str.replace("Host: $host", "Host: $host\r\nCoNnEcTiOn: ClOsE")
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_HEADER_FUZZING && str != null) {
+            val modified = str.replace("Host: $host", "Host: $host\r\nX-Fuzzed-Header-" + rnd.nextInt(100) + ": " + rnd.nextInt(1000000))
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_HEADER_MANGLE && str != null) {
+            val modified = str.replace("Accept:", "AcCePt: ")
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_HOST_DOT_MANGLE && str != null) {
+            val modified = str.replace("Host: $host", "Host: $host.")
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_HOST_REVERSE && str != null) {
+            val modified = str.replace("Host: $host", "Host: " + host.reversed())
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_LINE_SPLIT && str != null) {
+            val modified = str.replace("\r\n", "\r\n ")
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_METHOD_SPACE_MANGLE && str != null) {
+            val modified = str.replace("GET ", "GET\t").replace("POST ", "POST\t")
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_RANGE_SKEW && str != null) {
+            val modified = str.replace("Host: $host", "Host: $host\r\nRange: bytes=0-0")
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.HTTP_USER_AGENT_SKEW && str != null) {
+            val modified = str.replace("User-Agent:", "UsEr-AgEnT:")
+            val outData = modified.toByteArray()
+            output.write(outData, 0, outData.size)
+            output.flush()
+            return
+        }
 
         if (strategy == BypassStrategy.HTTP_HOST_SMUGGLE && str != null) {
             if (str.contains("Host:")) {
@@ -286,6 +407,279 @@ object StrategyHandlers {
             return
         }
 
+        if (strategy == BypassStrategy.WINDOW_SIZE_MANGLE || strategy == BypassStrategy.TCP_WINDOW_SIZE_SKEW || strategy == BypassStrategy.TCP_WINDOW_SIZE_CHAOS || strategy == BypassStrategy.TCP_WINDOW_SIZE_OSCILLATION) {
+            TtlHelper.setWindowSize(socket, rnd.nextInt(10, 100))
+            output.write(data, 0, length / 2)
+            output.flush()
+            delay(rnd.nextLong(5, 15))
+            TtlHelper.setWindowSize(socket, 65535)
+            output.write(data, length / 2, length - length / 2)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_FAST_RETRANSMIT_SIM || strategy == BypassStrategy.TCP_RETRANS_FAKE) {
+            output.write(data, 0, length)
+            output.flush()
+            delay(rnd.nextLong(2, 6))
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_FAST_OPEN_FAKE) {
+            val fakeCookie = FakePacketHelper.buildUdpNoise(8)
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            output.write(fakeCookie)
+            output.flush()
+            delay(rnd.nextLong(1, 3))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_RST_FAKE || strategy == BypassStrategy.TCP_FAKE_FIN) {
+            val rst = FakePacketHelper.buildUdpNoise(12)
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            output.write(rst)
+            output.flush()
+            delay(rnd.nextLong(1, 4))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_TIMESTAMP_MANGLE || strategy == BypassStrategy.TCP_TOS_MANGLE) {
+            val part = length / 2
+            output.write(data, 0, part)
+            output.flush()
+            delay(rnd.nextLong(2, 8))
+            output.write(data, part, length - part)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_URGENT_RANDOM || strategy == BypassStrategy.TCP_URGENT_SKEW || strategy == BypassStrategy.TCP_URGENT_DESYNC) {
+            output.write(data, 0, minOf(2, length))
+            output.flush()
+            delay(rnd.nextLong(1, 5))
+            output.write(data, minOf(2, length), length - minOf(2, length))
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_REORDER_DESYNC || strategy == BypassStrategy.TCP_FRAGMENT_REORDER || strategy == BypassStrategy.TCP_REORDER) {
+            val part = length / 2
+            if (part > 1) {
+                output.write(data, part, length - part)
+                output.flush()
+                delay(rnd.nextLong(10, 30))
+                output.write(data, 0, part)
+                output.flush()
+            } else {
+                output.write(data, 0, length)
+                output.flush()
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_GHOST_SKEW || strategy == BypassStrategy.TCP_SYN_FLOOD_FAKE) {
+            val ghost = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 40))
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            output.write(ghost)
+            output.flush()
+            delay(rnd.nextLong(1, 4))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_SMALL_CHUNKS || strategy == BypassStrategy.TCP_RANDOM_PADDING) {
+            var pos = 0
+            while (pos < length) {
+                val sz = rnd.nextInt(4, 12).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < length) delay(rnd.nextLong(1, 3))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_MSS_CLUMPING || strategy == BypassStrategy.TCP_HANDSHAKE_CHAOS) {
+            var pos = 0
+            while (pos < length) {
+                val sz = rnd.nextInt(16, 48).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < length) delay(rnd.nextLong(1, 4))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_DATA_OOB_SKEW || strategy == BypassStrategy.TCP_ZERO_WINDOW_OOB || strategy == BypassStrategy.TCP_OOB_SEGMENTATION) {
+            if (length > 2) {
+                output.write(data, 0, 1)
+                output.flush()
+                delay(rnd.nextLong(1, 3))
+                output.write(data, 2, length - 2)
+                output.flush()
+            } else {
+                output.write(data, 0, length)
+                output.flush()
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_SACK_FAKE || strategy == BypassStrategy.TCP_SACK_PANIC || strategy == BypassStrategy.TCP_SACK_SKEW) {
+            var pos = 0
+            while (pos < length) {
+                val sz = rnd.nextInt(10, 30).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < length) delay(rnd.nextLong(5, 15))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_SEGMENT_DESYNC || strategy == BypassStrategy.TCP_DATA_DESYNC || strategy == BypassStrategy.TCP_DATA_DESYNC_OVERLAP || strategy == BypassStrategy.TCP_TRIPLE_DESYNC) {
+            val decoy = FakePacketHelper.buildRealisticTlsHello("decoy.internal")
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            output.write(decoy)
+            output.flush()
+            delay(rnd.nextLong(1, 3))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_ACK_SKEW || strategy == BypassStrategy.TCP_ACK_SKEW_ADVANCED) {
+            val part = length / 3
+            if (part > 0) {
+                output.write(data, 0, part)
+                output.flush()
+                delay(rnd.nextLong(10, 30))
+                output.write(data, part, length - part)
+                output.flush()
+            } else {
+                output.write(data, 0, length)
+                output.flush()
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_ZERO_WINDOW_DESYNC) {
+            TtlHelper.setWindowSize(socket, 0)
+            delay(rnd.nextLong(10, 40))
+            TtlHelper.setWindowSize(socket, 65535)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_OVERLAP || strategy == BypassStrategy.TCP_OVERLAP_SKEW || strategy == BypassStrategy.TCP_SEGMENT_OVERLAP) {
+            if (length > 4) {
+                output.write(data, 0, 4)
+                output.flush()
+                delay(rnd.nextLong(1, 3))
+                output.write(data, 2, length - 2)
+                output.flush()
+            } else {
+                output.write(data, 0, length)
+                output.flush()
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_WINDOW_SHAKE || strategy == BypassStrategy.TCP_WINDOW_RESIZE_PACING || strategy == BypassStrategy.TCP_WINDOW_SHRINK || strategy == BypassStrategy.TCP_WINDOW_STALL) {
+            TtlHelper.setWindowSize(socket, 256)
+            output.write(data, 0, minOf(5, length))
+            output.flush()
+            delay(rnd.nextLong(5, 15))
+            TtlHelper.setWindowSize(socket, 65535)
+            output.write(data, minOf(5, length), length - minOf(5, length))
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_KEEPALIVE_SKEW) {
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_FOOL_DPI) {
+            val fake = FakePacketHelper.buildFakeHttpRequest("decoy.org")
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            output.write(fake)
+            output.flush()
+            delay(rnd.nextLong(1, 4))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_REVERSE_FRAG || strategy == BypassStrategy.TCP_SEGMENT_REVERSE) {
+            val part = length / 2
+            if (part > 0) {
+                output.write(data, part, length - part)
+                output.flush()
+                delay(rnd.nextLong(5, 15))
+                output.write(data, 0, part)
+                output.flush()
+            } else {
+                output.write(data, 0, length)
+                output.flush()
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_TLS_SESSION_DESYNC) {
+            val fake = FakePacketHelper.buildRealisticTlsHello("decoy.internal")
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            output.write(fake)
+            output.flush()
+            delay(rnd.nextLong(2, 5))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_TIMING_CHAOS) {
+            var pos = 0
+            while (pos < length) {
+                val sz = rnd.nextInt(1, 5).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < length) delay(rnd.nextLong(5, 25))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_TLS_HELLO_FRAGMENT || strategy == BypassStrategy.TCP_TLS_SNI_CASE_MOD) {
+            val part = length / 3
+            if (part > 0) {
+                output.write(data, 0, part)
+                output.flush()
+                delay(rnd.nextLong(2, 8))
+                output.write(data, part, length - part)
+                output.flush()
+            } else {
+                output.write(data, 0, length)
+                output.flush()
+            }
+            return
+        }
+
         if (length > 15) {
             val sz = rnd.nextInt(5, 10)
             output.write(data, 0, sz)
@@ -310,6 +704,100 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TLS_PAD || strategy == BypassStrategy.TLS_RECORD_PADDING) {
             finalData = FakePacketHelper.injectTlsPadding(finalData, finalLen, rnd.nextInt(64, 256))
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.SNI_MANGLE) {
+            val mangledHost = host.reversed()
+            finalData = FakePacketHelper.injectMultipleSni(finalData, finalLen, mangledHost)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_ALPN_SKEW) {
+            finalData = FakePacketHelper.injectTlsGrease(finalData, finalLen)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_CIPHER_SHUFFLE || strategy == BypassStrategy.TLS_CLIENT_HELLO_REORDER) {
+            finalData = FakePacketHelper.shuffleTlsExtensions(finalData, finalLen)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_CLIENT_HELLO_GREASE_RANDOM || strategy == BypassStrategy.TLS_GREASE_SKEW) {
+            finalData = FakePacketHelper.injectTlsGrease(finalData, finalLen)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_CLIENT_HELLO_MULTI_PAD || strategy == BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME) {
+            finalData = FakePacketHelper.injectTlsPadding(finalData, finalLen, rnd.nextInt(512, 1024))
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_CLIENT_HELLO_PAD) {
+            finalData = FakePacketHelper.injectTlsPadding(finalData, finalLen, 128)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_DIRTY) {
+            val dirty = FakePacketHelper.buildUdpNoise(16)
+            output.write(dirty)
+            output.flush()
+            delay(rnd.nextLong(1, 4))
+        }
+
+        if (strategy == BypassStrategy.TLS_ECH_FAKE) {
+            finalData = TlsParser.injectEchGrease(finalData, finalLen)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_EXT_CHAOS || strategy == BypassStrategy.TLS_EXT_SKEW) {
+            finalData = FakePacketHelper.shuffleTlsExtensions(finalData, finalLen)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_HANDSHAKE_RANDOM_PADDING) {
+            finalData = FakePacketHelper.injectTlsPadding(finalData, finalLen, rnd.nextInt(32, 128))
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_HELLO_JUNK) {
+            val junk = FakePacketHelper.buildUdpNoise(rnd.nextInt(5, 15))
+            output.write(junk)
+            output.flush()
+            delay(rnd.nextLong(1, 3))
+        }
+
+        if (strategy == BypassStrategy.TLS_LEGACY_HELLOS) {
+            if (finalLen > 10 && finalData[0] == 0x16.toByte()) {
+                finalData[1] = 0x03.toByte()
+                finalData[2] = 0x01.toByte()
+            }
+        }
+
+        if (strategy == BypassStrategy.TLS_MULTI_SNI) {
+            finalData = FakePacketHelper.injectMultipleSni(finalData, finalLen, "decoy.org, $host")
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_REHANDSHAKE_FAKE) {
+            val fake = FakePacketHelper.buildRealisticTlsHello("mydecoy.org")
+            output.write(fake)
+            output.flush()
+            delay(rnd.nextLong(5, 15))
+        }
+
+        if (strategy == BypassStrategy.TLS_SESSION_TICKET_SKEW) {
+            finalData = FakePacketHelper.mangleSessionId(finalData, finalLen)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_SNI_GREASE) {
+            finalData = FakePacketHelper.injectTlsGrease(finalData, finalLen)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_SNI_OVERLAP_SKEW || strategy == BypassStrategy.TLS_SNI_SKEW_ADVANCED) {
+            finalData = FakePacketHelper.injectMultipleSni(finalData, finalLen, host.reversed())
             finalLen = finalData.size
         }
 
@@ -340,16 +828,30 @@ object StrategyHandlers {
         }
 
         if (finalLen > 44 && finalData[0] == 0x16.toByte() && finalData[5] == 0x01.toByte()) {
-            // Find SNI position if possible
             val sniPos = TlsParser.findSniOffset(finalData, finalLen, host)
             if (sniPos > 0) {
-                // Split exactly at SNI or just before
-                val split = if (rnd.nextBoolean()) sniPos else sniPos - 1
-                output.write(finalData, 0, split)
-                output.flush()
-                delay(rnd.nextLong(2, 10))
-                output.write(finalData, split, finalLen - split)
-                output.flush()
+                if (strategy == BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT) {
+                    val split = sniPos + host.length / 2
+                    output.write(finalData, 0, split)
+                    output.flush()
+                    delay(rnd.nextLong(2, 6))
+                    output.write(finalData, split, finalLen - split)
+                    output.flush()
+                } else if (strategy == BypassStrategy.TLS_SNI_REVERSE) {
+                    val split = sniPos
+                    output.write(finalData, split, finalLen - split)
+                    output.flush()
+                    delay(rnd.nextLong(2, 6))
+                    output.write(finalData, 0, split)
+                    output.flush()
+                } else {
+                    val split = if (rnd.nextBoolean()) sniPos else sniPos - 1
+                    output.write(finalData, 0, split)
+                    output.flush()
+                    delay(rnd.nextLong(2, 10))
+                    output.write(finalData, split, finalLen - split)
+                    output.flush()
+                }
             } else {
                 val part = finalLen / 3
                 output.write(finalData, 0, part)
@@ -365,7 +867,7 @@ object StrategyHandlers {
     }
 
     suspend fun handleFragmentationStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, effectiveDelay: Long) {
-        if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE) {
+        if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE || strategy == BypassStrategy.TLS_SNI_FRAGMENT || strategy == BypassStrategy.TLS_SNI_SPLIT || strategy == BypassStrategy.TLS_SNI_JITTER_SPLIT || strategy == BypassStrategy.TLS_RECORD_FRAGMENTATION || strategy == BypassStrategy.ECH_FRAG) {
             if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
                 val sniPos = TlsParser.findSniOffset(data, length, host)
                 if (sniPos > 0) {
@@ -373,7 +875,8 @@ object StrategyHandlers {
                     if (split1 > 0) {
                         output.write(data, 0, split1)
                         output.flush()
-                        delay(effectiveDelay.coerceAtLeast(1L))
+                        val delayVal = if (strategy == BypassStrategy.TLS_SNI_JITTER_SPLIT) rnd.nextLong(10, 50) else effectiveDelay.coerceAtLeast(1L)
+                        delay(delayVal)
                         
                         if (strategy == BypassStrategy.SNI_TRIPLE) {
                             val split2 = split1 + rnd.nextInt(2, 6).coerceAtMost(length - split1)
@@ -389,6 +892,30 @@ object StrategyHandlers {
                     }
                 }
             }
+        }
+
+        if (strategy == BypassStrategy.TLS_REC_SPLIT || strategy == BypassStrategy.TLS_MULTI_FRAG) {
+            var pos = 0
+            val chunkSize = rnd.nextInt(8, 24)
+            while (pos < length) {
+                val sz = chunkSize.coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < length) delay(effectiveDelay.coerceAtLeast(1L))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_BYTE_FRAG) {
+            var pos = 0
+            while (pos < length) {
+                output.write(data, pos, 1)
+                output.flush()
+                pos += 1
+                if (pos < length) delay(effectiveDelay.coerceAtLeast(1L))
+            }
+            return
         }
         
         var pos = 0
@@ -524,6 +1051,143 @@ object StrategyHandlers {
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_DTLS || strategy == BypassStrategy.UDP_FAKE_DTLS) {
             val fake = FakePacketHelper.buildFakeDtlsClientHello()
             writeUdpWithFake(socket, packet.address, packet.port, fake, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_FAKE_SESSION) {
+            val fake = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
+            writeUdpWithFake(socket, packet.address, packet.port, fake, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_NOISE_PAD || strategy == BypassStrategy.UDP_PADDING_CHAOS || strategy == BypassStrategy.UDP_QUIC_PAD || strategy == BypassStrategy.UDP_QUIC_JITTER_PAD) {
+            val paddedData = packet.data.copyOf(packet.length + rnd.nextInt(16, 64))
+            val p = DatagramPacket(paddedData, paddedData.size, packet.address, packet.port)
+            socket.send(p)
+            return
+        }
+
+        if (strategy == BypassStrategy.QUIC_INITIAL_FAKE || strategy == BypassStrategy.QUIC_INITIAL_PADDING_EXTREME) {
+            val fake = FakePacketHelper.buildQuicInitialFake()
+            writeUdpWithFake(socket, packet.address, packet.port, fake, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_HIGH_VOL_PACING || strategy == BypassStrategy.UDP_STUTTER) {
+            delay(rnd.nextLong(2, 8))
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_ZERO_LEN_SKEW) {
+            val empty = DatagramPacket(ByteArray(0), 0, packet.address, packet.port)
+            try { socket.send(empty) } catch (e: Throwable) {}
+            delay(rnd.nextLong(1, 3))
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_NOISE_CHAOS || strategy == BypassStrategy.UDP_BURST_CHAOS) {
+            repeat(rnd.nextInt(2, 5)) {
+                val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 50))
+                val p = DatagramPacket(noise, noise.size, packet.address, packet.port)
+                try { socket.send(p) } catch (e: Throwable) {}
+            }
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_QUIC_SKEW || strategy == BypassStrategy.UDP_SKEW_ADVANCED || strategy == BypassStrategy.UDP_SKEW_REVERSE) {
+            delay(rnd.nextLong(1, 5))
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_DATA_FRAG || strategy == BypassStrategy.UDP_IP_FRAG || strategy == BypassStrategy.UDP_IPv6_FRAG || strategy == BypassStrategy.QUIC_INITIAL_FRAGMENTATION || strategy == BypassStrategy.QUIC_INITIAL_FRAGMENT || strategy == BypassStrategy.QUIC_FORCE_FRAG || strategy == BypassStrategy.UDP_FRAGMENT_SKEW) {
+            if (packet.length > 100) {
+                val part1 = packet.data.copyOfRange(0, packet.length / 2)
+                val part2 = packet.data.copyOfRange(packet.length / 2, packet.length)
+                val p1 = DatagramPacket(part1, part1.size, packet.address, packet.port)
+                val p2 = DatagramPacket(part2, part2.size, packet.address, packet.port)
+                try { socket.send(p1) } catch (e: Throwable) {}
+                delay(rnd.nextLong(1, 4))
+                try { socket.send(p2) } catch (e: Throwable) {}
+            } else {
+                socket.send(packet)
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_FAKE_TRAFFIC || strategy == BypassStrategy.UDP_REPLICATION) {
+            socket.send(packet)
+            try { socket.send(packet) } catch (e: Throwable) {}
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_GHOST_SKEW) {
+            val ghost = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 32))
+            writeUdpWithFake(socket, packet.address, packet.port, ghost, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.QUIC_RST_SKEW || strategy == BypassStrategy.QUIC_MTU_PROBE || strategy == BypassStrategy.QUIC_VERSION_SKEW) {
+            val fakeQuic = FakePacketHelper.buildQuicInitialFake()
+            writeUdpWithFake(socket, packet.address, packet.port, fakeQuic, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.DNS_OVER_TCP || strategy == BypassStrategy.DNS_OVER_TCP_FORCE || strategy == BypassStrategy.DNS_OVER_QUIC) {
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.DNS_NOISE || strategy == BypassStrategy.DNS_CASE_MANGLE) {
+            val fakeDns = FakePacketHelper.buildDnsFakeQuery("decoy.internal")
+            val ghost = DatagramPacket(fakeDns, fakeDns.size, packet.address, packet.port)
+            try { socket.send(ghost) } catch (e: Throwable) {}
+            delay(rnd.nextLong(1, 3))
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_HEARTBEAT) {
+            val ping = "PING".toByteArray()
+            val pingP = DatagramPacket(ping, ping.size, packet.address, packet.port)
+            try { socket.send(pingP) } catch (e: Throwable) {}
+            delay(rnd.nextLong(1, 3))
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_REORDER) {
+            delay(rnd.nextLong(2, 6))
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_IP_ID_MANGLE) {
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_QUIC_SMART_SHADOW) {
+            val shadow = FakePacketHelper.buildQuicInitialFake()
+            writeUdpWithFake(socket, packet.address, packet.port, shadow, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_DNS_REORDER_HYBRID) {
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_OVERLAP_SKEW) {
+            socket.send(packet)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_COMBINED_HYBRID || strategy == BypassStrategy.UDP_COMBINED_NUCLEAR || strategy == BypassStrategy.ADAPTIVE_CHUNK || strategy == BypassStrategy.BYEBYEDPI_SIM || strategy == BypassStrategy.BYEBYEDPI_HYBRID || strategy == BypassStrategy.BYEBYEDPI_EXTREME || strategy == BypassStrategy.ZAPRET_EXTREME || strategy == BypassStrategy.CHAOS) {
+            handleQuicChaos(socket, packet, rnd)
             return
         }
 

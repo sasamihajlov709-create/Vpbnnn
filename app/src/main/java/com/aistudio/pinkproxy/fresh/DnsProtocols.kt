@@ -69,9 +69,9 @@ object DnsProtocols {
         return client
     }
 
-    suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         
         // Wrap DNS query in a fake QUIC Initial packet (Shadow QUIC)
         // This is highly effective because UDP:443 is usually allowed, 
@@ -116,9 +116,9 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> {
+    suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<DnsPacketEngine.DnsRecord> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = DatagramSocket()
         val buffer = ProxyStats.obtain8k()
         try {
@@ -141,9 +141,9 @@ object DnsProtocols {
         }
     }
 
-    suspend fun queryUdpDnsReorder(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryUdpDnsReorder(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = DatagramSocket()
         val buffer = ProxyStats.obtain8k()
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
@@ -173,9 +173,9 @@ object DnsProtocols {
         }
     }
 
-    suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = DatagramSocket()
         val buffer = ProxyStats.obtain8k()
         try {
@@ -199,9 +199,9 @@ object DnsProtocols {
         }
     }
 
-    suspend fun queryUdpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryUdpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = DatagramSocket()
         val buffer = ProxyStats.obtain8k()
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
@@ -254,14 +254,14 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val strategy = BypassConfig.getBestStrategyForHost(host)
         val mangle = strategy == BypassStrategy.DNS_CASE_MANGLE || ProxyStats.censorshipIntensity.value > 60
         
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         val idReal = rnd.nextInt(0x10000)
         val idFake = rnd.nextInt(0x10000)
-        val queryReal = DnsPacketEngine.buildDnsQuery(host, 1, idReal, mangle)
+        val queryReal = DnsPacketEngine.buildDnsQuery(host, type, idReal, mangle)
         
         val innocentDomains = listOf("google.com", "bing.com", "apple.com", "microsoft.com", "cloudflare.com", "aws.amazon.com", "wikipedia.org")
         val fakeDomain = innocentDomains.random()
@@ -320,9 +320,9 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = Socket()
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         try {
@@ -382,9 +382,9 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryTcpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryTcpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = Socket()
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         try {
@@ -442,9 +442,9 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryTcpDns(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryTcpDns(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = Socket()
         try {
             try { vpnService?.protect(socket) } catch(e: Throwable) {}
@@ -493,9 +493,9 @@ object DnsProtocols {
         }
     }
 
-    suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         
         return withContext(ProxyDispatcher.io) {
             runCatching {
@@ -550,9 +550,9 @@ object DnsProtocols {
         }
     }
 
-    suspend fun queryDnsOverTcp(host: String, dnsIp: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDnsOverTcp(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val socket = Socket()
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         try {
@@ -638,18 +638,19 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryDoh(host: String, dohUrl: String, vpnService: VpnService?): List<InetAddress> {
-        return queryDohDetailed(host, dohUrl, vpnService).map { it.address }
+    suspend fun queryDoh(host: String, dohUrl: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
+        return queryDohDetailed(host, dohUrl, vpnService, type).map { it.address }
     }
 
     suspend fun queryHttpsRecord(host: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> {
         return queryDohDetailed(host, DnsOptimizer.bestDohUrl, vpnService, 65)
     }
 
-    suspend fun queryDohJson(host: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDohJson(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
+        val typeStr = if (type == 28) "AAAA" else "A"
         val urls = listOf(
-            "https://dns.google/resolve?name=$host&type=A",
-            "https://cloudflare-dns.com/dns-query?name=$host&type=A"
+            "https://dns.google/resolve?name=$host&type=$typeStr",
+            "https://cloudflare-dns.com/dns-query?name=$host&type=$typeStr"
         )
         val url = urls.random()
         try {
@@ -667,7 +668,11 @@ object DnsProtocols {
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return emptyList()
                     // Simple regex based parsing for speed and to avoid adding a JSON library
-                    val regex = """"data":\s*"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"""".toRegex()
+                    val regex = if (type == 28) {
+                        """"data":\s*"([0-9a-fA-F:]+)"""".toRegex()
+                    } else {
+                        """"data":\s*"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"""".toRegex()
+                    }
                     val matches = regex.findAll(body)
                     val ips = matches.mapNotNull { 
                         try { InetAddress.getByName(it.groupValues[1]) } catch(e: Throwable) { null }
@@ -679,7 +684,7 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryDohRacing(host: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         return kotlinx.coroutines.withTimeoutOrNull(7000) {
             kotlinx.coroutines.supervisorScope {
                 val allUrls = DnsOptimizer.getDohUrls()
@@ -700,7 +705,7 @@ object DnsProtocols {
                             }
                             if (delayMs > 0) delay(delayMs)
                             
-                            val res = queryDoh(host, url, vpnService)
+                            val res = queryDoh(host, url, vpnService, type)
                             if (res.isNotEmpty()) {
                                 channel.trySend(res)
                                 DnsOptimizer.recordDohSuccess(url)
@@ -733,7 +738,7 @@ object DnsProtocols {
         } ?: emptyList()
     }
 
-    suspend fun queryDohExtreme(host: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDohExtreme(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val hardcodedIps = listOf(
             "https://1.1.1.1/dns-query",
             "https://8.8.8.8/dns-query",
@@ -747,7 +752,7 @@ object DnsProtocols {
             val jobs = hardcodedIps.map { url ->
                 launch(ProxyDispatcher.io) {
                     try {
-                        val res = queryDoh(host, url, vpnService)
+                        val res = queryDoh(host, url, vpnService, type)
                         if (res.isNotEmpty()) channel.trySend(res)
                     } catch (e: CancellationException) {
                         throw e
@@ -769,9 +774,9 @@ object DnsProtocols {
         }
     }
 
-    suspend fun queryDohSmuggling(host: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDohSmuggling(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
-        val query = DnsPacketEngine.buildDnsQuery(host, 1, id)
+        val query = DnsPacketEngine.buildDnsQuery(host, type, id)
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         
         // Use a rotating set of popular IPs that often host DoH or are on popular CDNs
@@ -902,7 +907,7 @@ object DnsProtocols {
         return emptyList()
     }
 
-    suspend fun queryDnsExtremeRacing(host: String, vpnService: VpnService?): List<InetAddress> {
+    suspend fun queryDnsExtremeRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         return kotlinx.coroutines.withTimeoutOrNull(6000) {
             kotlinx.coroutines.supervisorScope {
                 val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(10)
@@ -912,7 +917,7 @@ object DnsProtocols {
                 // 1. DoH Racing (Top 3)
                 launch(ProxyDispatcher.io) {
                     try {
-                        val res = queryDohRacing(host, vpnService)
+                        val res = queryDohRacing(host, vpnService, type)
                         if (res.isNotEmpty()) channel.trySend(res)
                     } finally {
                         if (completed.incrementAndGet() == totalTasks) channel.close()
@@ -923,7 +928,7 @@ object DnsProtocols {
                 launch(ProxyDispatcher.io) {
                     try {
                         val dotIp = DnsOptimizer.bestDotServer
-                        val res = queryDot(host, dotIp, vpnService)
+                        val res = queryDot(host, dotIp, vpnService, type)
                         if (res.isNotEmpty()) channel.trySend(res)
                     } finally {
                         if (completed.incrementAndGet() == totalTasks) channel.close()
@@ -933,7 +938,7 @@ object DnsProtocols {
                 // 3. Shadow DoQ (UDP:443)
                 launch(ProxyDispatcher.io) {
                     try {
-                        val res = queryDnsOverQuic(host, "8.8.8.8", vpnService)
+                        val res = queryDnsOverQuic(host, "8.8.8.8", vpnService, type)
                         if (res.isNotEmpty()) channel.trySend(res)
                     } finally {
                         if (completed.incrementAndGet() == totalTasks) channel.close()
@@ -943,7 +948,7 @@ object DnsProtocols {
                 // 4. UDP Nuclear (DNS:53)
                 launch(ProxyDispatcher.io) {
                     try {
-                        val res = queryUdpDnsNuclear(host, "1.1.1.1", vpnService)
+                        val res = queryUdpDnsNuclear(host, "1.1.1.1", vpnService, type)
                         if (res.isNotEmpty()) channel.trySend(res)
                     } finally {
                         if (completed.incrementAndGet() == totalTasks) channel.close()
@@ -953,7 +958,7 @@ object DnsProtocols {
                 // 5. TCP Nuclear (DNS:53)
                 launch(ProxyDispatcher.io) {
                     try {
-                        val res = queryTcpDnsNuclear(host, "8.8.4.4", vpnService)
+                        val res = queryTcpDnsNuclear(host, "8.8.4.4", vpnService, type)
                         if (res.isNotEmpty()) channel.trySend(res)
                     } finally {
                         if (completed.incrementAndGet() == totalTasks) channel.close()
@@ -963,7 +968,7 @@ object DnsProtocols {
                 // 6. DoH Smuggling (HTTPS:443)
                 launch(ProxyDispatcher.io) {
                     try {
-                        val res = queryDohSmuggling(host, vpnService)
+                        val res = queryDohSmuggling(host, vpnService, type)
                         if (res.isNotEmpty()) channel.trySend(res)
                     } finally {
                         if (completed.incrementAndGet() == totalTasks) channel.close()

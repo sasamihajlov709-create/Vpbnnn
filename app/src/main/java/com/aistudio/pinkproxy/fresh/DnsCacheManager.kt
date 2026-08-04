@@ -160,17 +160,18 @@ object DnsCacheManager {
         if (negativeCache.size > 500) negativeCache.entries.removeIf { now - it.value > NEGATIVE_CACHE_TTL }
     }
 
-    fun getCached(host: String): List<InetAddress>? {
+    fun getCached(host: String, type: Int = 1): List<InetAddress>? {
         ensureEfficiency()
         if (isIpAddress(host)) {
             return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { null }
         }
+        val cacheKey = if (type == 1) host else "$host:$type"
         val now = System.currentTimeMillis()
-        dnsCache[host]?.let { (addresses, expiry) ->
+        dnsCache[cacheKey]?.let { (addresses, expiry) ->
             if (now < expiry) {
                 return getSortedIps(addresses)
             } else {
-                dnsCache.remove(host)
+                dnsCache.remove(cacheKey)
             }
         }
         return null
@@ -181,33 +182,36 @@ object DnsCacheManager {
         return if (intensity > 80) 3600 * 1000L else if (intensity > 50) 1800 * 1000L else CACHE_TTL_MS
     }
 
-    fun put(host: String, ips: List<InetAddress>, ttlMs: Long = getDynamicTtl()) {
+    fun put(host: String, ips: List<InetAddress>, ttlMs: Long = getDynamicTtl(), type: Int = 1) {
         if (ips.isEmpty()) return
         val filtered = ips.filter { ipHeatmap.getOrDefault(it.hostAddress ?: "", 50) > 10 }
         val finalIps = if (filtered.isEmpty()) ips else filtered
-        dnsCache[host] = finalIps to (System.currentTimeMillis() + ttlMs)
+        val cacheKey = if (type == 1) host else "$host:$type"
+        dnsCache[cacheKey] = finalIps to (System.currentTimeMillis() + ttlMs)
         if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
             val oldest = dnsCache.entries.minByOrNull { it.value.second }
             if (oldest != null) dnsCache.remove(oldest.key)
         }
     }
 
-    fun getCachedDetailed(host: String): List<DnsPacketEngine.DnsRecord>? {
+    fun getCachedDetailed(host: String, type: Int = 1): List<DnsPacketEngine.DnsRecord>? {
+        val cacheKey = if (type == 1) host else "$host:$type"
         val now = System.currentTimeMillis()
-        detailedDnsCache[host]?.let { (records, expiry) ->
+        detailedDnsCache[cacheKey]?.let { (records, expiry) ->
             if (now < expiry) return records
-            else detailedDnsCache.remove(host)
+            else detailedDnsCache.remove(cacheKey)
         }
         return null
     }
 
-    fun putDetailed(host: String, records: List<DnsPacketEngine.DnsRecord>) {
+    fun putDetailed(host: String, records: List<DnsPacketEngine.DnsRecord>, type: Int = 1) {
         if (records.isEmpty()) return
         val addresses = records.map { it.address }
         val minTtl = records.minOf { it.ttlSeconds }.coerceIn(30, 3600) * 1000L
         val expiry = System.currentTimeMillis() + minTtl
-        put(host, addresses, minTtl)
-        detailedDnsCache[host] = records to expiry
+        put(host, addresses, minTtl, type)
+        val cacheKey = if (type == 1) host else "$host:$type"
+        detailedDnsCache[cacheKey] = records to expiry
     }
 
     fun getStaticIps(host: String): List<InetAddress>? {
