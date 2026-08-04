@@ -379,25 +379,34 @@ object UdpTransportHandler {
         }
     }
 
-    private val reorderBuffers = ConcurrentHashMap<String, MutableList<DatagramPacket>>()
+    private val reorderBuffers = ConcurrentHashMap<String, MutableList<Pair<DatagramPacket, Long>>>()
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
     private var lastGlobalCleanup = System.currentTimeMillis()
-    private val REORDER_TIMEOUT = 5000L // 5 seconds
+    private val REORDER_TTL_MS = 5000L 
 
     private fun ensureGlobalMemoryEfficiency() {
         val now = System.currentTimeMillis()
         if (now - lastGlobalCleanup < 15000) return
         lastGlobalCleanup = now
 
-        if (reorderBuffers.size > 200) {
-            // Remove 100 random entries OR old entries
-            val keys = reorderBuffers.keys().toList().shuffled().take(100)
-            keys.forEach { reorderBuffers.remove(it) }
+        // TTL-based eviction for reorder buffers
+        reorderBuffers.entries.removeIf { entry ->
+            val list = entry.value
+            synchronized(list) {
+                list.removeIf { now - it.second > REORDER_TTL_MS }
+                list.isEmpty()
+            }
         }
-        if (flowPacketCounter.size > 500) {
+
+        if (reorderBuffers.size > 500) {
+            // Hard cap for extreme cases
+            reorderBuffers.clear()
+        }
+        
+        if (flowPacketCounter.size > 1000) {
             flowPacketCounter.clear() 
         }
-        if (hostStrategyCache.size > 300) {
+        if (hostStrategyCache.size > 500) {
             hostStrategyCache.clear()
         }
     }
@@ -482,8 +491,8 @@ object UdpTransportHandler {
                      // Save this packet for a very short time and let next one pass first
                      val buffer = reorderBuffers.getOrPut(flowKey) { java.util.Collections.synchronizedList(mutableListOf()) }
                      if (buffer.size < 2) {
-                         buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort))
-                        scope.launch { delay(25); val toSend = synchronized(buffer) { val c = buffer.toList(); buffer.clear(); c }; toSend.forEach { try { socket.send(it) } catch(e: Throwable){} } }
+                         buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort) to System.currentTimeMillis())
+                        scope.launch { delay(25); val toSend = synchronized(buffer) { val c = buffer.toList(); buffer.clear(); c }; toSend.forEach { try { socket.send(it.first) } catch(e: Throwable){} } }
                          return
                      }
                  }
@@ -571,16 +580,16 @@ object UdpTransportHandler {
         // 3. Reordering Logic for QUIC or explicit UDP_REORDER
         if (!isHighVolume && (finalConfig.strategy == BypassStrategy.UDP_REORDER || (isQuic && intensity > 80 && rnd.nextInt(100) < 20))) {
             val key = "${targetInet.hostAddress}:$targetPort"
-            val buffer = reorderBuffers.getOrPut(key) { java.util.Collections.synchronizedList(mutableListOf<DatagramPacket>()) }
+            val buffer = reorderBuffers.getOrPut(key) { java.util.Collections.synchronizedList(mutableListOf()) }
             
             val pCopy = DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort)
-            buffer.add(pCopy)
+            buffer.add(pCopy to System.currentTimeMillis())
             
             if (buffer.size >= 2 + rnd.nextInt(2)) {
                 val toSend = buffer.toMutableList().apply { shuffle() }
                 buffer.clear()
                 for (p in toSend) {
-                    BypassConfig.applyUdpBypass(socket, p, finalConfig, host)
+                    BypassConfig.applyUdpBypass(socket, p.first, finalConfig, host)
                     if (rnd.nextInt(100) < 30) delay(rnd.nextLong(1, 3))
                 }
             }

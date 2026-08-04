@@ -235,7 +235,6 @@ object RobustResolver {
         }
 
         val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size + 1)
-        val activeJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
 
         // Grouped Happy Eyeballs-like staggered start
         val queryGroups = listOf(
@@ -247,13 +246,13 @@ object RobustResolver {
 
         val staggerDelay = 250L // 250ms delay between groups if no result yet
 
-        activeJobs += launch {
+        launch {
             for (group in queryGroups) {
                 if (group.isEmpty()) continue
                 group.forEach { query ->
-                    activeJobs += launch {
+                    launch {
                         val res = try { query() } catch (e: Throwable) {
-                            // if (e is CancellationException) throw e
+                            if (e is CancellationException) throw e
                             emptyList()
                         }
                         try { channel.send(res) } catch (e: Throwable) {}
@@ -264,8 +263,11 @@ object RobustResolver {
             }
 
             // Finally launch emergency fallback if nothing worked after staggered starts
-            activeJobs += launch {
-                val res = try { fallbackDns() } catch (e: Throwable) { emptyList() }
+            launch {
+                val res = try { fallbackDns() } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    emptyList()
+                }
                 try { channel.send(res) } catch (e: Throwable) {}
             }
         }
@@ -274,54 +276,57 @@ object RobustResolver {
         val receivedResults = mutableListOf<List<InetAddress>>()
         var completed = 0
         
-        while (completed < queries.size) {
-            val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { 
-                if (e !is TimeoutCancellationException && e is CancellationException) throw e
-                emptyList() 
-            }
-            if (res.isNotEmpty()) {
-                // Check if any of these were detailed records with TTL
-                val detailed = DnsCacheManager.getCachedDetailed(host)
-                val cleanRes = res.filter { ip ->
-                    val recordTtl = detailed?.find { it.address == ip }?.ttlSeconds ?: -1L
-                    !DnsPacketEngine.isSuspicious(ip, host, recordTtl)
+        try {
+            while (completed < queries.size) {
+                val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { 
+                    if (e !is TimeoutCancellationException && e is CancellationException) throw e
+                    emptyList() 
                 }
-                
-                if (cleanRes.isEmpty()) {
-                    ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
-                    completed++
-                    continue
-                }
-                
-                // IP Verification Step: If high censorship, verify at least one IP from the result
-                if (intensity > 85 && (completed % 2 == 0 || receivedResults.isEmpty())) {
-                    val verified = DnsOptimizer.verifyIp(host, cleanRes.first(), vpnService)
-                    if (!verified) {
-                        Log.w("RobustResolver", "Verification failed for ${cleanRes.first()} on $host (Poisoned IP?)")
+                if (res.isNotEmpty()) {
+                    // Check if any of these were detailed records with TTL
+                    val detailed = DnsCacheManager.getCachedDetailed(host)
+                    val cleanRes = res.filter { ip ->
+                        val recordTtl = detailed?.find { it.address == ip }?.ttlSeconds ?: -1L
+                        !DnsPacketEngine.isSuspicious(ip, host, recordTtl)
+                    }
+                    
+                    if (cleanRes.isEmpty()) {
                         ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
                         completed++
                         continue
                     }
+                    
+                    // IP Verification Step: If high censorship, verify at least one IP from the result
+                    if (intensity > 85 && (completed % 2 == 0 || receivedResults.isEmpty())) {
+                        val verified = DnsOptimizer.verifyIp(host, cleanRes.first(), vpnService)
+                        if (!verified) {
+                            Log.w("RobustResolver", "Verification failed for ${cleanRes.first()} on $host (Poisoned IP?)")
+                            ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+                            completed++
+                            continue
+                        }
+                    }
+                    
+                    receivedResults.add(cleanRes)
+                    
+                    // Fast path: As soon as we receive a clean resolution from any secure resolver, return immediately
+                    if (cleanRes.isNotEmpty()) {
+                        result = cleanRes
+                        break
+                    }
                 }
-                
-                receivedResults.add(cleanRes)
-                
-                // Fast path: As soon as we receive a clean resolution from any secure resolver, return immediately
-                if (cleanRes.isNotEmpty()) {
-                    result = cleanRes
-                    break
-                }
+                completed++
             }
-            completed++
+        } finally {
+            // Cancel all other ongoing resolution attempts
+            this.coroutineContext.cancelChildren()
+            channel.close()
         }
         
         // Final fallback: use the first received result if loop ended
         if (result.isEmpty() && receivedResults.isNotEmpty()) {
             result = receivedResults.first()
         }
-        
-        activeJobs.forEach { it.cancel() }
-        channel.close()
         
         if (result.isNotEmpty()) {
             val sorted = DnsCacheManager.getSortedIps(result)

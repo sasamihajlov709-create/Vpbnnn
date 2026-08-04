@@ -72,7 +72,7 @@ object TcpTransportHandler {
             coroutineScope {
                 // Forward from Remote to Client (Direct)
                 launch(ProxyDispatcher.io) {
-                    val buffer = ProxyStats.obtain16k()
+                    val buffer = if (transportBufferSize > 8192) ProxyStats.obtain16k() else ProxyStats.obtain8k()
                     try {
                         var n: Int
                         while (isActive) {
@@ -89,14 +89,14 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("TcpTransport", "RemoteToClient error: ${e.message}")
                     } finally {
-                        ProxyStats.release16k(buffer)
+                        if (buffer.size > 8192) ProxyStats.release16k(buffer) else ProxyStats.release8k(buffer)
                         try { clientSocket.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
 
                 // Forward from Client to Remote (with Bypass & Advanced Evasion)
                 launch(ProxyDispatcher.io) {
-                    val buffer = ProxyStats.obtain16k()
+                    val buffer = if (transportBufferSize > 8192) ProxyStats.obtain16k() else ProxyStats.obtain8k()
                     val rnd = ThreadLocalRandom.current()
                     var packetsCount = 0
                     try {
@@ -217,7 +217,7 @@ object TcpTransportHandler {
                     } catch (e: Throwable) {
                         if (e !is CancellationException) Log.v("TcpTransport", "ClientToRemote error: ${e.message}")
                     } finally {
-                        ProxyStats.release16k(buffer)
+                        if (buffer.size > 8192) ProxyStats.release16k(buffer) else ProxyStats.release8k(buffer)
                         try { remoteSocket.shutdownOutput() } catch (e: Throwable) {}
                     }
                 }
@@ -423,7 +423,7 @@ object TcpTransportHandler {
             out.write(noise)
             out.flush()
             delay(rnd.nextLong(1, 4))
-            TtlHelper.setTtl(socket, 64)
+            TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
         } catch (e: Throwable) {}
     }
 
@@ -437,7 +437,7 @@ object TcpTransportHandler {
             out.write(ghost)
             out.flush()
             delay(rnd.nextLong(1, 3))
-            TtlHelper.setTtl(socket, 64)
+            TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
         } catch (e: Throwable) {}
     }
 
