@@ -417,17 +417,9 @@ class PinkVpnService : VpnService() {
     }
 
     private fun startSessionWarmup() {
+        BypassConfig.startWarmupTask(serviceScope)
         serviceScope.launch {
-            delay(2000)
-            val importantHosts = listOf(
-                "google.com", "telegram.org", "github.com", "youtube.com", "googlevideo.com"
-            )
-            importantHosts.forEach { host ->
-                if (!_isRunning.value) return@launch
-                try {
-                    RobustResolver.resolve(host, this@PinkVpnService)
-                } catch (e: Throwable) {}
-            }
+            delay(5000)
             ServiceChecker.runActiveProbing(this@PinkVpnService)
         }
     }

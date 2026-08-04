@@ -606,7 +606,7 @@ object DpiEngine {
         failureHistory.clear()
     }
 
-    private fun analyzeAndAdjust() {
+    fun analyzeAndAdjust() {
         // Apply score decay to allow for adaptation to new censorship patterns
         decayScores()
         

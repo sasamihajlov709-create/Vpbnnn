@@ -587,6 +587,27 @@ object BypassConfig {
         StrategyHandlers.handleUdpStrategies(socket, packet, rnd, host, strategy, config)
     }
 
+    fun startWarmupTask(scope: CoroutineScope) {
+        scope.launch {
+            // Warmup core connections to stabilize DPI state
+            val warmupHosts = listOf("google.com", "github.com", "telegram.org")
+            warmupHosts.forEach { host ->
+                if (!isActive) return@forEach
+                try {
+                    val resolved = RobustResolver.resolve(host)
+                    if (resolved.isNotEmpty()) {
+                        withTimeoutOrNull(3000) {
+                            val s = Socket()
+                            s.connect(InetSocketAddress(resolved.random(), 443), 1500)
+                            s.close()
+                        }
+                    }
+                } catch (e: Throwable) {}
+                delay(1000)
+            }
+        }
+    }
+
     fun startLearningTask(scope: CoroutineScope) {
         scope.launch {
             while (isActive) {

@@ -49,18 +49,18 @@ object DnsPacketEngine {
             bb.put(0.toByte()) // Version
             bb.putShort((if (rnd.nextBoolean()) 0x8000 else 0).toShort()) // Z (flags)
             
-            val ecsOption = buildEcsOption()
+            val ecsOptionStart = bb.position()
+            buildEcsOption(bb)
             val paddingSize = rnd.nextInt(64, 256)
-            val paddingOption = buildPaddingOption(paddingSize)
-            val cookieOption = buildCookieOption()
-            val extraOptions = buildRandomOptions()
+            buildPaddingOption(bb, paddingSize)
+            buildCookieOption(bb)
+            buildRandomOptions(bb)
+            val totalOptionsLen = bb.position() - ecsOptionStart
             
-            val totalOptionsLen = ecsOption.size + paddingOption.size + cookieOption.size + extraOptions.size
+            val currentPos = bb.position()
+            bb.position(ecsOptionStart - 2)
             bb.putShort(totalOptionsLen.toShort())
-            bb.put(ecsOption)
-            bb.put(paddingOption)
-            bb.put(cookieOption)
-            bb.put(extraOptions)
+            bb.position(currentPos)
             
             val result = ByteArray(bb.position())
             System.arraycopy(buffer, 0, result, 0, bb.position())
@@ -70,47 +70,36 @@ object DnsPacketEngine {
         }
     }
 
-    private fun buildCookieOption(): ByteArray {
-        val bos = ByteArrayOutputStream(); val dos = java.io.DataOutputStream(bos)
+    private fun buildCookieOption(bb: java.nio.ByteBuffer) {
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
-        dos.writeShort(10) // Option Code: Cookie
-        dos.writeShort(8) // Length
+        bb.putShort(10.toShort()) // Option Code: Cookie
+        bb.putShort(8.toShort()) // Length
         val cookie = ByteArray(8); rnd.nextBytes(cookie)
-        dos.write(cookie)
-        return bos.toByteArray()
+        bb.put(cookie)
     }
 
-    private fun buildRandomOptions(): ByteArray {
-        val bos = ByteArrayOutputStream()
-        val dos = java.io.DataOutputStream(bos)
+    private fun buildRandomOptions(bb: java.nio.ByteBuffer) {
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
         if (rnd.nextBoolean()) {
-            dos.writeShort(65001) // Experimental code
-            dos.writeShort(4)
-            dos.writeInt(rnd.nextInt())
+            bb.putShort(65001.toShort()) // Experimental code
+            bb.putShort(4.toShort())
+            bb.putInt(rnd.nextInt())
         }
-        return bos.toByteArray()
     }
 
-    private fun buildPaddingOption(size: Int): ByteArray {
-        val bos = ByteArrayOutputStream()
-        val dos = java.io.DataOutputStream(bos)
-        dos.writeShort(12) // Option Code: Padding
-        dos.writeShort(size) // Option Length
-        dos.write(ByteArray(size)) // Null padding
-        return bos.toByteArray()
+    private fun buildPaddingOption(bb: java.nio.ByteBuffer, size: Int) {
+        bb.putShort(12.toShort()) // Option Code: Padding
+        bb.putShort(size.toShort()) // Option Length
+        bb.put(ByteArray(size)) // Null padding
     }
 
-    private fun buildEcsOption(): ByteArray {
-        val bos = ByteArrayOutputStream()
-        val dos = java.io.DataOutputStream(bos)
+    private fun buildEcsOption(bb: java.nio.ByteBuffer) {
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
-        
-        dos.writeShort(8) // Option Code: ECS
-        dos.writeShort(8) // Option Length
-        dos.writeShort(1) // Family: IPv4
-        dos.writeByte(24) // Source Mask
-        dos.writeByte(0) // Scope Mask
+        bb.putShort(8.toShort()) // Option Code: ECS
+        bb.putShort(8.toShort()) // Option Length
+        bb.putShort(1.toShort()) // Family: IPv4
+        bb.put(24.toByte()) // Source Mask
+        bb.put(0.toByte()) // Scope Mask
         
         val prefixes = listOf(
             byteArrayOf(1, 1, 1, 0),    // Cloudflare
@@ -122,8 +111,7 @@ object DnsPacketEngine {
             byteArrayOf(104.toByte(), 16.toByte(), 0.toByte(), 0.toByte()),    // Cloudflare range
             byteArrayOf(rnd.nextInt(1, 223).toByte(), rnd.nextInt(256).toByte(), rnd.nextInt(256).toByte(), 0) // Totally random
         )
-        dos.write(prefixes.random())
-        return bos.toByteArray()
+        bb.put(prefixes.random())
     }
 
     fun buildDnsQueryTcp(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000), mangleCase: Boolean = false): ByteArray {

@@ -112,7 +112,7 @@ object TcpTransportHandler {
                                 
                                 val activeHost = detectedSni.get() ?: targetHost
                                 
-                                if (packetsCount <= 12) {
+                                 if (packetsCount <= 12) {
                                     // Try to extract SNI if it's a TLS handshake
                                     if (packetsCount <= 3) {
                                         val sniOffset = TlsParser.findSniOffset(buffer, n)
@@ -120,14 +120,40 @@ object TcpTransportHandler {
                                             val realSni = TlsParser.extractHostname(buffer, n, sniOffset)
                                             if (realSni != null) detectedSni.set(realSni)
                                         }
+                                        
+                                        // Adaptive Payload Padding: Pad handshake packets to avoid fingerprinting
+                                        if (intensity > 60 && n < 1400) {
+                                            val targetPadding = if (intensity > 85) rnd.nextInt(512, 1200) else rnd.nextInt(128, 512)
+                                            if (n < targetPadding) {
+                                                // We add padding in a separate segment to confuse DPI
+                                                val paddingSize = targetPadding - n
+                                                writeMutex.lock()
+                                                try {
+                                                    remoteOut.write(buffer, 0, n)
+                                                    remoteOut.flush()
+                                                    val padding = FakePacketHelper.buildUdpNoise(paddingSize)
+                                                    TtlHelper.setTtl(remoteSocket, rnd.nextInt(2, 4))
+                                                    remoteOut.write(padding)
+                                                    remoteOut.flush()
+                                                    TtlHelper.setTtl(remoteSocket, BypassConfig.currentTtl.value)
+                                                } finally {
+                                                    writeMutex.unlock()
+                                                }
+                                                totalWrittenClient.addAndGet(n.toLong())
+                                                continue 
+                                            }
+                                        }
                                     }
                                     
-                                    // Extreme evasion: Sequence Desync before critical packets
+                                    // Extreme evasion: Sequence Desync / Zero-Window Desync
                                     if (intensity > 80 && packetsCount < 5) {
-                                        sendSequenceDesync(remoteSocket, rnd)
+                                        if (intensity > 90 && rnd.nextBoolean()) {
+                                            sendZeroWindowDesync(remoteSocket, rnd)
+                                        } else {
+                                            sendSequenceDesync(remoteSocket, rnd)
+                                        }
                                     }
 
-                                    // Apply standard BypassConfig strategies
                                     writeMutex.lock()
                                     try {
                                         BypassConfig.applyBypass(remoteSocket, remoteOut, buffer, n, config, activeHost)
@@ -135,21 +161,19 @@ object TcpTransportHandler {
                                         writeMutex.unlock()
                                     }
                                 } else {
-                                    // Post-Handshake Evasion: Fragmentation and Chaos
                                     if (intensity > 40) {
-                                        // Periodic Window Oscillation to confuse stateful DPI
                                         if (packetsCount % 13 == 0) {
                                             oscillateWindowSize(remoteSocket)
                                         }
 
-                                        // Advanced fragmentation for large payloads
-                                        if (n > 800) {
+                                        val mtuThreshold = (BypassConfig.currentMtu.value * 0.6).toInt().coerceIn(400, 1000)
+                                        if (n > mtuThreshold) {
                                             var offset = 0
                                             while (offset < n) {
                                                 val sz = if (intensity > 75) 
-                                                    rnd.nextInt(32, 256).coerceAtMost(n - offset)
+                                                    rnd.nextInt(16, 128).coerceAtMost(n - offset)
                                                 else 
-                                                    rnd.nextInt(128, 768).coerceAtMost(n - offset)
+                                                    rnd.nextInt(128, mtuThreshold).coerceAtMost(n - offset)
                                                 
                                                 writeMutex.lock()
                                                 try {
@@ -419,8 +443,22 @@ object TcpTransportHandler {
 
     private suspend fun sendSequenceDesync(socket: Socket, rnd: ThreadLocalRandom) {
         try {
+            // Send a tiny packet with very low TTL to confuse DPI state
+            val out = socket.getOutputStream()
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            out.write(byteArrayOf(rnd.nextInt(256).toByte()))
+            out.flush()
+            delay(rnd.nextLong(2, 8))
+            TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
+        } catch (e: Throwable) {}
+    }
+
+    private suspend fun sendZeroWindowDesync(socket: Socket, rnd: ThreadLocalRandom) {
+        try {
+            // Signal a zero window to the remote, wait, then open it again
+            // This can break some middleboxes that don't handle flow control correctly
             TtlHelper.setWindowSize(socket, 0)
-            delay(rnd.nextLong(2, 10))
+            delay(rnd.nextLong(100, 300))
             TtlHelper.setWindowSize(socket, 65535)
         } catch (e: Throwable) {}
     }
