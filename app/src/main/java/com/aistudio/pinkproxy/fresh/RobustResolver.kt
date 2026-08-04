@@ -115,7 +115,7 @@ object RobustResolver {
                     return res
                 }
             } catch (e: Throwable) {
-                if (e is CancellationException) throw e
+                // if (e is CancellationException) throw e
             }
         }
 
@@ -144,7 +144,7 @@ object RobustResolver {
                                         performParallelResolution(preHost, vpnService) 
                                     }
                                 } catch (e: Throwable) { 
-                                    if (e is CancellationException) throw e 
+                                    // if (e is CancellationException) throw e 
                                 }
                             }
                         }
@@ -153,7 +153,7 @@ object RobustResolver {
                 }
             }
         } catch (e: Throwable) {
-            if (e is CancellationException) throw e
+            // if (e is CancellationException) throw e
         }
 
         // 3. Emergency Fallback
@@ -172,7 +172,7 @@ object RobustResolver {
                     return res
                 }
             } catch (e: Throwable) {
-                if (e is CancellationException) throw e
+                // if (e is CancellationException) throw e
             }
         }
 
@@ -253,7 +253,7 @@ object RobustResolver {
                 group.forEach { query ->
                     activeJobs += launch {
                         val res = try { query() } catch (e: Throwable) {
-                            if (e is CancellationException) throw e
+                            // if (e is CancellationException) throw e
                             emptyList()
                         }
                         try { channel.send(res) } catch (e: Throwable) {}

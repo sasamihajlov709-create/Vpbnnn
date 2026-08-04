@@ -125,24 +125,29 @@ object DnsCacheManager {
     fun ensureEfficiency() {
         val now = System.currentTimeMillis()
         if (ipHeatmap.size > 1500) {
-            // Keep only top 1000 hottest IPs
-            val sorted = ipHeatmap.entries.sortedByDescending { it.value }.take(1000)
-            ipHeatmap.clear()
-            sorted.forEach { ipHeatmap[it.key] = it.value }
+            val threshold = if (ProxyStats.censorshipIntensity.value > 70) 40 else 20
+            ipHeatmap.entries.removeIf { it.value < threshold }
+            if (ipHeatmap.size > 1000) {
+                val sortedKeys = ipHeatmap.entries.sortedByDescending { it.value }.take(800).map { it.key }.toSet()
+                ipHeatmap.entries.removeIf { it.key !in sortedKeys }
+            }
         }
         if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
             dnsCache.entries.removeIf { it.value.second < now }
             if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
-                // Remove oldest 20%
-                val oldest = dnsCache.entries.sortedBy { it.value.second }.take(MAX_DNS_CACHE_SIZE / 5)
-                oldest.forEach { dnsCache.remove(it.key) }
+                val sortedKeys = dnsCache.entries.sortedBy { it.value.second }.take(MAX_DNS_CACHE_SIZE / 5).map { it.key }.toSet()
+                sortedKeys.forEach { dnsCache.remove(it) }
             }
         }
         if (ipRtt.size > 1000) {
-            val highRttKeys = ipRtt.entries.filter { it.value > 1000 }.map { it.key }
-            highRttKeys.forEach { ipRtt.remove(it) }
+            ipRtt.entries.removeIf { it.value > 1500 }
+            if (ipRtt.size > 800) {
+                val keys = ipRtt.keys().toList().shuffled().take(300)
+                keys.forEach { ipRtt.remove(it) }
+            }
         }
         if (suspectedPoisonedIps.size > 500) suspectedPoisonedIps.clear()
+        if (negativeCache.size > 500) negativeCache.entries.removeIf { now - it.value > NEGATIVE_CACHE_TTL }
     }
 
     fun getCached(host: String): List<InetAddress>? {
@@ -251,16 +256,18 @@ object DnsCacheManager {
     }
 
     fun ageHeatmap() {
-        val keys = ipHeatmap.keys()
-        while (keys.hasMoreElements()) {
-            val key = keys.nextElement()
-            val score = ipHeatmap[key] ?: continue
+        val intensity = ProxyStats.censorshipIntensity.value
+        val decay = if (intensity > 80) 0.99f else 0.96f
+        val iterator = ipHeatmap.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val score = entry.value
             if (score < 100) {
-                 ipHeatmap[key] = (score * 0.98).toInt()
+                val newScore = (score * decay).toInt()
+                if (newScore < 5) iterator.remove()
+                else entry.setValue(newScore)
             }
         }
-        // Cleanup near-zero entries
-        ipHeatmap.entries.removeIf { it.value < 5 }
     }
 
     private fun isPoisonable(ip: String): Boolean {

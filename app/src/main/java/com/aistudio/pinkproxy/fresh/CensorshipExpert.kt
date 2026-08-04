@@ -223,14 +223,14 @@ object CensorshipExpert {
                     // Use light bypass to look like a real browser
                     val config = BypassConfig.getSessionConfig(host, BypassStrategy.TLS_SNI_FRAGMENT, 50)
                     BypassConfig.applyBypass(s, out, hello, hello.size, config, host)
-                    delay(rnd.nextLong(100, 500))
+                    delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(100, 500))
                     s.close()
                 }
             }
         } catch (e: Throwable) {}
     }
 
-    private val rnd = java.util.concurrent.ThreadLocalRandom.current()
+    
 
     private fun tuneMtu(fingerprint: DpiEngine.CensorshipFingerprint, stability: Int) {
         val currentMtu = BypassConfig.currentMtu.value

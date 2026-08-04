@@ -12,7 +12,6 @@ object StrategyHandlers {
 
     suspend fun handleHttpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
         if (strategy == BypassStrategy.HTTP_CHUNKED_FAKE) {
-            // Split into tiny chunks with staggered delays
             var pos = 0
             while (pos < length) {
                 val sz = rnd.nextInt(1, 10).coerceAtMost(length - pos)
@@ -25,7 +24,6 @@ object StrategyHandlers {
         }
 
         if (strategy == BypassStrategy.HTTP_PIPELINE_FAKE) {
-             // Send original request + a fake request immediately after
              output.write(data, 0, length)
              output.flush()
              val fake = "GET /favicon.ico HTTP/1.1\r\nHost: $host\r\nConnection: keep-alive\r\n\r\n".toByteArray()
@@ -34,10 +32,14 @@ object StrategyHandlers {
              return
         }
 
-        if (strategy == BypassStrategy.HTTP_HOST_SMUGGLE) {
-            val str = String(data, 0, length, Charsets.US_ASCII)
+        val str = if (strategy == BypassStrategy.HTTP_HOST_SMUGGLE || 
+                      strategy == BypassStrategy.HTTP_HOST_REORDER || 
+                      strategy == BypassStrategy.HTTP_KEEP_ALIVE_FAKE) {
+            String(data, 0, length, Charsets.US_ASCII)
+        } else null
+
+        if (strategy == BypassStrategy.HTTP_HOST_SMUGGLE && str != null) {
             if (str.contains("Host:")) {
-                // Smuggle host by injecting a valid decoy first, then the real one via \r\n
                 val smuggled = str.replaceFirst("Host: $host", "Host: mydecoy.com\r\nHost: $host")
                 val outData = smuggled.toByteArray()
                 output.write(outData, 0, outData.size)
@@ -46,9 +48,7 @@ object StrategyHandlers {
             }
         }
 
-        
-        if (strategy == BypassStrategy.HTTP_HOST_REORDER) {
-            val str = String(data, 0, length, Charsets.US_ASCII)
+        if (strategy == BypassStrategy.HTTP_HOST_REORDER && str != null) {
             val hostHeader = "Host: $host\r\n"
             if (str.contains(hostHeader)) {
                 val smuggled = str.replace(hostHeader, "")
@@ -63,8 +63,7 @@ object StrategyHandlers {
             }
         }
 
-        if (strategy == BypassStrategy.HTTP_KEEP_ALIVE_FAKE) {
-             val str = String(data, 0, length, Charsets.US_ASCII)
+        if (strategy == BypassStrategy.HTTP_KEEP_ALIVE_FAKE && str != null) {
              val modified = str.replace("Connection: keep-alive", "Connection: keep-alive, Upgrade")
              val outData = modified.toByteArray()
              output.write(outData, 0, outData.size)
@@ -72,7 +71,6 @@ object StrategyHandlers {
              return
         }
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_HTTP) {
-            // Prepend fake binary data that looks like a TLS handshake, then the HTTP request
             val fakeTls = FakePacketHelper.buildRealisticTlsHello(host)
             output.write(fakeTls)
             output.flush()
@@ -81,7 +79,6 @@ object StrategyHandlers {
 
         val dataCopy = data.copyOfRange(0, length)
         
-        // Randomize case of the method (e.g., GET -> gET)
         if (length > 10 && rnd.nextInt(100) < 30) {
             val spaceIndex = dataCopy.indexOf(' '.code.toByte())
             if (spaceIndex in 1..8) {

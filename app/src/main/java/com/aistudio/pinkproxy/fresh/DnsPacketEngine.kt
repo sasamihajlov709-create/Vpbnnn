@@ -8,66 +8,66 @@ import java.io.ByteArrayInputStream
 object DnsPacketEngine {
 
     fun buildDnsQuery(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000), mangleCase: Boolean = false): ByteArray {
-        val bos = ByteArrayOutputStream()
-        val dos = java.io.DataOutputStream(bos)
-        val rnd = java.util.concurrent.ThreadLocalRandom.current()
-        
-        dos.writeShort(id) // ID
-        dos.writeShort(0x0100) // Flags: Standard query, RD=1
-        dos.writeShort(1) // Questions
-        dos.writeShort(0) // Answer RRs
-        dos.writeShort(0) // Authority RRs
-        dos.writeShort(1) // Additional RRs (EDNS0)
-        
-        val labels = host.split(".")
-        for (label in labels) {
-            var labelToUse = label
-            if (mangleCase) {
-                val sb = StringBuilder()
-                for (char in label) {
-                    if (char in 'a'..'z' || char in 'A'..'Z') {
-                        if (rnd.nextBoolean()) {
-                            sb.append(char.uppercase())
-                        } else {
-                            sb.append(char.lowercase())
-                        }
-                    } else {
-                        sb.append(char)
+        val buffer = ProxyStats.obtain8k()
+        try {
+            val bb = java.nio.ByteBuffer.wrap(buffer)
+            val rnd = java.util.concurrent.ThreadLocalRandom.current()
+            
+            bb.putShort(id.toShort()) // ID
+            bb.putShort(0x0100.toShort()) // Flags: Standard query, RD=1
+            bb.putShort(1.toShort()) // Questions
+            bb.putShort(0.toShort()) // Answer RRs
+            bb.putShort(0.toShort()) // Authority RRs
+            bb.putShort(1.toShort()) // Additional RRs (EDNS0)
+            
+            val labels = host.split(".")
+            for (label in labels) {
+                var labelToUse = label
+                if (mangleCase) {
+                    val sb = StringBuilder()
+                    for (char in label) {
+                        if (char in 'a'..'z' || char in 'A'..'Z') {
+                            if (rnd.nextBoolean()) sb.append(char.uppercase()) else sb.append(char.lowercase())
+                        } else sb.append(char)
                     }
+                    labelToUse = sb.toString()
                 }
-                labelToUse = sb.toString()
+                val bytes = labelToUse.toByteArray(java.nio.charset.StandardCharsets.UTF_8)
+                bb.put(bytes.size.toByte())
+                bb.put(bytes)
             }
-            val bytes = labelToUse.toByteArray(java.nio.charset.StandardCharsets.UTF_8)
-            dos.writeByte(bytes.size)
-            dos.write(bytes)
+            bb.put(0.toByte()) // End of name
+            
+            bb.putShort(type.toShort()) // Type
+            bb.putShort(1.toShort())    // Class IN
+            
+            // EDNS0
+            bb.put(0.toByte()) // Name: root
+            bb.putShort(41.toShort()) // Type: OPT
+            bb.putShort(4096.toShort()) // UDP payload size
+            bb.put(0.toByte()) // RCODE
+            bb.put(0.toByte()) // Version
+            bb.putShort((if (rnd.nextBoolean()) 0x8000 else 0).toShort()) // Z (flags)
+            
+            val ecsOption = buildEcsOption()
+            val paddingSize = rnd.nextInt(64, 256)
+            val paddingOption = buildPaddingOption(paddingSize)
+            val cookieOption = buildCookieOption()
+            val extraOptions = buildRandomOptions()
+            
+            val totalOptionsLen = ecsOption.size + paddingOption.size + cookieOption.size + extraOptions.size
+            bb.putShort(totalOptionsLen.toShort())
+            bb.put(ecsOption)
+            bb.put(paddingOption)
+            bb.put(cookieOption)
+            bb.put(extraOptions)
+            
+            val result = ByteArray(bb.position())
+            System.arraycopy(buffer, 0, result, 0, bb.position())
+            return result
+        } finally {
+            ProxyStats.release8k(buffer)
         }
-        dos.writeByte(0) // End of name
-        
-        dos.writeShort(type) // Type
-        dos.writeShort(1)    // Class IN
-        
-        // Add EDNS0 with ECS (Client Subnet), Random Padding, and Cookie
-        dos.writeShort(0) // Name: root
-        dos.writeShort(41) // Type: OPT
-        dos.writeShort(4096) // UDP payload size
-        dos.writeByte(0) // Higher bits of extended RCODE
-        dos.writeByte(0) // EDNS version
-        dos.writeShort(if (rnd.nextBoolean()) 0x8000 else 0) // Z (flags) - occasionally set DO (DNSSEC OK)
-        
-        val ecsOption = buildEcsOption()
-        val paddingSize = rnd.nextInt(64, 256) // Even more aggressive padding
-        val paddingOption = buildPaddingOption(paddingSize)
-        val cookieOption = buildCookieOption()
-        val extraOptions = buildRandomOptions()
-        
-        val totalOptionsLen = ecsOption.size + paddingOption.size + cookieOption.size + extraOptions.size
-        dos.writeShort(totalOptionsLen)
-        dos.write(ecsOption)
-        dos.write(paddingOption)
-        dos.write(cookieOption)
-        dos.write(extraOptions)
-        
-        return bos.toByteArray()
     }
 
     private fun buildCookieOption(): ByteArray {

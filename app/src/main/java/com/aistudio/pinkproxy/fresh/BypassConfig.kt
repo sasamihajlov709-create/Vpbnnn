@@ -588,10 +588,35 @@ object BypassConfig {
     }
 
     fun startLearningTask(scope: CoroutineScope) {
-        // Implementation moved or simplified
+        scope.launch {
+            while (isActive) {
+                delay(TimeUnit.MINUTES.toMillis(15))
+                DpiEngine.analyzeAndAdjust()
+                DnsOptimizer.forceRefresh()
+            }
+        }
     }
+
     fun startNetworkWeatherSensor(scope: CoroutineScope) {
-        // Implementation moved or simplified
+        scope.launch {
+            val canaryHosts = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
+            while (isActive) {
+                try {
+                    val host = canaryHosts.random()
+                    val start = System.currentTimeMillis()
+                    withTimeout(2000) {
+                        val s = Socket()
+                        s.connect(InetSocketAddress(host, 53), 2000)
+                        s.close()
+                    }
+                    val rtt = System.currentTimeMillis() - start
+                    _currentRttMs.update { (it * 0.7 + rtt * 0.3).toLong().coerceIn(10, 2000) }
+                } catch (e: Throwable) {
+                    _currentRttMs.update { (it * 1.2).toLong().coerceAtMost(2000) }
+                }
+                delay(TimeUnit.MINUTES.toMillis(2))
+            }
+        }
     }
 
     private fun isProbableHttp(data: ByteArray, length: Int): Boolean {
