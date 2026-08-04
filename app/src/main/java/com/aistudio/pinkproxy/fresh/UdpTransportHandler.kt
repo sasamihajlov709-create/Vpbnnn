@@ -403,9 +403,14 @@ object UdpTransportHandler {
             }
         }
 
-        if (reorderBuffers.size > 500) {
-            // Hard cap for extreme cases
-            reorderBuffers.clear()
+        if (reorderBuffers.size > 800) {
+            // Keep only the most active or recent 500 buffers
+            val sortedKeys = reorderBuffers.entries
+                .sortedByDescending { it.value.maxOfOrNull { p -> p.second } ?: 0L }
+                .take(500)
+                .map { it.key }
+                .toSet()
+            reorderBuffers.entries.removeIf { it.key !in sortedKeys }
         }
         
         if (flowPacketCounter.size > 1000) {

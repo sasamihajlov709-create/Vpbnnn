@@ -137,27 +137,16 @@ object TcpTransportHandler {
                                             if (realSni != null) detectedSni.set(realSni)
                                         }
                                         
-                                        // Adaptive Payload Padding: Pad handshake packets to avoid fingerprinting
-                                        if (intensity > 60 && n < 1400) {
-                                            val targetPadding = if (intensity > 85) rnd.nextInt(512, 1200) else rnd.nextInt(128, 512)
-                                            if (n < targetPadding) {
-                                                // We add padding in a separate segment to confuse DPI
-                                                val paddingSize = targetPadding - n
-                                                writeMutex.lock()
-                                                try {
-                                                    remoteOut.write(buffer, 0, n)
-                                                    remoteOut.flush()
-                                                    val padding = FakePacketHelper.buildUdpNoise(paddingSize)
-                                                    TtlHelper.setTtl(remoteSocket, rnd.nextInt(2, 4))
-                                                    remoteOut.write(padding)
-                                                    remoteOut.flush()
-                                                    TtlHelper.setTtl(remoteSocket, BypassConfig.currentTtl.value)
-                                                } finally {
-                                                    writeMutex.unlock()
-                                                }
-                                                totalWrittenClient.addAndGet(n.toLong())
-                                                continue 
-                                            }
+                                        // Fragmentation is safer than padding for standard TCP streams
+                                        if (intensity > 65 && n > 100 && packetsCount < 10) {
+                                            val split = n / 2
+                                            remoteOut.write(buffer, 0, split)
+                                            remoteOut.flush()
+                                            delay(rnd.nextLong(2, 20))
+                                            remoteOut.write(buffer, split, n - split)
+                                            remoteOut.flush()
+                                            totalWrittenClient.addAndGet(n.toLong())
+                                            continue
                                         }
                                     }
                                     
