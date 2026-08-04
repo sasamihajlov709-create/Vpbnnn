@@ -197,11 +197,18 @@ object StrategyHandlers {
         
         var pos = 0
         while (pos < length) {
-            val sz = rnd.nextInt(5, 20).coerceAtMost(length - pos)
+            val sz = if (strategy == BypassStrategy.FRAGMENT_MULTI) {
+                rnd.nextInt(16, 64).coerceAtMost(length - pos)
+            } else {
+                rnd.nextInt(5, 32).coerceAtMost(length - pos)
+            }
             output.write(data, pos, sz)
             output.flush()
             pos += sz
-            if (pos < length) delay(effectiveDelay.coerceAtLeast(1L))
+            if (pos < length) {
+                val delay = if (effectiveDelay > 0) effectiveDelay else rnd.nextLong(1, 10)
+                delay(delay)
+            }
         }
     }
 

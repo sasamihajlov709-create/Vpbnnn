@@ -9,6 +9,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
@@ -836,23 +837,53 @@ object DnsProtocols {
             val dis = DataInputStream(input)
             val headerBuffer = StringBuilder()
             var lastChar = ' '
-            while (true) {
+            var contentLength = -1
+            
+            val startRead = System.currentTimeMillis()
+            while (System.currentTimeMillis() - startRead < 5000) {
                 val b = dis.read()
                 if (b == -1) break
                 val c = b.toChar()
                 headerBuffer.append(c)
+                
                 if (c == '\n' && lastChar == '\r' && headerBuffer.endsWith("\r\n\r\n")) break
                 lastChar = c
                 if (headerBuffer.length > 4096) break
             }
             
-            // Simple check for 200 OK
-            if (headerBuffer.contains("200 OK")) {
-                // Find content length or read until EOF since we sent Connection: close
-                val body = dis.readBytes()
-                if (body.isNotEmpty()) {
-                    val ips = DnsPacketEngine.parseDnsResponse(body, body.size, id)
-                    return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+            val headers = headerBuffer.toString()
+            if (headers.contains("200 OK")) {
+                val clMatch = Regex("(?i)Content-Length:\\s*(\\d+)").find(headers)
+                if (clMatch != null) {
+                    contentLength = clMatch.groupValues[1].toInt()
+                }
+                
+                if (contentLength > 0 && contentLength < 8192) {
+                    val resp = ByteArray(contentLength)
+                    dis.readFully(resp)
+                    return DnsPacketEngine.parseDnsResponse(resp, contentLength, id).filter { !DnsCacheManager.isPoisoned(it, host) }
+                } else if (headers.contains("Transfer-Encoding: chunked")) {
+                    // Simple chunked reader
+                    val outStream = ByteArrayOutputStream()
+                    while (true) {
+                        val line = readLineFromStream(dis) ?: break
+                        val size = line.trim().toIntOrNull(16) ?: 0
+                        if (size == 0) break
+                        val buf = ByteArray(size)
+                        dis.readFully(buf)
+                        outStream.write(buf)
+                        dis.read() // \r
+                        dis.read() // \n
+                    }
+                    val resp = outStream.toByteArray()
+                    return DnsPacketEngine.parseDnsResponse(resp, resp.size, id).filter { !DnsCacheManager.isPoisoned(it, host) }
+                } else {
+                    // Fallback to reading until EOF
+                    val body = dis.readBytes()
+                    if (body.isNotEmpty()) {
+                        val ips = DnsPacketEngine.parseDnsResponse(body, body.size, id)
+                        return ips.filter { !DnsCacheManager.isPoisoned(it, host) }
+                    }
                 }
             }
         } catch (e: Throwable) {
@@ -937,6 +968,18 @@ object DnsProtocols {
                 result
             }
         } ?: emptyList()
+    }
+
+    private fun readLineFromStream(dis: DataInputStream): String? {
+        val sb = StringBuilder()
+        while (true) {
+            val b = try { dis.read() } catch (e: Throwable) { -1 }
+            if (b == -1) return if (sb.isEmpty()) null else sb.toString()
+            val c = b.toChar()
+            if (c == '\n') break
+            if (c != '\r') sb.append(c)
+        }
+        return sb.toString()
     }
 }
 
