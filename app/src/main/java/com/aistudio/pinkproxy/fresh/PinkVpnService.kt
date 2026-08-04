@@ -471,14 +471,11 @@ class PinkVpnService : VpnService() {
         try {
             if (Build.VERSION.SDK_INT >= 34) {
                 try {
-                    val vpnType = 256
                     val specialUseType = 0x40000000
-                    startForeground(1, notification, vpnType or specialUseType)
+                    startForeground(1, notification, specialUseType)
                 } catch (e: Throwable) {
-                    startForeground(1, notification, 256)
+                    startForeground(1, notification)
                 }
-            } else if (Build.VERSION.SDK_INT >= 29) {
-                startForeground(1, notification, 256)
             } else {
                 startForeground(1, notification)
             }
