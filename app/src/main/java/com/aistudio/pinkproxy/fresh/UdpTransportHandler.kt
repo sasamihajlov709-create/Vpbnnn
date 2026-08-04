@@ -485,18 +485,27 @@ object UdpTransportHandler {
                 }
             }
             
-            // UDP Reorder Simulation for certain flows (QUIC)
-            if (!isHighVolume && isQuic && intensity > 70 && count < 10) {
-                 if (rnd.nextInt(100) < 15) {
-                     // Save this packet for a very short time and let next one pass first
-                     val buffer = reorderBuffers.getOrPut(flowKey) { java.util.Collections.synchronizedList(mutableListOf()) }
-                     if (buffer.size < 2) {
-                         buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort) to System.currentTimeMillis())
-                        scope.launch { delay(25); val toSend = synchronized(buffer) { val c = buffer.toList(); buffer.clear(); c }; toSend.forEach { try { socket.send(it.first) } catch(e: Throwable){} } }
-                         return
-                     }
-                 }
-            }
+                    if (!isHighVolume && isQuic && intensity > 70 && count < 10) {
+                        if (rnd.nextInt(100) < 15) {
+                            // Save this packet for a very short time and let next one pass first
+                            val buffer = reorderBuffers.getOrPut(flowKey) { java.util.Collections.synchronizedList(mutableListOf()) }
+                            var shouldReturn = false
+                            synchronized(buffer) {
+                                if (buffer.size < 2) {
+                                    buffer.add(DatagramPacket(payload.copyOfRange(offset, offset + length), length, targetInet, targetPort) to System.currentTimeMillis())
+                                    shouldReturn = true
+                                }
+                            }
+                            if (shouldReturn) {
+                                scope.launch { 
+                                    delay(25)
+                                    val toSend = synchronized(buffer) { val c = buffer.toList(); buffer.clear(); c }
+                                    toSend.forEach { try { socket.send(it.first) } catch(e: Throwable){} } 
+                                }
+                                return
+                            }
+                        }
+                    }
             
             // Manual Fragmentation for large packets (DPI confusion)
             if (!isHighVolume && intensity > 50 && length > 1200 && rnd.nextInt(100) < 15) {
