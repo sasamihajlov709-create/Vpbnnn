@@ -112,22 +112,6 @@ object TcpTransportHandler {
                                 
                                 val activeHost = detectedSni.get() ?: targetHost
                                 
-                                if (intensity > 85 && packetsCount == 1 && n > 5) {
-                                    // Extreme 1-byte fragmentation for the start of TLS/HTTP session
-                                    // This often bypasses DPI that waits for the full ClientHello
-                                    writeMutex.lock()
-                                    try {
-                                        remoteOut.write(buffer[0].toInt())
-                                        remoteOut.flush()
-                                        delay(rnd.nextLong(2, 10))
-                                        remoteOut.write(buffer, 1, n - 1)
-                                        remoteOut.flush()
-                                    } finally {
-                                        writeMutex.unlock()
-                                    }
-                                    continue
-                                }
-
                                 if (packetsCount <= 12) {
                                     // Try to extract SNI if it's a TLS handshake
                                     if (packetsCount <= 3) {

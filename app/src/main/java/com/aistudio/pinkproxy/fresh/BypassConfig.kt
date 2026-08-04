@@ -302,7 +302,7 @@ object BypassConfig {
 
                     val mssFailures = ProxyStats.mssFailureCount.value
                     if (mssFailures > 5 && _currentMtu.value > 1200) {
-                        _currentMtu.value = (_currentMtu.value - 20).coerceAtLeast(1100)
+                        _currentMtu.value = (_currentMtu.value - 40).coerceAtLeast(1100)
                         ProxyStats.resetMssFailureCount()
                     }
                     
@@ -408,11 +408,15 @@ object BypassConfig {
         _isPanicModeFlow.value = true
         val oldMtu = _currentMtu.value
         val newMtu = when {
-            oldMtu > 1300 -> 1280
+            oldMtu > 1300 -> 1260
             oldMtu > 1200 -> 1100
             else -> 1000
         }
-        _currentMtu.value = newMtu
+        if (Math.abs(oldMtu - newMtu) < 32) {
+            _currentMtu.value = oldMtu - 32
+        } else {
+            _currentMtu.value = newMtu
+        }
         DpiEngine.clearCircuitBreakers()
         rotateGlobalStrategy()
         hostStrategyMemory.clear()
