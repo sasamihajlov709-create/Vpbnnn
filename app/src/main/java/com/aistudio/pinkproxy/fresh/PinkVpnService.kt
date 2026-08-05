@@ -558,17 +558,16 @@ class PinkVpnService : VpnService() {
         try {
             if (Build.VERSION.SDK_INT >= 34) {
                 try {
-                    val specialUseType = 0x40000000
-                    startForeground(1, notification, specialUseType)
+                    startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                 } catch (e: Throwable) {
+                    Log.w("PinkVpnService", "Failed specialUse foreground service type, trying default startForeground: ${e.message}")
                     startForeground(1, notification)
                 }
             } else {
                 startForeground(1, notification)
             }
         } catch (e: Throwable) {
-            Log.e("PinkVpnService", "startForeground failed: ${e.message}")
-            try { startForeground(1, notification) } catch(ex: Throwable) {}
+            Log.e("PinkVpnService", "startForeground failed: ${e.message}", e)
         }
     }
 
