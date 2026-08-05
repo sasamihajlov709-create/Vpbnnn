@@ -52,9 +52,47 @@ object TtlHelper {
         try {
             socket.tcpNoDelay = true
             socket.keepAlive = true
-            try { socket.sendBufferSize = 128 * 1024 } catch (e: Throwable) {}
-            try { socket.receiveBufferSize = 128 * 1024 } catch (e: Throwable) {}
+            
+            val networkType = BypassConfig.currentNetworkType.value
+            val (sndBuf, rcvBuf) = when (networkType) {
+                NetworkType.WIFI -> 256 * 1024 to 512 * 1024
+                NetworkType.MOBILE -> 128 * 1024 to 256 * 1024
+                else -> 64 * 1024 to 128 * 1024
+            }
+            
+            try { socket.sendBufferSize = sndBuf } catch (e: Throwable) {}
+            try { socket.receiveBufferSize = rcvBuf } catch (e: Throwable) {}
+            
+            setIpTos(socket, 0x10 or 0x08) // IPTOS_LOWDELAY | IPTOS_THROUGHPUT
+            setTcpQuickAck(socket, true)
+            
+            // Настройка Keep-Alive для мобильных сетей (агрессивное обнаружение разрывов)
+            if (networkType == NetworkType.MOBILE) {
+                setKeepAliveParams(socket, 20, 5, 3) // 20s idle, 5s interval, 3 probes
+            }
         } catch (e: Throwable) {}
+    }
+
+    fun setIpTos(socket: Any, tos: Int) {
+        withFd(socket) { fd ->
+            setsockoptInt(fd, 0, 1, tos) // IPPROTO_IP=0, IP_TOS=1
+        }
+    }
+
+    fun setTcpQuickAck(socket: Socket, enabled: Boolean) {
+        withFd(socket) { fd ->
+            setsockoptInt(fd, 6, 12, if (enabled) 1 else 0) // IPPROTO_TCP=6, TCP_QUICKACK=12
+        }
+    }
+
+    fun setKeepAliveParams(socket: Socket, idle: Int, interval: Int, count: Int) {
+        withFd(socket) { fd ->
+            try {
+                setsockoptInt(fd, 6, 4, idle)     // TCP_KEEPIDLE = 4
+                setsockoptInt(fd, 6, 5, interval) // TCP_KEEPINTVL = 5
+                setsockoptInt(fd, 6, 6, count)    // TCP_KEEPCNT = 6
+            } catch (e: Throwable) {}
+        }
     }
 
     fun setTtl(socket: Any, ttl: Int) {
@@ -81,8 +119,18 @@ object TtlHelper {
 
     fun setMss(socket: Socket, mss: Int) {
         withFd(socket) { fd ->
-            setsockoptInt(fd, 6, 2, mss)
+            setsockoptInt(fd, 6, 2, mss) // IPPROTO_TCP=6, TCP_MAXSEG=2
         }
+    }
+
+    fun applyMssClamping(socket: Socket, host: String?) {
+        try {
+            val mtu = BypassConfig.currentMtu.value
+            val isIpv6 = socket.inetAddress is Inet6Address || (host != null && host.contains(":"))
+            val overhead = if (isIpv6) 60 else 40
+            val mss = mtu - overhead
+            setMss(socket, mss)
+        } catch (e: Throwable) {}
     }
 
     fun setWindowSize(socket: Any, size: Int) {

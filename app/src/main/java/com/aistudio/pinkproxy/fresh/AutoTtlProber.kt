@@ -112,7 +112,7 @@ object AutoTtlProber {
             try {
                 socket = Socket()
                 vpnService?.protect(socket)
-                socket.tcpNoDelay = true
+                TtlHelper.tuneSocket(socket)
                 TtlHelper.setMss(socket, (mtu - 40).coerceAtLeast(512))
                 socket.connect(InetSocketAddress(addr, port), 1000)
                 

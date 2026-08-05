@@ -68,6 +68,15 @@ object BypassConfig {
     private val _isChargingFlow = MutableStateFlow(true)
     val isChargingFlow: StateFlow<Boolean> = _isChargingFlow.asStateFlow()
 
+    private val _batteryLevelFlow = MutableStateFlow(100)
+    val batteryLevelFlow: StateFlow<Int> = _batteryLevelFlow.asStateFlow()
+
+    private val _isPowerSaveModeFlow = MutableStateFlow(false)
+    val isPowerSaveModeFlow: StateFlow<Boolean> = _isPowerSaveModeFlow.asStateFlow()
+
+    private val _thermalStatusFlow = MutableStateFlow(0) // 0 = Normal
+    val thermalStatusFlow: StateFlow<Int> = _thermalStatusFlow.asStateFlow()
+
     @Volatile var isAutoTuning = true
     @Volatile var frag1 = 1
     @Volatile var frag2 = 5
@@ -78,7 +87,78 @@ object BypassConfig {
     @Volatile var isDiagnosticMode = false
     @Volatile var blockQuic = false
     @Volatile var isCharging = true
+    @Volatile var isPowerSaveMode = false
+    @Volatile var batteryLevel = 100
+    @Volatile var thermalStatus = 0
     @Volatile var preferIpv6 = false
+
+    fun startDeviceMonitoring(context: Context) {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        
+        // Initial state
+        _isPowerSaveModeFlow.value = powerManager.isPowerSaveMode
+        isPowerSaveMode = powerManager.isPowerSaveMode
+
+        val batteryStatus: android.content.Intent? = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED).let { filter ->
+            context.registerReceiver(null, filter)
+        }
+        
+        batteryStatus?.let { intent ->
+            val status = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+            val charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                           status == android.os.BatteryManager.BATTERY_STATUS_FULL
+            val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+            val batPct = (level * 100 / scale.toFloat()).toInt()
+            
+            _isChargingFlow.value = charging
+            isCharging = charging
+            _batteryLevelFlow.value = batPct
+            batteryLevel = batPct
+        }
+
+        // Thermal listener for API 29+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try {
+                powerManager.addThermalStatusListener { status ->
+                    _thermalStatusFlow.value = status
+                    thermalStatus = status
+                    Log.i("BypassConfig", "Thermal status changed: $status")
+                }
+            } catch (e: Throwable) {}
+        }
+
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_BATTERY_CHANGED)
+            addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+        }
+        
+        context.registerReceiver(object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: android.content.Intent) {
+                when (intent.action) {
+                    android.content.Intent.ACTION_BATTERY_CHANGED -> {
+                        val status = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                        val charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                                       status == android.os.BatteryManager.BATTERY_STATUS_FULL
+                        val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                        val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+                        val batPct = (level * 100 / scale.toFloat()).toInt()
+                        
+                        _isChargingFlow.value = charging
+                        isCharging = charging
+                        _batteryLevelFlow.value = batPct
+                        batteryLevel = batPct
+                    }
+                    android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                        val active = powerManager.isPowerSaveMode
+                        _isPowerSaveModeFlow.value = active
+                        isPowerSaveMode = active
+                        Log.i("BypassConfig", "Power save mode: $active")
+                    }
+                }
+            }
+        }, filter)
+    }
 
     @Volatile var tcpSplitPosValue = 2
     @Volatile var tcpDelayValue = 2L
@@ -149,6 +229,7 @@ object BypassConfig {
             _currentNetworkType.value = type
             Log.i("BypassConfig", "Network type updated: $type. Clearing session memory.")
             hostStrategyMemory.clear()
+            ProxyStats.resetScores()
             DpiEngine.clearCircuitBreakers()
             DpiEngine.resetStrategyScoresForNetworkChange()
         }
@@ -323,6 +404,7 @@ object BypassConfig {
 
     fun recordSuccess(strat: BypassStrategy, rtt: Long, host: String?) {
         ProxyStats.recordGlobalSuccess(rtt)
+        ProxyStats.reportStrategyResult(strat, true)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         DpiEngine.recordResult(strat, true, cat, latencyMs = rtt, host = host)
         
@@ -380,6 +462,7 @@ object BypassConfig {
 
     fun recordFailure(strat: BypassStrategy, host: String?, reason: FailureReason = FailureReason.UNKNOWN) {
         ProxyStats.recordCensorshipEvent(true)
+        ProxyStats.reportStrategyResult(strat, false)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         DpiEngine.recordResult(strat, false, cat, reason, host = host)
         

@@ -94,11 +94,6 @@ object TcpTransportHandler {
                         continue
                     }
 
-                    rs.tcpNoDelay = true
-                    try { rs.sendBufferSize = 64 * 1024 } catch(e: Throwable) {}
-                    try { rs.receiveBufferSize = 64 * 1024 } catch(e: Throwable) {}
-//                     TtlHelper.setTtl(rs, BypassConfig.currentTtl.value)
-
                     val rsOut = rs.getOutputStream()
                     val rsIn = rs.getInputStream()
 
@@ -144,7 +139,6 @@ object TcpTransportHandler {
                     clientSocket.close()
                     return
                 }
-                remoteSocket.tcpNoDelay = true
                 remoteIn = remoteSocket.getInputStream()
                 remoteOut = remoteSocket.getOutputStream()
                 
@@ -395,6 +389,8 @@ object TcpTransportHandler {
             val s = Socket()
             try {
                 vpnService?.protect(s)
+                TtlHelper.tuneSocket(s)
+                TtlHelper.applyMssClamping(s, host)
                 s.connect(InetSocketAddress(ips[0], port), 5000)
                 return@withContext s
             } catch (e: Throwable) {
@@ -423,7 +419,8 @@ object TcpTransportHandler {
                     // Stagger connections: 200ms delay between attempts
                     if (index > 0) delay(index * 200L)
                     vpnService?.protect(s)
-                    s.tcpNoDelay = true
+                    TtlHelper.tuneSocket(s)
+                    TtlHelper.applyMssClamping(s, host)
                     
                     // Adaptive timeout: shorter for early attempts to trigger racing faster
                     val timeout = if (index < 2) 4000 else 7000

@@ -36,14 +36,15 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         // Connection Watchdog to monitor connections
         scope.launch {
             while (isActive) {
-                delay(60000)
+                val watchdogDelay = if (BypassConfig.isPowerSaveMode) 120000L else 60000L
+                delay(watchdogDelay)
                 val activeCount = 800 - activeConnectionSemaphore.availablePermits()
                 if (activeCount > 600) {
                     Log.i("PinkProxy", "Watchdog: $activeCount active connections.")
                 }
                 
-                // Trim buffer pools on low connection load to free RAM smoothly
-                if (activeCount < 50) {
+                // Trim buffer pools on low connection load or low battery to free RAM smoothly
+                if (activeCount < 50 || BypassConfig.batteryLevel < 15) {
                     ProxyStats.releaseAllPools()
                 }
             }
@@ -71,9 +72,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     ProxyStats.updateConnections(1)
                     val clientJob = scope.launch {
                         try {
-                            client.tcpNoDelay = true
-                            try { client.sendBufferSize = 64 * 1024 } catch (e: Throwable) {}
-                            try { client.receiveBufferSize = 64 * 1024 } catch (e: Throwable) {}
+                            TtlHelper.tuneSocket(client)
                             handleClient(client, this)
                         } finally {
                             try { client.close() } catch (e: Throwable) {}

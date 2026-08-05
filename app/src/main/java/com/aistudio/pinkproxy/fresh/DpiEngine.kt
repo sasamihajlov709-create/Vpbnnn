@@ -517,6 +517,13 @@ object DpiEngine {
         val totalScore = validStrategies.sumOf { (strat, score) ->
             var s = score.get().toDouble()
             
+            // Add global success bonus from ProxyStats
+            val globalScore = ProxyStats.getStrategyScore(strat)
+            if (globalScore > 0) s += globalScore * 5
+            else if (globalScore < 0) s += globalScore * 10 // Global failures are a heavy penalty
+            
+            s = s.coerceAtLeast(1.0)
+
             // Maturity Bonus
             s += (strategyMaturity[strat]?.get() ?: 0) / 6.0
             
@@ -538,6 +545,19 @@ object DpiEngine {
                 HostCategory.STREAMING, HostCategory.SOCIAL -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 1.4
                 HostCategory.AI, HostCategory.FINANCE -> if (strat.family == StrategyFamily.FRAGMENTATION) s *= 1.3
                 else -> {}
+            }
+
+            // Resource Awareness Penalty: предпочтение легким стратегиям при экономии энергии
+            if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20) {
+                when (strat.group) {
+                    StrategyGroup.EXTREME -> s *= 0.2
+                    StrategyGroup.HEAVY -> s *= 0.5
+                    StrategyGroup.MEDIUM -> s *= 0.8
+                    StrategyGroup.LIGHT -> s *= 1.5 // Буст легким
+                }
+            }
+            if (BypassConfig.thermalStatus >= 3) { // Нагрев устройства
+                 if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 0.3
             }
             
             val latency = strategyLatency[strat]?.get() ?: 200L

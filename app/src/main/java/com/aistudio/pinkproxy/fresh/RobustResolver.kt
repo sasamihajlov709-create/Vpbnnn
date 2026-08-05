@@ -134,20 +134,20 @@ object RobustResolver {
                     val sorted = DnsCacheManager.getSortedIps(par)
                     DnsCacheManager.put(host, sorted, type = type)
                     
-                    // Smart Prefetch common subdomains with throttling
-                    if (type == 1 && !host.startsWith("www.") && host.split(".").size == 2) {
-                        getScope().launch {
-                            listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
-                                try { 
-                                    delay(500) // Stagger prefetch to avoid overwhelming the system
-                                    val preHost = prefix + host
-                                    if (DnsCacheManager.getCached(preHost) == null) {
-                                        performParallelResolution(preHost, vpnService, 1) 
-                                    }
-                                } catch (e: Throwable) { }
-                            }
+                // Smart Prefetch common subdomains with throttling
+                if (type == 1 && !host.startsWith("www.") && host.split(".").size == 2 && !BypassConfig.isPowerSaveMode) {
+                    getScope().launch {
+                        listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
+                            try { 
+                                delay(if (BypassConfig.batteryLevel < 30) 1500L else 500L) // Longer delay on low battery
+                                val preHost = prefix + host
+                                if (DnsCacheManager.getCached(preHost) == null) {
+                                    performParallelResolution(preHost, vpnService, 1) 
+                                }
+                            } catch (e: Throwable) { }
                         }
                     }
+                }
                     return sorted
                 }
             }
@@ -243,7 +243,7 @@ object RobustResolver {
             queries.filter { it !in listOf(primaryDoH, primaryDoT, shadowUdp, shadowTcp, dnsQuic, echCheck) }
         )
 
-        val staggerDelay = 250L // 250ms delay between groups if no result yet
+        val staggerDelay = if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 15) 600L else 250L // 250ms delay between groups if no result yet
 
         launch {
             for (group in queryGroups) {

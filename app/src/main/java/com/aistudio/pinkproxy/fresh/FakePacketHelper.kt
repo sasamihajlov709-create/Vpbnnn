@@ -612,6 +612,18 @@ object FakePacketHelper {
 
     fun buildFakeEchExtension(): ByteArray = buildUdpNoise(ThreadLocalRandom.current().nextInt(128, 256))
 
+    fun buildBitTorrentHandshake(): ByteArray {
+        val data = ByteArray(68)
+        val buf = ByteBuffer.wrap(data)
+        buf.put(19.toByte())
+        buf.put("BitTorrent protocol".toByteArray(StandardCharsets.US_ASCII))
+        buf.put(ByteArray(8))
+        val rndBytes = ByteArray(40)
+        ThreadLocalRandom.current().nextBytes(rndBytes)
+        buf.put(rndBytes)
+        return data
+    }
+
     fun buildProtocolConfusion(type: String): ByteArray {
         return when(type.uppercase()) {
             "SSH" -> buildSshHandshake()
@@ -619,6 +631,7 @@ object FakePacketHelper {
             "HTTP" -> buildFakeHttpRequest("google.com")
             "REDIS" -> "*1\r\n\$4\r\nPING\r\n".toByteArray()
             "MEMCACHED" -> "stats\r\n".toByteArray()
+            "BITTORRENT" -> buildBitTorrentHandshake()
             "QUIC" -> buildQuicInitial()
             "DTLS" -> buildFakeDtlsClientHello()
             else -> buildUdpNoise(32)

@@ -303,6 +303,83 @@ object StrategyHandlers {
     }
 
     suspend fun handleTcpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
+        if (strategy == BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT) {
+            val fake = FakePacketHelper.buildProtocolConfusion("BITTORRENT")
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            output.write(fake)
+            output.flush()
+            delay(rnd.nextLong(2, 6))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.PROTOCOL_CONFUSION_MEMCACHED) {
+            val fake = FakePacketHelper.buildProtocolConfusion("MEMCACHED")
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            output.write(fake)
+            output.flush()
+            delay(rnd.nextLong(2, 6))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.PROTOCOL_CONFUSION_REDIS) {
+            val fake = FakePacketHelper.buildProtocolConfusion("REDIS")
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            output.write(fake)
+            output.flush()
+            delay(rnd.nextLong(2, 6))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.PROTOCOL_CONFUSION_SSH) {
+            val fake = FakePacketHelper.buildProtocolConfusion("SSH")
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            output.write(fake)
+            output.flush()
+            delay(rnd.nextLong(2, 6))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.SSH_HANDSHAKE_FAKE) {
+            val sshBanner = "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6\r\n".toByteArray()
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            output.write(sshBanner)
+            output.flush()
+            delay(rnd.nextLong(3, 8))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_WINDOW_SCAN) {
+            val winSizes = intArrayOf(512, 1024, 2048, 4096, 8192, 16384, 65535)
+            var pos = 0
+            var idx = 0
+            while (pos < length) {
+                val sz = rnd.nextInt(1, 32).coerceAtMost(length - pos)
+                TtlHelper.setWindowSize(socket, winSizes[idx % winSizes.size])
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                idx++
+                if (pos < length) delay(rnd.nextLong(1, 3))
+            }
+            TtlHelper.setWindowSize(socket, 65535)
+            return
+        }
+
         if (strategy == BypassStrategy.TCP_WINDOW_SIZE_JITTER) {
             TtlHelper.setWindowSize(socket, rnd.nextInt(512, 4096))
             output.write(data, 0, length)
@@ -717,6 +794,72 @@ object StrategyHandlers {
         var finalData = data
         var finalLen = length
         
+        if (strategy == BypassStrategy.TLS_COMPRESSION_FAKE) {
+            val fakeHello = FakePacketHelper.buildRealisticTlsHello(host)
+            if (fakeHello.size > 3) {
+                fakeHello[fakeHello.size - 3] = 0x01
+            }
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            output.write(fakeHello)
+            output.flush()
+            delay(rnd.nextLong(2, 6))
+            TtlHelper.setTtl(socket, 64)
+            output.write(data, 0, length)
+            output.flush()
+            return
+        }
+
+        if (strategy == BypassStrategy.TLS_PADDING_RAND) {
+            finalData = FakePacketHelper.injectTlsPadding(finalData, finalLen, rnd.nextInt(16, 128))
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_SNI_NULL_EXT) {
+            val nullExt = FakePacketHelper.buildUdpNoise(16)
+            finalData = FakePacketHelper.injectExtension(finalData, finalLen, 0x00ff, nullExt)
+            finalLen = finalData.size
+        }
+
+        if (strategy == BypassStrategy.TLS_REC_MANGLE) {
+            if (finalLen >= 3 && finalData[0] == 0x16.toByte()) {
+                val mangled = finalData.copyOf(finalLen)
+                mangled[1] = 0x03.toByte()
+                mangled[2] = 0x01.toByte()
+                finalData = mangled
+            }
+        }
+
+        if (strategy == BypassStrategy.TLS_APP_DATA_SPLIT) {
+            var pos = 0
+            while (pos < finalLen) {
+                val sz = rnd.nextInt(16, 128).coerceAtMost(finalLen - pos)
+                output.write(finalData, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < finalLen) delay(rnd.nextLong(1, 4))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TLS_CLIENT_HELLO_CHOP || strategy == BypassStrategy.TLS_REC_CHOP) {
+            val chop1 = finalLen / 3
+            val chop2 = (finalLen * 2) / 3
+            if (chop1 > 0 && chop2 > chop1 && finalLen > chop2) {
+                output.write(finalData, 0, chop1)
+                output.flush()
+                delay(rnd.nextLong(2, 6))
+                output.write(finalData, chop1, chop2 - chop1)
+                output.flush()
+                delay(rnd.nextLong(2, 6))
+                output.write(finalData, chop2, finalLen - chop2)
+                output.flush()
+            } else {
+                output.write(finalData, 0, finalLen)
+                output.flush()
+            }
+            return
+        }
+        
         if (strategy == BypassStrategy.ECH_GREASE || strategy == BypassStrategy.ECH_FRAG) {
             finalData = TlsParser.injectEchGrease(data, length)
             finalLen = finalData.size
@@ -1065,6 +1208,16 @@ object StrategyHandlers {
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_QUIC) {
             val fake = FakePacketHelper.buildQuicInitialFake()
             writeUdpWithFake(socket, packet.address, packet.port, fake, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.QUIC_HANDSHAKE_SKEW) {
+            val paddingSize = rnd.nextInt(32, 128)
+            val padded = FakePacketHelper.buildQuicJitterPad(packet.length + paddingSize)
+            System.arraycopy(packet.data, packet.offset, padded, 0, packet.length)
+            val skewPacket = DatagramPacket(padded, padded.size, packet.address, packet.port)
+            socket.send(skewPacket)
+            delay(rnd.nextLong(3, 15))
             return
         }
 

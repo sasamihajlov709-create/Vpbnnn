@@ -96,6 +96,7 @@ class PinkVpnService : VpnService() {
         
         connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
         
+        BypassConfig.startDeviceMonitoring(this)
         DnsCacheManager.load(this)
         BypassConfig.loadTuningSettings(this)
         loadFilterSettings(this)

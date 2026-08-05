@@ -371,6 +371,33 @@ object ProxyStats {
         bufferPool64k.clear()
     }
 
+    private val strategySuccessMap = java.util.concurrent.ConcurrentHashMap<BypassStrategy, Int>()
+    private val strategyFailureMap = java.util.concurrent.ConcurrentHashMap<BypassStrategy, Int>()
+
+    fun reportStrategyResult(strategy: BypassStrategy, success: Boolean) {
+        if (success) {
+            val current = strategySuccessMap.get(strategy) ?: 0
+            strategySuccessMap[strategy] = current + 1
+            // Постепенно снижаем счетчик ошибок при успехах
+            val fails = strategyFailureMap.get(strategy) ?: 0
+            if (fails > 0) strategyFailureMap[strategy] = fails - 1
+        } else {
+            val current = strategyFailureMap.get(strategy) ?: 0
+            strategyFailureMap[strategy] = current + 1
+        }
+    }
+
+    fun getStrategyScore(strategy: BypassStrategy): Int {
+        val success = strategySuccessMap.get(strategy) ?: 0
+        val failure = strategyFailureMap.get(strategy) ?: 0
+        return success - (failure * 2) // Ошибки наказываются сильнее
+    }
+
+    fun resetScores() {
+        strategySuccessMap.clear()
+        strategyFailureMap.clear()
+    }
+
     private val _bytesTransferred = MutableStateFlow(0L)
     val bytesTransferred: StateFlow<Long> = _bytesTransferred.asStateFlow()
     
