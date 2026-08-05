@@ -251,7 +251,7 @@ object RobustResolver {
                 group.forEach { query ->
                     launch {
                         val res = try { query() } catch (e: Throwable) {
-                            // if (e is CancellationException) throw e
+                            if (e is CancellationException) throw e
                             emptyList()
                         }
                         try { channel.send(res) } catch (e: Throwable) {}
@@ -264,7 +264,7 @@ object RobustResolver {
             // Finally launch emergency fallback if nothing worked after staggered starts
             launch {
                 val res = try { fallbackDns() } catch (e: Throwable) {
-                    // if (e is CancellationException) throw e
+                    if (e is CancellationException) throw e
                     emptyList()
                 }
                 try { channel.send(res) } catch (e: Throwable) {}

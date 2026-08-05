@@ -380,6 +380,7 @@ object TcpTransportHandler {
                 }
             }
         } catch (e: Throwable) {
+            if (e is CancellationException) throw e
             Log.v("TcpTransport", "Session failed: ${e.message}")
         } finally {
             try { clientSocket.close() } catch (e: Throwable) {}
@@ -507,7 +508,9 @@ object TcpTransportHandler {
             // Delay to allow kernel to potentially advertise smaller window on ACKs
             delay(10)
             socket.receiveBufferSize = original
-        } catch (e: Throwable) {}
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+        }
     }
 
     private suspend fun sendConfusionPacket(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
@@ -521,7 +524,9 @@ object TcpTransportHandler {
             out.flush()
             delay(rnd.nextLong(1, 4))
 //             TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
-        } catch (e: Throwable) {}
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+        }
     }
 
     private suspend fun injectGhostSegment(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
@@ -535,7 +540,9 @@ object TcpTransportHandler {
             out.flush()
             delay(rnd.nextLong(1, 3))
 //             TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
-        } catch (e: Throwable) {}
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+        }
     }
 
     private suspend fun sendSequenceDesync(socket: Socket, rnd: ThreadLocalRandom) {
@@ -547,7 +554,9 @@ object TcpTransportHandler {
             out.flush()
             delay(rnd.nextLong(2, 8))
 //             TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
-        } catch (e: Throwable) {}
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+        }
     }
 
     private suspend fun sendZeroWindowDesync(socket: Socket, rnd: ThreadLocalRandom) {
@@ -557,6 +566,8 @@ object TcpTransportHandler {
             TtlHelper.setWindowSize(socket, 0)
             delay(rnd.nextLong(100, 300))
             TtlHelper.setWindowSize(socket, 65535)
-        } catch (e: Throwable) {}
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+        }
     }
 }
