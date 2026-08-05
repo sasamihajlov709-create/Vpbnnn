@@ -83,7 +83,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 }
             } catch (e: Throwable) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                if (isActive) Log.e("PinkProxy", "Server error", e)
+                if (isActive) {
+                    Log.e("PinkProxy", "Server error", e)
+                    VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Internal proxy server error: ${e.localizedMessage}")
+                }
             } finally {
                 try { serverSocket?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
                 serverSocket = null

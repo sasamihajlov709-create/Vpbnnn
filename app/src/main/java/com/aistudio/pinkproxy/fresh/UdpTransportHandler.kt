@@ -384,6 +384,7 @@ object UdpTransportHandler {
     fun clearBuffers() {
         reorderBuffers.clear()
         hostStrategyCache.clear()
+        flowPacketCounter.clear()
     }
     private val flowPacketCounter = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
     private var lastGlobalCleanup = System.currentTimeMillis()

@@ -28,7 +28,7 @@ object DiagnosticManager {
         val dnsJobs = testDomains.map { domain ->
             launch {
                 val ips = RobustResolver.resolve(domain, BypassConfig.activeVpnService)
-                if (ips != null && ips.isNotEmpty()) dnsSuccess.incrementAndGet()
+                if (ips.isNotEmpty()) dnsSuccess.incrementAndGet()
             }
         }
         
@@ -36,7 +36,7 @@ object DiagnosticManager {
         val tcpJobs = testDomains.map { domain ->
             launch {
                 val ips = RobustResolver.resolve(domain, BypassConfig.activeVpnService)
-                if (ips != null && ips.isNotEmpty()) {
+                if (ips.isNotEmpty()) {
                     val socket = Socket()
                     try {
                         BypassConfig.activeVpnService?.protect(socket)

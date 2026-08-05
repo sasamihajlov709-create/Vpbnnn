@@ -15,6 +15,7 @@ object AutoTtlProber {
     private val networkTtls = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
     private val networkMtus = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
     private val probingHosts = java.util.concurrent.ConcurrentSkipListSet<String>()
+    private var probingJob: Job? = null
 
     fun getDiscoveredTtl(host: String): Int? {
         val netType = BypassConfig.getNetworkType().toString()
@@ -29,7 +30,8 @@ object AutoTtlProber {
     }
 
     fun startProbing(scope: CoroutineScope, vpnService: VpnService?) {
-        scope.launch(ProxyDispatcher.io) {
+        probingJob?.cancel()
+        probingJob = scope.launch(ProxyDispatcher.io) {
             val canary = listOf("google.com", "facebook.com", "twitter.com", "youtube.com", "instagram.com", "t.me")
             while (isActive) {
                 for (host in canary) {
@@ -53,10 +55,34 @@ object AutoTtlProber {
                     discoveredMtus.clear()
                     if (globalMtu != null) discoveredMtus["global"] = globalMtu
                 }
+                
+                // Cleanup nested maps
+                if (networkTtls.size > 20) networkTtls.clear()
+                networkTtls.values.forEach { inner ->
+                    if (inner.size > 1000) {
+                        val g = inner["global"]
+                        inner.clear()
+                        if (g != null) inner["global"] = g
+                    }
+                }
+                if (networkMtus.size > 20) networkMtus.clear()
+                networkMtus.values.forEach { inner ->
+                    if (inner.size > 1000) {
+                        val g = inner["global"]
+                        inner.clear()
+                        if (g != null) inner["global"] = g
+                    }
+                }
 
                 delay(TimeUnit.MINUTES.toMillis(15)) 
             }
         }
+    }
+
+    fun stopProbing() {
+        probingJob?.cancel()
+        probingJob = null
+        probingHosts.clear()
     }
 
     fun scheduleProbe(host: String, port: Int, vpnService: VpnService?, scope: CoroutineScope) {

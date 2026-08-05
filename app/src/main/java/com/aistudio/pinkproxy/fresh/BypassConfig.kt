@@ -91,8 +91,11 @@ object BypassConfig {
     @Volatile var batteryLevel = 100
     @Volatile var thermalStatus = 0
     @Volatile var preferIpv6 = false
+    private var isMonitoringStarted = false
 
     fun startDeviceMonitoring(context: Context) {
+        if (isMonitoringStarted) return
+        isMonitoringStarted = true
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
         
         // Initial state

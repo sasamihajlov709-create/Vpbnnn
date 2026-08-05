@@ -53,7 +53,7 @@ object PrefetchManager {
             
             // 1. DNS Prefetch
             val ips = RobustResolver.resolve(host, vpnService)
-            if (ips != null && ips.isNotEmpty()) {
+            if (ips.isNotEmpty()) {
                 // 2. TCP Warming (только если мы на зарядке или WiFi)
                 if (BypassConfig.isCharging || BypassConfig.currentNetworkType.value == NetworkType.WIFI) {
                     warmupConnection(host, ips, vpnService)

@@ -15,7 +15,7 @@ object TlsParser {
         
         // Ensure it's a TLS Handshake (0x16) and ClientHello (0x01)
         if (buffer[0] != 0x16.toByte()) return -1
-        if (buffer[5] != 0x01.toByte()) return -1
+        if (length < 6 || buffer[5] != 0x01.toByte()) return -1
         
         try {
             // Record layer version: 3.x
@@ -194,11 +194,14 @@ object TlsParser {
         try {
             val sessionIdLen = buffer[43].toInt() and 0xFF
             var pos = 44 + sessionIdLen
+            if (pos + 1 >= length) return buffer.copyOf(length)
             val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2 + cipherSuitesLen
+            if (pos >= length) return buffer.copyOf(length)
             pos += 1 + (buffer[pos].toInt() and 0xFF) // Compression
             
             // Extensions position
+            if (pos + 1 >= length) return buffer.copyOf(length)
             val extLenPos = pos
             val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2
@@ -220,25 +223,33 @@ object TlsParser {
             // Reconstruct the packet
             val newLen = length + newExt.size
             val result = ByteArray(newLen)
-            System.arraycopy(buffer, 0, result, 0, pos) // Header + part of extensions
+            System.arraycopy(buffer, 0, result, 0, minOf(pos, length)) // Header + part of extensions
             System.arraycopy(newExt, 0, result, pos, newExt.size) // Inject grease at the start of extensions
-            System.arraycopy(buffer, pos, result, pos + newExt.size, length - pos) // Rest
+            if (length > pos) {
+                System.arraycopy(buffer, pos, result, pos + newExt.size, length - pos) // Rest
+            }
             
             // Update lengths
-            val totalHandshakeLen = ((result[6].toInt() and 0xFF) shl 16) or ((result[7].toInt() and 0xFF) shl 8) or (result[8].toInt() and 0xFF)
-            val newHandshakeLen = totalHandshakeLen + newExt.size
-            result[6] = (newHandshakeLen shr 16).toByte()
-            result[7] = (newHandshakeLen shr 8).toByte()
-            result[8] = (newHandshakeLen and 0xFF).toByte()
+            if (result.size > 8) {
+                val totalHandshakeLen = ((result[6].toInt() and 0xFF) shl 16) or ((result[7].toInt() and 0xFF) shl 8) or (result[8].toInt() and 0xFF)
+                val newHandshakeLen = totalHandshakeLen + newExt.size
+                result[6] = (newHandshakeLen shr 16).toByte()
+                result[7] = (newHandshakeLen shr 8).toByte()
+                result[8] = (newHandshakeLen and 0xFF).toByte()
+            }
             
-            val recordLen = ((result[3].toInt() and 0xFF) shl 8) or (result[4].toInt() and 0xFF)
-            val newRecordLen = recordLen + newExt.size
-            result[3] = (newRecordLen shr 8).toByte()
-            result[4] = (newRecordLen and 0xFF).toByte()
+            if (result.size > 4) {
+                val recordLen = ((result[3].toInt() and 0xFF) shl 8) or (result[4].toInt() and 0xFF)
+                val newRecordLen = recordLen + newExt.size
+                result[3] = (newRecordLen shr 8).toByte()
+                result[4] = (newRecordLen and 0xFF).toByte()
+            }
             
-            val newExtensionsLen = extensionsLen + newExt.size
-            result[extLenPos] = (newExtensionsLen shr 8).toByte()
-            result[extLenPos + 1] = (newExtensionsLen and 0xFF).toByte()
+            if (result.size > extLenPos + 1) {
+                val newExtensionsLen = extensionsLen + newExt.size
+                result[extLenPos] = (newExtensionsLen shr 8).toByte()
+                result[extLenPos + 1] = (newExtensionsLen and 0xFF).toByte()
+            }
             
             return result
         } catch (e: Throwable) {

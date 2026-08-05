@@ -347,7 +347,7 @@ object TcpTransportHandler {
                             writeMutex.lock()
                             try {
                                 val outputStream = remoteOut
-                                if (remoteSocket != null && outputStream != null) {
+                                if (outputStream != null) {
                                     sendConfusionPacket(remoteSocket, outputStream, rnd)
                                 }
                             } catch (e: Throwable) {} finally {
@@ -362,8 +362,7 @@ object TcpTransportHandler {
                     while (isActive) {
                         delay(30000)
                         if (ProxyStats.censorshipIntensity.value > 30) {
-                            val rs = remoteSocket
-                            if (rs != null) applyWindowPulse(rs)
+                            applyWindowPulse(remoteSocket)
                         }
                     }
                 }

@@ -37,6 +37,7 @@ object DnsProtocols {
 
     private var cachedProtectedClient: OkHttpClient? = null
     private var lastVpnService: VpnService? = null
+    private val clientLock = Any()
 
     private fun getProtectedClient(vpnService: VpnService?): OkHttpClient {
         val cached = cachedProtectedClient
@@ -44,29 +45,36 @@ object DnsProtocols {
             return cached
         }
         
-        val builder = baseOkHttpClient.newBuilder()
-            .socketFactory(ProtectedSocketFactory(vpnService))
-            .dns(BootstrapDns())
-        
-        try {
-            val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
-            trustManagerFactory.init(null as java.security.KeyStore?)
-            val trustManagers = trustManagerFactory.trustManagers
-            val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
-            
-            if (defaultTrustManager != null) {
-                val sc = SSLContext.getInstance("TLS")
-                sc.init(null, arrayOf(defaultTrustManager), null)
-                builder.sslSocketFactory(ProtectedSSLSocketFactory(sc.socketFactory, vpnService), defaultTrustManager)
+        return synchronized(clientLock) {
+            val existing = cachedProtectedClient
+            if (existing != null && lastVpnService == vpnService) {
+                existing
+            } else {
+                val builder = baseOkHttpClient.newBuilder()
+                    .socketFactory(ProtectedSocketFactory(vpnService))
+                    .dns(BootstrapDns())
+                
+                try {
+                    val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+                    trustManagerFactory.init(null as java.security.KeyStore?)
+                    val trustManagers = trustManagerFactory.trustManagers
+                    val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
+                    
+                    if (defaultTrustManager != null) {
+                        val sc = SSLContext.getInstance("TLS")
+                        sc.init(null, arrayOf(defaultTrustManager), null)
+                        builder.sslSocketFactory(ProtectedSSLSocketFactory(sc.socketFactory, vpnService), defaultTrustManager)
+                    }
+                } catch (e: Throwable) {
+                    Log.e("DnsProtocols", "Failed to setup protected SSL", e)
+                }
+                
+                val client = builder.build()
+                cachedProtectedClient = client
+                lastVpnService = vpnService
+                client
             }
-        } catch (e: Throwable) {
-            Log.e("DnsProtocols", "Failed to setup protected SSL", e)
         }
-        
-        val client = builder.build()
-        cachedProtectedClient = client
-        lastVpnService = vpnService
-        return client
     }
 
     suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {

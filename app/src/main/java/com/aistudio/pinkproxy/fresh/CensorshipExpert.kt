@@ -41,9 +41,14 @@ object CensorshipExpert {
         
         // Listen to global DPI events to trigger immediate reactions
         eventsJob = scope.launch {
+            var lastExtremeTriggerTime = 0L
             ProxyStats.censorshipIntensity.collect { intensity ->
                 if (intensity > 90) {
-                    onExtremeCensorshipDetected()
+                    val now = System.currentTimeMillis()
+                    if (now - lastExtremeTriggerTime > 60_000) {
+                        lastExtremeTriggerTime = now
+                        onExtremeCensorshipDetected()
+                    }
                 }
             }
         }
@@ -293,7 +298,7 @@ object CensorshipExpert {
     }
 
     private fun onExtremeCensorshipDetected() {
-        Log.e("CensorshipExpert", "EXTREME CENSORSHIP DETECTED! Deploying maximum evasion patterns.")
+        Log.i("CensorshipExpert", "EXTREME CENSORSHIP DETECTED! Deploying maximum evasion patterns.")
         BypassConfig.setPanicMode(true)
         BypassConfig.frag1 = 1
         BypassConfig.delay1 = 150

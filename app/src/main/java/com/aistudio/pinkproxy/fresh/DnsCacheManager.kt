@@ -85,13 +85,24 @@ object DnsCacheManager {
         val now = System.currentTimeMillis()
         if (ipHeatmap.size > 1500) {
             ipHeatmap.entries.removeIf { it.value < 20 }
+            if (ipHeatmap.size > 2000) ipHeatmap.clear()
         }
         if (dnsCache.size > MAX_DNS_CACHE_SIZE) {
             dnsCache.entries.removeIf { it.value.second < now }
+            if (dnsCache.size > MAX_DNS_CACHE_SIZE) dnsCache.clear()
+        }
+        if (detailedDnsCache.size > MAX_DNS_CACHE_SIZE) {
+            detailedDnsCache.entries.removeIf { it.value.second < now }
+            if (detailedDnsCache.size > MAX_DNS_CACHE_SIZE) detailedDnsCache.clear()
         }
         if (negativeCache.size > 500) {
             negativeCache.entries.removeIf { now - it.value > NEGATIVE_CACHE_TTL }
+            if (negativeCache.size > 1000) negativeCache.clear()
         }
+        if (ipRtt.size > 2000) ipRtt.clear()
+        if (resolverBlacklist.size > 100) resolverBlacklist.entries.removeIf { now > it.value }
+        if (resolverSuccess.size > 500) resolverSuccess.clear()
+        if (resolverFailure.size > 500) resolverFailure.clear()
     }
 
     fun getCached(host: String, type: Int = 1): List<InetAddress>? {

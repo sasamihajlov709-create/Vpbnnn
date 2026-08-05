@@ -331,6 +331,7 @@ object RobustResolver {
         if (result.isNotEmpty()) {
             val sorted = DnsCacheManager.getSortedIps(result)
             DnsCacheManager.put(host, sorted, type = type)
+            ProxyStats.recordDnsResult(true)
             return@coroutineScope sorted
         }
         

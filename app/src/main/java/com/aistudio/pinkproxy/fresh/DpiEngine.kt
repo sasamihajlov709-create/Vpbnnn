@@ -665,6 +665,16 @@ object DpiEngine {
             toRemove.forEach { hostStrategyBlacklist.remove(it) }
             if (hostStrategyBlacklist.size > 1000) hostStrategyBlacklist.clear() // Hard reset
         }
+        
+        // Fix: Added cleanup for consecutiveFailuresByHost
+        if (consecutiveFailuresByHost.size > 500) {
+            val toRemove = consecutiveFailuresByHost.filterValues { it.get() == 0 }.keys
+            toRemove.forEach { consecutiveFailuresByHost.remove(it) }
+            if (consecutiveFailuresByHost.size > 1000) {
+                // Keep only a fraction of active ones or just clear all to be safe
+                consecutiveFailuresByHost.clear()
+            }
+        }
 
         val totalSuccess = successHistory.values.sumOf { it.get() }
         val totalFailure = failureHistory.values.sumOf { it.get() }
@@ -673,6 +683,7 @@ object DpiEngine {
             val now = System.currentTimeMillis()
             val expiry = 86400000L * 7 // 7 days
             hostSpecificMemory.entries.removeIf { now - it.value.timestamp > expiry }
+            if (hostSpecificMemory.size > 1500) hostSpecificMemory.clear() // Hard reset
         }
 
         if (totalSuccess + totalFailure == 0) {

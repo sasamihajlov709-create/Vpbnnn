@@ -522,6 +522,7 @@ object ProxyStats {
     fun recordDnsResult(success: Boolean) {
         if (success) {
             _dnsSuccessCount.update { it + 1 }
+            _dnsFailureCount.value = 0
             recordGlobalSuccess(0)
         } else {
             _dnsFailureCount.update { it + 1 }

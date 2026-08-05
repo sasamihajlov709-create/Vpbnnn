@@ -99,18 +99,26 @@ object FakePacketHelper {
             if (length < pos + 1) return data.copyOf(length)
             val sidLen = data[pos].toInt() and 0xFF
             pos += 1 + sidLen
+            
             if (length < pos + 2) return data.copyOf(length)
             val cipherLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
             pos += 2 + cipherLen
+            
             if (length < pos + 1) return data.copyOf(length)
             val compLen = data[pos].toInt() and 0xFF
             pos += 1 + compLen
-            if (length < pos + 2) return data.copyOf(length)
             
+            if (length < pos + 2) return data.copyOf(length)
             val oldExtLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos+1].toInt() and 0xFF)
             if (pos + 2 + oldExtLen > length) return data.copyOf(length)
             
-            val result = ByteArray(pos + 2 + oldExtLen + 4 + extData.size)
+            // Safety limit for extension injection
+            if (oldExtLen + 4 + extData.size > 16384) return data.copyOf(length)
+            
+            val newTotalLen = pos + 2 + oldExtLen + 4 + extData.size
+            if (newTotalLen > 65535) return data.copyOf(length) // TLS packet size limit
+            
+            val result = ByteArray(newTotalLen)
             System.arraycopy(data, 0, result, 0, pos)
             
             val newExtLen = oldExtLen + 4 + extData.size
@@ -122,20 +130,32 @@ object FakePacketHelper {
             }
             
             val extStart = pos + 2 + oldExtLen
-            result[extStart] = (type shr 8).toByte()
-            result[extStart + 1] = (type and 0xFF).toByte()
-            result[extStart + 2] = (extData.size shr 8).toByte()
-            result[extStart + 3] = (extData.size and 0xFF).toByte()
-            System.arraycopy(extData, 0, result, extStart + 4, extData.size)
+            if (extStart + 4 + extData.size <= result.size) {
+                result[extStart] = (type shr 8).toByte()
+                result[extStart + 1] = (type and 0xFF).toByte()
+                result[extStart + 2] = (extData.size shr 8).toByte()
+                result[extStart + 3] = (extData.size and 0xFF).toByte()
+                System.arraycopy(extData, 0, result, extStart + 4, extData.size)
+            }
             
             // Fix lengths
             val recLen = result.size - 5
-            result[3] = (recLen shr 8).toByte(); result[4] = (recLen and 0xFF).toByte()
+            if (result.size > 4) {
+                result[3] = (recLen shr 8).toByte()
+                result[4] = (recLen and 0xFF).toByte()
+            }
             val handLen = result.size - 9
-            result[6] = (handLen shr 16).toByte(); result[7] = (handLen shr 8).toByte(); result[8] = (handLen and 0xFF).toByte()
+            if (result.size > 8) {
+                result[6] = (handLen shr 16).toByte()
+                result[7] = (handLen shr 8).toByte()
+                result[8] = (handLen and 0xFF).toByte()
+            }
             
             return result
-        } catch (e: Exception) { return data.copyOf(length) }
+        } catch (e: Exception) { 
+            android.util.Log.v("FakePacketHelper", "Extension injection failed: ${e.message}")
+            return data.copyOf(length) 
+        }
     }
 
     fun buildWireguardFake(): ByteArray {

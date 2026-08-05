@@ -126,18 +126,21 @@ class MainActivity : ComponentActivity() {
         val autoConnect = prefs.getBoolean("auto_connect_on_launch", false)
         
         setContent {
-            val isVpnActive by PinkVpnService.isRunning.collectAsStateWithLifecycle(initialValue = false)
+            val vpnState by VpnRuntimeState.lifecycleState.collectAsStateWithLifecycle()
+            val vpnError by VpnRuntimeState.lastError.collectAsStateWithLifecycle()
+            val isVpnActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
             val context = androidx.compose.ui.platform.LocalContext.current
             
             LaunchedEffect(Unit) {
-                if (autoConnect && !PinkVpnService.isRunning.value) {
-                    toggleVpn(false) // start it if not active
+                if (autoConnect && vpnState == VpnLifecycleState.IDLE) {
+                    toggleVpn(false) 
                 }
             }
 
             MyApplicationTheme(dynamicColor = false) {
                 PinkProxyApp(
-                    isActive = isVpnActive,
+                    vpnState = vpnState,
+                    vpnError = vpnError,
                     onToggle = { toggleVpn(isVpnActive) },
                     onRestart = { 
                         if (isVpnActive) {
@@ -150,7 +153,8 @@ class MainActivity : ComponentActivity() {
                                 android.util.Log.e("MainActivity", "Quick restart failed: ${e.message}")
                             }
                         }
-                    }
+                    },
+                    onDismissError = { VpnRuntimeState.clearError() }
                 )
             }
         }
@@ -216,7 +220,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit) {
+fun PinkProxyApp(
+    vpnState: VpnLifecycleState,
+    vpnError: String?,
+    onToggle: () -> Unit,
+    onRestart: () -> Unit,
+    onDismissError: () -> Unit
+) {
+    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
     val bgColor1 = Color(0xFF000000) // Pure black
     val bgColor2 = Color(0xFF070305) // Deep charcoal black with subtle dark hue
     val bgColor3 = Color(0xFF000000) // Pure black
@@ -346,10 +357,37 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
             Spacer(modifier = Modifier.height(24.dp))
 
             // Main Status Indicator
-            if (isActive) {
-                StatusBadge(isProxyHealthy, isInternetUp, isProbing)
-            } else {
-                Text(
+            when (vpnState) {
+                VpnLifecycleState.RUNNING -> StatusBadge(isProxyHealthy, isInternetUp, isProbing)
+                VpnLifecycleState.RECOVERING -> Text(
+                    text = "RECOVERING CONNECTION...",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFFB74D),
+                    letterSpacing = 2.sp
+                )
+                VpnLifecycleState.STARTING -> Text(
+                    text = "STARTING ENGINES...",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GentleMediumPink,
+                    letterSpacing = 2.sp
+                )
+                VpnLifecycleState.STOPPING -> Text(
+                    text = "STOPPING SECURELY...",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GentleDarkPink,
+                    letterSpacing = 2.sp
+                )
+                VpnLifecycleState.FAILED, VpnLifecycleState.ERROR -> Text(
+                    text = "CRITICAL FAILURE",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE57373),
+                    letterSpacing = 2.sp
+                )
+                else -> Text(
                     text = stringResource(R.string.status_ready),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
@@ -360,8 +398,55 @@ fun PinkProxyApp(isActive: Boolean, onToggle: () -> Unit, onRestart: () -> Unit)
 
             Spacer(modifier = Modifier.height(32.dp))
 
+            // Error Banner
+            if (vpnError != null) {
+                Surface(
+                    color = Color(0xFFE57373).copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFFE57373).copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Error",
+                            tint = Color(0xFFE57373),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "SYSTEM ALERT",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE57373),
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = vpnError,
+                                fontSize = 13.sp,
+                                color = GentleLightPink,
+                                lineHeight = 18.sp
+                            )
+                        }
+                        IconButton(onClick = onDismissError) {
+                            Icon(
+                                imageVector = Icons.Default.Cancel,
+                                contentDescription = "Dismiss",
+                                tint = GentleMediumPink.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+            }
+
             // Power Button (The Heart)
-            PowerButton(isActive, onToggle, infiniteTransition)
+            PowerButton(vpnState, onToggle, infiniteTransition)
 
             Spacer(modifier = Modifier.height(20.dp))
 
@@ -734,38 +819,64 @@ fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean) {
 }
 
 @Composable
-fun PowerButton(isActive: Boolean, onToggle: () -> Unit, transition: InfiniteTransition) {
+fun PowerButton(state: VpnLifecycleState, onToggle: () -> Unit, transition: InfiniteTransition) {
+    val isActive = state == VpnLifecycleState.RUNNING || state == VpnLifecycleState.RECOVERING
+    val isProcessing = state == VpnLifecycleState.STARTING || state == VpnLifecycleState.STOPPING || state == VpnLifecycleState.RECOVERING
+    val isError = state == VpnLifecycleState.FAILED || state == VpnLifecycleState.ERROR
+
     val pulseScale by transition.animateFloat(
         initialValue = 1f,
-        targetValue = if (isActive) 1.1f else 1f,
-        animationSpec = infiniteRepeatable(tween(1500), RepeatMode.Reverse), label = ""
+        targetValue = if (isActive) 1.15f else if (isProcessing) 1.05f else 1f,
+        animationSpec = infiniteRepeatable(tween(if (isProcessing) 800 else 1500), RepeatMode.Reverse), label = "pulse"
+    )
+
+    val buttonColor by animateColorAsState(
+        targetValue = when {
+            isError -> Color(0xFFE57373)
+            isActive -> GentleDarkPink
+            isProcessing -> GentleMediumPink.copy(alpha = 0.8f)
+            else -> Color.Black
+        },
+        animationSpec = tween(500), label = "color"
+    )
+
+    val iconTint by animateColorAsState(
+        targetValue = if (isActive || isError || isProcessing) Color.White else GentleDarkPink,
+        animationSpec = tween(500), label = "tint"
     )
     
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(180.dp)) {
-        if (isActive) {
+        if (isActive || isProcessing || isError) {
             Box(
                 modifier = Modifier
                     .size(160.dp)
                     .scale(pulseScale)
                     .clip(CircleShape)
-                    .background(GentleDarkPink.copy(alpha = 0.1f))
-                    .border(2.dp, GentleDarkPink.copy(alpha = 0.2f), CircleShape)
+                    .background(buttonColor.copy(alpha = 0.1f))
+                    .border(2.dp, buttonColor.copy(alpha = 0.2f), CircleShape)
             )
         }
         
         Surface(
             onClick = onToggle,
             shape = CircleShape,
-            color = if (isActive) GentleDarkPink else Color.Black,
+            color = buttonColor,
             tonalElevation = 8.dp,
             modifier = Modifier.size(120.dp).testTag("connect_button"),
             border = BorderStroke(1.dp, GentleLightPink.copy(alpha = 0.1f))
         ) {
             Box(contentAlignment = Alignment.Center) {
+                if (isProcessing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(80.dp),
+                        color = Color.White.copy(alpha = 0.4f),
+                        strokeWidth = 2.dp
+                    )
+                }
                 Icon(
                     imageVector = Icons.Default.PowerSettingsNew,
                     contentDescription = null,
-                    tint = if (isActive) Color.White else GentleDarkPink,
+                    tint = iconTint,
                     modifier = Modifier.size(48.dp)
                 )
             }
