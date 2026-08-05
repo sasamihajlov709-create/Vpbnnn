@@ -374,12 +374,22 @@ class PinkVpnService : VpnService() {
                 b.addAddress("10.0.0.2", 24)
                 b.addRoute("0.0.0.0", 0)
                 
+                // Add explicit DNS servers so system queries route cleanly into VPN
+                try {
+                    b.addDnsServer("1.1.1.1")
+                    b.addDnsServer("8.8.8.8")
+                } catch (e: Throwable) {
+                    Log.w("PinkVpnService", "Failed to set IPv4 DNS servers", e)
+                }
+                
                 if (includeIpv6) {
                     try {
                         b.addAddress("fd00::2", 64)
                         b.addRoute("::", 0)
+                        b.addDnsServer("2606:4700:4700::1111")
+                        b.addDnsServer("2001:4860:4860::8888")
                     } catch (e: Throwable) {
-                        Log.w("PinkVpnService", "Failed to add IPv6 route", e)
+                        Log.w("PinkVpnService", "Failed to add IPv6 route/DNS", e)
                     }
                 }
 

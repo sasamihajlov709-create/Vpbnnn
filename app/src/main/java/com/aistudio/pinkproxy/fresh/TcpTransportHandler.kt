@@ -20,7 +20,8 @@ object TcpTransportHandler {
         targetHost: String,
         targetPort: Int,
         vpnService: VpnService?,
-        scope: CoroutineScope
+        scope: CoroutineScope,
+        forcedStrategy: BypassStrategy? = null
     ) {
         var remoteSocket: Socket? = null
         var remoteIn: InputStream? = null
@@ -37,7 +38,7 @@ object TcpTransportHandler {
             val isTls = targetPort == 443 || targetPort == 8443
 
             val censorship = BypassConfig.censorshipLevel.value
-            var strategy = BypassConfig.getBestStrategyForHost(targetHost)
+            var strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
             var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
             // SNI Ghosting: Send fake TLS Hello with low TTL to distract DPI

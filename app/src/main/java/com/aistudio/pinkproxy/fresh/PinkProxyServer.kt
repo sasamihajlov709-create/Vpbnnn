@@ -311,12 +311,8 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             try { client.keepAlive = true } catch (e: Throwable) {}
             
             val activeHost = host ?: ""
-            if (BypassConfig.isHostDirect(activeHost)) {
-                // For direct hosts, use direct strategy to save overhead
-                TcpTransportHandler.handleTcpSession(client, activeHost, targetPort, vpnService, scope)
-            } else {
-                TcpTransportHandler.handleTcpSession(client, activeHost, targetPort, vpnService, scope)
-            }
+            val forcedStrategy = if (BypassConfig.isHostDirect(activeHost)) BypassStrategy.DIRECT else null
+            TcpTransportHandler.handleTcpSession(client, activeHost, targetPort, vpnService, scope, forcedStrategy)
 
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
