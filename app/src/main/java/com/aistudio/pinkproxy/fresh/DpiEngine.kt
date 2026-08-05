@@ -509,16 +509,22 @@ object DpiEngine {
         if (rnd.nextInt(100) < 7) {
             return validStrategies.random().key
         }
+
+        // Take a snapshot of scores to ensure consistent weight calculation during this pass
+        val scoresSnapshot = validStrategies.map { it.key to it.value.get().toDouble() }
+        
+        // Use a single-pass approach to build the weighted list and calculate total
+        val weightedList = mutableListOf<Pair<BypassStrategy, Double>>()
+        var currentTotal = 0.0
         
         // Context-aware boost based on current DpiType detected globally
         val currentDpi = ProxyStats.currentDpiType.value
         
-        // Softmax-like selection: Pick strategy with probability proportional to its score
-        val totalScore = validStrategies.sumOf { (strat, score) ->
-            var s = score.get().toDouble()
+        for ((strat, sRaw) in scoresSnapshot) {
+            var s = sRaw
             
             // Add global success bonus from ProxyStats
-            val globalScore = ProxyStats.getStrategyScore(strat)
+            val globalScore = ProxyStats.getStrategyScore(strat).toDouble()
             if (globalScore > 0) s += globalScore * 5
             else if (globalScore < 0) s += globalScore * 10 // Global failures are a heavy penalty
             
@@ -527,7 +533,7 @@ object DpiEngine {
             // Maturity Bonus
             s += (strategyMaturity[strat]?.get() ?: 0) / 6.0
             
-            // Contextual Boosts
+            // Contextual Boosts based on detected DPI
             when (currentDpi) {
                 DpiType.TLS_SNI_BLOCK -> {
                     if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
@@ -547,44 +553,39 @@ object DpiEngine {
                 else -> {}
             }
 
-            // Resource Awareness Penalty: предпочтение легким стратегиям при экономии энергии
+            // Resource Awareness Penalty
             if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20) {
                 when (strat.group) {
                     StrategyGroup.EXTREME -> s *= 0.2
                     StrategyGroup.HEAVY -> s *= 0.5
                     StrategyGroup.MEDIUM -> s *= 0.8
-                    StrategyGroup.LIGHT -> s *= 1.5 // Буст легким
+                    StrategyGroup.LIGHT -> s *= 1.5
                 }
             }
-            if (BypassConfig.thermalStatus >= 3) { // Нагрев устройства
+            if (BypassConfig.thermalStatus >= 3) {
                  if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 0.3
             }
             
             val latency = strategyLatency[strat]?.get() ?: 200L
             val latencyPenalty = (latency / 15.0).coerceAtMost(60.0)
-            (s - latencyPenalty).coerceAtLeast(5.0)
-        }
-
-        var randomPivot = rnd.nextDouble() * totalScore
-        for ((strat, score) in validStrategies) {
-            var s = score.get().toDouble()
-            s += (strategyMaturity[strat]?.get() ?: 0) / 8.0
-            when (currentDpi) {
-                DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
-                DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.5
-                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 1.5
-                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.0
-                else -> {}
-            }
-            val latency = strategyLatency[strat]?.get() ?: 200L
-            val latencyPenalty = (latency / 20.0).coerceAtMost(50.0)
-            val weight = (s - latencyPenalty).coerceAtLeast(10.0)
+            val weight = (s - latencyPenalty).coerceAtLeast(5.0)
             
-            randomPivot -= weight
-            if (randomPivot <= 0) return strat
+            weightedList.add(strat to weight)
+            currentTotal += weight
         }
 
-        return validStrategies.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
+
+        if (currentTotal <= 0 || weightedList.isEmpty()) {
+            return validStrategies.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
+        }
+
+        var randomPivot = rnd.nextDouble() * currentTotal
+        for ((strat, weight) in weightedList) {
+            randomPivot -= weight
+            if (randomPivot <= 1e-9) return strat
+        }
+
+        return weightedList.last().first
     }
 
     fun boostStrategyFamily(family: StrategyFamily, host: String?) {

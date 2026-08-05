@@ -288,7 +288,7 @@ object ProxyStats {
         _dpiEventHistory.update { current ->
             (current + DpiEvent(type)).takeLast(50)
         }
-        dpiEvents[type] = (dpiEvents[type] ?: 0) + 1
+        dpiEvents.compute(type) { _, current -> (current ?: 0) + 1 }
         VpnRuntimeState.updateDpi(type.name)
         recordCensorshipEvent(true)
         DpiEngine.recordEvent(type)
