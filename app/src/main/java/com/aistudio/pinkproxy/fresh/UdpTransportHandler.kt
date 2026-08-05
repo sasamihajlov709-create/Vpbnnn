@@ -481,13 +481,36 @@ object UdpTransportHandler {
         val isHighVolume = count > 50
         
         if (!isDns) {
-            // Random Jitter/Delay - skip for high volume to maintain performance
             val intensity = ProxyStats.censorshipIntensity.value
-            if (!isHighVolume && intensity > 60 && rnd.nextInt(100) < 5) {
-                delay(rnd.nextLong(1, 5))
+            // 1. Dynamic Jitter: Random micro-delays to break timing patterns
+            if (!isHighVolume && intensity > 50) {
+                val jitterProb = if (count < 10) 30 else 5
+                if (rnd.nextInt(100) < jitterProb) {
+                    val maxJitter = if (count < 5) 8L else 3L
+                    delay(rnd.nextLong(1, maxJitter))
+                }
             }
 
-            if (!isHighVolume && count % 20 == 0) { // Every 20 packets, but only for initial burst
+            // 2. Initial Burst Reordering Simulator: delay early packets randomly
+            if (count < 5 && intensity > 70 && rnd.nextBoolean()) {
+                delay(rnd.nextLong(2, 12))
+            }
+
+            // 3. UDP Padding: add random bytes to small packets to mask protocol size signatures
+            if (!isHighVolume && length < 100 && intensity > 40) {
+                if (rnd.nextInt(100) < 20) {
+                    val paddedData = ByteArray(length + rnd.nextInt(16, 128))
+                    System.arraycopy(payload, offset, paddedData, 0, length)
+                    // Add noise at the end
+                    val noise = FakePacketHelper.getSmallNoise(paddedData.size - length)
+                    System.arraycopy(noise, 0, paddedData, length, noise.size)
+                    
+                    val paddedPacket = DatagramPacket(paddedData, paddedData.size, targetInet, targetPort)
+                    try { socket.send(paddedPacket); return } catch(e: Throwable) {}
+                }
+            }
+
+            if (!isHighVolume && count % 20 == 0) {
                 if (rnd.nextInt(100) < (intensity / 2).coerceIn(10, 50)) {
                     val noiseSize = if (isQuic) rnd.nextInt(256, 1024) else rnd.nextInt(16, 64)
                     val noise = FakePacketHelper.buildUdpNoise(noiseSize)

@@ -688,8 +688,14 @@ object DnsProtocols {
         return kotlinx.coroutines.withTimeoutOrNull(7000) {
             kotlinx.coroutines.supervisorScope {
                 val allUrls = DnsOptimizer.getDohUrls()
-                // Sort by latency, put high latency at the end. Use 5000 as default for unknown.
-                val urls = allUrls.sortedBy { DnsOptimizer.getLatencyForUrl(it) }.take(8)
+                // Sort by latency and filter blacklisted
+                val urls = allUrls
+                    .filter { !DnsOptimizer.isUrlBlacklisted(it) }
+                    .sortedBy { DnsOptimizer.getLatencyForUrl(it) }
+                    .take(8)
+                
+                if (urls.isEmpty()) return@supervisorScope emptyList<InetAddress>()
+                
                 val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(urls.size)
                 val jobs = mutableListOf<Job>()
                 val completed = java.util.concurrent.atomic.AtomicInteger(0)
@@ -709,13 +715,16 @@ object DnsProtocols {
                             if (res.isNotEmpty()) {
                                 channel.trySend(res)
                                 DnsOptimizer.recordDohSuccess(url)
+                                DnsCacheManager.reportResolverResult(url, true)
                             } else {
                                 DnsOptimizer.recordDohFailure(url)
+                                DnsCacheManager.reportResolverResult(url, false)
                             }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Throwable) {
                             DnsOptimizer.recordDohFailure(url)
+                            DnsCacheManager.reportResolverResult(url, false)
                         } finally {
                             if (completed.incrementAndGet() == urls.size) {
                                 channel.close()

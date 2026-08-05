@@ -66,6 +66,14 @@ object FakePacketHelper {
     fun getCachedIke() = synchronized(this) { checkCacheRefresh(); getIke() }
     fun getCachedDhcp() = synchronized(this) { checkCacheRefresh(); getDhcp() }
 
+    fun getSmallNoise(size: Int): ByteArray {
+        val out = ByteArray(size)
+        val noise = getStaticNoise()
+        val offset = ThreadLocalRandom.current().nextInt(noise.size - size)
+        System.arraycopy(noise, offset, out, 0, size)
+        return out
+    }
+
     fun buildExtension(type: Int, data: ByteArray): ByteArray {
         val buf = ByteBuffer.allocate(4 + data.size)
         buf.putShort(type.toShort())

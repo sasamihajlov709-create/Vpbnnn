@@ -291,6 +291,7 @@ object RobustResolver {
                     
                     if (cleanRes.isEmpty()) {
                         ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+                        ProxyStats.recordCensorshipEvent(true) // Повышаем интенсивность при отравлении
                         completed++
                         continue
                     }
@@ -333,6 +334,7 @@ object RobustResolver {
             return@coroutineScope sorted
         }
         
+        DnsCacheManager.putNegative(host)
         ProxyStats.recordDnsFailure()
         if (ProxyStats.dnsFailureCount.value > 5) {
             RecoveryManager.handleEvent(RecoveryEvent.DNS_FAILURE, "Multiple sequential DNS failures")

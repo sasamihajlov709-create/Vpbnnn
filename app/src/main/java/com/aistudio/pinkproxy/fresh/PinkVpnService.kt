@@ -97,6 +97,7 @@ class PinkVpnService : VpnService() {
         connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
         
         BypassConfig.startDeviceMonitoring(this)
+        PrefetchManager.start(this, this)
         DnsCacheManager.load(this)
         BypassConfig.loadTuningSettings(this)
         loadFilterSettings(this)
@@ -144,11 +145,21 @@ class PinkVpnService : VpnService() {
                         ProxyStats.logRecovery("Watchdog: Proxy server missing! Starting...")
                         proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
                         proxyServer?.start()
-                    } else if (System.currentTimeMillis() % 300000 < delayMs) {
+                    } else if (System.currentTimeMillis() % 300000 < delayMs) { // Every 5 mins
                         try {
                             val s = java.net.Socket()
                             s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1000)
                             s.close()
+                            
+                            // If proxy is alive, also run background diagnostic occasionally
+                            if (System.currentTimeMillis() % 600000 < delayMs) {
+                                engineScope.launch {
+                                    val health = DiagnosticManager.runFullDiagnostic()
+                                    if (!health.tcpOk || !health.dnsOk) {
+                                        ProxyStats.logRecovery("Health Warning: ${health.recommendation}")
+                                    }
+                                }
+                            }
                         } catch (e: Throwable) {
                             ProxyStats.logRecovery("Watchdog: Proxy server unresponsive. Restarting...")
                             stopVpnInternal()
@@ -606,6 +617,7 @@ class PinkVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        PrefetchManager.stop()
         DnsCacheManager.save(this)
         
         runBlocking {

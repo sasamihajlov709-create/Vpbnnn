@@ -107,13 +107,29 @@ object DnsOptimizer {
         }
     }
     
+    private val providerBlacklist = ConcurrentHashMap<String, Long>()
+
+    fun isUrlBlacklisted(url: String): Boolean {
+        val expiry = providerBlacklist[url] ?: return false
+        if (System.currentTimeMillis() > expiry) {
+            providerBlacklist.remove(url)
+            return false
+        }
+        return true
+    }
+
     fun recordDohSuccess(url: String) {
         providerFailures[url] = ((providerFailures[url] ?: 1) - 1).coerceAtLeast(0)
     }
     
     fun recordDohFailure(url: String) {
-        providerFailures[url] = (providerFailures[url] ?: 0) + 1
-        if (url == bestDohUrl && (providerFailures[url] ?: 0) > 3) {
+        val f = (providerFailures[url] ?: 0) + 1
+        providerFailures[url] = f
+        if (f > 5) {
+            // Ban for 10 minutes
+            providerBlacklist[url] = System.currentTimeMillis() + 600000L
+        }
+        if (url == bestDohUrl && f > 3) {
             forceRefresh()
         }
     }
