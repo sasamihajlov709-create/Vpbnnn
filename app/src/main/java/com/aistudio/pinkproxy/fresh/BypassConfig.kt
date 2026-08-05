@@ -333,8 +333,17 @@ object BypassConfig {
     }
 
     private val lastStrategies = Collections.synchronizedList(LinkedList<BypassStrategy>())
-    
+    private var lastRotationTime = 0L
+    private const val ROTATION_COOLDOWN = 10000L // 10 seconds
+
     fun rotateGlobalStrategy() {
+        val now = System.currentTimeMillis()
+        if (now - lastRotationTime < ROTATION_COOLDOWN) {
+            Log.d("BypassConfig", "Strategy rotation skipped (cooldown active)")
+            return
+        }
+        lastRotationTime = now
+
         val fingerprint = DpiEngine.getCensorshipFingerprint()
         val intensity = ProxyStats.censorshipIntensity.value
         

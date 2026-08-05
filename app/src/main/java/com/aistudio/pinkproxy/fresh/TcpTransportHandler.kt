@@ -169,8 +169,9 @@ object TcpTransportHandler {
                         
                         remoteSocket.soTimeout = 60000
                         var n: Int
+                        val inputStream = remoteIn ?: return@launch
                         while (isActive) {
-                            n = remoteIn!!.read(buffer)
+                            n = inputStream.read(buffer)
                             if (n == -1) break
                             if (n > 0) {
                                 lastActivity.set(System.currentTimeMillis())
@@ -219,11 +220,12 @@ object TcpTransportHandler {
                                         // Fragmentation is safer than padding for standard TCP streams
                                         if (intensity > 65 && n > 100 && packetsCount < 10) {
                                             val split = n / 2
-                                            remoteOut!!.write(buffer, 0, split)
-                                            remoteOut.flush()
+                                            val outputStream = remoteOut ?: break
+                                            outputStream.write(buffer, 0, split)
+                                            outputStream.flush()
                                             delay(rnd.nextLong(2, 20))
-                                            remoteOut.write(buffer, split, n - split)
-                                            remoteOut.flush()
+                                            outputStream.write(buffer, split, n - split)
+                                            outputStream.flush()
                                             totalWrittenClient.addAndGet(n.toLong())
                                             continue
                                         }
@@ -240,7 +242,8 @@ object TcpTransportHandler {
 
                                     writeMutex.lock()
                                     try {
-                                        BypassConfig.applyBypass(remoteSocket, remoteOut!!, buffer, n, config, activeHost)
+                                        val outputStream = remoteOut ?: break
+                                        BypassConfig.applyBypass(remoteSocket, outputStream, buffer, n, config, activeHost)
                                     } finally {
                                         writeMutex.unlock()
                                     }
@@ -261,13 +264,14 @@ object TcpTransportHandler {
                                                 
                                                 writeMutex.lock()
                                                 try {
+                                                    val outputStream = remoteOut ?: break
                                                     // In extreme cases, inject a tiny junk segment with low TTL before the real fragment
                                                     if (intensity > 85 && rnd.nextInt(100) < 35) {
-                                                        injectGhostSegment(remoteSocket, remoteOut!!, rnd)
+                                                        injectGhostSegment(remoteSocket, outputStream, rnd)
                                                     }
                                                     
-                                                    remoteOut!!.write(buffer, offset, sz)
-                                                    remoteOut.flush()
+                                                    outputStream.write(buffer, offset, sz)
+                                                    outputStream.flush()
                                                 } finally {
                                                     writeMutex.unlock()
                                                 }
@@ -278,8 +282,9 @@ object TcpTransportHandler {
                                         } else {
                                             writeMutex.lock()
                                             try {
-                                                remoteOut!!.write(buffer, 0, n)
-                                                remoteOut.flush()
+                                                val outputStream = remoteOut ?: break
+                                                outputStream.write(buffer, 0, n)
+                                                outputStream.flush()
                                             } finally {
                                                 writeMutex.unlock()
                                             }
@@ -288,8 +293,9 @@ object TcpTransportHandler {
                                         // Standard direct forwarding
                                         writeMutex.lock()
                                         try {
-                                            remoteOut!!.write(buffer, 0, n)
-                                            remoteOut.flush()
+                                            val outputStream = remoteOut ?: break
+                                            outputStream.write(buffer, 0, n)
+                                            outputStream.flush()
                                         } finally {
                                             writeMutex.unlock()
                                         }
@@ -340,7 +346,10 @@ object TcpTransportHandler {
                         if (System.currentTimeMillis() - lastActivity.get() > 12000) {
                             writeMutex.lock()
                             try {
-                                sendConfusionPacket(remoteSocket!!, remoteOut!!, rnd)
+                                val outputStream = remoteOut
+                                if (remoteSocket != null && outputStream != null) {
+                                    sendConfusionPacket(remoteSocket, outputStream, rnd)
+                                }
                             } catch (e: Throwable) {} finally {
                                 writeMutex.unlock()
                             }
@@ -353,7 +362,8 @@ object TcpTransportHandler {
                     while (isActive) {
                         delay(30000)
                         if (ProxyStats.censorshipIntensity.value > 30) {
-                            applyWindowPulse(remoteSocket!!)
+                            val rs = remoteSocket
+                            if (rs != null) applyWindowPulse(rs)
                         }
                     }
                 }

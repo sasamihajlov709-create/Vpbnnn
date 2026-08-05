@@ -14,14 +14,14 @@ object ProxyDispatcher {
         corePoolSize,
         maxPoolSize,
         60L, java.util.concurrent.TimeUnit.SECONDS,
-        java.util.concurrent.SynchronousQueue<Runnable>(),
+        java.util.concurrent.LinkedBlockingQueue<Runnable>(2048),
         { r ->
             Thread(r, "PinkProxyWorker").apply { 
                 isDaemon = true
-                priority = Thread.MAX_PRIORITY - 1
+                priority = Thread.NORM_PRIORITY + 1
             }
         },
-        java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
+        java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
     ).asCoroutineDispatcher()
     
     val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
