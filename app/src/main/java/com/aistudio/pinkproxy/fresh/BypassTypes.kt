@@ -254,6 +254,10 @@ enum class BypassStrategy(
     UDP_QUIC_CHAOS(StrategyFamily.QUIC, 6, 5, StrategyGroup.EXTREME),
     TCP_SEGMENT_REVERSE(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
     DNS_OVER_QUIC(StrategyFamily.DNS, 4, 3, StrategyGroup.HEAVY),
+    TCP_PULSE_FRAG(StrategyFamily.FRAGMENTATION, 5, 3, StrategyGroup.HEAVY),
+    UDP_RACING(StrategyFamily.QUIC, 6, 5, StrategyGroup.EXTREME),
+    UDP_FAKE_PACKET(StrategyFamily.UDP, 3, 3, StrategyGroup.HEAVY),
+    UDP_FRAGMENTATION(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY),
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 

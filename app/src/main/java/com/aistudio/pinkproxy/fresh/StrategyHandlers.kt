@@ -1036,7 +1036,7 @@ object StrategyHandlers {
         }
 
         if (finalLen > 44 && finalData[0] == 0x16.toByte() && finalData[5] == 0x01.toByte()) {
-            val sniPos = TlsParser.findSniOffset(finalData, finalLen, host)
+            val sniPos = TlsParser.findSniOffset(finalData, finalLen, host = host)
             if (sniPos > 0) {
                 if (strategy == BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT) {
                     val split = sniPos + host.length / 2
@@ -1077,7 +1077,7 @@ object StrategyHandlers {
     suspend fun handleFragmentationStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, effectiveDelay: Long) {
         if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE || strategy == BypassStrategy.TLS_SNI_FRAGMENT || strategy == BypassStrategy.TLS_SNI_SPLIT || strategy == BypassStrategy.TLS_SNI_JITTER_SPLIT || strategy == BypassStrategy.TLS_RECORD_FRAGMENTATION || strategy == BypassStrategy.ECH_FRAG) {
             if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
-                val sniPos = TlsParser.findSniOffset(data, length, host)
+                val sniPos = TlsParser.findSniOffset(data, length, host = host)
                 if (sniPos > 0) {
                     val split1 = sniPos - rnd.nextInt(1, 3)
                     if (split1 > 0) {
@@ -1111,6 +1111,18 @@ object StrategyHandlers {
                 output.flush()
                 pos += sz
                 if (pos < length) delay(effectiveDelay.coerceAtLeast(1L))
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TCP_PULSE_FRAG) {
+            var pos = 0
+            while (pos < length) {
+                val sz = rnd.nextInt(2, 64).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < length) delay(rnd.nextLong(1, 15))
             }
             return
         }
@@ -1214,7 +1226,7 @@ object StrategyHandlers {
         ProxyStats.logTraffic("Triggering ByeByeDPI Extreme for $host")
         // Inspired by ByeByeDPI: sequence of out-of-order and ghost segments
         val intensity = ProxyStats.censorshipIntensity.value
-        val sniPos = TlsParser.findSniOffset(data, length, host)
+        val sniPos = TlsParser.findSniOffset(data, length, host = host)
         val splitPos = if (sniPos > 0) sniPos else (length / 2).coerceAtLeast(1)
         
         // 1. Send OOB/Urgent noise to confuse stateful DPI
@@ -1277,7 +1289,7 @@ object StrategyHandlers {
         ProxyStats.logTraffic("Triggering NUCLEAR bypass for $host")
         // Multi-stage fragmentation with desync, window oscillation and fake retransmissions
         val intensity = ProxyStats.censorshipIntensity.value
-        val sniPos = TlsParser.findSniOffset(data, length, host)
+        val sniPos = TlsParser.findSniOffset(data, length, host = host)
         val splitPos = if (sniPos > 0) sniPos else (length / 2).coerceAtLeast(1)
         
         // 1. Initial desync: Set tiny window
@@ -1515,7 +1527,34 @@ object StrategyHandlers {
             return
         }
 
+        if (strategy == BypassStrategy.UDP_FAKE_PACKET) {
+            val fake = FakePacketHelper.buildQuicInitialFake()
+            writeUdpWithFake(socket, packet.address, packet.port, fake, packet, config)
+            return
+        }
+
+        if (strategy == BypassStrategy.UDP_FRAGMENTATION) {
+            val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
+            if (data.size > 2) {
+                val mid = data.size / 2
+                val p1 = DatagramPacket(data, 0, mid, packet.address, packet.port)
+                val p2 = DatagramPacket(data, mid, data.size - mid, packet.address, packet.port)
+                socket.send(p1)
+                delay(rnd.nextLong(1, 10))
+                socket.send(p2)
+            } else {
+                socket.send(packet)
+            }
+            return
+        }
+
         if (strategy == BypassStrategy.UDP_OVERLAP_SKEW) {
+            // Send empty junk then real packet
+            val junk = DatagramPacket(ByteArray(1), 1, packet.address, packet.port)
+            TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 5))
+            try { socket.send(junk) } catch (e: Throwable) {}
+            TtlHelper.setUdpTtl(socket, 64)
+            delay(rnd.nextLong(1, 5))
             socket.send(packet)
             return
         }

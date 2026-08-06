@@ -1,45 +1,48 @@
 package com.aistudio.pinkproxy.fresh
 
 object TlsParser {
-    fun isClientHello(buffer: ByteArray, length: Int): Boolean {
+    fun isClientHello(buffer: ByteArray, length: Int, offset: Int = 0): Boolean {
         if (length < 44) return false
-        return buffer[0] == 0x16.toByte() && buffer[5] == 0x01.toByte()
+        if (offset + 5 >= buffer.size) return false
+        return buffer[offset] == 0x16.toByte() && buffer[offset + 5] == 0x01.toByte()
     }
 
     /**
      * Parses a TLS ClientHello packet and finds the exact offset of the SNI hostname string.
      * Returns the offset of the first character of the hostname, or -1 if not found.
      */
-    fun findSniOffset(buffer: ByteArray, length: Int, host: String? = null): Int {
+    fun findSniOffset(buffer: ByteArray, length: Int, offset: Int = 0, host: String? = null): Int {
         if (length < 44) return -1
         
         // Ensure it's a TLS Handshake (0x16) and ClientHello (0x01)
-        if (buffer[0] != 0x16.toByte()) return -1
-        if (length < 6 || buffer[5] != 0x01.toByte()) return -1
+        if (buffer[offset] != 0x16.toByte()) return -1
+        if (length < 6 || buffer[offset + 5] != 0x01.toByte()) return -1
         
         try {
             // Record layer version: 3.x
-            if (buffer[1] != 0x03.toByte()) return -1
+            if (buffer[offset + 1] != 0x03.toByte()) return -1
 
             // Session ID length (variable)
-            val sessionIdLen = buffer[43].toInt() and 0xFF
-            var pos = 44 + sessionIdLen
+            val sessionIdLen = buffer[offset + 43].toInt() and 0xFF
+            var pos = offset + 44 + sessionIdLen
+            
+            val end = offset + length
             
             // Cipher suites length (variable)
-            if (pos + 1 >= length) return -1
+            if (pos + 1 >= end) return -1
             val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2 + cipherSuitesLen
             
             // Compression methods length (variable)
-            if (pos >= length) return -1
+            if (pos >= end) return -1
             pos += 1 + (buffer[pos].toInt() and 0xFF)
             
             // Extensions length
-            if (pos + 1 >= length) return -1
+            if (pos + 1 >= end) return -1
             val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2
             
-            val extEnd = minOf(pos + extensionsLen, length)
+            val extEnd = minOf(pos + extensionsLen, end)
             
             while (pos + 3 < extEnd) {
                 val extType = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
@@ -139,20 +142,21 @@ object TlsParser {
         return -1
     }
 
-    fun isTls13(buffer: ByteArray, length: Int): Boolean {
-        if (!isClientHello(buffer, length)) return false
+    fun isTls13(buffer: ByteArray, length: Int, offset: Int = 0): Boolean {
+        if (!isClientHello(buffer, length, offset)) return false
         try {
-            val sessionIdLen = buffer[43].toInt() and 0xFF
-            var pos = 44 + sessionIdLen
-            if (pos + 1 >= length) return false
+            val sessionIdLen = buffer[offset + 43].toInt() and 0xFF
+            var pos = offset + 44 + sessionIdLen
+            val end = offset + length
+            if (pos + 1 >= end) return false
             val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2 + cipherSuitesLen
-            if (pos >= length) return false
+            if (pos >= end) return false
             pos += 1 + (buffer[pos].toInt() and 0xFF)
-            if (pos + 1 >= length) return false
+            if (pos + 1 >= end) return false
             val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2
-            val extEnd = minOf(pos + extensionsLen, length)
+            val extEnd = minOf(pos + extensionsLen, end)
             
             while (pos + 3 < extEnd) {
                 val extType = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)

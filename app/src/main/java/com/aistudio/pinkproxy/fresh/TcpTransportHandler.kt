@@ -102,9 +102,7 @@ object TcpTransportHandler {
                     // RACING CONNECT: Try 2 strategies in parallel
                     val cat = HostClassifier.classify(targetHost)
                     val strat1 = DpiEngine.getBestStrategy(cat, targetHost)
-                    val strat2 = DpiEngine.getBestStrategy(cat, targetHost).let { 
-                        if (it == strat1) DpiEngine.getFallbackStrategy(it) ?: BypassStrategy.TCP_COMBINED_NUCLEAR else it
-                    }
+                    val strat2 = DpiEngine.getDiverseFallback(strat1, cat)
                     
                     Log.i("TcpTransport", "RACING CONNECT started for $targetHost using $strat1 vs $strat2")
                     
@@ -700,24 +698,31 @@ object TcpTransportHandler {
         firstPacketLen: Int,
         bufferSize: Int
     ): RaceResult? = coroutineScope {
-        val raceScope = this
         val resultChannel = kotlinx.coroutines.channels.Channel<RaceResult>(2)
         
         val job1 = launch(ProxyDispatcher.io) {
-            val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize)
-            if (res != null) resultChannel.send(res)
+            try {
+                val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize)
+                if (res != null) resultChannel.send(res)
+            } catch (e: Exception) {
+                // Silently fail, let the other job win
+            }
         }
         
         val job2 = launch(ProxyDispatcher.io) {
-            // Slight delay for the second contender to prioritize the first one
-            delay(150)
-            val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize)
-            if (res != null) resultChannel.send(res)
+            try {
+                // Slight delay for the second contender to prioritize the first one
+                delay(200)
+                val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize)
+                if (res != null) resultChannel.send(res)
+            } catch (e: Exception) {
+                // Silently fail
+            }
         }
         
         var winner: RaceResult? = null
         try {
-            winner = withTimeoutOrNull(5000) {
+            winner = withTimeoutOrNull(6000) {
                 resultChannel.receive()
             }
         } catch (e: Throwable) {
@@ -725,17 +730,62 @@ object TcpTransportHandler {
         } finally {
             job1.cancel()
             job2.cancel()
-            // Important: close losing sockets if they connect later
-            raceScope.launch {
+            
+            // Critical: Close any losers that connected after the winner or during cancellation
+            launch(ProxyDispatcher.io) {
                 repeat(2) {
                     val other = resultChannel.tryReceive().getOrNull()
-                    if (other != null && other != winner) {
-                        try { other.socket.close() } catch (e: Throwable) {}
+                    if (other != null && other.socket != winner?.socket) {
+                        try { 
+                            other.input.close()
+                            other.output.close()
+                            other.socket.close() 
+                        } catch (e: Throwable) {}
                     }
                 }
+                resultChannel.close()
             }
         }
         winner
+    }
+
+    private suspend fun sendPacketWithEvasion(
+        socket: Socket,
+        out: OutputStream,
+        data: ByteArray,
+        offset: Int,
+        len: Int,
+        packetIdx: Int,
+        strategy: BypassStrategy,
+        intensity: Int,
+        rnd: ThreadLocalRandom,
+        host: String
+    ) {
+        if (packetIdx <= 8) {
+            if (intensity > 70 && rnd.nextBoolean()) {
+                injectGhostSegment(socket, out, rnd)
+            }
+            if (intensity > 85 && packetIdx < 4) {
+                if (rnd.nextBoolean()) sendZeroWindowDesync(socket, rnd) else sendSequenceDesync(socket, rnd)
+            }
+        }
+
+        if (intensity > 60 && len > 100 && packetIdx < 15) {
+            // Adaptive fragmentation
+            val split = if (TlsParser.isClientHello(data, len, offset)) 
+                (TlsParser.findSniOffset(data, len, offset) - offset - 2).coerceIn(10, len - 10)
+            else 
+                len / 2
+            
+            out.write(data, offset, split)
+            out.flush()
+            delay(rnd.nextLong(2, 20))
+            out.write(data, offset + split, len - split)
+            out.flush()
+        } else {
+            out.write(data, offset, len)
+            out.flush()
+        }
     }
 
     private suspend fun runSingleAttempt(
@@ -753,27 +803,26 @@ object TcpTransportHandler {
         
         try {
             rs.tcpNoDelay = true
+            rs.soTimeout = (BypassConfig.currentRttMs.value * 2 + 1000).coerceAtMost(3000).toInt()
+            
             val rsOut = rs.getOutputStream()
             val rsIn = rs.getInputStream()
             
             BypassConfig.applyBypass(rs, rsOut, firstPacket, firstPacketLen, config, host)
-            
-            val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 1200).coerceAtMost(3500).toInt()
-            rs.soTimeout = verifyTimeout
             
             val responseBuf = ByteArray(bufferSize)
             val readBytes = rsIn.read(responseBuf)
             
             if (readBytes > 0) {
                 DpiEngine.recordResult(strategy, true, HostClassifier.classify(host), host = host)
-                BypassConfig.recordSuccess(strategy, verifyTimeout.toLong(), host)
+                BypassConfig.recordSuccess(strategy, 100, host) // Use dummy rtt for success record
                 return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
             } else {
                 try { rs.close() } catch (e: Throwable) {}
                 return null
             }
         } catch (e: Throwable) {
-            try { rs.close() } catch (e: Throwable) {}
+            try { rs.close() } catch (ex: Throwable) {}
             return null
         }
     }

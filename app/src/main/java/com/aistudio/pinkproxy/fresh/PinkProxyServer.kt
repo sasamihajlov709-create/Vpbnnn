@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.VpnService
 import android.util.Log
 import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import java.net.*
 import java.nio.ByteBuffer
@@ -57,11 +58,19 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port))
                 }
                 ProxyStats.logRecovery("Proxy server started on port $port")
+                var errorCount = 0
                 while (isActive) {
                     val client = try {
-                        serverSocket?.accept()
-                    } catch (e: SocketException) {
-                        null
+                        val c = serverSocket?.accept()
+                        errorCount = 0 // Reset error count on successful accept
+                        c
+                    } catch (e: Exception) {
+                        if (!isActive) break
+                        Log.e("PinkProxy", "Accept failed, attempt ${errorCount + 1}", e)
+                        errorCount++
+                        // Exponential backoff to prevent CPU spin during persistent system errors (e.g. EMFILE)
+                        delay(minOf(50L * (1 shl minOf(errorCount, 6)), 5000L))
+                        continue
                     } ?: break
 
                     if (!activeConnectionSemaphore.tryAcquire()) {
@@ -74,6 +83,10 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         try {
                             TtlHelper.tuneSocket(client)
                             handleClient(client, this)
+                        } catch (e: Throwable) {
+                            if (e !is CancellationException) {
+                                Log.e("PinkProxy", "Error handling client: ${e.message}")
+                            }
                         } finally {
                             try { client.close() } catch (e: Throwable) {}
                             ProxyStats.updateConnections(-1)

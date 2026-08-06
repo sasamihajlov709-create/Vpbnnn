@@ -61,10 +61,14 @@ object UdpTransportHandler {
                                 while (isActive) {
                                     delay(rnd.nextLong(20000, 45000))
                                     val now = System.currentTimeMillis()
-                                    val toRemove = activeSessions.entries.filter { now - it.value > 60000 }
-                                    toRemove.forEach { (key, _) ->
-                                        activeSessions.remove(key)
-                                        ProxyStats.closeFlow("udp_$key")
+                                    val timeout = 60000L
+                                    activeSessions.entries.removeIf { entry ->
+                                        if (now - entry.value > timeout) {
+                                            ProxyStats.closeFlow("udp_${entry.key}")
+                                            true
+                                        } else {
+                                            false
+                                        }
                                     }
                                     
                                     for (session in activeSessions.keys) {
@@ -101,6 +105,17 @@ object UdpTransportHandler {
                                 activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
                                 
                                 var currentConfig = BypassConfig.getSessionConfig(targetHost, BypassConfig.getBestStrategyForHost(targetHost), BypassConfig.currentRttMs.value)
+                                if ((currentConfig.strategy == BypassStrategy.UDP_RACING || (packet.port == 443 && ProxyStats.censorshipIntensity.value > 80)) && 
+                                    (flowPacketCounter[flowId]?.get() ?: 0) < 1) {
+                                    val strat1 = if (currentConfig.strategy == BypassStrategy.UDP_RACING) BypassStrategy.UDP_FAKE_PACKET else currentConfig.strategy
+                                    val strat2 = BypassStrategy.UDP_OVERLAP_SKEW
+                                    val p1 = DatagramPacket(packet.data.copyOf(), packet.length, packet.address, packet.port)
+                                    val p2 = DatagramPacket(packet.data.copyOf(), packet.length, packet.address, packet.port)
+                                    launch { sendUdpPacket(outSocket, p1, targetHost, currentConfig.copy(strategy = strat1), this) }
+                                    launch { delay(25); sendUdpPacket(outSocket, p2, targetHost, currentConfig.copy(strategy = strat2), this) }
+                                    ProxyStats.updateFlow(flowId, sent = packet.length.toLong())
+                                    continue 
+                                }
                                 var attempts = 0
                                 val maxAttempts = 2
                                 
@@ -190,22 +205,28 @@ object UdpTransportHandler {
                 }
 
                 // Receive from SOCKS5 Client, forward to Target
-                jobs += launch(ProxyDispatcher.io) {
-                    val buffer = ProxyStats.obtain64k()
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    try {
-                        udpSocket.soTimeout = 2000
-                        while (isActive) {
-                            packet.setData(buffer)
-                            try {
-                                udpSocket.receive(packet)
-                            } catch (e: java.net.SocketTimeoutException) {
-                                continue
-                            } catch (e: Throwable) {
-                                if (e is CancellationException) throw e
-                                break
-                            }
-                            val pktAddr = packet.address ?: continue
+                    jobs += launch(ProxyDispatcher.io) {
+                        val buffer = ProxyStats.obtain64k()
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        var errorCount = 0
+                        try {
+                            udpSocket.soTimeout = 2000
+                            while (isActive) {
+                                packet.setData(buffer)
+                                try {
+                                    udpSocket.receive(packet)
+                                    errorCount = 0
+                                } catch (e: java.net.SocketTimeoutException) {
+                                    continue
+                                } catch (e: Throwable) {
+                                    if (e is CancellationException) throw e
+                                    errorCount++
+                                    Log.e("UdpTransport", "Client receive error $errorCount", e)
+                                    delay(minOf(100L * (1 shl minOf(errorCount, 6)), 2000L))
+                                    if (errorCount > 20) break
+                                    continue
+                                }
+                                val pktAddr = packet.address ?: continue
                             val pktPort = packet.port
                             if (clientUdpAddress == null) {
                                 if (pktAddr.isLoopbackAddress || pktAddr.hostAddress == "127.0.0.1") {

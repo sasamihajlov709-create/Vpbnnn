@@ -5,6 +5,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.LinkedList
 import java.util.Collections
@@ -88,6 +89,16 @@ object DpiEngine {
         
         initStrategyChains()
         loadScores(context)
+
+        scope.launch {
+            while (isActive) {
+                delay(TimeUnit.MINUTES.toMillis(5))
+                if (ProxyStats.censorshipIntensity.value > 75) {
+                    val target = if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) "google.com" else "telegram.org"
+                    triggerMicroProbe(target, HostCategory.OTHER)
+                }
+            }
+        }
 
         optimizerJob = scope.launch {
             while (isActive) {
@@ -216,6 +227,20 @@ object DpiEngine {
         }
     }
 
+    val isPanicMode = MutableStateFlow(false)
+
+    fun enterPanicMode() {
+        if (isPanicMode.value) return
+        isPanicMode.value = true
+        Log.e("DpiEngine", "ENTERING PANIC MODE: Extreme censorship detected.")
+        ProxyStats.logRecovery("PANIC MODE ACTIVATED: Rotating all strategies to Heavy/Extreme")
+        scope.launch {
+            delay(TimeUnit.MINUTES.toMillis(15))
+            isPanicMode.value = false
+            Log.i("DpiEngine", "Exiting panic mode.")
+        }
+    }
+
     private fun checkGlobalStall() {
         val total = successHistory.values.sumOf { it.get() } + failureHistory.values.sumOf { it.get() }
         if (total > 20) {
@@ -225,6 +250,7 @@ object DpiEngine {
             if ((rate < 15 || fingerprint.timeoutRate > 0.8) && System.currentTimeMillis() - lastGlobalReset > 480_000) {
                 Log.e("DpiEngine", "GLOBAL STALL DETECTED (Success rate $rate%, Timeout ${fingerprint.timeoutRate*100}%). Emergency fallback rotation.")
                 ProxyStats.logRecovery("Global Connectivity Stall: Emergency Strategy Rotation Triggered")
+                enterPanicMode()
                 BypassConfig.rotateGlobalStrategy()
                 lastGlobalReset = System.currentTimeMillis()
                 
@@ -252,6 +278,25 @@ object DpiEngine {
                 .maxByOrNull { getAverageScore(it) } ?: BypassStrategy.ZAPRET_EXTREME
         }
         return extreme.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.ZAPRET_EXTREME
+    }
+
+    /**
+     * Returns a strategy that is significantly different from the current one to maximize success in racing.
+     */
+    fun getDiverseFallback(current: BypassStrategy, category: HostCategory): BypassStrategy {
+        val all = BypassStrategy.entries.filter { it != current && it != BypassStrategy.DIRECT }
+        val isNuclear = current.name.contains("NUCLEAR")
+        val isZapret = current.name.contains("ZAPRET")
+        val isFragmentation = current.family == StrategyFamily.FRAGMENTATION
+        
+        val candidates = all.filter { 
+            if (isNuclear) !it.name.contains("NUCLEAR")
+            else if (isZapret) !it.name.contains("ZAPRET")
+            else if (isFragmentation) it.family != StrategyFamily.FRAGMENTATION
+            else true
+        }.sortedByDescending { strategyScores[category]?.get(it)?.get() ?: 0 }
+
+        return candidates.firstOrNull() ?: all.maxByOrNull { strategyScores[category]?.get(it)?.get() ?: 0 } ?: all.first()
     }
 
     fun recordEvent(type: DpiType) {
@@ -404,6 +449,10 @@ object DpiEngine {
         } else {
             failureHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             
+            if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) {
+                ProxyStats.recordCensorshipEvent(true)
+            }
+
             if (host != null) {
                 val hostFails = consecutiveFailuresByHost.getOrPut(host) { AtomicInteger(0) }.incrementAndGet()
                 if (hostFails > 4) {
@@ -463,6 +512,10 @@ object DpiEngine {
         val now = System.currentTimeMillis()
         val netType = BypassConfig.currentNetworkType.value.toString()
         
+        if (isPanicMode.value || ProxyStats.censorshipIntensity.value > 92) {
+             return getBestExtremeStrategy(host)
+        }
+
         // Host-based escalation: If too many failures, use chain
         if (host != null) {
             val hostFails = consecutiveFailuresByHost[host]?.get() ?: 0
@@ -490,11 +543,11 @@ object DpiEngine {
 
         // 0. High Intensity override: use hybrid or nuclear strategies if censorship is extreme
         if (ProxyStats.censorshipIntensity.value > 95) {
-            val nuclear = listOf(BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.UDP_COMBINED_NUCLEAR)
+            val nuclear = listOf(BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.UDP_COMBINED_NUCLEAR, BypassStrategy.UDP_RACING)
             val bestNuclear = nuclear.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_NUCLEAR
             if ((circuitBreakers[bestNuclear] ?: 0L) < now) return bestNuclear
         } else if (ProxyStats.censorshipIntensity.value > 85) {
-            val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID)
+            val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID, BypassStrategy.TCP_PULSE_FRAG)
             val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_HYBRID
             if ((circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
         }
@@ -843,8 +896,23 @@ object DpiEngine {
         ProxyDispatcher.context?.let { saveScores(it) }
 
         if (totalSuccess + totalFailure > 1000) {
-            successHistory.clear()
-            failureHistory.clear()
+            // Smoothly decay history instead of clearing to preserve recent trends
+            successHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toInt() } }
+            failureHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toInt() } }
+            
+            // Remove entries with 0 count to keep map small
+            successHistory.entries.removeIf { it.value.get() == 0 }
+            failureHistory.entries.removeIf { it.value.get() == 0 }
+        }
+        
+        // Limit event history size
+        if (eventHistory.size > 100) {
+             eventHistory.clear()
+        }
+        
+        // Limit strategy latency memory
+        if (strategyLatency.size > BypassStrategy.entries.size * 2) {
+            strategyLatency.clear()
         }
     }
 
