@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
@@ -268,13 +269,23 @@ fun PinkProxyApp(
     val congestionWindow by ProxyStats.congestionWindow.collectAsStateWithLifecycle(initialValue = 10)
     val dnsSuccess by ProxyStats.dnsSuccessCount.collectAsStateWithLifecycle(initialValue = 0L)
     val dnsFailure by ProxyStats.dnsFailureCount.collectAsStateWithLifecycle(initialValue = 0L)
+    val activeFlows by ProxyStats.activeFlows.collectAsStateWithLifecycle(initialValue = emptyList())
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
     val stabilityScore by ProxyStats.stabilityScore.collectAsStateWithLifecycle(initialValue = 100)
     val currentMtu by BypassConfig.currentMtu.collectAsStateWithLifecycle(initialValue = 1400)
     val successRate by ProxyStats.successRate.collectAsStateWithLifecycle(initialValue = 100)
+    
+    val censorshipFingerprint by produceState(initialValue = DpiEngine.getCensorshipFingerprint()) {
+        while (true) {
+            delay(5000)
+            value = DpiEngine.getCensorshipFingerprint()
+        }
+    }
+
     var showStrategyMenu by remember { mutableStateOf(false) }
     
     var showDiagnostics by remember { mutableStateOf(false) }
+    var showActiveFlows by remember { mutableStateOf(false) }
     var showStrategyStats by remember { mutableStateOf(false) }
     var showStrategyConfig by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
@@ -458,6 +469,10 @@ fun PinkProxyApp(
                 onSelectStrategy = { showStrategyConfig = !showStrategyConfig }
             )
 
+            if (isActive) {
+                CensorshipFingerprintCard(censorshipFingerprint)
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
 
             if (isActive) {
@@ -539,6 +554,18 @@ fun PinkProxyApp(
                             MetricItem("DNS HEALTH", "OK: $dnsSuccess | ERR: $dnsFailure", if (dnsFailure > 10) Color(0xFFE57373) else Color(0xFF81C784))
                         }
                     }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                ExpandableSection(
+                    title = "ACTIVE SESSIONS",
+                    subtitle = "${activeFlows.size} FLOWS",
+                    icon = Icons.Default.SwapHoriz,
+                    isExpanded = showActiveFlows,
+                    onToggle = { showActiveFlows = !showActiveFlows }
+                ) {
+                    ActiveFlowsContent(activeFlows)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))

@@ -354,11 +354,18 @@ object DpiEngine {
         }
     }
 
+    private val globalPenalties = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+    private val globalBoosts = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
         if (success) {
             successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             
+            // Success reduces global penalty and increases boost
+            globalPenalties[strategy]?.updateAndGet { (it * 0.8).toInt() }
+            globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(5)
+
             strategyScores[category]?.get(strategy)?.let { score ->
                 // Fast recovery for successful strategies
                 val bonus = if (latencyMs in 1..300) 35 else 15
@@ -405,8 +412,16 @@ object DpiEngine {
             }
 
             val penalty = when (reason) {
-                FailureReason.TCP_RESET -> 120 // High confidence DPI block
-                FailureReason.CENSORSHIP_STALL -> 150 // Most severe
+                FailureReason.TCP_RESET -> {
+                    globalPenalties.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(50)
+                    globalBoosts[strategy]?.set(0)
+                    120
+                }
+                FailureReason.CENSORSHIP_STALL -> {
+                    globalPenalties.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(80)
+                    globalBoosts[strategy]?.set(0)
+                    150
+                }
                 FailureReason.DNS_POISONED -> 60
                 FailureReason.SSL_HANDSHAKE_ERROR -> 80
                 FailureReason.MTU_EXCEEDED -> 40
@@ -529,6 +544,11 @@ object DpiEngine {
         for ((strat, sRaw) in scoresSnapshot) {
             var s = sRaw
             
+            // Global Penalties/Boosts application
+            val gPenalty = globalPenalties[strat]?.get() ?: 0
+            val gBoost = globalBoosts[strat]?.get() ?: 0
+            s = (s - gPenalty + gBoost).coerceAtLeast(1.0)
+
             // Add global success bonus from ProxyStats
             val globalScore = ProxyStats.getStrategyScore(strat).toDouble()
             if (globalScore > 0) s += globalScore * 5

@@ -12,6 +12,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -36,6 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aistudio.pinkproxy.fresh.BypassStrategy
 import com.aistudio.pinkproxy.fresh.VpnLifecycleState
+import com.aistudio.pinkproxy.fresh.DpiEngine
+import com.aistudio.pinkproxy.fresh.ProxyStats
+import java.util.Locale
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleLightPink
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink
@@ -355,5 +360,111 @@ fun LogsContent(recovery: List<String>, traffic: List<String>) {
                 modifier = Modifier.padding(vertical = 2.dp)
             )
         }
+    }
+}
+
+
+@Composable
+fun CensorshipFingerprintCard(fingerprint: DpiEngine.CensorshipFingerprint) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.4f)),
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, GentleMediumPink.copy(alpha = 0.2f))
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                "CENSORSHIP FINGERPRINT",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                color = GentleMediumPink,
+                letterSpacing = 1.5.sp
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                FingerprintItem("TCP RESET", "${(fingerprint.rstRate * 100).toInt()}%", Color(0xFFE57373))
+                FingerprintItem("SNI BLOCK", "${(fingerprint.sniBlockRate * 100).toInt()}%", Color(0xFFF06292))
+                FingerprintItem("STALLS", "${(fingerprint.stallRate * 100).toInt()}%", Color(0xFFFFB74D))
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                FingerprintItem("TIMEOUTS", "${(fingerprint.timeoutRate * 100).toInt()}%", Color(0xFF9575CD))
+                FingerprintItem("JITTER", "${fingerprint.jitter.toInt()}ms", Color(0xFF4FC3F7))
+                FingerprintItem("INTENSITY", "${fingerprint.intensity}%", GentleDarkPink)
+            }
+        }
+    }
+}
+
+@Composable
+fun FingerprintItem(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.5f))
+        Text(value, fontSize = 16.sp, fontWeight = FontWeight.Black, color = color)
+    }
+}
+
+@Composable
+fun ActiveFlowsContent(flows: List<com.aistudio.pinkproxy.fresh.ActiveFlow>) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 16.dp)
+            .heightIn(max = 300.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(PureBlack)
+            .border(1.dp, GentleMediumPink.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        if (flows.isEmpty()) {
+            item {
+                Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        "NO ACTIVE SESSIONS",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = GentleMediumPink.copy(alpha = 0.3f)
+                    )
+                }
+            }
+        } else {
+            items(flows, key = { it.id }) { flow ->
+                FlowRow(flow)
+                HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.05f))
+            }
+        }
+    }
+}
+
+@Composable
+fun FlowRow(flow: com.aistudio.pinkproxy.fresh.ActiveFlow) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(flow.host, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+            Text(
+                "${flow.type} • ${flow.strategy.name.replace("_", " ")}",
+                fontSize = 9.sp,
+                color = GentleMediumPink.copy(alpha = 0.5f)
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MetricSmallDetail("UP", formatFlowSize(flow.bytesSent), GentleLightPink)
+            MetricSmallDetail("DOWN", formatFlowSize(flow.bytesReceived), GentleMediumPink)
+        }
+    }
+}
+
+private fun formatFlowSize(bytes: Long): String {
+    return when {
+        bytes >= 1024 * 1024 -> "%.1fM".format(bytes / (1024f * 1024f))
+        bytes >= 1024 -> "${bytes / 1024}K"
+        else -> "${bytes}B"
     }
 }

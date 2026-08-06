@@ -25,6 +25,7 @@ object TcpTransportHandler {
         onConnectSuccess: (suspend () -> Unit)? = null,
         onConnectFailure: (suspend (reason: String) -> Unit)? = null
     ) {
+        val sessionId = "tcp_${System.currentTimeMillis()}_${ThreadLocalRandom.current().nextInt(1000, 9999)}"
         var remoteSocket: Socket? = null
         var remoteIn: InputStream? = null
         var remoteOut: OutputStream? = null
@@ -49,11 +50,13 @@ object TcpTransportHandler {
                 return
             }
             ProxyStats.addTraffic(targetHost)
+            var strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
+            ProxyStats.registerFlow(sessionId, targetHost, "TCP", strategy)
+            
             val totalWrittenClient = AtomicLong(0)
             val isTls = targetPort == 443 || targetPort == 8443
 
             val censorship = BypassConfig.censorshipLevel.value
-            var strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
             var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
             // SNI Ghosting: Send fake TLS Hello with low TTL to distract DPI
@@ -93,69 +96,99 @@ object TcpTransportHandler {
             var firstRemoteResponseLen = 0
 
             if (firstClientPacketLen > 0 && (targetPort == 443 || targetPort == 80 || targetPort == 8443)) {
-                var attempt = 0
-                val maxAttempts = 3
-                while (attempt < maxAttempts) {
-                    attempt++
-                    if (attempt > 1) {
-                        // Record previous failure and pick fallback or better strategy
-                        DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CENSORSHIP_STALL, host = targetHost)
-                        BypassConfig.recordFailure(strategy, targetHost, FailureReason.CENSORSHIP_STALL)
-                        val fallback = DpiEngine.getFallbackStrategy(strategy)
-                        strategy = fallback ?: DpiEngine.getBestStrategy(HostClassifier.classify(targetHost), targetHost)
-                        config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
-                        Log.i("TcpTransport", "Transparent fallback: Retrying connection to $targetHost (attempt $attempt/$maxAttempts) using strategy $strategy")
-                    }
-
-                    val rs = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
-                    if (rs == null) {
-                        delay(150)
-                        continue
+                val intensity = ProxyStats.censorshipIntensity.value
+                
+                if (intensity > 60 && forcedStrategy == null) {
+                    // RACING CONNECT: Try 2 strategies in parallel
+                    val cat = HostClassifier.classify(targetHost)
+                    val strat1 = DpiEngine.getBestStrategy(cat, targetHost)
+                    val strat2 = DpiEngine.getBestStrategy(cat, targetHost).let { 
+                        if (it == strat1) DpiEngine.getFallbackStrategy(it) ?: BypassStrategy.TCP_COMBINED_NUCLEAR else it
                     }
                     
-                    // Apply socket optimizations
-                    rs.tcpNoDelay = true
-                    rs.keepAlive = true
-                    try { rs.receiveBufferSize = 65536 } catch (e: Throwable) {}
-                    try { rs.sendBufferSize = 65536 } catch (e: Throwable) {}
+                    Log.i("TcpTransport", "RACING CONNECT started for $targetHost using $strat1 vs $strat2")
+                    
+                    val raceResult = racingConnect(
+                        resolved, targetPort, vpnService, targetHost, 
+                        strat1, strat2, firstClientPacket, firstClientPacketLen, transportBufferSize
+                    )
+                    
+                    if (raceResult != null) {
+                        remoteSocket = raceResult.socket
+                        remoteIn = raceResult.input
+                        remoteOut = raceResult.output
+                        firstRemoteResponse = raceResult.firstResponse
+                        firstRemoteResponseLen = raceResult.firstResponseLen
+                        strategy = raceResult.strategy
+                    }
+                }
 
-                    val rsOut = rs.getOutputStream()
-                    val rsIn = rs.getInputStream()
-
-                    try {
-                        // Apply bypass on the first client packet
-                        BypassConfig.applyBypass(rs, rsOut, firstClientPacket, firstClientPacketLen, config, targetHost)
-                        
-                        // Read first response packet with short adaptive timeout to verify bypass
-                        val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 800).coerceAtMost(3000).toInt()
-                        rs.soTimeout = verifyTimeout
-                        
-                        val responseBuf = ByteArray(transportBufferSize)
-                        val readBytes = rsIn.read(responseBuf)
-                        if (readBytes > 0) {
-                            // Handshake succeeded!
-                            DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
-                            BypassConfig.recordSuccess(strategy, verifyTimeout.toLong(), targetHost)
-                            
-                            remoteSocket = rs
-                            remoteIn = rsIn
-                            remoteOut = rsOut
-                            firstRemoteResponse = responseBuf
-                            firstRemoteResponseLen = readBytes
-                            break // Exit retry loop
-                        } else if (readBytes == -1) {
-                            throw java.io.IOException("EOF received during handshake verification")
+                if (remoteSocket == null) {
+                    // Fallback to sequential or single attempt if race failed or wasn't triggered
+                    var attempt = 0
+                    val maxAttempts = 2
+                    while (attempt < maxAttempts) {
+                        attempt++
+                        if (attempt > 1) {
+                            // Record previous failure and pick fallback or better strategy
+                            DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CENSORSHIP_STALL, host = targetHost)
+                            BypassConfig.recordFailure(strategy, targetHost, FailureReason.CENSORSHIP_STALL)
+                            val fallback = DpiEngine.getFallbackStrategy(strategy)
+                            strategy = fallback ?: DpiEngine.getBestStrategy(HostClassifier.classify(targetHost), targetHost)
+                            config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
+                            Log.i("TcpTransport", "Transparent fallback: Retrying connection to $targetHost (attempt $attempt/$maxAttempts) using strategy $strategy")
                         }
-                    } catch (e: Throwable) {
-                        Log.w("TcpTransport", "Handshake attempt $attempt failed for $targetHost with strategy $strategy: ${e.message}")
-                        try { rs.close() } catch (ex: Throwable) {}
+
+                        val rs = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
+                        if (rs == null) {
+                            delay(150)
+                            continue
+                        }
                         
-                        if (attempt == maxAttempts) {
-                            DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CONNECTION_REFUSED, host = targetHost)
-                            BypassConfig.recordFailure(strategy, targetHost, FailureReason.CONNECTION_REFUSED)
+                        // Apply socket optimizations
+                        rs.tcpNoDelay = true
+                        rs.keepAlive = true
+                        try { rs.receiveBufferSize = 65536 } catch (e: Throwable) {}
+                        try { rs.sendBufferSize = 65536 } catch (e: Throwable) {}
+
+                        val rsOut = rs.getOutputStream()
+                        val rsIn = rs.getInputStream()
+
+                        try {
+                            // Apply bypass on the first client packet
+                            BypassConfig.applyBypass(rs, rsOut, firstClientPacket, firstClientPacketLen, config, targetHost)
                             
-                            // Blacklist if repeated failures
-                            RecoveryManager.blacklistHost(targetHost, 120000) // 2 minutes
+                            // Read first response packet with short adaptive timeout to verify bypass
+                            val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 800).coerceAtMost(3000).toInt()
+                            rs.soTimeout = verifyTimeout
+                            
+                            val responseBuf = ByteArray(transportBufferSize)
+                            val readBytes = rsIn.read(responseBuf)
+                            if (readBytes > 0) {
+                                // Handshake succeeded!
+                                DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
+                                BypassConfig.recordSuccess(strategy, verifyTimeout.toLong(), targetHost)
+                                
+                                remoteSocket = rs
+                                remoteIn = rsIn
+                                remoteOut = rsOut
+                                firstRemoteResponse = responseBuf
+                                firstRemoteResponseLen = readBytes
+                                break // Exit retry loop
+                            } else if (readBytes == -1) {
+                                throw java.io.IOException("EOF received during handshake verification")
+                            }
+                        } catch (e: Throwable) {
+                            Log.w("TcpTransport", "Handshake attempt $attempt failed for $targetHost with strategy $strategy: ${e.message}")
+                            try { rs.close() } catch (ex: Throwable) {}
+                            
+                            if (attempt == maxAttempts) {
+                                DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CONNECTION_REFUSED, host = targetHost)
+                                BypassConfig.recordFailure(strategy, targetHost, FailureReason.CONNECTION_REFUSED)
+                                
+                                // Blacklist if repeated failures
+                                RecoveryManager.blacklistHost(targetHost, 120000) // 2 minutes
+                            }
                         }
                     }
                 }
@@ -209,6 +242,7 @@ object TcpTransportHandler {
                             clientOut.write(firstRemoteResponse, 0, firstRemoteResponseLen)
                             clientOut.flush()
                             ProxyStats.updateBytes(firstRemoteResponseLen.toLong())
+                            ProxyStats.updateFlow(sessionId, received = firstRemoteResponseLen.toLong())
                         }
                         
                         finalRemoteSocket.soTimeout = 90000
@@ -220,6 +254,7 @@ object TcpTransportHandler {
                             clientOut.write(buffer, 0, n)
                             clientOut.flush()
                             ProxyStats.updateBytes(n.toLong())
+                            ProxyStats.updateFlow(sessionId, received = n.toLong())
                         }
                     } catch (e: Throwable) {
                         if (e !is CancellationException && e !is java.net.SocketException) {
@@ -276,6 +311,7 @@ object TcpTransportHandler {
                                         outputStream.write(buffer, split, n - split)
                                         outputStream.flush()
                                         ProxyStats.updateBytes(n.toLong())
+                                        ProxyStats.updateFlow(sessionId, sent = n.toLong())
                                         continue
                                     }
                                 }
@@ -293,6 +329,7 @@ object TcpTransportHandler {
                                 try {
                                     val outputStream = remoteOut ?: break
                                     BypassConfig.applyBypass(finalRemoteSocket, outputStream, buffer, n, config, activeHost)
+                                    ProxyStats.updateFlow(sessionId, sent = n.toLong())
                                 } finally {
                                     writeMutex.unlock()
                                 }
@@ -325,6 +362,7 @@ object TcpTransportHandler {
                                                 writeMutex.unlock()
                                             }
                                             offset += sz
+                                            ProxyStats.updateFlow(sessionId, sent = sz.toLong())
                                             delay(rnd.nextLong(1, 10))
                                         }
                                         ProxyStats.updateBytes(n.toLong())
@@ -338,6 +376,7 @@ object TcpTransportHandler {
                                     outputStream.write(buffer, 0, n)
                                     outputStream.flush()
                                     ProxyStats.updateBytes(n.toLong())
+                                    ProxyStats.updateFlow(sessionId, sent = n.toLong())
                                 } finally {
                                     writeMutex.unlock()
                                 }
@@ -437,6 +476,7 @@ object TcpTransportHandler {
         } finally {
             try { clientSocket.close() } catch (e: Throwable) {}
             try { remoteSocket?.close() } catch (e: Throwable) {}
+            ProxyStats.closeFlow(sessionId)
         }
     }
 
@@ -648,4 +688,102 @@ object TcpTransportHandler {
             if (e is CancellationException) throw e
         }
     }
+
+    private suspend fun racingConnect(
+        ips: List<java.net.InetAddress>,
+        port: Int,
+        vpnService: VpnService?,
+        host: String,
+        strat1: BypassStrategy,
+        strat2: BypassStrategy,
+        firstPacket: ByteArray,
+        firstPacketLen: Int,
+        bufferSize: Int
+    ): RaceResult? = coroutineScope {
+        val raceScope = this
+        val resultChannel = kotlinx.coroutines.channels.Channel<RaceResult>(2)
+        
+        val job1 = launch(ProxyDispatcher.io) {
+            val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize)
+            if (res != null) resultChannel.send(res)
+        }
+        
+        val job2 = launch(ProxyDispatcher.io) {
+            // Slight delay for the second contender to prioritize the first one
+            delay(150)
+            val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize)
+            if (res != null) resultChannel.send(res)
+        }
+        
+        var winner: RaceResult? = null
+        try {
+            winner = withTimeoutOrNull(5000) {
+                resultChannel.receive()
+            }
+        } catch (e: Throwable) {
+            // Timeout or error
+        } finally {
+            job1.cancel()
+            job2.cancel()
+            // Important: close losing sockets if they connect later
+            raceScope.launch {
+                repeat(2) {
+                    val other = resultChannel.tryReceive().getOrNull()
+                    if (other != null && other != winner) {
+                        try { other.socket.close() } catch (e: Throwable) {}
+                    }
+                }
+            }
+        }
+        winner
+    }
+
+    private suspend fun runSingleAttempt(
+        ips: List<java.net.InetAddress>,
+        port: Int,
+        vpnService: VpnService?,
+        host: String,
+        strategy: BypassStrategy,
+        firstPacket: ByteArray,
+        firstPacketLen: Int,
+        bufferSize: Int
+    ): RaceResult? {
+        val config = BypassConfig.getSessionConfig(host, strategy, BypassConfig.currentRttMs.value)
+        val rs = connectToBestIp(ips, port, vpnService, config, host) ?: return null
+        
+        try {
+            rs.tcpNoDelay = true
+            val rsOut = rs.getOutputStream()
+            val rsIn = rs.getInputStream()
+            
+            BypassConfig.applyBypass(rs, rsOut, firstPacket, firstPacketLen, config, host)
+            
+            val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 1200).coerceAtMost(3500).toInt()
+            rs.soTimeout = verifyTimeout
+            
+            val responseBuf = ByteArray(bufferSize)
+            val readBytes = rsIn.read(responseBuf)
+            
+            if (readBytes > 0) {
+                DpiEngine.recordResult(strategy, true, HostClassifier.classify(host), host = host)
+                BypassConfig.recordSuccess(strategy, verifyTimeout.toLong(), host)
+                return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
+            } else {
+                try { rs.close() } catch (e: Throwable) {}
+                return null
+            }
+        } catch (e: Throwable) {
+            try { rs.close() } catch (e: Throwable) {}
+            return null
+        }
+    }
+
+    data class RaceResult(
+        val socket: Socket,
+        val input: InputStream,
+        val output: OutputStream,
+        val firstResponse: ByteArray,
+        val firstResponseLen: Int,
+        val strategy: BypassStrategy
+    )
 }

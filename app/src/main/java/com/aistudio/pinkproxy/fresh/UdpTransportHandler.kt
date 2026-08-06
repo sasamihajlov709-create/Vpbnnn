@@ -43,6 +43,7 @@ object UdpTransportHandler {
             var clientUdpAddress: InetAddress? = null
             var clientUdpPort = 0
             
+            val activeSessions = ConcurrentHashMap<String, Long>()
             val udpOutChannels = Array(8) { kotlinx.coroutines.channels.Channel<Pair<DatagramPacket, String>>(500) }
             
             coroutineScope {
@@ -52,7 +53,6 @@ object UdpTransportHandler {
                 repeat(8) { i ->
                     val outSocket = outSockets[i]
                     jobs += launch(ProxyDispatcher.io) {
-                        val activeSessions = ConcurrentHashMap<String, Long>()
                         
                         // Heartbeat job for this worker's sessions
                         val hbJob = launch {
@@ -61,7 +61,11 @@ object UdpTransportHandler {
                                 while (isActive) {
                                     delay(rnd.nextLong(20000, 45000))
                                     val now = System.currentTimeMillis()
-                                    activeSessions.entries.removeIf { now - it.value > 60000 }
+                                    val toRemove = activeSessions.entries.filter { now - it.value > 60000 }
+                                    toRemove.forEach { (key, _) ->
+                                        activeSessions.remove(key)
+                                        ProxyStats.closeFlow("udp_$key")
+                                    }
                                     
                                     for (session in activeSessions.keys) {
                                         val parts = session.split(":")
@@ -88,6 +92,9 @@ object UdpTransportHandler {
                             for (work in udpOutChannels[i]) {
                                 if (outSocket.isClosed) break
                                 val (packet, targetHost) = work
+                                val flowId = "udp_${targetHost}_${packet.port}"
+                                ProxyStats.registerFlow(flowId, targetHost, "UDP", BypassConfig.getBestStrategyForHost(targetHost))
+                                
                                 if (RecoveryManager.isHostBlacklisted(targetHost)) {
                                     continue
                                 }
@@ -100,6 +107,7 @@ object UdpTransportHandler {
                                 while (attempts < maxAttempts) {
                                     try {
                                         sendUdpPacket(outSocket, packet, targetHost, currentConfig, this)
+                                        ProxyStats.updateFlow(flowId, sent = packet.length.toLong())
                                         break // Success
                                     } catch (e: Throwable) {
                                         if (e is CancellationException) throw e
@@ -143,6 +151,9 @@ object UdpTransportHandler {
                                     break
                                 }
 
+                                val flowId = "udp_${packet.address.hostAddress}:${packet.port}"
+                                activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
+                                
                                 val currentClientAddr = clientUdpAddress
                                 val currentClientPort = clientUdpPort
                                 if (currentClientAddr != null) {
@@ -164,6 +175,7 @@ object UdpTransportHandler {
                                         if (!udpSocket.isClosed) {
                                             udpSocket.send(outPacket)
                                             ProxyStats.updateBytes(packet.length.toLong())
+                                            ProxyStats.updateFlow("udp_${packet.address.hostAddress}:${packet.port}", received = packet.length.toLong())
                                         }
                                     } catch (e: Throwable) {}
                                 }
