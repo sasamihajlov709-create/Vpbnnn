@@ -21,7 +21,7 @@ object ProxyDispatcher {
                 priority = Thread.NORM_PRIORITY + 1
             }
         },
-        java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
+        java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
     ).asCoroutineDispatcher()
     
     val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
