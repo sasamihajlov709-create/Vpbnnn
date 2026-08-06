@@ -101,7 +101,9 @@ object DnsOptimizer {
     fun getDohUrls(): List<String> {
         // Return sorted by performance with some randomness to avoid sticking to one provider
         val rnd = java.util.concurrent.ThreadLocalRandom.current()
-        return dohUrls.sortedBy { 
+        val valid = dohUrls.filterNot { isUrlBlacklisted(it) }
+        val pool = if (valid.isNotEmpty()) valid else dohUrls
+        return pool.sortedBy { 
             val base = (providerLatencies[it] ?: 500L) + (providerFailures[it] ?: 0) * 150L
             base + rnd.nextLong(0, 50)
         }

@@ -113,6 +113,19 @@ object DnsCacheManager {
         return null
     }
 
+    fun getCachedOrStale(host: String, type: Int = 1, maxStaleMs: Long = 24 * 3600 * 1000L): List<InetAddress>? {
+        ensureEfficiency()
+        if (isIpAddress(host)) {
+            return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { null }
+        }
+        val cacheKey = if (type == 1) host else "$host:$type"
+        val now = System.currentTimeMillis()
+        dnsCache[cacheKey]?.let { (addresses, expiry) ->
+            if (now < expiry + maxStaleMs) return getSortedIps(addresses)
+        }
+        return getEmergencyFallback(host)
+    }
+
     fun put(host: String, ips: List<InetAddress>, ttlMs: Long = CACHE_TTL_MS, type: Int = 1) {
         if (ips.isEmpty()) return
         val cacheKey = if (type == 1) host else "$host:$type"

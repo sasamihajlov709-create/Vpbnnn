@@ -88,12 +88,12 @@ object RobustResolver {
             }
         } catch (e: TimeoutCancellationException) {
             pendingResolutions.remove(cacheKey)
-            DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
+            DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             pendingResolutions.remove(cacheKey)
-            DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
+            DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         }
     }
 
@@ -122,7 +122,7 @@ object RobustResolver {
         // 2. Try Smart Parallel Resolution (DoH, DoT, Shadow UDP)
         try {
             if (ProxyStats.censorshipIntensity.value > 95) {
-                val cached = DnsCacheManager.getCached(host, type) ?: DnsCacheManager.getEmergencyFallback(host)
+                val cached = DnsCacheManager.getCached(host, type) ?: DnsCacheManager.getCachedOrStale(host, type)
                 if (cached != null) return cached
             }
             
@@ -155,8 +155,8 @@ object RobustResolver {
             // // if (e is CancellationException) throw e
         }
 
-        // 3. Emergency Fallback
-        DnsCacheManager.getEmergencyFallback(host)?.let {
+        // 3. Emergency Fallback & Stale Cache
+        DnsCacheManager.getCachedOrStale(host, type)?.let {
             DnsCacheManager.put(host, it, type = type)
             return it
         }
