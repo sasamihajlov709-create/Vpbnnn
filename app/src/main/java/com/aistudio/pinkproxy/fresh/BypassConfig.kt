@@ -90,6 +90,7 @@ object BypassConfig {
     @Volatile var isPowerSaveMode = false
     @Volatile var batteryLevel = 100
     @Volatile var thermalStatus = 0
+    @Volatile var isStrictBypassMode = false
     @Volatile var preferIpv6 = false
     private var isMonitoringStarted = false
 

@@ -16,6 +16,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.HostnameVerifier
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.withLock
 
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -490,6 +491,7 @@ object DnsProtocols {
     )
 
     private val dotPool = java.util.concurrent.ConcurrentHashMap<String, javax.net.ssl.SSLSocket>()
+    private val dotLocks = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.sync.Mutex>()
     private val poolLock = Any()
 
     fun clearPool() {
@@ -504,56 +506,59 @@ object DnsProtocols {
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val id = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
         val query = DnsPacketEngine.buildDnsQuery(host, type, id)
+        val mutex = dotLocks.getOrPut(dotIp) { kotlinx.coroutines.sync.Mutex() }
         
         return withContext(ProxyDispatcher.io) {
-            runCatching {
-                var sslSocket: javax.net.ssl.SSLSocket? = dotPool[dotIp]
-                
-                if (sslSocket == null || sslSocket.isClosed || !sslSocket.isConnected) {
-                    synchronized(poolLock) {
-                        sslSocket = dotPool[dotIp]
-                        if (sslSocket == null || sslSocket?.isClosed == true || sslSocket?.isConnected == false) {
-                            val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
-                            trustManagerFactory.init(null as java.security.KeyStore?)
-                            val trustManagers = trustManagerFactory.trustManagers
-                            val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
-                            
-                            val sc = SSLContext.getInstance("TLS")
-                            sc.init(null, if (defaultTrustManager != null) arrayOf(defaultTrustManager) else null, null)
-                            
-                            val factory = ProtectedSSLSocketFactory(sc.socketFactory, vpnService)
-                            val s = factory.createSocket() as javax.net.ssl.SSLSocket
-                            s.connect(InetSocketAddress(dotIp, 853), 4000)
-                            s.soTimeout = 5000
-                            s.tcpNoDelay = true
-                            s.startHandshake()
-                            
-                            val expectedHost = dotHostnames[dotIp] ?: dotIp
-                            if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(expectedHost, s.session)) {
-                                s.close()
-                                throw Exception("DoT hostname verification failed")
+            mutex.withLock {
+                runCatching {
+                    var sslSocket: javax.net.ssl.SSLSocket? = dotPool[dotIp]
+                    
+                    if (sslSocket == null || sslSocket.isClosed || !sslSocket.isConnected) {
+                        synchronized(poolLock) {
+                            sslSocket = dotPool[dotIp]
+                            if (sslSocket == null || sslSocket?.isClosed == true || sslSocket?.isConnected == false) {
+                                val trustManagerFactory = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+                                trustManagerFactory.init(null as java.security.KeyStore?)
+                                val trustManagers = trustManagerFactory.trustManagers
+                                val defaultTrustManager = trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
+                                
+                                val sc = SSLContext.getInstance("TLS")
+                                sc.init(null, if (defaultTrustManager != null) arrayOf(defaultTrustManager) else null, null)
+                                
+                                val factory = ProtectedSSLSocketFactory(sc.socketFactory, vpnService)
+                                val s = factory.createSocket() as javax.net.ssl.SSLSocket
+                                s.connect(InetSocketAddress(dotIp, 853), 4000)
+                                s.soTimeout = 5000
+                                s.tcpNoDelay = true
+                                s.startHandshake()
+                                
+                                val expectedHost = dotHostnames[dotIp] ?: dotIp
+                                if (!HttpsURLConnection.getDefaultHostnameVerifier().verify(expectedHost, s.session)) {
+                                    s.close()
+                                    throw Exception("DoT hostname verification failed")
+                                }
+                                dotPool[dotIp] = s
+                                sslSocket = s
                             }
-                            dotPool[dotIp] = s
-                            sslSocket = s
                         }
                     }
-                }
 
-                val socket = sslSocket ?: throw Exception("SSLSocket initialization failed")
-                val dos = DataOutputStream(socket.getOutputStream())
-                dos.writeShort(query.size)
-                dos.write(query)
-                dos.flush()
-                
-                val dis = DataInputStream(socket.getInputStream())
-                val len = dis.readUnsignedShort()
-                if (len > 8192) throw Exception("Packet too large")
-                val resp = ByteArray(len)
-                dis.readFully(resp)
-                DnsPacketEngine.parseDnsResponse(resp, len, id).filter { !DnsCacheManager.isPoisoned(it, host) }
-            }.getOrElse { 
-                dotPool.remove(dotIp)?.let { try { it.close() } catch(e: Throwable) {} }
-                emptyList() 
+                    val socket = sslSocket ?: throw Exception("SSLSocket initialization failed")
+                    val dos = DataOutputStream(socket.getOutputStream())
+                    dos.writeShort(query.size)
+                    dos.write(query)
+                    dos.flush()
+                    
+                    val dis = DataInputStream(socket.getInputStream())
+                    val len = dis.readUnsignedShort()
+                    if (len > 8192) throw Exception("Packet too large")
+                    val resp = ByteArray(len)
+                    dis.readFully(resp)
+                    DnsPacketEngine.parseDnsResponse(resp, len, id).filter { !DnsCacheManager.isPoisoned(it, host) }
+                }.getOrElse { 
+                    dotPool.remove(dotIp)?.let { try { it.close() } catch(e: Throwable) {} }
+                    emptyList() 
+                }
             }
         }
     }

@@ -21,7 +21,9 @@ object TcpTransportHandler {
         targetPort: Int,
         vpnService: VpnService?,
         scope: CoroutineScope,
-        forcedStrategy: BypassStrategy? = null
+        forcedStrategy: BypassStrategy? = null,
+        onConnectSuccess: (suspend () -> Unit)? = null,
+        onConnectFailure: (suspend (reason: String) -> Unit)? = null
     ) {
         var remoteSocket: Socket? = null
         var remoteIn: InputStream? = null
@@ -30,6 +32,7 @@ object TcpTransportHandler {
             val resolved = RobustResolver.resolve(targetHost, vpnService)
             if (resolved.isEmpty()) {
                 Log.w("TcpTransport", "Resolution failed for $targetHost")
+                onConnectFailure?.invoke("DNS_FAILED")
                 clientSocket.close()
                 return
             }
@@ -134,9 +137,16 @@ object TcpTransportHandler {
 
             // Direct fallback connection if the retry loop didn't succeed, or if there was no first client packet
             if (remoteSocket == null) {
+                if (BypassConfig.isStrictBypassMode) {
+                    Log.w("TcpTransport", "Bypass failed for $targetHost and strict bypass mode is enabled. Aborting fallback.")
+                    onConnectFailure?.invoke("BYPASS_FAILED_STRICT")
+                    clientSocket.close()
+                    return
+                }
                 Log.w("TcpTransport", "Bypass attempts failed or skipped for $targetHost. Connecting directly.")
                 remoteSocket = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
                 if (remoteSocket == null) {
+                    onConnectFailure?.invoke("CONNECT_FAILED")
                     clientSocket.close()
                     return
                 }
@@ -150,12 +160,16 @@ object TcpTransportHandler {
                         remoteOut.flush()
                     } catch (e: Throwable) {
                         Log.w("TcpTransport", "Failed to write first packet directly: ${e.message}")
+                        onConnectFailure?.invoke("WRITE_FAILED")
                         clientSocket.close()
                         remoteSocket.close()
                         return
                     }
                 }
             }
+
+            // Connection successfully established to remote target
+            onConnectSuccess?.invoke()
 
             coroutineScope {
                 // Forward from Remote to Client (Direct)

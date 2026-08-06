@@ -151,16 +151,29 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     }
                     if (line.toString().trim().isEmpty()) break
                 }
-                
-                output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
-                output.flush()
             } else {
                 client.close()
                 return
             }
             
             client.soTimeout = 0
-            TcpTransportHandler.handleTcpSession(client, host, port, vpnService, scope)
+            TcpTransportHandler.handleTcpSession(
+                clientSocket = client,
+                targetHost = host,
+                targetPort = port,
+                vpnService = vpnService,
+                scope = scope,
+                onConnectSuccess = {
+                    output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+                    output.flush()
+                },
+                onConnectFailure = { reason ->
+                    try {
+                        output.write("HTTP/1.1 502 Bad Gateway\r\n\r\n".toByteArray())
+                        output.flush()
+                    } catch (e: Throwable) {}
+                }
+            )
         } catch (e: Throwable) {
             Log.v("PinkProxy", "HTTP Proxy error: ${e.message}")
             try { client.close() } catch (ex: Throwable) {}
@@ -304,15 +317,34 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 delay(jitter)
             }
             
-            output.write(SOCKS5_CONNECT_SUCCESS)
-            output.flush()
-            
-            client.soTimeout = 0 // Remove timeout for the tunneled connection
-            try { client.keepAlive = true } catch (e: Throwable) {}
-            
             val activeHost = host ?: ""
             val forcedStrategy = if (BypassConfig.isHostDirect(activeHost)) BypassStrategy.DIRECT else null
-            TcpTransportHandler.handleTcpSession(client, activeHost, targetPort, vpnService, scope, forcedStrategy)
+            
+            TcpTransportHandler.handleTcpSession(
+                clientSocket = client,
+                targetHost = activeHost,
+                targetPort = targetPort,
+                vpnService = vpnService,
+                scope = scope,
+                forcedStrategy = forcedStrategy,
+                onConnectSuccess = {
+                    client.soTimeout = 0 // Remove timeout for the tunneled connection
+                    try { client.keepAlive = true } catch (e: Throwable) {}
+                    output.write(SOCKS5_CONNECT_SUCCESS)
+                    output.flush()
+                },
+                onConnectFailure = { reason ->
+                    try {
+                        val errByte = when (reason) {
+                            "DNS_FAILED" -> 4.toByte() // Host unreachable
+                            "BYPASS_FAILED_STRICT" -> 5.toByte() // Connection refused
+                            else -> 1.toByte() // General SOCKS server failure
+                        }
+                        output.write(byteArrayOf(5, errByte, 0, 1, 0, 0, 0, 0, 0, 0))
+                        output.flush()
+                    } catch (e: Throwable) {}
+                }
+            )
 
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
