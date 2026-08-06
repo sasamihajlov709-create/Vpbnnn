@@ -17,6 +17,13 @@ object AutoTtlProber {
     private val probingHosts = java.util.concurrent.ConcurrentSkipListSet<String>()
     private var probingJob: Job? = null
 
+    fun resetOnNetworkChange() {
+        discoveredTtls.clear()
+        discoveredMtus.clear()
+        probingHosts.clear()
+        Log.i("AutoTtlProber", "TTL/MTU cache reset on network interface switch")
+    }
+
     fun getDiscoveredTtl(host: String): Int? {
         val netType = BypassConfig.getNetworkType().toString()
         return networkTtls[netType]?.get(host) ?: networkTtls[netType]?.get("global") ?: discoveredTtls[host] ?: discoveredTtls["global"]
@@ -102,29 +109,21 @@ object AutoTtlProber {
             if (resolved.isEmpty()) return 1400
             val target = resolved.first()
             
-            var low = 576
-            var high = 1500
-            var best = 1400
-            
-            while (low <= high) {
-                val mid = (low + high) / 2
-                if (tryMtu(target, port, mid, vpnService, host)) {
-                    best = mid
-                    low = mid + 1
-                } else {
-                    high = mid - 1
+            val commonMtus = intArrayOf(1500, 1492, 1480, 1450, 1420, 1400, 1360, 1280, 576)
+            for (mtu in commonMtus) {
+                if (tryMtu(target, port, mtu, vpnService, host)) {
+                    discoveredMtus[host] = mtu
+                    val currentGlobal = discoveredMtus["global"] ?: 1400
+                    discoveredMtus["global"] = (currentGlobal * 0.8 + mtu * 0.2).toInt().coerceIn(576, 1500)
+                    if (mtu < 1300) {
+                        ProxyStats.logRecovery("MTU Probe Result for $host: $mtu (Fragmented path detected)")
+                    }
+                    return mtu
                 }
-                delay(50)
             }
             
-            discoveredMtus[host] = best
-            val currentGlobal = discoveredMtus["global"] ?: 1400
-            discoveredMtus["global"] = (currentGlobal * 0.8 + best * 0.2).toInt().coerceIn(576, 1500)
-            
-            if (best < 1300) {
-                ProxyStats.logRecovery("MTU Probe Result for $host: $best (Fragmented path detected)")
-            }
-            return best
+            discoveredMtus[host] = 1400
+            return 1400
         } catch (e: Throwable) {
             return 1400
         } finally {

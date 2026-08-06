@@ -10,6 +10,13 @@ import kotlinx.coroutines.delay
 
 object StrategyHandlers {
 
+    private fun getFakeTtl(host: String, rnd: ThreadLocalRandom, overrideTtl: Int = -1): Int {
+        if (overrideTtl > 0) return overrideTtl
+        val disc = AutoTtlProber.getDiscoveredTtl(host)
+        if (disc != null && disc > 1) return disc
+        return rnd.nextInt(2, 5)
+    }
+
     suspend fun handleHttpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
         if (strategy == BypassStrategy.DIRECT) {
             output.write(data, 0, length)
@@ -54,7 +61,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.HTTP_METHOD_FAKE) {
             val fakeReq = FakePacketHelper.buildFakeHttpRequest(host)
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fakeReq)
             output.flush()
             delay(rnd.nextLong(2, 6))
@@ -66,9 +73,13 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.HTTP2_PREAMBLE_FAKE) {
             val preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray()
+            val fakeSettings = byteArrayOf(0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00)
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(preface)
+            output.write(fakeSettings)
             output.flush()
             delay(rnd.nextLong(1, 4))
+            TtlHelper.setTtl(socket, 64)
             output.write(data, 0, length)
             output.flush()
             return
@@ -295,7 +306,7 @@ object StrategyHandlers {
     suspend fun handleTcpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT) {
             val fake = FakePacketHelper.buildProtocolConfusion("BITTORRENT")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fake)
             output.flush()
             delay(rnd.nextLong(2, 6))
@@ -307,7 +318,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_MEMCACHED) {
             val fake = FakePacketHelper.buildProtocolConfusion("MEMCACHED")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fake)
             output.flush()
             delay(rnd.nextLong(2, 6))
@@ -319,7 +330,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_REDIS) {
             val fake = FakePacketHelper.buildProtocolConfusion("REDIS")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fake)
             output.flush()
             delay(rnd.nextLong(2, 6))
@@ -331,7 +342,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.PROTOCOL_CONFUSION_SSH) {
             val fake = FakePacketHelper.buildProtocolConfusion("SSH")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fake)
             output.flush()
             delay(rnd.nextLong(2, 6))
@@ -343,7 +354,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.SSH_HANDSHAKE_FAKE) {
             val sshBanner = "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6\r\n".toByteArray()
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(sshBanner)
             output.flush()
             delay(rnd.nextLong(3, 8))
@@ -392,7 +403,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.FAKE_PACKET || strategy == BypassStrategy.TCP_OOB_DESYNC || strategy == BypassStrategy.OOB_DESYNC) {
             val decoy = if (rnd.nextBoolean()) FakePacketHelper.buildRealisticTlsHello("decoy.security.internal") else FakePacketHelper.buildFakeHttpRequest("decoy.security.internal")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(decoy)
             output.flush()
             delay(rnd.nextLong(2, 6))
@@ -404,7 +415,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.GHOST_PACKETS) {
             val ghost = FakePacketHelper.buildUdpNoise(rnd.nextInt(32, 128))
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(ghost)
             output.flush()
             delay(rnd.nextLong(1, 4))
@@ -472,7 +483,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_DATA_REPETITION) {
             val repeatLen = minOf(10, length)
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(data, 0, repeatLen)
             output.flush()
             delay(rnd.nextLong(1, 3))
@@ -484,7 +495,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_KEEP_ALIVE_FAKE) {
             // Write 0-byte keepalive probes before data
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(ByteArray(0))
             output.flush()
             delay(rnd.nextLong(1, 3))
@@ -516,7 +527,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_FAST_OPEN_FAKE) {
             val fakeCookie = FakePacketHelper.buildUdpNoise(8)
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fakeCookie)
             output.flush()
             delay(rnd.nextLong(1, 3))
@@ -528,7 +539,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_RST_FAKE || strategy == BypassStrategy.TCP_FAKE_FIN) {
             val rst = FakePacketHelper.buildUdpNoise(12)
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(rst)
             output.flush()
             delay(rnd.nextLong(1, 4))
@@ -574,7 +585,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_GHOST_SKEW || strategy == BypassStrategy.TCP_SYN_FLOOD_FAKE) {
             val ghost = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 40))
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(ghost)
             output.flush()
             delay(rnd.nextLong(1, 4))
@@ -636,7 +647,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_SEGMENT_DESYNC || strategy == BypassStrategy.TCP_DATA_DESYNC || strategy == BypassStrategy.TCP_DATA_DESYNC_OVERLAP || strategy == BypassStrategy.TCP_TRIPLE_DESYNC) {
             val decoy = FakePacketHelper.buildRealisticTlsHello("decoy.internal")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(decoy)
             output.flush()
             delay(rnd.nextLong(1, 3))
@@ -703,7 +714,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_FOOL_DPI) {
             val fake = FakePacketHelper.buildFakeHttpRequest("decoy.org")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fake)
             output.flush()
             delay(rnd.nextLong(1, 4))
@@ -730,7 +741,7 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_TLS_SESSION_DESYNC) {
             val fake = FakePacketHelper.buildRealisticTlsHello("decoy.internal")
-            TtlHelper.setTtl(socket, rnd.nextInt(2, 5))
+            TtlHelper.setTtl(socket, getFakeTtl(host, rnd))
             output.write(fake)
             output.flush()
             delay(rnd.nextLong(2, 5))
