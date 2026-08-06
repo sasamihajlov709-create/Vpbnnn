@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.aistudio.pinkproxy.fresh.BypassStrategy
 import com.aistudio.pinkproxy.fresh.VpnLifecycleState
 import com.aistudio.pinkproxy.fresh.DpiEngine
+import com.aistudio.pinkproxy.fresh.DpiAnalyzer
 import com.aistudio.pinkproxy.fresh.ProxyStats
 import java.util.Locale
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
@@ -365,7 +366,7 @@ fun LogsContent(recovery: List<String>, traffic: List<String>) {
 
 
 @Composable
-fun CensorshipFingerprintCard(fingerprint: DpiEngine.CensorshipFingerprint) {
+fun CensorshipFingerprintCard(fingerprint: DpiAnalyzer.CensorshipFingerprint) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.4f)),

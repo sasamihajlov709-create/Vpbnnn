@@ -123,14 +123,16 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
     }
 
     private suspend fun handleHttpProxy(client: Socket, firstByte: Int, input: InputStream, output: OutputStream, scope: CoroutineScope) {
-        val line = java.lang.StringBuilder()
-        line.append(firstByte.toChar())
-        var b: Int
-        
-        // Use a short timeout for the initial request line to prevent hanging workers
-        client.soTimeout = 5000
-        
+        var host = "unknown"
+        var port = 0
         try {
+            val line = java.lang.StringBuilder()
+            line.append(firstByte.toChar())
+            var b: Int
+            
+            // Use a short timeout for the initial request line to prevent hanging workers
+            client.soTimeout = 5000
+            
             while (line.length < 4096) {
                 b = input.read()
                 if (b == -1 || b == '\n'.code) break
@@ -143,9 +145,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             
             val method = parts[0].uppercase()
             val target = parts[1]
-            
-            var host: String
-            var port: Int
             
             if (method == "CONNECT") {
                 val hostPort = target.split(":")
@@ -184,11 +183,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     try {
                         output.write("HTTP/1.1 502 Bad Gateway\r\n\r\n".toByteArray())
                         output.flush()
-                    } catch (e: Throwable) {}
+                    } catch (e: Throwable) {
+                        Log.v("PinkProxy", "Failed to close client in HTTP Proxy: ${e.message}")
+                    }
                 }
             )
         } catch (e: Throwable) {
-            Log.v("PinkProxy", "HTTP Proxy error: ${e.message}")
+            Log.e("PinkProxy", "HTTP Proxy error for $host:$port", e)
             try { client.close() } catch (ex: Throwable) {}
         }
     }
@@ -331,7 +332,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             }
             
             val activeHost = host ?: ""
-            val forcedStrategy = if (BypassConfig.isHostDirect(activeHost)) BypassStrategy.DIRECT else null
+            val forcedStrategy = if (com.aistudio.pinkproxy.fresh.BypassConfig.isHostDirect(activeHost)) com.aistudio.pinkproxy.fresh.BypassStrategy.DIRECT else null
             
             TcpTransportHandler.handleTcpSession(
                 clientSocket = client,
@@ -355,15 +356,23 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         }
                         output.write(byteArrayOf(5, errByte, 0, 1, 0, 0, 0, 0, 0, 0))
                         output.flush()
-                    } catch (e: Throwable) {}
+                    } catch (e: Throwable) {
+                        Log.v("PinkProxy", "Failed to send SOCKS5 error response: ${e.message}")
+                    }
                 }
             )
 
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            Log.v("PinkProxy", "Client handling error: ${e.message}")
+            if (e !is java.io.EOFException && e !is java.net.SocketException) {
+                Log.e("PinkProxy", "Client handling error from ${client.remoteSocketAddress}", e)
+            } else {
+                Log.v("PinkProxy", "Client disconnected: ${e.message}")
+            }
         } finally {
-            try { client.close() } catch (ex: Throwable) {}
+            try { client.close() } catch (ex: Throwable) {
+                Log.v("PinkProxy", "Failed to close client: ${ex.message}")
+            }
         }
     }
 }

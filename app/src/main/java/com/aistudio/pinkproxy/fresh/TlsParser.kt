@@ -130,6 +130,85 @@ object TlsParser {
         return false
     }
 
+    fun findSni(buffer: ByteArray, length: Int): Int = findSniOffset(buffer, length)
+
+    fun mangleSni(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        val offset = findSniOffset(buffer, length)
+        if (offset == -1) return buffer.copyOf(length)
+        val copy = buffer.copyOf(length)
+        val nameLen = ((copy[offset - 2].toInt() and 0xFF) shl 8) or (copy[offset - 1].toInt() and 0xFF)
+        for (i in 0 until nameLen) {
+            val b = copy[offset + i]
+            if ((b >= 'A'.code.toByte() && b <= 'Z'.code.toByte()) || (b >= 'a'.code.toByte() && b <= 'z'.code.toByte())) {
+                if (rnd.nextBoolean()) {
+                    copy[offset + i] = (b.toInt() xor 32).toByte()
+                }
+            }
+        }
+        return copy
+    }
+
+    fun addPadding(buffer: ByteArray, length: Int, padLen: Int): ByteArray {
+        return FakePacketHelper.injectTlsPadding(buffer, length, padLen)
+    }
+
+    fun addGrease(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return FakePacketHelper.addTlsGreaseExtensions(buffer, length)
+    }
+
+    fun shuffleExtensions(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return FakePacketHelper.shuffleTlsExtensions(buffer, length)
+    }
+
+    fun shuffleCiphers(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return buffer.copyOf(length)
+    }
+
+    fun mangleAlpn(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return buffer.copyOf(length)
+    }
+
+    fun mangleSessionId(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return FakePacketHelper.mangleSessionId(buffer, length)
+    }
+
+    fun addExtraSni(buffer: ByteArray, length: Int, extraHost: String, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return FakePacketHelper.injectMultipleSni(buffer, length, extraHost)
+    }
+
+    fun findEch(buffer: ByteArray, length: Int): Int {
+        if (length < 44) return -1
+        try {
+            val sessionIdLen = buffer[43].toInt() and 0xFF
+            var pos = 44 + sessionIdLen
+            val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherSuitesLen
+            pos += 1 + (buffer[pos].toInt() and 0xFF)
+            val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+            pos += 2
+            val extEnd = minOf(pos + extensionsLen, length)
+            while (pos + 3 < extEnd) {
+                val extType = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
+                val extLen = ((buffer[pos + 2].toInt() and 0xFF) shl 8) or (buffer[pos + 3].toInt() and 0xFF)
+                if (extType == 0xfe0d || extType == 0xff0d || extType == 0x1102) return pos
+                pos += 4 + extLen
+            }
+        } catch (e: Throwable) {}
+        return -1
+    }
+
+    fun addSniGrease(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return injectEchGrease(buffer, length)
+    }
+
+    fun addFakeEch(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        return injectEchGrease(buffer, length)
+    }
+
+    fun replaceSni(buffer: ByteArray, length: Int, newSni: String): ByteArray {
+        return buffer.copyOf(length)
+    }
+
     fun findHostInPayload(buffer: ByteArray, length: Int, host: String): Int {
         if (host.isEmpty()) return -1
         val hostBytes = host.toByteArray(java.nio.charset.StandardCharsets.US_ASCII)

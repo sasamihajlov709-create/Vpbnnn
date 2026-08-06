@@ -98,7 +98,7 @@ object RobustResolver {
     }
 
     private suspend fun performResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
-        val censorship = BypassConfig.censorshipLevel.value
+        val censorship = BypassConfig.censorshipLevel
         if (censorship > 50) {
             return performParallelResolution(host, vpnService, type)
         }

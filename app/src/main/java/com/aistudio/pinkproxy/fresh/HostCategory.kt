@@ -1,0 +1,3 @@
+package com.aistudio.pinkproxy.fresh
+
+enum class HostCategory { DIRECT, STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN, NEWS, GAMING, SHOPPING, DEV, AD, GOVERNMENT, SECURITY, OTHER }

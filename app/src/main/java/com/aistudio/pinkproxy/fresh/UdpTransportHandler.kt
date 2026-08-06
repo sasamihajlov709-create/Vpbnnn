@@ -27,7 +27,13 @@ object UdpTransportHandler {
         
         // Multiple outgoing sockets, one per worker, to avoid race conditions on socket options (like TTL)
         val outSockets = Array(8) { 
-            DatagramSocket().apply { try { vpnService.protect(this) } catch (e: Throwable) {} }
+            DatagramSocket().apply { 
+                try { 
+                    vpnService.protect(this) 
+                } catch (e: Throwable) {
+                    Log.e("UdpTransport", "Failed to protect outgoing UDP socket", e)
+                } 
+            }
         }
         
         try {
@@ -81,7 +87,9 @@ object UdpTransportHandler {
                                                 // Send realistic noise instead of 0x00
                                                 val noise = if (port == 443) FakePacketHelper.buildUdpNoise(rnd.nextInt(1, 10)) else byteArrayOf(0x00)
                                                 outSocket.send(DatagramPacket(noise, noise.size, addr, port))
-                                            } catch (e: Throwable) {}
+                                            } catch (e: Throwable) {
+                                                Log.v("UdpTransport", "Failed to send UDP heartbeat to ${parts[0]}: ${e.message}")
+                                            }
                                         }
                                     }
                                 }
@@ -192,7 +200,9 @@ object UdpTransportHandler {
                                             ProxyStats.updateBytes(packet.length.toLong())
                                             ProxyStats.updateFlow("udp_${packet.address.hostAddress}:${packet.port}", received = packet.length.toLong())
                                         }
-                                    } catch (e: Throwable) {}
+                                    } catch (e: Throwable) {
+                                        Log.v("UdpTransport", "Failed to send UDP response back to client: ${e.message}")
+                                    }
                                 }
                             }
                         } catch (e: Throwable) {
@@ -298,7 +308,9 @@ object UdpTransportHandler {
                                             System.arraycopy(vn, 0, resp, headerLen, vn.size)
                                             try {
                                                 udpSocket.send(DatagramPacket(resp, resp.size, pktAddr, pktPort))
-                                            } catch (e: Throwable) {}
+                                            } catch (e: Throwable) {
+                                                Log.v("UdpTransport", "Failed to send QUIC rejection to client: ${e.message}")
+                                            }
                                         }
                                     }
                                     continue // Don't forward blocked QUIC
@@ -378,14 +390,16 @@ object UdpTransportHandler {
                                     udpOutChannels[workerIdx].send(DatagramPacket(payload, payload.size, cached.first(), targetPortNum) to targetHost)
                                 } else {
                                     launch(ProxyDispatcher.io) {
-                                        try {
-                                            val res = RobustResolver.resolve(targetHost, vpnService)
-                                            if (res.isNotEmpty()) {
-                                                val hash2 = (targetHost.hashCode() xor targetPortNum)
-                                                val workerIdx2 = (hash2 and 0x7FFFFFFF) % 8
-                                                udpOutChannels[workerIdx2].send(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
+                                            try {
+                                                val res = RobustResolver.resolve(targetHost, vpnService)
+                                                if (res.isNotEmpty()) {
+                                                    val hash2 = (targetHost.hashCode() xor targetPortNum)
+                                                    val workerIdx2 = (hash2 and 0x7FFFFFFF) % 8
+                                                    udpOutChannels[workerIdx2].send(DatagramPacket(payload, payload.size, res.first(), targetPortNum) to targetHost)
+                                                }
+                                            } catch (e: Throwable) {
+                                                Log.v("UdpTransport", "Failed to resolve target $targetHost: ${e.message}")
                                             }
-                                        } catch (e: Throwable) {}
                                     }
                                 }
                             }
@@ -415,8 +429,10 @@ object UdpTransportHandler {
         } catch (e: Throwable) {
             if (e !is CancellationException) Log.e("UdpTransport", "handleUdpAssociate error", e)
         } finally {
-            outSockets.forEach { try { it.close() } catch (e: Throwable) {} }
-            try { udpSocket.close() } catch (e: Throwable) {}
+            outSockets.forEach { 
+                try { it.close() } catch (e: Throwable) { Log.v("UdpTransport", "Error closing out socket: ${e.message}") } 
+            }
+            try { udpSocket.close() } catch (e: Throwable) { Log.v("UdpTransport", "Error closing UDP socket: ${e.message}") }
         }
     }
 

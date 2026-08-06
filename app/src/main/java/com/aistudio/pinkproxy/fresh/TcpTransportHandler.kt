@@ -32,8 +32,16 @@ object TcpTransportHandler {
         try {
             clientSocket.tcpNoDelay = true
             clientSocket.keepAlive = true
-            try { clientSocket.receiveBufferSize = 65536 } catch (e: Throwable) {}
-            try { clientSocket.sendBufferSize = 65536 } catch (e: Throwable) {}
+            try { 
+                clientSocket.receiveBufferSize = 65536 
+            } catch (e: Throwable) {
+                Log.v("TcpTransport", "Failed to set client receive buffer: ${e.message}")
+            }
+            try { 
+                clientSocket.sendBufferSize = 65536 
+            } catch (e: Throwable) {
+                Log.v("TcpTransport", "Failed to set client send buffer: ${e.message}")
+            }
 
             if (RecoveryManager.isHostBlacklisted(targetHost)) {
                 Log.w("TcpTransport", "Rejecting connection to blacklisted host: $targetHost")
@@ -56,7 +64,7 @@ object TcpTransportHandler {
             val totalWrittenClient = AtomicLong(0)
             val isTls = targetPort == 443 || targetPort == 8443
 
-            val censorship = BypassConfig.censorshipLevel.value
+            val censorship = BypassConfig.censorshipLevel
             var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
             // SNI Ghosting: Send fake TLS Hello with low TTL to distract DPI
@@ -158,8 +166,16 @@ object TcpTransportHandler {
                         // Apply socket optimizations
                         rs.tcpNoDelay = true
                         rs.keepAlive = true
-                        try { rs.receiveBufferSize = 65536 } catch (e: Throwable) {}
-                        try { rs.sendBufferSize = 65536 } catch (e: Throwable) {}
+                        try { 
+                            rs.receiveBufferSize = 65536 
+                        } catch (e: Throwable) {
+                            Log.v("TcpTransport", "Failed to set remote receive buffer: ${e.message}")
+                        }
+                        try { 
+                            rs.sendBufferSize = 65536 
+                        } catch (e: Throwable) {
+                            Log.v("TcpTransport", "Failed to set remote send buffer: ${e.message}")
+                        }
 
                         val rsOut = rs.getOutputStream()
                         val rsIn = rs.getInputStream()
@@ -268,12 +284,12 @@ object TcpTransportHandler {
                         }
                     } catch (e: Throwable) {
                         if (e !is CancellationException && e !is java.net.SocketException) {
-                            Log.v("TcpTransport", "R2C error: ${e.message}")
+                            Log.v("TcpTransport", "R2C error for $targetHost: ${e.message}")
                         }
                     } finally {
                         if (buffer.size > 16384) ProxyStats.release64k(buffer) else ProxyStats.release16k(buffer)
-                        try { clientSocket.close() } catch (e: Throwable) {}
-                        try { finalRemoteSocket.close() } catch (e: Throwable) {}
+                        try { clientSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close client socket: ${e.message}") }
+                        try { finalRemoteSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close remote socket: ${e.message}") }
                     }
                 }
 
@@ -394,12 +410,12 @@ object TcpTransportHandler {
                         }
                     } catch (e: Throwable) {
                         if (e !is CancellationException && e !is java.net.SocketException) {
-                            Log.v("TcpTransport", "C2R error: ${e.message}")
+                            Log.v("TcpTransport", "C2R error for $targetHost: ${e.message}")
                         }
                     } finally {
                         if (buffer.size > 16384) ProxyStats.release64k(buffer) else ProxyStats.release16k(buffer)
-                        try { clientSocket.close() } catch (e: Throwable) {}
-                        try { finalRemoteSocket.close() } catch (e: Throwable) {}
+                        try { clientSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close client socket (C2R): ${e.message}") }
+                        try { finalRemoteSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close remote socket (C2R): ${e.message}") }
                     }
                 }
                 
@@ -484,8 +500,8 @@ object TcpTransportHandler {
                 Log.v("TcpTransport", "Session for $targetHost failed: $reason")
             }
         } finally {
-            try { clientSocket.close() } catch (e: Throwable) {}
-            try { remoteSocket?.close() } catch (e: Throwable) {}
+            try { clientSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Final close client: ${e.message}") }
+            try { remoteSocket?.close() } catch (e: Throwable) { Log.v("TcpTransport", "Final close remote: ${e.message}") }
             ProxyStats.closeFlow(sessionId)
         }
     }

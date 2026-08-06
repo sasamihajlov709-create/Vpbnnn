@@ -211,7 +211,7 @@ object ServiceChecker {
         val activeLatencies = results.filter { it.isUp && it.latencyMs > 0 }.map { it.latencyMs }
         if (activeLatencies.isNotEmpty()) {
             val minRtt = activeLatencies.minOrNull() ?: 50L
-            BypassConfig.TrafficShaper.updateRtt(minRtt)
+            TrafficShaper.updateRtt(minRtt)
         }
 
         _statuses.value = results
@@ -391,7 +391,7 @@ object ServiceChecker {
                     (if (currentCensorship < 30) it.group != StrategyGroup.EXTREME else true)
                 }.shuffled().take(8)
                 
-                BypassConfig.updateTestingStrategies(strategiesToTest)
+                DpiEngine.updateTestingStrategies(strategiesToTest)
                 
                 val resultsChannel = java.util.concurrent.CopyOnWriteArrayList<Triple<BypassStrategy, Long, Int>>() // Strategy, Duration, SuccessCount
                 
@@ -475,7 +475,7 @@ object ServiceChecker {
                                         totalDuration += (System.currentTimeMillis() - start)
                                     }
                                     try {
-                                        BypassConfig.recordStrategyResult(host, strategy, success)
+                                        DpiEngine.recordStrategyResult(host = host, strat = strategy, success = success)
                                     } catch (e: Throwable) {
                                         Log.e("ServiceChecker", "Error recording strategy result for $host, strategy $strategy", e)
                                     }
@@ -503,7 +503,7 @@ object ServiceChecker {
                 if (best != null && best.third > 0) {
                     // Do not hardcode the global strategy based on a single background smoke test.
                     // Just let the optimizer know this strategy had a successful probe.
-                    BypassConfig.recordStrategyResult("global_probe", best.first, true, best.second)
+                    DpiEngine.recordStrategyResult(host = "global_probe", strat = best.first, success = true, latencyMs = best.second)
                     ProxyStats.logRecovery("Autopilot Tournament Winner -> ${best.first.name} (${best.third}/${testHosts.size} hosts ok)! Logged for ranking.")
                     
                     // If the winner is very stable, maybe reduce intensity slightly

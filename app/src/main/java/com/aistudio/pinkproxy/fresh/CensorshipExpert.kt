@@ -192,7 +192,7 @@ object CensorshipExpert {
         }
     }
 
-    private fun detectAndReactToProbing(fingerprint: DpiEngine.CensorshipFingerprint, successRate: Int) {
+    private fun detectAndReactToProbing(fingerprint: DpiAnalyzer.CensorshipFingerprint, successRate: Int) {
         // Active Probing detection: High RST rate combined with specific stall patterns
         if (fingerprint.rstRate > 0.35 || (fingerprint.stallRate > 0.4 && successRate < 50)) {
             Log.w("CensorshipExpert", "ACTIVE PROBING DETECTED. Forcing extreme desynchronization.")
@@ -237,7 +237,7 @@ object CensorshipExpert {
 
     
 
-    private fun tuneMtu(fingerprint: DpiEngine.CensorshipFingerprint, stability: Int) {
+    private fun tuneMtu(fingerprint: DpiAnalyzer.CensorshipFingerprint, stability: Int) {
         val currentMtu = BypassConfig.currentMtu.value
         var targetMtu = currentMtu
         val mtuErrors = ProxyStats.dpiEvents[DpiType.MTU_EXCEEDED] ?: 0
@@ -258,7 +258,7 @@ object CensorshipExpert {
         }
     }
 
-    private fun optimizeGlobalStrategies(fingerprint: DpiEngine.CensorshipFingerprint, successRate: Int) {
+    private fun optimizeGlobalStrategies(fingerprint: DpiAnalyzer.CensorshipFingerprint, successRate: Int) {
         // Boost strategy families based on the type of blocking detected
         when {
             fingerprint.rstRate > 0.3 -> {

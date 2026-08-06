@@ -1,0 +1,243 @@
+package com.aistudio.pinkproxy.fresh
+
+import android.util.Log
+import java.util.concurrent.ThreadLocalRandom
+import java.util.concurrent.atomic.AtomicInteger
+
+object DpiStrategySelector {
+
+    fun getBestStrategy(category: HostCategory, host: String? = null): BypassStrategy {
+        val now = System.currentTimeMillis()
+        val netType = BypassConfig.currentNetworkType.value.toString()
+        
+        if (DpiEngine.isPanicMode.value || ProxyStats.censorshipIntensity.value > 92) {
+             return getBestExtremeStrategy(host)
+        }
+
+        if (host != null) {
+            val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
+            if (hostFails > 4) {
+                val lastMem = DpiEngine.hostSpecificMemory[host]
+                if (lastMem != null) {
+                    val escalated = getFallbackStrategy(lastMem.strategy)
+                    if (escalated != null && (DpiEngine.circuitBreakers[escalated] ?: 0L) < now) {
+                        return escalated
+                    }
+                }
+                return getBestExtremeStrategy(host)
+            }
+        }
+
+        if (ProxyStats.censorshipIntensity.value > 95) {
+            val nuclear = listOf(BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.UDP_COMBINED_NUCLEAR, BypassStrategy.UDP_RACING)
+            val bestNuclear = nuclear.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_NUCLEAR
+            if ((DpiEngine.circuitBreakers[bestNuclear] ?: 0L) < now) return bestNuclear
+        } else if (ProxyStats.censorshipIntensity.value > 85) {
+            val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID, BypassStrategy.TCP_PULSE_FRAG)
+            val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_HYBRID
+            if ((DpiEngine.circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
+        }
+
+        DpiEngine.networkStrategyMemory[netType]?.get(category)?.let { strat ->
+            if ((DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
+                val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
+                if (blacklistedUntil < now) {
+                    return strat
+                }
+            }
+        }
+
+        val catScores = DpiEngine.strategyScores[category] ?: return BypassStrategy.SNI_SPLIT
+        
+        val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
+        val validStrategies = catScores.entries.filter { (strat, _) ->
+            (DpiEngine.circuitBreakers[strat] ?: 0L) < now && (hostBlacklist?.get(strat) ?: 0L) < now
+        }
+        
+        if (validStrategies.isEmpty()) {
+            if (host != null) DpiEngine.hostStrategyBlacklist.remove(host)
+            DpiEngine.circuitBreakers.clear()
+            return BypassStrategy.CHAOS
+        }
+
+        val rnd = ThreadLocalRandom.current()
+        if (rnd.nextInt(100) < 7) {
+            return validStrategies.random().key
+        }
+
+        val weightedList = mutableListOf<Pair<BypassStrategy, Double>>()
+        var currentTotal = 0.0
+        val currentDpi = ProxyStats.currentDpiType.value
+        
+        for ((strat, sRaw) in validStrategies) {
+            var s = sRaw.get().toDouble()
+            
+            val gPenalty = DpiEngine.globalPenalties[strat]?.get() ?: 0
+            val gBoost = DpiEngine.globalBoosts[strat]?.get() ?: 0
+            s = (s - gPenalty + gBoost).coerceAtLeast(1.0)
+
+            val globalScore = ProxyStats.getStrategyScore(strat).toDouble()
+            if (globalScore > 0) s += globalScore * 5
+            else if (globalScore < 0) s += globalScore * 10
+            
+            s = s.coerceAtLeast(1.0)
+            s += (DpiEngine.strategyMaturity[strat]?.get() ?: 0) / 6.0
+            
+            when (currentDpi) {
+                DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
+                DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
+                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 1.8
+                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.5
+                else -> {}
+            }
+            
+            when (category) {
+                HostCategory.STREAMING, HostCategory.SOCIAL -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 1.4
+                HostCategory.AI, HostCategory.FINANCE -> if (strat.family == StrategyFamily.FRAGMENTATION) s *= 1.3
+                else -> {}
+            }
+
+            if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20) {
+                when (strat.group) {
+                    StrategyGroup.EXTREME -> s *= 0.2
+                    StrategyGroup.HEAVY -> s *= 0.5
+                    StrategyGroup.MEDIUM -> s *= 0.8
+                    StrategyGroup.LIGHT -> s *= 1.5
+                }
+            }
+            if (BypassConfig.thermalStatus >= 3) {
+                 if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 0.3
+            }
+            
+            val latency = DpiEngine.strategyLatency[strat]?.get() ?: 200L
+            val latencyPenalty = (latency / 15.0).coerceAtMost(60.0)
+            val weight = (s - latencyPenalty).coerceAtLeast(5.0)
+            
+            weightedList.add(strat to weight)
+            currentTotal += weight
+        }
+
+        if (currentTotal <= 0 || weightedList.isEmpty()) {
+            return validStrategies.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
+        }
+
+        var randomPivot = rnd.nextDouble() * currentTotal
+        for ((strat, weight) in weightedList) {
+            randomPivot -= weight
+            if (randomPivot <= 1e-9) return strat
+        }
+
+        return weightedList.last().first
+    }
+
+    fun getBestExtremeStrategy(host: String? = null): BypassStrategy {
+        val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+        val extreme = DpiEngine.strategyScores[cat]?.entries?.filter { it.key.group == StrategyGroup.EXTREME } ?: emptyList()
+        if (extreme.isEmpty()) {
+            return BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
+                .maxByOrNull { getAverageScore(it) } ?: BypassStrategy.ZAPRET_EXTREME
+        }
+        return extreme.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.ZAPRET_EXTREME
+    }
+
+    fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {
+        return DpiEngine.strategyChains[failedStrategy]
+    }
+
+    fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null): BypassStrategy {
+        val candidates = BypassStrategy.entries.filter { 
+            (it.group == StrategyGroup.EXTREME || it.group == StrategyGroup.HEAVY) && 
+            it != failed &&
+            (if (category != null) (it.family == failed?.family) else true)
+        }
+        return if (candidates.isNotEmpty()) candidates.random() else BypassStrategy.ZAPRET_EXTREME
+    }
+
+    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
+        if (success) {
+            DpiEngine.successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            DpiEngine.strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            DpiEngine.globalPenalties[strategy]?.updateAndGet { (it * 0.8).toInt() }
+            DpiEngine.globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(5)
+
+            DpiEngine.strategyScores[category]?.get(strategy)?.let { score ->
+                val bonus = if (latencyMs in 1..300) 35 else 15
+                score.addAndGet(bonus)
+                if (score.get() > 3000) score.set(3000)
+            }
+            
+            if (host != null) {
+                DpiEngine.hostStrategyBlacklist[host]?.remove(strategy)
+                DpiEngine.consecutiveFailuresByHost[host]?.set(0)
+                DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, System.currentTimeMillis())
+                
+                val netType = BypassConfig.currentNetworkType.value.toString()
+                val netMemory = DpiEngine.networkStrategyMemory.getOrPut(netType) { java.util.concurrent.ConcurrentHashMap() }
+                if ((DpiEngine.strategyMaturity[strategy]?.get() ?: 0) > 3) {
+                    netMemory[category] = strategy
+                }
+            }
+
+            if (latencyMs > 0) {
+                val currentAvg = DpiEngine.strategyLatency.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0) }
+                if (currentAvg.get() == 0L) currentAvg.set(latencyMs)
+                else currentAvg.set((currentAvg.get() * 7 + latencyMs) / 8)
+            }
+            DpiEngine.consecutiveFailures.remove(strategy)
+            DpiEngine.circuitBreakers.remove(strategy)
+        } else {
+            DpiEngine.failureHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) {
+                ProxyStats.recordCensorshipEvent(true)
+            }
+            if (host != null) {
+                DpiEngine.consecutiveFailuresByHost.getOrPut(host) { AtomicInteger(0) }.incrementAndGet()
+            }
+
+            val penalty = when (reason) {
+                FailureReason.TCP_RESET -> {
+                    DpiEngine.globalPenalties.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(50)
+                    DpiEngine.globalBoosts[strategy]?.set(0)
+                    120
+                }
+                FailureReason.CENSORSHIP_STALL -> {
+                    DpiEngine.globalPenalties.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(80)
+                    DpiEngine.globalBoosts[strategy]?.set(0)
+                    150
+                }
+                else -> 40
+            }
+            DpiEngine.strategyScores[category]?.get(strategy)?.let { it.addAndGet(-penalty); if (it.get() < 0) it.set(0) }
+            
+            val fails = DpiEngine.consecutiveFailures.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            if (fails >= 4 || (fails >= 2 && reason == FailureReason.TCP_RESET)) {
+                val duration = if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) 600_000L else 300_000L
+                DpiEngine.circuitBreakers[strategy] = System.currentTimeMillis() + duration
+                DpiEngine.consecutiveFailures.remove(strategy)
+            }
+            if (host != null && (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL)) {
+                val hostBlacklist = DpiEngine.hostStrategyBlacklist.getOrPut(host) { java.util.concurrent.ConcurrentHashMap() }
+                val currentLevel = hostBlacklist[strategy] ?: 0L
+                val waitTime = if (System.currentTimeMillis() > currentLevel) 900_000L else 3_600_000L
+                hostBlacklist[strategy] = System.currentTimeMillis() + waitTime
+            }
+        }
+    }
+
+    fun getAverageScore(strategy: BypassStrategy): Double {
+        val scores = DpiEngine.strategyScores.values.map { it[strategy]?.get() ?: 0 }.map { it.toDouble() }
+        if (scores.isEmpty()) return 0.0
+        return scores.average()
+    }
+
+    fun getStrategyMetrics(): List<StrategyMetric> {
+        return BypassStrategy.entries.map { strat ->
+            val successes = DpiEngine.successHistory[strat]?.get()?.toLong() ?: 0L
+            val failures = DpiEngine.failureHistory[strat]?.get()?.toLong() ?: 0L
+            val avgRtt = DpiEngine.strategyLatency[strat]?.get() ?: 0L
+            val score = getAverageScore(strat).toInt()
+            StrategyMetric(strat, score, successes, failures, avgRtt)
+        }.sortedByDescending { it.score }
+    }
+}

@@ -411,6 +411,26 @@ object FakePacketHelper {
         }
     }
 
+    fun buildQuicInitial(size: Int): ByteArray = buildUdpNoise(size).apply {
+        if (size > 5) {
+            this[0] = 0xC3.toByte()
+            this[1] = 0; this[2] = 0; this[3] = 0; this[4] = 1
+        }
+    }
+
+    fun buildDtlsClientHello(): ByteArray = buildFakeDtlsClientHello()
+
+    fun buildUdpProtocolFake(type: String): ByteArray {
+        return when(type.uppercase()) {
+            "WIREGUARD" -> buildWireguardFake()
+            "IKE" -> buildIkeHandshake()
+            "DHCP" -> buildDhcpRequest()
+            "TELEGRAM" -> buildTelegramFake()
+            "DISCORD" -> buildDiscordFake()
+            else -> buildUdpNoise(64)
+        }
+    }
+
     fun buildStunBindingRequest(): ByteArray {
         val data = ByteArray(20)
         val buf = ByteBuffer.wrap(data)
@@ -747,6 +767,24 @@ object FakePacketHelper {
     fun injectTlsPadding(data: ByteArray, length: Int, padSize: Int): ByteArray {
         val padding = buildUdpNoise(padSize)
         return injectExtension(data, length, 0x0015, padding)
+    }
+
+    fun buildChromeHello(host: String): ByteArray {
+        val base = buildFakeClientHello(host, 32)
+        // Add more Chrome-specific extensions like GREASE, padding, etc.
+        return injectTlsGrease(base, base.size)
+    }
+
+    fun buildFirefoxHello(host: String): ByteArray {
+        val base = buildFakeClientHello(host, 32)
+        // Firefox specific fingerprinting
+        return base
+    }
+
+    fun buildTls13Hello(host: String): ByteArray {
+        val base = buildFakeClientHello(host, 32)
+        // Tls13 specifically requires supported_versions and key_share (already partially in buildFakeClientHello)
+        return base
     }
 
     fun buildTelegramFake(): ByteArray {

@@ -233,7 +233,7 @@ object RecoveryManager {
                         }
                         
                         // Dynamic TTL shifting
-                        val currentTtl = BypassConfig.currentTtl.value
+                        val currentTtl = BypassConfig.currentTtl
                         val newTtl = if (currentTtl == 64) 128 else if (currentTtl == 128) 255 else 64
                         BypassConfig.setTtl(newTtl)
                         ProxyStats.logRecovery("Watchdog: Shifting TTL to $newTtl due to $event")
