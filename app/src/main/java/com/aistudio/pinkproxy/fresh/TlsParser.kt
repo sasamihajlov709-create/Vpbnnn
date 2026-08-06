@@ -139,19 +139,17 @@ object TlsParser {
         return -1
     }
 
-    fun getAlpn(buffer: ByteArray, length: Int): String? {
-        if (length < 44) return null
-        if (buffer[0] != 0x16.toByte() || buffer[5] != 0x01.toByte()) return null
-        
+    fun isTls13(buffer: ByteArray, length: Int): Boolean {
+        if (!isClientHello(buffer, length)) return false
         try {
             val sessionIdLen = buffer[43].toInt() and 0xFF
             var pos = 44 + sessionIdLen
-            if (pos + 1 >= length) return null
+            if (pos + 1 >= length) return false
             val cipherSuitesLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2 + cipherSuitesLen
-            if (pos >= length) return null
+            if (pos >= length) return false
             pos += 1 + (buffer[pos].toInt() and 0xFF)
-            if (pos + 1 >= length) return null
+            if (pos + 1 >= length) return false
             val extensionsLen = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
             pos += 2
             val extEnd = minOf(pos + extensionsLen, length)
@@ -159,20 +157,31 @@ object TlsParser {
             while (pos + 3 < extEnd) {
                 val extType = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
                 val extLen = ((buffer[pos + 2].toInt() and 0xFF) shl 8) or (buffer[pos + 3].toInt() and 0xFF)
-                
-                if (extType == 16) { // ALPN
-                    if (pos + 6 < extEnd) {
-                        val alpnListLen = ((buffer[pos + 4].toInt() and 0xFF) shl 8) or (buffer[pos + 5].toInt() and 0xFF)
-                        val protoLen = buffer[pos + 6].toInt() and 0xFF
-                        if (pos + 7 + protoLen <= extEnd) {
-                            return String(buffer, pos + 7, protoLen, java.nio.charset.StandardCharsets.US_ASCII)
+                if (extType == 0x002b) { // Supported Versions
+                    var vPos = pos + 4
+                    if (vPos + 1 <= extEnd) {
+                        val vLen = buffer[vPos].toInt() and 0xFF
+                        vPos++
+                        for (i in 0 until vLen step 2) {
+                            if (vPos + i + 1 < extEnd) {
+                                val v = ((buffer[vPos + i].toInt() and 0xFF) shl 8) or (buffer[vPos + i + 1].toInt() and 0xFF)
+                                if (v == 0x0304) return true
+                            }
                         }
                     }
                 }
                 pos += 4 + extLen
             }
         } catch (e: Throwable) {}
-        return null
+        return false
+    }
+
+    /**
+     * Extracts the ClientHello version (Legacy version)
+     */
+    fun getLegacyVersion(buffer: ByteArray, length: Int): Int {
+        if (length < 11) return -1
+        return ((buffer[9].toInt() and 0xFF) shl 8) or (buffer[10].toInt() and 0xFF)
     }
 
     fun getTlsRecordLength(buffer: ByteArray, offset: Int, length: Int): Int {

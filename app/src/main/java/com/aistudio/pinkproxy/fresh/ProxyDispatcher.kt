@@ -7,8 +7,8 @@ object ProxyDispatcher {
     @Volatile var context: android.content.Context? = null
 
     private val cpuCores = Runtime.getRuntime().availableProcessors()
-    private val corePoolSize = Math.max(16, cpuCores * 4)
-    private val maxPoolSize = Math.max(128, cpuCores * 16)
+    private val corePoolSize = Math.max(64, cpuCores * 8)
+    private val maxPoolSize = Math.max(512, cpuCores * 32)
 
     val io = java.util.concurrent.ThreadPoolExecutor(
         corePoolSize,

@@ -23,6 +23,8 @@ enum class FailureReason {
     CENSORSHIP_STALL,
     DNS_POISONED,
     MTU_EXCEEDED,
+    PROTOCOL_ERROR,
+    HANDSHAKE_TIMEOUT,
     UNKNOWN
 }
 
@@ -162,6 +164,7 @@ enum class BypassStrategy(
     WS_HANDSHAKE_FAKE(StrategyFamily.HTTP, 3, 3, StrategyGroup.MEDIUM),
     SSH_HANDSHAKE_FAKE(StrategyFamily.TCP, 3, 3, StrategyGroup.MEDIUM),
     HTTP2_PREAMBLE_FAKE(StrategyFamily.HTTP, 3, 3, StrategyGroup.MEDIUM),
+    TCP_REARRANGE_CHUNKS(StrategyFamily.FRAGMENTATION, 5, 4, StrategyGroup.HEAVY),
     TLS_0RTT_FAKE(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
     TCP_DATA_OOB_SKEW(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
     TCP_SACK_FAKE(StrategyFamily.TCP, 3, 3, StrategyGroup.HEAVY),
@@ -276,7 +279,52 @@ enum class DpiType {
 
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())
 
+data class ActiveFlow(
+    val id: String,
+    val host: String,
+    val type: String, // "TCP" or "UDP"
+    val strategy: BypassStrategy,
+    val startTime: Long = System.currentTimeMillis(),
+    var bytesSent: Long = 0,
+    var bytesReceived: Long = 0,
+    var status: String = "ACTIVE"
+)
+
 object ProxyStats {
+    private val _activeFlows = MutableStateFlow<Map<String, ActiveFlow>>(emptyMap())
+    val activeFlows: StateFlow<List<ActiveFlow>> = _activeFlows.map { it.values.toList().sortedByDescending { f -> f.startTime } }
+        .stateIn(CoroutineScope(Dispatchers.Default), SharingStarted.Eagerly, emptyList())
+
+    fun registerFlow(id: String, host: String, type: String, strategy: BypassStrategy) {
+        _activeFlows.update { it + (id to ActiveFlow(id, host, type, strategy)) }
+    }
+
+    fun updateFlow(id: String, sent: Long = 0, received: Long = 0, status: String? = null) {
+        _activeFlows.update { current ->
+            current[id]?.let { flow ->
+                val updated = flow.copy(
+                    bytesSent = flow.bytesSent + sent,
+                    bytesReceived = flow.bytesReceived + received,
+                    status = status ?: flow.status
+                )
+                current + (id to updated)
+            } ?: current
+        }
+    }
+
+    fun removeFlow(id: String) {
+        _activeFlows.update { it - id }
+    }
+
+    fun closeFlow(id: String) {
+        updateFlow(id, status = "CLOSED")
+        // Remove after some delay to let UI show it closed
+        CoroutineScope(Dispatchers.Default).launch {
+            delay(5000)
+            removeFlow(id)
+        }
+    }
+
     private val _dpiEventHistory = MutableStateFlow(emptyList<DpiEvent>())
     val dpiEventHistory: StateFlow<List<DpiEvent>> = _dpiEventHistory.asStateFlow()
 
@@ -446,6 +494,16 @@ object ProxyStats {
 
     private val _trafficLog = MutableStateFlow(emptyList<String>())
     val trafficLog: StateFlow<List<String>> = _trafficLog.asStateFlow()
+
+    fun logRecovery(msg: String) {
+        Log.i("ProxyStats", "RECOVERY: $msg")
+        _recoveryLog.update { (it + msg).takeLast(100) }
+    }
+
+    fun logTraffic(msg: String) {
+        Log.v("ProxyStats", "TRAFFIC: $msg")
+        _trafficLog.update { (it + msg).takeLast(100) }
+    }
 
     private val _signalQuality = MutableStateFlow(100)
     val signalQuality: StateFlow<Int> = _signalQuality.asStateFlow()
@@ -642,12 +700,6 @@ object ProxyStats {
         _censorshipIntensity.update { (it + 5).coerceAtMost(100) }
         _successRate.update { (it * 0.98).toInt().coerceIn(0, 100) }
         _stabilityScore.update { (it - 3).coerceAtLeast(0) }
-    }
-
-    fun logRecovery(msg: String) {
-        _recoveryLog.update { current ->
-            (listOf("[${java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(Date())}] $msg") + current).take(100)
-        }
     }
 
     fun addTraffic(host: String) {

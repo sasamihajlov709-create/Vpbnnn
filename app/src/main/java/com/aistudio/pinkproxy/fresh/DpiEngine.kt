@@ -305,7 +305,8 @@ object DpiEngine {
         strategyChains[BypassStrategy.TLS_SNI_FRAGMENT] = BypassStrategy.TLS_APP_DATA_SPLIT
         strategyChains[BypassStrategy.TLS_APP_DATA_SPLIT] = BypassStrategy.BYEBYEDPI_HYBRID
         strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.TCP_SEGMENT_OVERLAP
-        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.TCP_DATA_DESYNC_OVERLAP
+        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.TCP_REARRANGE_CHUNKS
+        strategyChains[BypassStrategy.TCP_REARRANGE_CHUNKS] = BypassStrategy.TCP_DATA_DESYNC_OVERLAP
         strategyChains[BypassStrategy.TCP_DATA_DESYNC_OVERLAP] = BypassStrategy.TCP_TRIPLE_DESYNC
         strategyChains[BypassStrategy.TCP_TRIPLE_DESYNC] = BypassStrategy.TCP_FAKE_FIN
         strategyChains[BypassStrategy.TCP_FAKE_FIN] = BypassStrategy.TCP_COMBINED_NUCLEAR
@@ -404,25 +405,30 @@ object DpiEngine {
             }
 
             val penalty = when (reason) {
-                FailureReason.TCP_RESET -> 100 // High confidence DPI block
-                FailureReason.CENSORSHIP_STALL -> 120
-                FailureReason.DNS_POISONED -> 50
-                FailureReason.SSL_HANDSHAKE_ERROR -> 60
+                FailureReason.TCP_RESET -> 120 // High confidence DPI block
+                FailureReason.CENSORSHIP_STALL -> 150 // Most severe
+                FailureReason.DNS_POISONED -> 60
+                FailureReason.SSL_HANDSHAKE_ERROR -> 80
                 FailureReason.MTU_EXCEEDED -> 40
-                FailureReason.TIMEOUT -> 30
-                else -> 35
+                FailureReason.TIMEOUT -> 35
+                FailureReason.CONNECTION_REFUSED -> 70
+                FailureReason.PROTOCOL_ERROR -> 100
+                FailureReason.HANDSHAKE_TIMEOUT -> 90
+                else -> 40
             }
             
             strategyScores[category]?.get(strategy)?.let { score ->
                 score.addAndGet(-penalty)
-                if (score.get() < 5) score.set(5)
+                if (score.get() < 0) score.set(0) // Minimum score 0
             }
             
             val fails = consecutiveFailures.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
-            if (fails >= 5) {
-                // Trigger circuit breaker for 5 minutes
-                circuitBreakers[strategy] = System.currentTimeMillis() + 300_000
-                Log.w("DpiEngine", "Circuit breaker triggered for $strategy due to $fails consecutive failures")
+            if (fails >= 4 || (fails >= 2 && reason == FailureReason.TCP_RESET)) {
+                // Trigger circuit breaker: 10m for resets/stalls, 5m for others
+                val duration = if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) 600_000L else 300_000L
+                circuitBreakers[strategy] = System.currentTimeMillis() + duration
+                Log.w("DpiEngine", "Circuit breaker active for $strategy due to $fails fails ($reason). Duration: ${duration/1000}s")
+                consecutiveFailures.remove(strategy)
             }
 
             if (host != null && (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL)) {

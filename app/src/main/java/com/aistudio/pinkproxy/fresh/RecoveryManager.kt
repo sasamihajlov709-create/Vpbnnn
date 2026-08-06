@@ -31,6 +31,22 @@ object RecoveryManager {
     private var healthCheckJob: Job? = null
     private var stallMonitorJob: Job? = null
 
+    private val blacklistedHosts = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    
+    fun isHostBlacklisted(host: String): Boolean {
+        val expiry = blacklistedHosts[host] ?: return false
+        if (System.currentTimeMillis() > expiry) {
+            blacklistedHosts.remove(host)
+            return false
+        }
+        return true
+    }
+
+    fun blacklistHost(host: String, durationMs: Long = 300000) {
+        blacklistedHosts[host] = System.currentTimeMillis() + durationMs
+        Log.i("RecoveryManager", "Host $host blacklisted for ${durationMs/1000}s")
+    }
+
     fun startHealthCheck(scope: CoroutineScope) {
         healthCheckJob?.cancel()
         healthCheckJob = scope.launch(ProxyDispatcher.io) {
@@ -40,10 +56,13 @@ object RecoveryManager {
                 try {
                     // Adaptive delay: 60s if active, 120s if idle
                     val activeConns = ProxyStats.activeConnections.value
-                    val delayMs = if (activeConns > 0) 60000L else 120000L
+                    val delayMs = if (activeConns > 0) 45000L else 90000L
                     delay(delayMs)
                     
                     val now = System.currentTimeMillis()
+                    
+                    // Periodically clean blacklist
+                    blacklistedHosts.entries.removeIf { it.value < now }
                     
                     // Strategy Cooling: Periodically try to reduce escalation if things are stable
                     if (now - lastCoolDown > 600000) { // Every 10 minutes
@@ -60,14 +79,15 @@ object RecoveryManager {
                     }
                     
                     if (activeConns > 0) {
-                        if (ProxyStats.censorshipIntensity.value > 90 && ProxyStats.successRate.value < 25) {
-                            handleEvent(RecoveryEvent.TUNNEL_STALL, "Critical success rate drop during active session")
+                        val rate = ProxyStats.successRate.value
+                        if (ProxyStats.censorshipIntensity.value > 85 && rate < 30) {
+                            handleEvent(RecoveryEvent.TUNNEL_STALL, "Low success rate ($rate%) with high intensity")
                         }
                         
                         // Monitor RTT for suspicious spikes
                         val currentRtt = ProxyStats.lastLatency.value
-                        if (currentRtt > 1500) {
-                            handleEvent(RecoveryEvent.HIGH_RTT, "Suspicious latency spike: $currentRtt ms")
+                        if (currentRtt > 2500) {
+                            handleEvent(RecoveryEvent.HIGH_RTT, "Extreme latency spike: $currentRtt ms")
                         }
                     }
                     
@@ -89,14 +109,18 @@ object RecoveryManager {
             var stallCounter = 0
             
             while (isActive) {
-                delay(5000)
+                val rtt = BypassConfig.currentRttMs.value
+                val checkInterval = if (rtt > 800) 8000L else 5000L
+                delay(checkInterval)
+                
                 val currentBytes = ProxyStats.bytesTransferred.value
                 val activeConns = ProxyStats.activeConnections.value
                 
                 if (activeConns > 0 && currentBytes == lastBytes) {
                     stallCounter++
-                    if (stallCounter >= 3) { // 15 seconds of no traffic with active conns
-                        handleEvent(RecoveryEvent.TUNNEL_STALL, "No traffic for 15s with $activeConns active connections")
+                    val threshold = if (rtt > 1000) 4 else 3
+                    if (stallCounter >= threshold) { 
+                        handleEvent(RecoveryEvent.TUNNEL_STALL, "No traffic for ${stallCounter * checkInterval / 1000}s with $activeConns active connections")
                         stallCounter = 0
                     }
                 } else {

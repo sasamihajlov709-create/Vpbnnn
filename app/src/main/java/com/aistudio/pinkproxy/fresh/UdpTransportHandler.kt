@@ -88,6 +88,9 @@ object UdpTransportHandler {
                             for (work in udpOutChannels[i]) {
                                 if (outSocket.isClosed) break
                                 val (packet, targetHost) = work
+                                if (RecoveryManager.isHostBlacklisted(targetHost)) {
+                                    continue
+                                }
                                 activeSessions["${packet.address.hostAddress}:${packet.port}"] = System.currentTimeMillis()
                                 
                                 var currentConfig = BypassConfig.getSessionConfig(targetHost, BypassConfig.getBestStrategyForHost(targetHost), BypassConfig.currentRttMs.value)
@@ -140,17 +143,22 @@ object UdpTransportHandler {
                                     break
                                 }
 
-                                if (clientUdpAddress != null) {
-                                    val addrBytes = packet.address.address
+                                val currentClientAddr = clientUdpAddress
+                                val currentClientPort = clientUdpPort
+                                if (currentClientAddr != null) {
+                                    val addr = packet.address ?: continue
+                                    val addrBytes = addr.address
                                     var offset = 0
                                     respBuffer[offset++] = 0; respBuffer[offset++] = 0; respBuffer[offset++] = 0
-                                    if (addrBytes.size == 4) { respBuffer[offset++] = 1 } else { respBuffer[offset++] = 4 }
+                                    respBuffer[offset++] = if (addrBytes.size == 4) 1.toByte() else 4.toByte()
                                     System.arraycopy(addrBytes, 0, respBuffer, offset, addrBytes.size); offset += addrBytes.size
-                                    respBuffer[offset++] = (packet.port shr 8).toByte(); respBuffer[offset++] = (packet.port and 0xFF).toByte()
+                                    val p = packet.port
+                                    respBuffer[offset++] = (p ushr 8).toByte()
+                                    respBuffer[offset++] = (p and 0xFF).toByte()
                                     System.arraycopy(packet.data, packet.offset, respBuffer, offset, packet.length); offset += packet.length
                                     
-                                    outPacket.address = clientUdpAddress
-                                    outPacket.port = clientUdpPort
+                                    outPacket.address = currentClientAddr
+                                    outPacket.port = currentClientPort
                                     outPacket.setData(respBuffer, 0, offset)
                                     try {
                                         if (!udpSocket.isClosed) {
@@ -161,7 +169,7 @@ object UdpTransportHandler {
                                 }
                             }
                         } catch (e: Throwable) {
-                            if (e !is CancellationException) Log.v("UdpTransport", "Target->Client error: ${e.message}")
+                            if (e !is CancellationException) Log.v("UdpTransport", "T2C error: ${e.message}")
                         } finally {
                             ProxyStats.release64k(buffer)
                             ProxyStats.release64k(respBuffer)

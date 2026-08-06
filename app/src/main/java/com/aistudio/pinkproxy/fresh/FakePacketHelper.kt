@@ -459,9 +459,60 @@ object FakePacketHelper {
 
     fun buildFakeHttpRequest(host: String): ByteArray = "GET / HTTP/1.1\r\nHost: $host\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n".toByteArray()
 
+    fun buildRealisticHttp2Header(): ByteArray {
+        val data = ByteArray(24)
+        val buf = ByteBuffer.wrap(data)
+        buf.put("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toByteArray())
+        return data
+    }
+
+    fun buildAlpnExtension(protocols: List<String>): ByteArray {
+        val out = ByteArrayOutputStream()
+        val dos = DataOutputStream(out)
+        val protoBytes = ByteArrayOutputStream()
+        for (p in protocols) {
+            protoBytes.write(p.length)
+            protoBytes.write(p.toByteArray(StandardCharsets.UTF_8))
+        }
+        val pb = protoBytes.toByteArray()
+        dos.writeShort(pb.size)
+        dos.write(pb)
+        return out.toByteArray()
+    }
+
     fun buildRealisticTlsHello(host: String): ByteArray {
         val base = buildFakeClientHello(host, 32)
-        return injectExtension(base, base.size, 0x0017, buildUdpNoise(16)) // Extended Master Secret
+        var current = injectExtension(base, base.size, 0x0017, buildUdpNoise(16)) // Extended Master Secret
+        
+        // Add ALPN (h2, http/1.1)
+        val alpn = buildAlpnExtension(listOf("h2", "http/1.1"))
+        current = injectExtension(current, current.size, 0x0010, alpn)
+        
+        // Add Cookie (to look more like a retry/resumption)
+        if (ThreadLocalRandom.current().nextBoolean()) {
+            current = injectExtension(current, current.size, 0x002c, buildUdpNoise(32))
+        }
+        
+        return current
+    }
+
+    fun buildFakeServerHello(host: String): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val innerLen = 2 + 32 + 1 + 32 + 2 + 1 + 2 + 32 // Version + Random + SessionId + Cipher + Compression + Exts
+        val totalSize = 5 + 4 + innerLen
+        
+        val data = ByteArray(totalSize)
+        val buf = ByteBuffer.wrap(data)
+        buf.put(22.toByte()); buf.putShort(0x0303.toShort()); buf.putShort((totalSize - 5).toShort())
+        buf.put(2.toByte()); buf.put((innerLen shr 16).toByte()); buf.put((innerLen shr 8).toByte()); buf.put((innerLen and 0xFF).toByte())
+        buf.putShort(0x0303.toShort())
+        val rnd32 = ByteArray(32); rnd.nextBytes(rnd32); buf.put(rnd32)
+        buf.put(32.toByte()); val sid = ByteArray(32); rnd.nextBytes(sid); buf.put(sid)
+        buf.putShort(0x1301.toShort()) // TLS_AES_128_GCM_SHA256
+        buf.put(0.toByte())
+        buf.putShort(32.toShort()); val exts = ByteArray(32); rnd.nextBytes(exts); buf.put(exts)
+        
+        return data
     }
 
     fun buildFakeClientHello(host: String, sidLen: Int): ByteArray {

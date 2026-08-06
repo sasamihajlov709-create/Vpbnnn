@@ -85,6 +85,46 @@ object StrategyHandlers {
             return
         }
 
+        if (strategy == BypassStrategy.TCP_REARRANGE_CHUNKS) {
+            if (length > 100) {
+                val c1Size = length / 3
+                val c2Size = length / 3
+                val c3Size = length - c1Size - c2Size
+                
+                val fakeTtl = getFakeTtl(host, rnd)
+                
+                // 1. Ghost C1
+                TtlHelper.setTtl(socket, fakeTtl)
+                output.write(data, 0, c1Size)
+                output.flush()
+                delay(rnd.nextLong(2, 5))
+                
+                // 2. Ghost C1+C2
+                output.write(data, 0, c1Size + c2Size)
+                output.flush()
+                delay(rnd.nextLong(2, 5))
+                
+                // 3. Real C1
+                TtlHelper.setTtl(socket, 64)
+                output.write(data, 0, c1Size)
+                output.flush()
+                delay(rnd.nextLong(1, 3))
+                
+                // 4. Real C2
+                output.write(data, c1Size, c2Size)
+                output.flush()
+                delay(rnd.nextLong(1, 3))
+                
+                // 5. Real C3
+                output.write(data, c1Size + c2Size, c3Size)
+                output.flush()
+            } else {
+                output.write(data, 0, length)
+                output.flush()
+            }
+            return
+        }
+
         if (strategy == BypassStrategy.HTTP_FRAGMENT) {
             var pos = 0
             while (pos < length) {
@@ -1113,6 +1153,16 @@ object StrategyHandlers {
             return
         }
         
+        if (strategy == BypassStrategy.BYEBYEDPI_EXTREME || strategy == BypassStrategy.BYEBYEDPI_HYBRID) {
+            handleByeByeDpiExtreme(socket, output, data, length, rnd, host, config)
+            return
+        }
+        
+        if (strategy == BypassStrategy.ZAPRET_EXTREME) {
+            handleZapretExtreme(socket, output, data, length, rnd, host, config)
+            return
+        }
+        
         val split1 = (length / 4).coerceAtLeast(1)
         val split2 = (length / 2).coerceAtLeast(split1 + 1)
         if (length > 20) {
@@ -1132,39 +1182,145 @@ object StrategyHandlers {
         }
     }
 
+    private suspend fun sendDecoyStorm(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
+        try {
+            val configuredTtl = config.fakeTtl
+            val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(3, 7)
+            
+            // Multiple decoys in sequence to exhaust stateful inspection
+            val decoys = listOf(
+                FakePacketHelper.buildRealisticHttp2Header(),
+                FakePacketHelper.buildRealisticTlsHello("blocked.content.internal"),
+                FakePacketHelper.buildHttpChaosPacket(),
+                FakePacketHelper.buildStunBindingRequest(),
+                FakePacketHelper.buildRealisticTlsHello(host).also { 
+                    if (it.size > 10) it[it.size-1] = rnd.nextInt().toByte() // Corrupt slightly
+                }
+            ).shuffled()
+
+            for (decoy in decoys.take(rnd.nextInt(3, 5))) {
+                TtlHelper.setTtl(socket, fakeTtl)
+                out.write(decoy)
+                out.flush()
+                delay(rnd.nextLong(1, 4))
+            }
+            TtlHelper.setTtl(socket, 64) // Restore normal TTL
+        } catch (e: Throwable) {
+            // Log.v("StrategyHandlers", "Decoy storm failed: ${e.message}")
+        }
+    }
+
+    private suspend fun handleByeByeDpiExtreme(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
+        ProxyStats.logTraffic("Triggering ByeByeDPI Extreme for $host")
+        // Inspired by ByeByeDPI: sequence of out-of-order and ghost segments
+        val intensity = ProxyStats.censorshipIntensity.value
+        val sniPos = TlsParser.findSniOffset(data, length, host)
+        val splitPos = if (sniPos > 0) sniPos else (length / 2).coerceAtLeast(1)
+        
+        // 1. Send OOB/Urgent noise to confuse stateful DPI
+        if (intensity > 70) {
+            try { socket.sendUrgentData(rnd.nextInt(1, 255)) } catch (e: Throwable) {}
+        }
+        
+        // 2. Ghost Disorder: Send second half with low TTL first
+        val fakeTtl = config.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 5)
+        TtlHelper.setTtl(socket, fakeTtl)
+        output.write(data, splitPos, length - splitPos)
+        output.flush()
+        delay(rnd.nextLong(2, 10))
+        
+        // 3. Real First Half
+        TtlHelper.setTtl(socket, 64)
+        output.write(data, 0, splitPos)
+        output.flush()
+        delay(rnd.nextLong(5, 15))
+        
+        // 4. Real Second Half
+        output.write(data, splitPos, length - splitPos)
+        output.flush()
+    }
+
+    private suspend fun handleZapretExtreme(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
+        ProxyStats.logTraffic("Triggering Zapret Extreme for $host")
+        // Inspired by Zapret: combine header mangling with extreme fragmentation
+        val intensity = ProxyStats.censorshipIntensity.value
+        
+        if (TlsParser.isClientHello(data, length)) {
+            // Extreme fragmentation for TLS
+            var pos = 0
+            while (pos < length) {
+                val sz = if (pos == 0) rnd.nextInt(1, 5) else rnd.nextInt(5, 40)
+                val chunk = sz.coerceAtMost(length - pos)
+                
+                // Inject fake retransmission occasionally
+                if (intensity > 80 && rnd.nextInt(100) < 20) {
+                    TtlHelper.setTtl(socket, 2)
+                    output.write(data, pos, chunk)
+                    output.flush()
+                    delay(2)
+                    TtlHelper.setTtl(socket, 64)
+                }
+                
+                output.write(data, pos, chunk)
+                output.flush()
+                pos += chunk
+                if (pos < length) delay(rnd.nextLong(5, 20))
+            }
+        } else {
+            // Generic fallback
+            output.write(data, 0, length)
+            output.flush()
+        }
+    }
+
     private suspend fun handleNuclearStrategy(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
+        ProxyStats.logTraffic("Triggering NUCLEAR bypass for $host")
         // Multi-stage fragmentation with desync, window oscillation and fake retransmissions
         val intensity = ProxyStats.censorshipIntensity.value
-        val splitPos = TlsParser.findSniOffset(data, length, host).coerceAtLeast(length / 2).coerceAtMost(length - 1)
+        val sniPos = TlsParser.findSniOffset(data, length, host)
+        val splitPos = if (sniPos > 0) sniPos else (length / 2).coerceAtLeast(1)
         
         // 1. Initial desync: Set tiny window
-        TtlHelper.setWindowSize(socket, rnd.nextInt(1, 10))
+        TtlHelper.setWindowSize(socket, rnd.nextInt(1, 20))
         
-        // 2. Send first fragment (pre-SNI) with low TTL decoy if high intensity
-        if (intensity > 85) {
-            val decoy = FakePacketHelper.buildRealisticTlsHello("decoy.internal")
-            TtlHelper.setTtl(socket, config.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 6))
-            output.write(decoy)
+        // 2. Heavy Decoy Storm
+        sendDecoyStorm(socket, output, rnd, host, config)
+        
+        // 3. Fragmentation with overlapping segments (in extreme cases)
+        if (intensity > 90 && length > splitPos + 2) {
+            // Overlap: Send bytes [0..splitPos] then [splitPos-1..splitPos+1] then [splitPos..end]
+            output.write(data, 0, splitPos)
+            output.flush()
+            delay(rnd.nextLong(5, 15))
+            
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4)) // Fake TTL for overlap
+            output.write(data, splitPos - 1, 2)
             output.flush()
             delay(rnd.nextLong(2, 5))
             TtlHelper.setTtl(socket, 64)
-        }
-        
-        output.write(data, 0, splitPos)
-        output.flush()
-        
-        // 3. Staggered fragmentation of the rest
-        delay(config.delay1.coerceAtLeast(10L))
-        TtlHelper.setWindowSize(socket, 65535)
-        
-        var pos = splitPos
-        while (pos < length) {
-            val sz = rnd.nextInt(1, 16).coerceAtMost(length - pos)
-            output.write(data, pos, sz)
+            
+            output.write(data, splitPos, length - splitPos)
             output.flush()
-            pos += sz
-            if (pos < length) delay(rnd.nextLong(1, 5))
+        } else {
+            // Standard split at SNI
+            output.write(data, 0, splitPos)
+            output.flush()
+            delay(config.delay1.coerceAtLeast(15L))
+            
+            // Further fragment the second half
+            var pos = splitPos
+            while (pos < length) {
+                val sz = if (intensity > 70) rnd.nextInt(1, 32) else rnd.nextInt(32, 256)
+                val currentChunk = sz.coerceAtMost(length - pos)
+                output.write(data, pos, currentChunk)
+                output.flush()
+                pos += currentChunk
+                if (pos < length) delay(rnd.nextLong(2, 10))
+            }
         }
+        
+        // 4. Restore window
+        TtlHelper.setWindowSize(socket, 65535)
     }
 
     private suspend fun handleZeroRttSimulation(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String) {

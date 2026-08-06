@@ -34,25 +34,33 @@ object DnsCacheManager {
     ))
 
     private val staticIps = mapOf(
-        "dns.google" to listOf("8.8.8.8", "8.8.4.4"),
-        "cloudflare-dns.com" to listOf("1.1.1.1", "1.0.0.1"),
+        "dns.google" to listOf("8.8.8.8", "8.8.4.4", "2001:4860:4860::8888"),
+        "cloudflare-dns.com" to listOf("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111"),
         "dns.quad9.net" to listOf("9.9.9.9", "149.112.112.112"),
-        "google.com" to listOf("142.250.190.46"),
-        "facebook.com" to listOf("157.240.22.35"),
-        "github.com" to listOf("140.82.112.4", "140.82.113.3"),
+        "doh.opendns.com" to listOf("208.67.222.222", "208.67.220.220"),
+        "google.com" to listOf("142.250.190.46", "142.250.180.14"),
+        "facebook.com" to listOf("157.240.22.35", "157.240.1.35"),
+        "github.com" to listOf("140.82.112.4", "140.82.113.3", "140.82.114.3"),
         "telegram.org" to listOf("149.154.167.99", "149.154.167.51", "149.154.165.120", "149.154.160.1"),
-        "t.me" to listOf("149.154.167.99", "149.154.175.50")
+        "t.me" to listOf("149.154.167.99", "149.154.175.50"),
+        "instagram.com" to listOf("157.240.22.174"),
+        "twitter.com" to listOf("104.244.42.193", "104.244.42.65"),
+        "x.com" to listOf("104.244.42.193", "104.244.42.65")
     )
 
     private val bogonIps = setOf(
-        "127.0.0.1", "0.0.0.0", "10.0.0.1", "255.255.255.255"
+        "127.0.0.1", "0.0.0.0", "10.0.0.1", "255.255.255.255", "::1", "::"
     )
 
     private val emergencyFallback = mapOf(
-        "youtube.com" to listOf("142.250.180.142", "142.251.46.206"),
-        "telegram.org" to listOf("149.154.167.99", "149.154.167.51"),
-        "google.com" to listOf("8.8.8.8", "142.250.180.14"),
-        "github.com" to listOf("140.82.112.4")
+        "youtube.com" to listOf("142.250.180.142", "142.251.46.206", "172.217.16.206"),
+        "googlevideo.com" to listOf("173.194.220.33", "74.125.167.165"),
+        "telegram.org" to listOf("149.154.167.99", "149.154.167.51", "91.108.56.110"),
+        "google.com" to listOf("8.8.8.8", "142.250.180.14", "142.250.185.110"),
+        "github.com" to listOf("140.82.112.4", "140.82.121.3"),
+        "wikipedia.org" to listOf("103.102.166.224"),
+        "discord.com" to listOf("162.159.138.232", "162.159.135.232"),
+        "reddit.com" to listOf("151.101.1.140", "151.101.65.140")
     )
 
     private val poisonedPrefixes = setOf(
