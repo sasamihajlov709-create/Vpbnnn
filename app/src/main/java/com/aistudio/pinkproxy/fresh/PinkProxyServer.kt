@@ -191,7 +191,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 val localEndpoint = client.localSocketAddress as? InetSocketAddress
                 if (cm != null && remoteEndpoint != null && localEndpoint != null) {
                     val uid = cm.getConnectionOwnerUid(android.system.OsConstants.IPPROTO_TCP, remoteEndpoint, localEndpoint)
-                    if (uid != -1 && uid != android.os.Process.myUid()) {
+                    if (uid != -1 && uid != 0 && uid != android.os.Process.myUid()) {
                         Log.w("PinkProxy", "Rejected unauthorized proxy access attempt from UID $uid")
                         client.close()
                         return

@@ -86,6 +86,7 @@ object TcpTransportHandler {
                     if (attempt > 1) {
                         // Record previous failure and pick fallback or better strategy
                         DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CENSORSHIP_STALL, host = targetHost)
+                        BypassConfig.recordFailure(strategy, targetHost, FailureReason.CENSORSHIP_STALL)
                         val fallback = DpiEngine.getFallbackStrategy(strategy)
                         strategy = fallback ?: DpiEngine.getBestStrategy(HostClassifier.classify(targetHost), targetHost)
                         config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
@@ -114,6 +115,7 @@ object TcpTransportHandler {
                         if (readBytes > 0) {
                             // Handshake succeeded!
                             DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
+                            BypassConfig.recordSuccess(strategy, verifyTimeout.toLong(), targetHost)
                             
                             remoteSocket = rs
                             remoteIn = rsIn
@@ -130,6 +132,7 @@ object TcpTransportHandler {
                         
                         if (attempt == maxAttempts) {
                             DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CONNECTION_REFUSED, host = targetHost)
+                            BypassConfig.recordFailure(strategy, targetHost, FailureReason.CONNECTION_REFUSED)
                         }
                     }
                 }
