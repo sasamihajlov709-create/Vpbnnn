@@ -497,25 +497,13 @@ object UdpTransportHandler {
                 delay(rnd.nextLong(2, 12))
             }
 
-            // 3. UDP Padding: add random bytes to small packets to mask protocol size signatures
-            if (!isHighVolume && length < 100 && intensity > 40) {
-                if (rnd.nextInt(100) < 20) {
-                    val paddedData = ByteArray(length + rnd.nextInt(16, 128))
-                    System.arraycopy(payload, offset, paddedData, 0, length)
-                    // Add noise at the end
-                    val noise = FakePacketHelper.getSmallNoise(paddedData.size - length)
-                    System.arraycopy(noise, 0, paddedData, length, noise.size)
-                    
-                    val paddedPacket = DatagramPacket(paddedData, paddedData.size, targetInet, targetPort)
-                    try { socket.send(paddedPacket); return } catch(e: Throwable) {}
-                }
-            }
-
             if (!isHighVolume && count % 20 == 0) {
                 if (rnd.nextInt(100) < (intensity / 2).coerceIn(10, 50)) {
                     val noiseSize = if (isQuic) rnd.nextInt(256, 1024) else rnd.nextInt(16, 64)
                     val noise = FakePacketHelper.buildUdpNoise(noiseSize)
+                    TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), targetInet is java.net.Inet6Address)
                     try { socket.send(DatagramPacket(noise, noise.size, targetInet, targetPort)) } catch(e: Throwable) {}
+                    TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                 }
             }
             
@@ -562,7 +550,9 @@ object UdpTransportHandler {
                 2 -> FakePacketHelper.buildQuicInitialFake()
                 else -> FakePacketHelper.buildProtocolConfusion("DTLS")
             }
+            TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), targetInet is java.net.Inet6Address)
             socket.send(DatagramPacket(shadow, shadow.size, targetInet, targetPort))
+            TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
             if (intensity > 80) delay(rnd.nextLong(1, 5))
         }
 
@@ -579,7 +569,9 @@ object UdpTransportHandler {
                          if (length > scidOffset + 1 + scidLen) {
                              val scid = payload.copyOfRange(scidOffset + 1, scidOffset + 1 + scidLen)
                              val retry = FakePacketHelper.buildQuicRetry(dcid, scid, FakePacketHelper.buildUdpNoise(16))
+                             TtlHelper.setUdpTtl(socket, rnd.nextInt(2, 4), targetInet is java.net.Inet6Address)
                              socket.send(DatagramPacket(retry, retry.size, targetInet, targetPort))
+                             TtlHelper.setUdpTtl(socket, 64, targetInet is java.net.Inet6Address)
                              delay(rnd.nextLong(1, 4))
                          }
                      }
