@@ -29,6 +29,11 @@ object TcpTransportHandler {
         var remoteIn: InputStream? = null
         var remoteOut: OutputStream? = null
         try {
+            clientSocket.tcpNoDelay = true
+            clientSocket.keepAlive = true
+            try { clientSocket.receiveBufferSize = 65536 } catch (e: Throwable) {}
+            try { clientSocket.sendBufferSize = 65536 } catch (e: Throwable) {}
+
             val resolved = RobustResolver.resolve(targetHost, vpnService)
             if (resolved.isEmpty()) {
                 Log.w("TcpTransport", "Resolution failed for $targetHost")
