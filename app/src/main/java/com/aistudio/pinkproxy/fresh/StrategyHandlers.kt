@@ -279,25 +279,15 @@ object StrategyHandlers {
             delay(rnd.nextLong(2, 5))
         }
 
-        val dataCopy = data.copyOfRange(0, length)
-        
-        if (length > 10 && rnd.nextInt(100) < 30) {
-            val spaceIndex = dataCopy.indexOf(' '.code.toByte())
-            if (spaceIndex in 1..8) {
-                val charIndex = rnd.nextInt(0, spaceIndex)
-                dataCopy[charIndex] = (dataCopy[charIndex].toInt() xor 32).toByte()
-            }
-        }
-
         val part = length / 2
         if (length > 10) {
-            output.write(dataCopy, 0, part)
+            output.write(data, 0, part)
             output.flush()
             delay(rnd.nextLong(2, 5))
-            output.write(dataCopy, part, length - part)
+            output.write(data, part, length - part)
             output.flush()
         } else {
-            output.write(dataCopy, 0, length)
+            output.write(data, 0, length)
             output.flush()
         }
     }
@@ -450,11 +440,11 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_REORDER_SIM || strategy == BypassStrategy.TCP_REORDER_CHAOS) {
             val part = length / 3
-            if (part > 2) {
-                output.write(data, part, part)
+            if (part > 0) {
+                output.write(data, 0, part)
                 output.flush()
                 delay(rnd.nextLong(5, 15))
-                output.write(data, 0, part)
+                output.write(data, part, part)
                 output.flush()
                 delay(rnd.nextLong(5, 15))
                 output.write(data, part * 2, length - part * 2)
@@ -569,11 +559,11 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TCP_REORDER_DESYNC || strategy == BypassStrategy.TCP_FRAGMENT_REORDER || strategy == BypassStrategy.TCP_REORDER) {
             val part = length / 2
-            if (part > 1) {
-                output.write(data, part, length - part)
+            if (part > 0) {
+                output.write(data, 0, part)
                 output.flush()
                 delay(rnd.nextLong(10, 30))
-                output.write(data, 0, part)
+                output.write(data, part, length - part)
                 output.flush()
             } else {
                 output.write(data, 0, length)
@@ -619,11 +609,11 @@ object StrategyHandlers {
         }
 
         if (strategy == BypassStrategy.TCP_DATA_OOB_SKEW || strategy == BypassStrategy.TCP_ZERO_WINDOW_OOB || strategy == BypassStrategy.TCP_OOB_SEGMENTATION) {
-            if (length > 2) {
+            if (length > 1) {
                 output.write(data, 0, 1)
                 output.flush()
                 delay(rnd.nextLong(1, 3))
-                output.write(data, 2, length - 2)
+                output.write(data, 1, length - 1)
                 output.flush()
             } else {
                 output.write(data, 0, length)
@@ -681,8 +671,8 @@ object StrategyHandlers {
         }
 
         if (strategy == BypassStrategy.TCP_OVERLAP || strategy == BypassStrategy.TCP_OVERLAP_SKEW || strategy == BypassStrategy.TCP_SEGMENT_OVERLAP) {
-            if (length > 4) {
-                output.write(data, 0, 4)
+            if (length > 2) {
+                output.write(data, 0, 2)
                 output.flush()
                 delay(rnd.nextLong(1, 3))
                 output.write(data, 2, length - 2)
@@ -726,10 +716,10 @@ object StrategyHandlers {
         if (strategy == BypassStrategy.TCP_REVERSE_FRAG || strategy == BypassStrategy.TCP_SEGMENT_REVERSE) {
             val part = length / 2
             if (part > 0) {
-                output.write(data, part, length - part)
+                output.write(data, 0, part)
                 output.flush()
                 delay(rnd.nextLong(5, 15))
-                output.write(data, 0, part)
+                output.write(data, part, length - part)
                 output.flush()
             } else {
                 output.write(data, 0, length)
@@ -903,9 +893,11 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TLS_DIRTY) {
             val dirty = FakePacketHelper.buildUdpNoise(16)
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
             output.write(dirty)
             output.flush()
             delay(rnd.nextLong(1, 4))
+            TtlHelper.setTtl(socket, 64)
         }
 
         if (strategy == BypassStrategy.TLS_ECH_FAKE) {
@@ -925,9 +917,11 @@ object StrategyHandlers {
 
         if (strategy == BypassStrategy.TLS_HELLO_JUNK) {
             val junk = FakePacketHelper.buildUdpNoise(rnd.nextInt(5, 15))
+            TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
             output.write(junk)
             output.flush()
             delay(rnd.nextLong(1, 3))
+            TtlHelper.setTtl(socket, 64)
         }
 
         if (strategy == BypassStrategy.TLS_LEGACY_HELLOS) {
@@ -980,7 +974,7 @@ object StrategyHandlers {
         }
 
         if (strategy == BypassStrategy.TLS_CHROME_HELLO_FAKE || strategy == BypassStrategy.TLS_FIREFOX_HELLO_FAKE || strategy == BypassStrategy.TLS_13_HELLO_FAKE) {
-            finalData = FakePacketHelper.buildFakeClientHello(host, 32)
+            finalData = FakePacketHelper.injectTlsPadding(finalData, finalLen, 64)
             finalLen = finalData.size
         }
 
@@ -1002,10 +996,10 @@ object StrategyHandlers {
                     output.flush()
                 } else if (strategy == BypassStrategy.TLS_SNI_REVERSE) {
                     val split = sniPos
-                    output.write(finalData, split, finalLen - split)
+                    output.write(finalData, 0, split)
                     output.flush()
                     delay(rnd.nextLong(2, 6))
-                    output.write(finalData, 0, split)
+                    output.write(finalData, split, finalLen - split)
                     output.flush()
                 } else {
                     val split = if (rnd.nextBoolean()) sniPos else sniPos - 1
