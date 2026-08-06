@@ -114,7 +114,7 @@ object TlsStrategyHandler {
                 output.write(junk)
                 output.flush()
                 delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
             }
@@ -138,7 +138,7 @@ object TlsStrategyHandler {
                 output.write(fakeHello)
                 output.flush()
                 delay(rnd.nextLong(2, 6))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
             }
@@ -212,7 +212,7 @@ object TlsStrategyHandler {
                     output.write(data, 0, sniPos + 2)
                     output.flush()
                     delay(rnd.nextLong(1, 3))
-                    TtlHelper.setTtl(socket, 64)
+                    TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                     output.write(data, 0, length)
                     output.flush()
                 } else {
@@ -241,7 +241,7 @@ object TlsStrategyHandler {
                     output.write(data, 0, length)
                     output.flush()
                     delay(rnd.nextLong(2, 5))
-                    TtlHelper.setTtl(socket, 64)
+                    TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                     output.write(data, 0, length)
                     output.flush()
                 } else {

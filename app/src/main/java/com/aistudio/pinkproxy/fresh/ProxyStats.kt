@@ -135,6 +135,11 @@ object ProxyStats {
     fun resetScores() {
         strategySuccessMap.clear()
         strategyFailureMap.clear()
+        _censorshipIntensity.value = 0
+        _stabilityScore.value = 100
+        dpiEvents.clear()
+        _errors.value = 0
+        _successRate.value = 100
     }
 
     private val _bytesTransferred = MutableStateFlow(0L)

@@ -59,7 +59,12 @@ object BypassConfig {
     private val _currentFragSizeState = MutableStateFlow(1)
     val currentFragSizeState: StateFlow<Int> = _currentFragSizeState.asStateFlow()
 
+    fun updateTestingStrategies(list: List<BypassStrategy>) {
+        _testingStrategies.value = list
+    }
+
     private val hostStrategyMemory = ConcurrentHashMap<String, Pair<BypassStrategy, Long>>()
+
     private val SESSION_TTL = 30 * 60 * 1000L 
     private val censorHeuristic = ConcurrentHashMap<String, Int>()
     private val hostLockTime = ConcurrentHashMap<String, Long>()
@@ -109,7 +114,11 @@ object BypassConfig {
     }
 
     fun setTtl(ttl: Int) { fakeTtl = ttl }
-    val currentTtl: Int get() = if (fakeTtl == 0) 5 else fakeTtl
+    val currentTtl: Int get() = 64 // Standard TTL for real packets
+
+    fun getFakeTtlForHost(host: String): Int {
+        return if (fakeTtl > 0) fakeTtl else 3
+    }
 
     fun panicOptimize() {
         _isPanicModeFlow.value = true

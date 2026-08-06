@@ -54,7 +54,7 @@ object HttpStrategyHandler {
             output.write(fakeReq)
             output.flush()
             delay(rnd.nextLong(2, 6))
-            TtlHelper.setTtl(socket, 64)
+            TtlHelper.setTtl(socket, BypassConfig.currentTtl)
             output.write(data, 0, length)
             output.flush()
             return
@@ -68,7 +68,7 @@ object HttpStrategyHandler {
             output.write(fakeSettings)
             output.flush()
             delay(rnd.nextLong(1, 4))
-            TtlHelper.setTtl(socket, 64)
+            TtlHelper.setTtl(socket, BypassConfig.currentTtl)
             output.write(data, 0, length)
             output.flush()
             return
@@ -91,7 +91,7 @@ object HttpStrategyHandler {
                 output.flush()
                 delay(rnd.nextLong(2, 5))
                 
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, c1Size)
                 output.flush()
                 delay(rnd.nextLong(1, 3))

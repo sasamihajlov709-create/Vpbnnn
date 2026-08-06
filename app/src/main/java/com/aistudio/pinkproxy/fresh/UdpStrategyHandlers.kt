@@ -45,7 +45,7 @@ object UdpStrategyHandlers {
         val ghost = DatagramPacket(fakeData, fakeData.size, targetAddr, targetPort)
         TtlHelper.setUdpTtl(socket, config.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(targetAddr.hostAddress ?: "") ?: 3)
         try { socket.send(ghost) } catch (e: Throwable) {}
-        TtlHelper.setUdpTtl(socket, 64)
+        TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl)
         delay(config.delay1)
         socket.send(realPacket)
     }

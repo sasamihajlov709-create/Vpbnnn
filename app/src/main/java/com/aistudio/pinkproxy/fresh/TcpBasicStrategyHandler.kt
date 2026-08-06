@@ -16,7 +16,7 @@ object TcpBasicStrategyHandler {
                 output.write(fake)
                 output.flush()
                 delay(rnd.nextLong(2, 6))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -27,7 +27,7 @@ object TcpBasicStrategyHandler {
                 output.write(sshBanner)
                 output.flush()
                 delay(rnd.nextLong(3, 8))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -72,7 +72,7 @@ object TcpBasicStrategyHandler {
                 output.write(decoy)
                 output.flush()
                 delay(rnd.nextLong(2, 6))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -83,7 +83,7 @@ object TcpBasicStrategyHandler {
                 output.write(ghost)
                 output.flush()
                 delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -100,7 +100,8 @@ object TcpBasicStrategyHandler {
             }
             BypassStrategy.TCP_MSS_CLAMP, BypassStrategy.TCP_MSS_CLAMPER -> {
                 var pos = 0
-                val chunkSize = rnd.nextInt(64, 128)
+                val recommendedMss = TrafficShaper.getRecommendedMss()
+                val chunkSize = rnd.nextInt(recommendedMss / 2, recommendedMss).coerceAtLeast(64)
                 while (pos < length) {
                     val sz = chunkSize.coerceAtMost(length - pos)
                     output.write(data, pos, sz)
@@ -146,7 +147,7 @@ object TcpBasicStrategyHandler {
                 output.write(data, 0, repeatLen)
                 output.flush()
                 delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -156,7 +157,7 @@ object TcpBasicStrategyHandler {
                 output.write(ByteArray(0))
                 output.flush()
                 delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -185,7 +186,7 @@ object TcpBasicStrategyHandler {
                 output.write(fakeCookie)
                 output.flush()
                 delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -196,7 +197,7 @@ object TcpBasicStrategyHandler {
                 output.write(rst)
                 output.flush()
                 delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -238,7 +239,7 @@ object TcpBasicStrategyHandler {
                 output.write(ghost)
                 output.flush()
                 delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -295,7 +296,7 @@ object TcpBasicStrategyHandler {
                 output.write(decoy)
                 output.flush()
                 delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -351,7 +352,7 @@ object TcpBasicStrategyHandler {
                 output.write(fake)
                 output.flush()
                 delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -376,7 +377,7 @@ object TcpBasicStrategyHandler {
                 output.write(fake)
                 output.flush()
                 delay(rnd.nextLong(2, 5))
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, 0, length)
                 output.flush()
                 return

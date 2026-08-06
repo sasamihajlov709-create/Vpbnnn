@@ -105,7 +105,7 @@ object DpiEngine {
     fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null): BypassStrategy = DpiStrategySelector.getDiverseFallback(failed, category)
     
     fun updateTestingStrategies(list: List<BypassStrategy>) {
-        // Implementation logic
+        BypassConfig.updateTestingStrategies(list)
     }
     
     fun recordStrategyResult(host: String, strat: BypassStrategy, success: Boolean, latencyMs: Long = 0) {

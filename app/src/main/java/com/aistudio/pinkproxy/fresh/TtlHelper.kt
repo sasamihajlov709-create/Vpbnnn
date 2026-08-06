@@ -148,7 +148,7 @@ object TtlHelper {
     }
 
     fun getSocketTtl(socket: Socket): Int {
-        return 64
+        return BypassConfig.currentTtl
     }
 
     fun setLowTtlTemporary(socket: Socket, lowTtl: Int, delayMs: Long) {
