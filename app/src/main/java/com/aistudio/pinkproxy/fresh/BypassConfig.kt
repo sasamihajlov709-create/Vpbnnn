@@ -228,6 +228,25 @@ object BypassConfig {
         }
     }
 
+    fun adjustMtuBasedOnConditions() {
+        val intensity = ProxyStats.censorshipIntensity.value
+        val rtt = currentRttMs.value
+        val type = _currentNetworkType.value
+        
+        var targetMtu = when {
+            intensity > 90 -> 900 // Low MTU for extreme censorship (more fragments, less likely to match full signature)
+            intensity > 75 -> 1100
+            type == NetworkType.MOBILE_LOW -> 1200
+            rtt > 400 -> 1280
+            else -> 1400 // Default optimal for modern networks
+        }
+        
+        // Ensure standard boundaries
+        targetMtu = targetMtu.coerceIn(576, 1420)
+        
+        setMtu(targetMtu)
+    }
+
     fun updateNetworkType(type: NetworkType) {
         if (_currentNetworkType.value != type) {
             _currentNetworkType.value = type

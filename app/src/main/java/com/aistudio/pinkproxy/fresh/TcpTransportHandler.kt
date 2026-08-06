@@ -118,13 +118,25 @@ object TcpTransportHandler {
                         firstRemoteResponse = raceResult.firstResponse
                         firstRemoteResponseLen = raceResult.firstResponseLen
                         strategy = raceResult.strategy
+                        
+                        // If we already have a response from the race, write it to client immediately
+                        if (firstRemoteResponseLen > 0 && firstRemoteResponse != null) {
+                            try {
+                                clientOut.write(firstRemoteResponse, 0, firstRemoteResponseLen)
+                                clientOut.flush()
+                                ProxyStats.updateFlow(sessionId, received = firstRemoteResponseLen.toLong())
+                                firstRemoteResponseLen = 0 // Handled
+                            } catch (e: Throwable) {
+                                Log.e("TcpTransport", "Failed to write initial race response to client", e)
+                            }
+                        }
                     }
                 }
 
                 if (remoteSocket == null) {
                     // Fallback to sequential or single attempt if race failed or wasn't triggered
                     var attempt = 0
-                    val maxAttempts = 2
+                    val maxAttempts = if (ProxyStats.censorshipIntensity.value > 85) 3 else 2
                     while (attempt < maxAttempts) {
                         attempt++
                         if (attempt > 1) {
@@ -132,14 +144,14 @@ object TcpTransportHandler {
                             DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CENSORSHIP_STALL, host = targetHost)
                             BypassConfig.recordFailure(strategy, targetHost, FailureReason.CENSORSHIP_STALL)
                             val fallback = DpiEngine.getFallbackStrategy(strategy)
-                            strategy = fallback ?: DpiEngine.getBestStrategy(HostClassifier.classify(targetHost), targetHost)
+                            strategy = fallback ?: DpiEngine.getBestExtremeStrategy(targetHost)
                             config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
                             Log.i("TcpTransport", "Transparent fallback: Retrying connection to $targetHost (attempt $attempt/$maxAttempts) using strategy $strategy")
                         }
 
                         val rs = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
                         if (rs == null) {
-                            delay(150)
+                            delay(200L * attempt)
                             continue
                         }
                         
@@ -157,7 +169,7 @@ object TcpTransportHandler {
                             BypassConfig.applyBypass(rs, rsOut, firstClientPacket, firstClientPacketLen, config, targetHost)
                             
                             // Read first response packet with short adaptive timeout to verify bypass
-                            val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 800).coerceAtMost(3000).toInt()
+                            val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 1500).coerceAtMost(4000).toInt()
                             rs.soTimeout = verifyTimeout
                             
                             val responseBuf = ByteArray(transportBufferSize)
@@ -165,7 +177,7 @@ object TcpTransportHandler {
                             if (readBytes > 0) {
                                 // Handshake succeeded!
                                 DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
-                                BypassConfig.recordSuccess(strategy, verifyTimeout.toLong(), targetHost)
+                                BypassConfig.recordSuccess(strategy, 100, targetHost)
                                 
                                 remoteSocket = rs
                                 remoteIn = rsIn

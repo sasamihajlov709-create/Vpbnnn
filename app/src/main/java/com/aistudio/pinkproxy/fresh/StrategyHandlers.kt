@@ -1617,6 +1617,63 @@ object StrategyHandlers {
         socket.send(packet)
     }
 
+    suspend fun handleUdpPacketWithEvasion(
+        socket: DatagramSocket,
+        packet: DatagramPacket,
+        strategy: BypassStrategy,
+        intensity: Int,
+        rnd: ThreadLocalRandom,
+        host: String,
+        config: SessionConfig
+    ) {
+        val data = packet.data
+        val length = packet.length
+        val address = packet.address
+        val port = packet.port
+        
+        when (strategy) {
+            BypassStrategy.UDP_FAKE_PACKET -> {
+                val fake = if (rnd.nextBoolean()) FakePacketHelper.buildQuicInitialFake() else FakePacketHelper.buildDhcpRequest()
+                writeUdpWithFake(socket, address, port, fake, packet, config)
+            }
+            BypassStrategy.UDP_FRAGMENTATION -> {
+                if (length > 100) {
+                    val split = length / 2
+                    val p1 = DatagramPacket(data, split, address, port)
+                    val p2 = DatagramPacket(data, split, length - split, address, port)
+                    socket.send(p1)
+                    delay(rnd.nextLong(2, 10))
+                    socket.send(p2)
+                } else {
+                    socket.send(packet)
+                }
+            }
+            BypassStrategy.UDP_OVERLAP_SKEW -> {
+                if (length > 200) {
+                    val part1 = length / 3
+                    val overlap = rnd.nextInt(10, 30)
+                    
+                    val p1 = DatagramPacket(data, part1 + overlap, address, port)
+                    socket.send(p1)
+                    delay(rnd.nextLong(1, 5))
+                    
+                    val p2 = DatagramPacket(data, part1, length - part1, address, port)
+                    socket.send(p2)
+                } else {
+                    socket.send(packet)
+                }
+            }
+            else -> {
+                if (intensity > 60 && rnd.nextInt(100) < 30) {
+                    val fake = FakePacketHelper.buildQuicInitialFake()
+                    writeUdpWithFake(socket, address, port, fake, packet, config)
+                } else {
+                    socket.send(packet)
+                }
+            }
+        }
+    }
+
     suspend fun writeUdpWithFake(
         socket: DatagramSocket,
         targetAddr: InetAddress,

@@ -261,7 +261,7 @@ enum class BypassStrategy(
     DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT)
 }
 
-enum class NetworkType { WIFI, MOBILE, UNKNOWN }
+enum class NetworkType { WIFI, MOBILE, MOBILE_LOW, UNKNOWN }
 
 enum class HostCategory { STREAMING, SOCIAL, MESSENGER, SEARCH, AI, FINANCE, CDN, NEWS, GAMING, SHOPPING, DEV, AD, GOVERNMENT, SECURITY, OTHER }
 

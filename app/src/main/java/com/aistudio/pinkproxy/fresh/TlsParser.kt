@@ -97,6 +97,12 @@ object TlsParser {
         }
     }
 
+    fun extractSni(buffer: ByteArray, length: Int): String? {
+        val offset = findSniOffset(buffer, length)
+        if (offset == -1) return null
+        return extractHostname(buffer, length, offset)
+    }
+
     fun isEchDetected(buffer: ByteArray, length: Int): Boolean {
         if (length < 44) return false
         if (buffer[0] != 0x16.toByte() || buffer[5] != 0x01.toByte()) return false
