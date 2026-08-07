@@ -160,6 +160,35 @@ object TlsParser {
         return FakePacketHelper.shuffleTlsExtensions(buffer, length)
     }
 
+    fun mangleExtensions(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        if (!isClientHello(buffer, length)) return buffer.copyOf(length)
+        try {
+            val copy = buffer.copyOf(length)
+            val sessionIdLen = copy[43].toInt() and 0xFF
+            var pos = 44 + sessionIdLen
+            val cipherSuitesLen = ((copy[pos].toInt() and 0xFF) shl 8) or (copy[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherSuitesLen
+            pos += 1 + (copy[pos].toInt() and 0xFF)
+            val extensionsLen = ((copy[pos].toInt() and 0xFF) shl 8) or (copy[pos + 1].toInt() and 0xFF)
+            pos += 2
+            val extEnd = minOf(pos + extensionsLen, length)
+            
+            while (pos + 3 < extEnd) {
+                val extLen = ((copy[pos + 2].toInt() and 0xFF) shl 8) or (copy[pos + 3].toInt() and 0xFF)
+                if (rnd.nextInt(100) < 30) {
+                    // Xoring extension data with some bits
+                    for (i in 0 until minOf(extLen, 4)) {
+                        if (pos + 4 + i < extEnd) {
+                             copy[pos + 4 + i] = (copy[pos + 4 + i].toInt() xor rnd.nextInt(1, 255)).toByte()
+                        }
+                    }
+                }
+                pos += 4 + extLen
+            }
+            return copy
+        } catch (e: Throwable) { return buffer.copyOf(length) }
+    }
+
     fun shuffleCiphers(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
         return buffer.copyOf(length)
     }

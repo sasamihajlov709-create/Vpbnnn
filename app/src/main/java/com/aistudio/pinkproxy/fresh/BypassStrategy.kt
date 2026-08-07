@@ -191,6 +191,7 @@ enum class BypassStrategy(
     TCP_RETRANS_FAKE(StrategyFamily.TCP, 5, 4, StrategyGroup.HEAVY),
     TCP_WINDOW_SIZE_JITTER(StrategyFamily.TCP, 3, 2, StrategyGroup.MEDIUM),
     TLS_SNI_JITTER_SPLIT(StrategyFamily.TLS, 5, 4, StrategyGroup.EXTREME),
+    TLS_SNI_EXT_MANGLE(StrategyFamily.TLS, 4, 3, StrategyGroup.HEAVY),
     UDP_QUIC_JITTER_PAD(StrategyFamily.UDP, 3, 2, StrategyGroup.MEDIUM),
     TLS_SNI_FRAGMENT(StrategyFamily.FRAGMENTATION, 4, 3, StrategyGroup.HEAVY),
     TCP_TLS_SESSION_DESYNC(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),

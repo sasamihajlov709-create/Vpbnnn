@@ -50,7 +50,7 @@ object UdpStrategyHandler {
             }
             BypassStrategy.UDP_ZERO_LEN_SKEW -> {
                 val empty = DatagramPacket(ByteArray(0), 0, address, port)
-                try { socket.send(empty) } catch (e: Throwable) {}
+                try { socket.send(empty) } catch (e: Throwable) { android.util.Log.v("UdpStrategy", "Zero-len packet failed: ${e.message}") }
                 delay(rnd.nextLong(1, 3))
                 socket.send(DatagramPacket(data, length, address, port))
             }
@@ -174,7 +174,7 @@ object UdpStrategyHandler {
         val ghost = DatagramPacket(fakeData, fakeData.size, targetAddr, targetPort)
         val discoveredTtl = AutoTtlProber.getDiscoveredTtl(targetAddr.hostAddress ?: "") ?: 3
         TtlHelper.setUdpTtl(socket, discoveredTtl)
-        try { socket.send(ghost) } catch (e: Throwable) {}
+        try { socket.send(ghost) } catch (e: Throwable) { android.util.Log.v("UdpStrategy", "Fake UDP send failed: ${e.message}") }
         TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl)
         delay(delayMs)
         socket.send(realPacket)

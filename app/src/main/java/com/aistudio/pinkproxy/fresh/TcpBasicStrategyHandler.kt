@@ -1,5 +1,6 @@
 package com.aistudio.pinkproxy.fresh
 
+import android.util.Log
 import java.io.OutputStream
 import java.net.Socket
 import java.util.concurrent.ThreadLocalRandom
@@ -129,16 +130,16 @@ object TcpBasicStrategyHandler {
                 return
             }
             BypassStrategy.TCP_WINDOW_RESTRICT, BypassStrategy.TCP_WINDOW_CLAMPING -> {
-                try { socket.sendBufferSize = 256 } catch (e: Throwable) {}
-                var pos = 0
-                while (pos < length) {
-                    val sz = rnd.nextInt(8, 32).coerceAtMost(length - pos)
-                    output.write(data, pos, sz)
-                    output.flush()
-                    pos += sz
-                    if (pos < length) delay(rnd.nextLong(1, 3))
-                }
-                try { socket.sendBufferSize = 64 * 1024 } catch (e: Throwable) {}
+            try { socket.sendBufferSize = 256 } catch (e: Throwable) { Log.v("TcpBasicStrategy", "Failed to set small send buffer: ${e.message}") }
+            var pos = 0
+            while (pos < length) {
+                val sz = rnd.nextInt(8, 32).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                if (pos < length) delay(rnd.nextLong(1, 3))
+            }
+            try { socket.sendBufferSize = 64 * 1024 } catch (e: Throwable) { Log.v("TcpBasicStrategy", "Failed to restore send buffer: ${e.message}") }
                 return
             }
             BypassStrategy.TCP_DATA_REPETITION -> {

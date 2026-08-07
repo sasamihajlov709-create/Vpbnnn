@@ -76,7 +76,7 @@ object DnsOptimizer {
         return withContext(ProxyDispatcher.io) {
             val socket = java.net.Socket()
             try {
-                try { vpnService?.protect(socket) } catch(e: Throwable) {}
+                try { vpnService?.protect(socket) } catch(e: Throwable) { Log.v("DnsOptimizer", "Socket protection failed: ${e.message}") }
                 socket.tcpNoDelay = true
                 // We use a very short timeout for verification to avoid blocking the resolver
                 socket.connect(java.net.InetSocketAddress(ip, 443), 1200)
@@ -89,9 +89,10 @@ object DnsOptimizer {
                 cat != HostCategory.AI && cat != HostCategory.FINANCE && cat != HostCategory.SECURITY
             } catch (e: Throwable) {
                 // Connection refused or reset is a strong signal of poisoning or blocking
+                Log.d("DnsOptimizer", "IP verification failed for $domain ($ip): ${e.message}")
                 false
             } finally {
-                try { socket.close() } catch (e: Throwable) {}
+                try { socket.close() } catch (e: Throwable) { Log.v("DnsOptimizer", "Socket close failed: ${e.message}") }
             }
         }
     }

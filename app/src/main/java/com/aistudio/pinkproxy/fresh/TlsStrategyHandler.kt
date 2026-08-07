@@ -234,6 +234,11 @@ object TlsStrategyHandler {
                     output.flush()
                 }
             }
+            BypassStrategy.TLS_SNI_EXT_MANGLE -> {
+                val modified = TlsParser.mangleExtensions(data, length, rnd)
+                output.write(modified)
+                output.flush()
+            }
             BypassStrategy.TLS_SNI_SKEW_ADVANCED, BypassStrategy.TLS_SNI_SKEW -> {
                 val sniPos = TlsParser.findSni(data, length)
                 if (sniPos != -1) {

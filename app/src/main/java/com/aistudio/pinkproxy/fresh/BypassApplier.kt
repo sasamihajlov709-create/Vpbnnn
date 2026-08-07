@@ -41,15 +41,20 @@ object BypassApplier {
                 finalData = FakePacketHelper.randomizeHeaderCase(finalData, finalLen)
                 finalLen = finalData.size
             }
+        } else if (isProbableTls(data, length)) {
+            if (strategy == BypassStrategy.TLS_SESSION_ID_MANGLE || (strategy.family == StrategyFamily.TLS && rnd.nextInt(100) < 15)) {
+                finalData = FakePacketHelper.mangleSessionId(finalData, finalLen)
+                finalLen = finalData.size
+            }
         }
 
         when (strategy.family) {
-            StrategyFamily.HTTP -> TcpStrategyHandlers.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.TLS -> TcpStrategyHandlers.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.TCP -> TcpStrategyHandlers.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.FRAGMENTATION -> TcpStrategyHandlers.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, effectiveDelay)
-            StrategyFamily.ADAPTIVE -> TcpStrategyHandlers.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
-            StrategyFamily.TIMING -> TcpStrategyHandlers.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.HTTP -> HttpStrategyHandler.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.TLS -> TlsStrategyHandler.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.TCP -> TcpBasicStrategyHandler.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.FRAGMENTATION -> FragmentationStrategyHandler.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, effectiveDelay)
+            StrategyFamily.ADAPTIVE -> AdaptiveStrategyHandler.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
+            StrategyFamily.TIMING -> TimingStrategyHandler.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
             else -> {
                 if (strategy == BypassStrategy.CHAOS) {
                     val picked = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TCP_WINDOW_SHRINK, BypassStrategy.FRAGMENT_MULTI).random()
@@ -67,7 +72,10 @@ object BypassApplier {
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(packet); return
         }
-        UdpStrategyHandlers.handleUdpStrategies(socket, packet, rnd, host, strategy, config)
+        val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
+        UdpStrategyHandler.handleUdpStrategies(
+            socket, packet.address, packet.port, data, packet.length, rnd, host, strategy
+        )
     }
 
     fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean, avgDuration: Long = 50L) {
@@ -82,6 +90,12 @@ object BypassApplier {
         if (length < 8) return false
         val s = String(data, 0, minOf(length, 16), Charsets.US_ASCII)
         return s.startsWith("GET ") || s.startsWith("POST ") || s.startsWith("HEAD ") || s.startsWith("HTTP/")
+    }
+
+    private fun isProbableTls(data: ByteArray, length: Int): Boolean {
+        if (length < 5) return false
+        // TLS Record Layer: 0x16 (Handshake), 0x03 (Version major), 0x01/03 (Version minor)
+        return data[0] == 0x16.toByte() && data[1] == 0x03.toByte() && (data[2] == 0x01.toByte() || data[2] == 0x03.toByte())
     }
 
     fun findHeaderEnd(data: ByteArray, length: Int): Int {
