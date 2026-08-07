@@ -86,7 +86,7 @@ object CensorshipExpert {
         }
         
         // Proactive Strategy Evaluation: Test a few strategies to see what's winning
-        if (intensity > 40 && ProxyStats.getSuccessRate() < 70) {
+        if (intensity > 40 && ProxyStats.successRate.value < 70) {
             evaluateBestStrategies()
         }
     }
@@ -158,7 +158,7 @@ object CensorshipExpert {
         lastIntelligenceUpdate = now
         
         val fingerprint = DpiEngine.getCensorshipFingerprint()
-        val successRate = ProxyStats.getSuccessRate()
+        val successRate = ProxyStats.successRate.value
         val dnsPoisoningRate = ProxyStats.dpiEvents[DpiType.DNS_POISONING]?.toFloat() ?: 0f
         val stability = ProxyStats.stabilityScore.value
         
@@ -312,6 +312,6 @@ object CensorshipExpert {
     }
 
     private fun successRateAbove(threshold: Int): Boolean {
-        return ProxyStats.getSuccessRate() > threshold
+        return ProxyStats.successRate.value > threshold
     }
 }

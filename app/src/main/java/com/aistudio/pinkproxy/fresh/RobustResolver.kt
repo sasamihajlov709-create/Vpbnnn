@@ -63,7 +63,12 @@ object RobustResolver {
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     suspend fun resolve(host: String, vpnService: VpnService? = null, type: Int = 1): List<InetAddress> {
         if (DnsCacheManager.isIpAddress(host)) {
-            return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { emptyList() }
+            return try {
+            listOf(InetAddress.getByName(host))
+        } catch (e: Throwable) {
+            Log.v("RobustResolver", "Failed to parse IP $host: ${e.message}")
+            emptyList()
+        }
         }
         if (DnsCacheManager.isNegative(host)) return emptyList()
 
@@ -87,11 +92,13 @@ object RobustResolver {
                 deferred.await()
             }
         } catch (e: TimeoutCancellationException) {
+            Log.v("RobustResolver", "Resolution timeout for $host")
             pendingResolutions.remove(cacheKey)
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
+            Log.v("RobustResolver", "Resolution error for $host: ${e.message}")
             pendingResolutions.remove(cacheKey)
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         }

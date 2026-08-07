@@ -66,7 +66,7 @@ object RecoveryManager {
                     
                     // Strategy Cooling: Periodically try to reduce escalation if things are stable
                     if (now - lastCoolDown > 600000) { // Every 10 minutes
-                        val rate = ProxyStats.getSuccessRate()
+                        val rate = ProxyStats.successRate.value
                         val currentEsc = recoveryEscalation.get()
                         if (currentEsc > 0 && rate > 80) {
                             val reduction = if (rate > 95) 2 else 1
@@ -192,7 +192,7 @@ object RecoveryManager {
                 // Schedule an active probe to find better strategy soon
                 PinkVpnService.instance?.getServiceScope()?.launch {
                     delay(3000)
-                    ServiceChecker.runActiveProbing(null)
+                    ServiceChecker.runActiveProbing(PinkVpnService.instance ?: ProxyDispatcher.context!!)
                 }
             }
             RecoveryEvent.DNS_FAILURE, RecoveryEvent.DNS_POISONED -> {
@@ -254,7 +254,7 @@ object RecoveryManager {
                     // Force immediate re-evaluation via active probing
                     PinkVpnService.instance?.getServiceScope()?.launch {
                         delay(2000)
-                        ServiceChecker.runActiveProbing(null)
+                        ServiceChecker.runActiveProbing(PinkVpnService.instance ?: ProxyDispatcher.context!!)
                     }
                 } else {
                     triggerPanic("Critical stall detected ($event)")

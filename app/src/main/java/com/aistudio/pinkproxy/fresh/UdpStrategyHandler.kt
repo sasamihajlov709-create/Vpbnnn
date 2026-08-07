@@ -16,21 +16,25 @@ object UdpStrategyHandler {
         when (strategy) {
             BypassStrategy.UDP_STUN_FAKE -> {
                 val stun = FakePacketHelper.buildStunBindingRequest()
-                socket.send(DatagramPacket(stun, stun.size, address, port))
-                delay(rnd.nextLong(1, 3))
-                socket.send(DatagramPacket(data, length, address, port))
+                writeUdpWithFake(socket, address, port, stun, DatagramPacket(data, length, address, port), rnd.nextLong(1, 4))
             }
-            BypassStrategy.UDP_FAKE_DTLS -> {
+            BypassStrategy.UDP_FAKE_DTLS, BypassStrategy.PROTOCOL_CONFUSION_DTLS -> {
                 val dtls = FakePacketHelper.buildDtlsClientHello()
-                socket.send(DatagramPacket(dtls, dtls.size, address, port))
-                delay(rnd.nextLong(2, 5))
-                socket.send(DatagramPacket(data, length, address, port))
+                writeUdpWithFake(socket, address, port, dtls, DatagramPacket(data, length, address, port), rnd.nextLong(2, 5))
             }
             BypassStrategy.UDP_FAKE_SESSION, BypassStrategy.UDP_FAKE_TRAFFIC -> {
                 val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
-                socket.send(DatagramPacket(noise, noise.size, address, port))
-                delay(rnd.nextLong(1, 3))
-                socket.send(DatagramPacket(data, length, address, port))
+                writeUdpWithFake(socket, address, port, noise, DatagramPacket(data, length, address, port), rnd.nextLong(1, 3))
+            }
+            BypassStrategy.PROTOCOL_CONFUSION_QUIC, BypassStrategy.QUIC_INITIAL_FAKE, BypassStrategy.QUIC_VERSION_SKEW -> {
+                val quic = FakePacketHelper.buildQuicInitial()
+                writeUdpWithFake(socket, address, port, quic, DatagramPacket(data, length, address, port), rnd.nextLong(2, 6))
+            }
+            BypassStrategy.UDP_WIREGUARD_FAKE, BypassStrategy.UDP_IKE_FAKE, BypassStrategy.UDP_DHCP_FAKE, 
+            BypassStrategy.UDP_TELEGRAM_FAKE, BypassStrategy.UDP_DISCORD_FAKE -> {
+                val protocol = strategy.name.substringAfter("UDP_").substringBefore("_FAKE")
+                val fake = FakePacketHelper.buildUdpProtocolFake(protocol)
+                writeUdpWithFake(socket, address, port, fake, DatagramPacket(data, length, address, port), rnd.nextLong(2, 5))
             }
             BypassStrategy.UDP_NOISE_PAD, BypassStrategy.UDP_PADDING_CHAOS, BypassStrategy.UDP_QUIC_PAD, BypassStrategy.UDP_QUIC_JITTER_PAD -> {
                 val padded = data.copyOf(length + rnd.nextInt(16, 64))
@@ -39,34 +43,14 @@ object UdpStrategyHandler {
                 System.arraycopy(noise, 0, padded, length, noise.size)
                 socket.send(DatagramPacket(padded, padded.size, address, port))
             }
-            BypassStrategy.QUIC_INITIAL_FAKE, BypassStrategy.QUIC_VERSION_SKEW -> {
-                val quic = FakePacketHelper.buildQuicInitial(rnd.nextInt(100, 200))
-                socket.send(DatagramPacket(quic, quic.size, address, port))
-                delay(rnd.nextLong(2, 6))
-                socket.send(DatagramPacket(data, length, address, port))
-            }
-            BypassStrategy.UDP_WIREGUARD_FAKE, BypassStrategy.UDP_IKE_FAKE, BypassStrategy.UDP_DHCP_FAKE, 
-            BypassStrategy.UDP_TELEGRAM_FAKE, BypassStrategy.UDP_DISCORD_FAKE -> {
-                val protocol = strategy.name.substringAfter("UDP_").substringBefore("_FAKE")
-                val fake = FakePacketHelper.buildUdpProtocolFake(protocol)
-                socket.send(DatagramPacket(fake, fake.size, address, port))
-                delay(rnd.nextLong(2, 5))
-                socket.send(DatagramPacket(data, length, address, port))
-            }
-            BypassStrategy.PROTOCOL_CONFUSION_QUIC, BypassStrategy.PROTOCOL_CONFUSION_DTLS -> {
-                val proto = strategy.name.substringAfter("PROTOCOL_CONFUSION_")
-                val fake = FakePacketHelper.buildProtocolConfusion(proto)
-                socket.send(DatagramPacket(fake, fake.size, address, port))
-                delay(rnd.nextLong(2, 5))
-                socket.send(DatagramPacket(data, length, address, port))
-            }
             BypassStrategy.UDP_HIGH_VOL_PACING -> {
                 socket.send(DatagramPacket(data, length, address, port))
                 delay(rnd.nextLong(1, 2))
                 socket.send(DatagramPacket(data, length, address, port))
             }
             BypassStrategy.UDP_ZERO_LEN_SKEW -> {
-                socket.send(DatagramPacket(ByteArray(0), 0, address, port))
+                val empty = DatagramPacket(ByteArray(0), 0, address, port)
+                try { socket.send(empty) } catch (e: Throwable) {}
                 delay(rnd.nextLong(1, 3))
                 socket.send(DatagramPacket(data, length, address, port))
             }
@@ -89,11 +73,49 @@ object UdpStrategyHandler {
                 }
             }
             BypassStrategy.UDP_DATA_FRAG, BypassStrategy.UDP_FRAGMENTATION, BypassStrategy.UDP_FRAGMENT_SKEW, BypassStrategy.QUIC_INITIAL_FRAGMENT, BypassStrategy.QUIC_INITIAL_FRAGMENTATION, BypassStrategy.QUIC_FORCE_FRAG -> {
-                val part = length / 2
+                val split = if (TlsParser.isClientHello(data, length, 0)) {
+                    (TlsParser.findSniOffset(data, length, 0) - 2).coerceIn(10, length - 10)
+                } else {
+                    length / 2
+                }
+                
                 if (length > 20) {
-                    socket.send(DatagramPacket(data, part, address, port))
-                    delay(rnd.nextLong(5, 15))
-                    socket.send(DatagramPacket(data.copyOfRange(part, length), length - part, address, port))
+                    val shouldReorder = rnd.nextInt(100) < 30
+                    if (shouldReorder) {
+                        socket.send(DatagramPacket(data.copyOfRange(split, length), length - split, address, port))
+                        delay(rnd.nextLong(1, 5))
+                        socket.send(DatagramPacket(data, split, address, port))
+                    } else {
+                        socket.send(DatagramPacket(data, split, address, port))
+                        delay(rnd.nextLong(1, 4))
+                        socket.send(DatagramPacket(data.copyOfRange(split, length), length - split, address, port))
+                    }
+                } else {
+                    socket.send(DatagramPacket(data, length, address, port))
+                }
+            }
+            BypassStrategy.UDP_STUTTER -> {
+                val chunks = rnd.nextInt(2, 5)
+                var pos = 0
+                for (i in 0 until chunks) {
+                    val sz = if (i == chunks - 1) length - pos else (length / chunks)
+                    if (sz > 0) {
+                        socket.send(DatagramPacket(data, pos, sz, address, port))
+                        pos += sz
+                        delay(rnd.nextLong(2, 12))
+                    }
+                }
+            }
+            BypassStrategy.UDP_PADDING_CHAOS -> {
+                val mtu = 1400 // Safe default MTU
+                val targetSize = rnd.nextInt(mtu - 200, mtu - 40).coerceAtMost(1300)
+                if (length < targetSize) {
+                    val padded = ByteArray(targetSize)
+                    System.arraycopy(data, 0, padded, 0, length)
+                    val noise = ByteArray(targetSize - length)
+                    rnd.nextBytes(noise)
+                    System.arraycopy(noise, 0, padded, length, noise.size)
+                    socket.send(DatagramPacket(padded, targetSize, address, port))
                 } else {
                     socket.send(DatagramPacket(data, length, address, port))
                 }
@@ -133,13 +155,28 @@ object UdpStrategyHandler {
             }
             BypassStrategy.UDP_FAKE_PACKET -> {
                 val fake = FakePacketHelper.buildUdpNoise(length)
-                socket.send(DatagramPacket(fake, fake.size, address, port))
-                delay(rnd.nextLong(1, 4))
-                socket.send(DatagramPacket(data, length, address, port))
+                writeUdpWithFake(socket, address, port, fake, DatagramPacket(data, length, address, port), rnd.nextLong(1, 4))
             }
             else -> {
                 socket.send(DatagramPacket(data, length, address, port))
             }
         }
+    }
+
+    private suspend fun writeUdpWithFake(
+        socket: DatagramSocket,
+        targetAddr: InetAddress,
+        targetPort: Int,
+        fakeData: ByteArray,
+        realPacket: DatagramPacket,
+        delayMs: Long
+    ) {
+        val ghost = DatagramPacket(fakeData, fakeData.size, targetAddr, targetPort)
+        val discoveredTtl = AutoTtlProber.getDiscoveredTtl(targetAddr.hostAddress ?: "") ?: 3
+        TtlHelper.setUdpTtl(socket, discoveredTtl)
+        try { socket.send(ghost) } catch (e: Throwable) {}
+        TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl)
+        delay(delayMs)
+        socket.send(realPacket)
     }
 }

@@ -44,12 +44,12 @@ object BypassApplier {
         }
 
         when (strategy.family) {
-            StrategyFamily.HTTP -> StrategyHandlers.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.TLS -> StrategyHandlers.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.TCP -> StrategyHandlers.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.FRAGMENTATION -> StrategyHandlers.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, effectiveDelay)
-            StrategyFamily.ADAPTIVE -> StrategyHandlers.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
-            StrategyFamily.TIMING -> StrategyHandlers.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.HTTP -> TcpStrategyHandlers.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.TLS -> TcpStrategyHandlers.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.TCP -> TcpStrategyHandlers.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            StrategyFamily.FRAGMENTATION -> TcpStrategyHandlers.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, effectiveDelay)
+            StrategyFamily.ADAPTIVE -> TcpStrategyHandlers.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
+            StrategyFamily.TIMING -> TcpStrategyHandlers.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
             else -> {
                 if (strategy == BypassStrategy.CHAOS) {
                     val picked = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TCP_WINDOW_SHRINK, BypassStrategy.FRAGMENT_MULTI).random()
@@ -67,7 +67,7 @@ object BypassApplier {
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(packet); return
         }
-        StrategyHandlers.handleUdpStrategies(socket, packet, rnd, host, strategy, config)
+        UdpStrategyHandlers.handleUdpStrategies(socket, packet, rnd, host, strategy, config)
     }
 
     fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean, avgDuration: Long = 50L) {

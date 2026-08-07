@@ -150,6 +150,10 @@ object ProxyStats {
 
     private val _activeConnections = MutableStateFlow(0)
     val activeConnections: StateFlow<Int> = _activeConnections.asStateFlow()
+    
+    fun updateConnections(delta: Int) {
+        _activeConnections.update { (it + delta).coerceAtLeast(0) }
+    }
 
     private val _speedBytesPerSecond = MutableStateFlow(0L)
     val speedBytesPerSecond: StateFlow<Long> = _speedBytesPerSecond.asStateFlow()
@@ -374,6 +378,13 @@ object ProxyStats {
         }
     }
 
-    fun updateConnections(delta: Int) { _activeConnections.update { (it + delta).coerceAtLeast(0) } }
-    fun getSuccessRate() = _successRate.value
+    fun recordStats(id: String, sent: Long = 0, received: Long = 0) {
+        updateFlow(id, sent, received)
+        updateBytes(sent + received)
+    }
+
+    fun unregisterFlow(id: String, success: Boolean) {
+        if (success) recordCensorshipEvent(false) else recordCensorshipEvent(true)
+        closeFlow(id)
+    }
 }

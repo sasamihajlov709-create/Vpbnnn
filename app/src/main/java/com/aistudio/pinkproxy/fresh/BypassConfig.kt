@@ -226,6 +226,15 @@ object BypassConfig {
     fun setStrategy(strat: BypassStrategy) { _strategy.value = strat }
     fun setGlobalStrategy(strat: BypassStrategy) { _strategy.value = strat }
     fun getStrategyMetrics(): List<StrategyMetric> = DpiStrategySelector.getStrategyMetrics()
+    fun getFallbackStrategy(current: BypassStrategy): BypassStrategy {
+        return when (current.family) {
+            StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
+            StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE
+            StrategyFamily.TCP -> BypassStrategy.TCP_WINDOW_SHRINK
+            StrategyFamily.FRAGMENTATION -> BypassStrategy.FRAGMENT_MULTI
+            else -> BypassStrategy.DIRECT
+        }
+    }
     fun clearScores(context: Context) {
         ProxyStats.resetScores()
         DpiEngine.resetStrategyScoresForNetworkChange()

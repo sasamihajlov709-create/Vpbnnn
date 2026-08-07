@@ -5,7 +5,6 @@ import android.util.Log
 import kotlinx.coroutines.*
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicLong
@@ -30,18 +29,7 @@ object TcpTransportHandler {
         var remoteIn: InputStream? = null
         var remoteOut: OutputStream? = null
         try {
-            clientSocket.tcpNoDelay = true
-            clientSocket.keepAlive = true
-            try { 
-                clientSocket.receiveBufferSize = 65536 
-            } catch (e: Throwable) {
-                Log.v("TcpTransport", "Failed to set client receive buffer: ${e.message}")
-            }
-            try { 
-                clientSocket.sendBufferSize = 65536 
-            } catch (e: Throwable) {
-                Log.v("TcpTransport", "Failed to set client send buffer: ${e.message}")
-            }
+            TcpTransportManager.configureSocket(clientSocket)
 
             if (RecoveryManager.isHostBlacklisted(targetHost)) {
                 Log.w("TcpTransport", "Rejecting connection to blacklisted host: $targetHost")
@@ -58,19 +46,18 @@ object TcpTransportHandler {
                 return
             }
             ProxyStats.addTraffic(targetHost)
-            var strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
+            val strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
             ProxyStats.registerFlow(sessionId, targetHost, "TCP", strategy)
             
             val totalWrittenClient = AtomicLong(0)
             val isTls = targetPort == 443 || targetPort == 8443
 
             val censorship = BypassConfig.censorshipLevel
-            var config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
+            val config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
-            // SNI Ghosting: Send fake TLS Hello with low TTL to distract DPI
             if (censorship > 65 && isTls) {
                 scope.launch(ProxyDispatcher.io) {
-                    performSniGhosting(targetHost, vpnService)
+                    TcpTransportManager.performSniGhosting(targetHost, vpnService)
                 }
             }
 
@@ -78,789 +65,139 @@ object TcpTransportHandler {
             val clientOut = clientSocket.getOutputStream()
             
             val lastActivity = AtomicLong(System.currentTimeMillis())
-            val detectedSni = AtomicReference<String?>(null)
             val writeMutex = Mutex()
             
-            // Adaptive buffer size based on RTT and censorship
             val rtt = BypassConfig.currentRttMs.value
             val intensity = ProxyStats.censorshipIntensity.value
             val transportBufferSize = when {
-                intensity > 80 -> 4096 // Smaller buffers for intense fragmentation
+                intensity > 80 -> 4096
                 rtt > 500 -> 8192
                 rtt > 200 -> 16384
                 else -> 32768
             }
 
             val firstClientPacket = ByteArray(transportBufferSize)
-            clientSocket.soTimeout = 3000 // Increased for slower networks
+            clientSocket.soTimeout = 3000
             var firstClientPacketLen = 0
             try {
                 firstClientPacketLen = clientIn.read(firstClientPacket)
             } catch (e: Throwable) {
-                // Not always an error, client might wait for server
+                Log.v("TcpTransport", "Initial client read failed (might be normal): ${e.message}")
             }
 
-            var firstRemoteResponse: ByteArray? = null
-            var firstRemoteResponseLen = 0
-
-            if (firstClientPacketLen > 0 && (targetPort == 443 || targetPort == 80 || targetPort == 8443)) {
-                val intensity = ProxyStats.censorshipIntensity.value
+            if (firstClientPacketLen <= 0) {
+                // If we can't read anything initially, it might be a server-first protocol or just slow client.
+                // For HTTPS it shouldn't happen usually.
+                remoteSocket = TcpTransportManager.connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
+            } else {
+                val raceResult = TcpRaceConnector.racingConnect(
+                    resolved, targetPort, vpnService, targetHost, 
+                    strategy, BypassConfig.getFallbackStrategy(strategy),
+                    firstClientPacket, firstClientPacketLen, transportBufferSize
+                )
                 
-                if (intensity > 60 && forcedStrategy == null) {
-                    // RACING CONNECT: Try 2 strategies in parallel
-                    val cat = HostClassifier.classify(targetHost)
-                    val strat1 = DpiEngine.getBestStrategy(cat, targetHost)
-                    val strat2 = DpiEngine.getDiverseFallback(strat1, cat)
-                    
-                    Log.i("TcpTransport", "RACING CONNECT started for $targetHost using $strat1 vs $strat2")
-                    
-                    val raceResult = racingConnect(
-                        resolved, targetPort, vpnService, targetHost, 
-                        strat1, strat2, firstClientPacket, firstClientPacketLen, transportBufferSize
-                    )
-                    
-                    if (raceResult != null) {
-                        remoteSocket = raceResult.socket
-                        remoteIn = raceResult.input
-                        remoteOut = raceResult.output
-                        firstRemoteResponse = raceResult.firstResponse
-                        firstRemoteResponseLen = raceResult.firstResponseLen
-                        strategy = raceResult.strategy
-                        
-                        // If we already have a response from the race, write it to client immediately
-                        if (firstRemoteResponseLen > 0 && firstRemoteResponse != null) {
-                            try {
-                                clientOut.write(firstRemoteResponse, 0, firstRemoteResponseLen)
-                                clientOut.flush()
-                                ProxyStats.updateFlow(sessionId, received = firstRemoteResponseLen.toLong())
-                                firstRemoteResponseLen = 0 // Handled
-                            } catch (e: Throwable) {
-                                Log.e("TcpTransport", "Failed to write initial race response to client", e)
-                            }
-                        }
-                    }
-                }
-
-                if (remoteSocket == null) {
-                    // Fallback to sequential or single attempt if race failed or wasn't triggered
-                    var attempt = 0
-                    val maxAttempts = if (ProxyStats.censorshipIntensity.value > 85) 3 else 2
-                    while (attempt < maxAttempts) {
-                        attempt++
-                        if (attempt > 1) {
-                            // Record previous failure and pick fallback or better strategy
-                            DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CENSORSHIP_STALL, host = targetHost)
-                            BypassConfig.recordFailure(strategy, targetHost, FailureReason.CENSORSHIP_STALL)
-                            val fallback = DpiEngine.getFallbackStrategy(strategy)
-                            strategy = fallback ?: DpiEngine.getBestExtremeStrategy(targetHost)
-                            config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
-                            Log.i("TcpTransport", "Transparent fallback: Retrying connection to $targetHost (attempt $attempt/$maxAttempts) using strategy $strategy")
-                        }
-
-                        val rs = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
-                        if (rs == null) {
-                            delay(200L * attempt)
-                            continue
-                        }
-                        
-                        // Apply socket optimizations
-                        rs.tcpNoDelay = true
-                        rs.keepAlive = true
-                        try { 
-                            rs.receiveBufferSize = 65536 
-                        } catch (e: Throwable) {
-                            Log.v("TcpTransport", "Failed to set remote receive buffer: ${e.message}")
-                        }
-                        try { 
-                            rs.sendBufferSize = 65536 
-                        } catch (e: Throwable) {
-                            Log.v("TcpTransport", "Failed to set remote send buffer: ${e.message}")
-                        }
-
-                        val rsOut = rs.getOutputStream()
-                        val rsIn = rs.getInputStream()
-
-                        try {
-                            // Apply bypass on the first client packet
-                            BypassConfig.applyBypass(rs, rsOut, firstClientPacket, firstClientPacketLen, config, targetHost)
-                            
-                            // Read first response packet with short adaptive timeout to verify bypass
-                            val verifyTimeout = (BypassConfig.currentRttMs.value * 3 + 1500).coerceAtMost(4000).toInt()
-                            rs.soTimeout = verifyTimeout
-                            
-                            val responseBuf = ByteArray(transportBufferSize)
-                            val readBytes = rsIn.read(responseBuf)
-                            if (readBytes > 0) {
-                                // Handshake succeeded!
-                                DpiEngine.recordResult(strategy, true, HostClassifier.classify(targetHost), host = targetHost)
-                                BypassConfig.recordSuccess(strategy, 100, targetHost)
-                                
-                                remoteSocket = rs
-                                remoteIn = rsIn
-                                remoteOut = rsOut
-                                firstRemoteResponse = responseBuf
-                                firstRemoteResponseLen = readBytes
-                                break // Exit retry loop
-                            } else if (readBytes == -1) {
-                                throw java.io.IOException("EOF received during handshake verification")
-                            }
-                        } catch (e: Throwable) {
-                            Log.w("TcpTransport", "Handshake attempt $attempt failed for $targetHost with strategy $strategy: ${e.message}")
-                            try { rs.close() } catch (ex: Throwable) {}
-                            
-                            if (attempt == maxAttempts) {
-                                DpiEngine.recordResult(strategy, false, HostClassifier.classify(targetHost), reason = FailureReason.CONNECTION_REFUSED, host = targetHost)
-                                BypassConfig.recordFailure(strategy, targetHost, FailureReason.CONNECTION_REFUSED)
-                                
-                                // Blacklist if repeated failures
-                                RecoveryManager.blacklistHost(targetHost, 120000) // 2 minutes
-                            }
-                        }
-                    }
+                if (raceResult != null) {
+                    remoteSocket = raceResult.socket
+                    remoteIn = raceResult.input
+                    remoteOut = raceResult.output
+                    // Write back the first response we got during racing
+                    clientOut.write(raceResult.firstResponse, 0, raceResult.firstResponseLen)
+                    clientOut.flush()
+                } else {
+                    remoteSocket = TcpTransportManager.connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
                 }
             }
 
-            // Direct fallback connection if the retry loop didn't succeed, or if there was no first client packet
             if (remoteSocket == null) {
-                if (BypassConfig.isStrictBypassMode) {
-                    Log.w("TcpTransport", "Bypass failed for $targetHost and strict bypass mode is enabled. Aborting fallback.")
-                    onConnectFailure?.invoke("BYPASS_FAILED_STRICT")
-                    clientSocket.close()
-                    return
-                }
-                Log.v("TcpTransport", "Bypass attempts failed for $targetHost. Connecting directly.")
-                remoteSocket = connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
-                if (remoteSocket == null) {
-                    onConnectFailure?.invoke("CONNECT_FAILED")
-                    clientSocket.close()
-                    return
-                }
-                remoteSocket!!.tcpNoDelay = true
-                remoteSocket!!.keepAlive = true
-                remoteIn = remoteSocket!!.getInputStream()
-                remoteOut = remoteSocket!!.getOutputStream()
-                
-                // If we have client data, write it direct
-                if (firstClientPacketLen > 0) {
-                    try {
-                        remoteOut.write(firstClientPacket, 0, firstClientPacketLen)
-                        remoteOut.flush()
-                    } catch (e: Throwable) {
-                        Log.w("TcpTransport", "Failed to write first packet directly: ${e.message}")
-                        onConnectFailure?.invoke("WRITE_FAILED")
-                        clientSocket.close()
-                        remoteSocket.close()
-                        return
-                    }
-                }
+                onConnectFailure?.invoke("CONNECT_FAILED")
+                return
             }
+            
+            val finalRemoteSocket = remoteSocket
+            remoteIn = remoteIn ?: finalRemoteSocket.getInputStream()
+            remoteOut = remoteOut ?: finalRemoteSocket.getOutputStream()
+            val finalRemoteIn = remoteIn!!
+            val finalRemoteOut = remoteOut!!
 
-            // Connection successfully established to remote target
             onConnectSuccess?.invoke()
 
             coroutineScope {
-                val finalRemoteSocket = remoteSocket!!
-                // Forward from Remote to Client (Direct)
-                launch(ProxyDispatcher.io) {
-                    val buffer = if (transportBufferSize > 16384) ProxyStats.obtain64k() else ProxyStats.obtain16k()
-                    try {
-                        if (firstRemoteResponse != null && firstRemoteResponseLen > 0) {
-                            clientOut.write(firstRemoteResponse, 0, firstRemoteResponseLen)
-                            clientOut.flush()
-                            ProxyStats.updateBytes(firstRemoteResponseLen.toLong())
-                            ProxyStats.updateFlow(sessionId, received = firstRemoteResponseLen.toLong())
-                        }
-                        
-                        finalRemoteSocket.soTimeout = 90000
-                        val inputStream = remoteIn ?: return@launch
-                        while (isActive) {
-                            val n = inputStream.read(buffer)
-                            if (n <= 0) break
-                            lastActivity.set(System.currentTimeMillis())
-                            clientOut.write(buffer, 0, n)
-                            clientOut.flush()
-                            ProxyStats.updateBytes(n.toLong())
-                            ProxyStats.updateFlow(sessionId, received = n.toLong())
-                        }
-                    } catch (e: Throwable) {
-                        if (e !is CancellationException && e !is java.net.SocketException) {
-                            Log.v("TcpTransport", "R2C error for $targetHost: ${e.message}")
-                        }
-                    } finally {
-                        if (buffer.size > 16384) ProxyStats.release64k(buffer) else ProxyStats.release16k(buffer)
-                        try { clientSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close client socket: ${e.message}") }
-                        try { finalRemoteSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close remote socket: ${e.message}") }
-                    }
-                }
-
-                // Forward from Client to Remote (with Bypass & Advanced Evasion)
-                launch(ProxyDispatcher.io) {
-                    val buffer = if (transportBufferSize > 16384) ProxyStats.obtain64k() else ProxyStats.obtain16k()
-                    val rnd = ThreadLocalRandom.current()
-                    var packetsCount = 1
-                    try {
-                        clientSocket.soTimeout = 90000
-                        while (isActive) {
-                            val n = clientIn.read(buffer)
-                            if (n <= 0) break
-                            lastActivity.set(System.currentTimeMillis())
-                            val currentIntensity = ProxyStats.censorshipIntensity.value
-                            packetsCount++
-                            
-                            val activeHost = detectedSni.get() ?: targetHost
-                            
-                             if (packetsCount <= 12) {
-                                // Try to extract SNI if it's a TLS handshake
-                                if (packetsCount <= 3) {
-                                    val sniOffset = TlsParser.findSniOffset(buffer, n)
-                                    if (sniOffset != -1) {
-                                        val realSni = TlsParser.extractHostname(buffer, n, sniOffset)
-                                        if (realSni != null) {
-                                            detectedSni.set(realSni)
-                                            if (TlsParser.isTls13(buffer, n)) {
-                                                ProxyStats.logTraffic("TLS 1.3 detected for $realSni")
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Fragmentation is safer than padding for standard TCP streams
-                                    if (currentIntensity > 65 && n > 100 && packetsCount < 10) {
-                                        val split = if (TlsParser.isClientHello(buffer, n)) 
-                                            (TlsParser.findSniOffset(buffer, n) - 2).coerceIn(10, n - 10)
-                                        else 
-                                            n / 2
-                                        
-                                        val outputStream = remoteOut ?: break
-                                        outputStream.write(buffer, 0, split)
-                                        outputStream.flush()
-                                        delay(rnd.nextLong(2, 20))
-                                        outputStream.write(buffer, split, n - split)
-                                        outputStream.flush()
-                                        ProxyStats.updateBytes(n.toLong())
-                                        ProxyStats.updateFlow(sessionId, sent = n.toLong())
-                                        continue
-                                    }
-                                }
-                                
-                                // Extreme evasion: Sequence Desync / Zero-Window Desync
-                                if (currentIntensity > 80 && packetsCount < 5) {
-                                    if (currentIntensity > 90 && rnd.nextBoolean()) {
-                                        sendZeroWindowDesync(finalRemoteSocket, rnd)
-                                    } else {
-                                        sendSequenceDesync(finalRemoteSocket, rnd)
-                                    }
-                                }
-
-                                writeMutex.lock()
-                                try {
-                                    val outputStream = remoteOut ?: break
-                                    BypassConfig.applyBypass(finalRemoteSocket, outputStream, buffer, n, config, activeHost)
-                                    ProxyStats.updateFlow(sessionId, sent = n.toLong())
-                                } finally {
-                                    writeMutex.unlock()
-                                }
-                            } else {
-                                if (currentIntensity > 40) {
-                                    if (packetsCount % 13 == 0) {
-                                        oscillateWindowSize(finalRemoteSocket)
-                                    }
-
-                                    val mtuThreshold = (BypassConfig.currentMtu.value * 0.6).toInt().coerceIn(400, 1000)
-                                    if (n > mtuThreshold) {
-                                        var offset = 0
-                                        while (offset < n) {
-                                            val sz = if (currentIntensity > 75) 
-                                                rnd.nextInt(16, 128).coerceAtMost(n - offset)
-                                            else 
-                                                rnd.nextInt(128, mtuThreshold).coerceAtMost(n - offset)
-                                            
-                                            writeMutex.lock()
-                                            try {
-                                                val outputStream = remoteOut ?: break
-                                                // In extreme cases, inject a tiny junk segment with low TTL before the real fragment
-                                                if (currentIntensity > 85 && rnd.nextInt(100) < 35) {
-                                                    injectGhostSegment(finalRemoteSocket, outputStream, rnd)
-                                                }
-                                                
-                                                outputStream.write(buffer, offset, sz)
-                                                outputStream.flush()
-                                            } finally {
-                                                writeMutex.unlock()
-                                            }
-                                            offset += sz
-                                            ProxyStats.updateFlow(sessionId, sent = sz.toLong())
-                                            delay(rnd.nextLong(1, 10))
-                                        }
-                                        ProxyStats.updateBytes(n.toLong())
-                                        continue
-                                    }
-                                }
-
-                                writeMutex.lock()
-                                try {
-                                    val outputStream = remoteOut ?: break
-                                    outputStream.write(buffer, 0, n)
-                                    outputStream.flush()
-                                    ProxyStats.updateBytes(n.toLong())
-                                    ProxyStats.updateFlow(sessionId, sent = n.toLong())
-                                } finally {
-                                    writeMutex.unlock()
-                                }
-                            }
-                        }
-                    } catch (e: Throwable) {
-                        if (e !is CancellationException && e !is java.net.SocketException) {
-                            Log.v("TcpTransport", "C2R error for $targetHost: ${e.message}")
-                        }
-                    } finally {
-                        if (buffer.size > 16384) ProxyStats.release64k(buffer) else ProxyStats.release16k(buffer)
-                        try { clientSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close client socket (C2R): ${e.message}") }
-                        try { finalRemoteSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Failed to close remote socket (C2R): ${e.message}") }
-                    }
-                }
-                
-                // Idle Smuggling (PSH-1): Send 1-byte PSH during inactivity to keep DPI state active
+                // Keep-alive pulse
                 launch {
                     val rnd = ThreadLocalRandom.current()
                     while (isActive) {
                         delay(rnd.nextLong(25000, 45000))
-                        
                         if (System.currentTimeMillis() - lastActivity.get() > 20000) {
                             writeMutex.lock()
                             try {
                                 if (finalRemoteSocket.isConnected && !finalRemoteSocket.isClosed) {
                                     Log.v("TcpTransport", "Idle keep-alive pulse for $targetHost")
                                 }
-                            } catch (e: Throwable) {} finally {
+                            } catch (e: Throwable) {
+                                Log.v("TcpTransport", "Idle pulse failed: ${e.message}")
+                            } finally {
                                 writeMutex.unlock()
                             }
                         }
                     }
                 }
 
-                // Confusion pulse: Periodically send realistic-looking fake data with low TTL
-                launch {
-                    val rnd = ThreadLocalRandom.current()
-                    while (isActive) {
-                        val delayMs = when {
-                            ProxyStats.censorshipIntensity.value > 85 -> rnd.nextLong(12000, 20000)
-                            ProxyStats.censorshipIntensity.value > 50 -> rnd.nextLong(18000, 35000)
-                            else -> rnd.nextLong(35000, 70000)
-                        }
-                        delay(delayMs)
-                        
-                        if (System.currentTimeMillis() - lastActivity.get() > 12000) {
-                            writeMutex.lock()
-                            try {
-                                val outputStream = remoteOut
-                                if (outputStream != null && finalRemoteSocket.isConnected && !finalRemoteSocket.isClosed) {
-                                    sendConfusionPacket(finalRemoteSocket, outputStream, rnd)
-                                }
-                            } catch (e: Throwable) {} finally {
-                                writeMutex.unlock()
+                // Data pump jobs
+                val remoteToClientJob = launch {
+                    try {
+                        val buffer = ByteArray(transportBufferSize)
+                        while (isActive) {
+                            val read = finalRemoteIn.read(buffer)
+                            if (read == -1) break
+                            lastActivity.set(System.currentTimeMillis())
+                            if (intensity > 70 && ThreadLocalRandom.current().nextInt(100) < 5) {
+                                TcpTransportManager.oscillateWindowSize(clientSocket)
                             }
+                            clientOut.write(buffer, 0, read)
+                            clientOut.flush()
+                            ProxyStats.recordStats(sessionId, 0, read.toLong())
                         }
+                    } catch (e: Throwable) {
+                        Log.v("TcpTransport", "Remote to client pump failed: ${e.message}")
+                    } finally {
+                        try { clientSocket.close() } catch (e: Throwable) {}
                     }
                 }
 
-                // Periodic Window Pulse to maintain flow state in DPI
-                launch {
+                try {
+                    // Send remaining data
+                    val buffer = ByteArray(transportBufferSize)
                     while (isActive) {
-                        delay(30000)
-                        if (ProxyStats.censorshipIntensity.value > 30 && finalRemoteSocket.isConnected && !finalRemoteSocket.isClosed) {
-                            applyWindowPulse(finalRemoteSocket)
+                        val read = clientIn.read(buffer)
+                        if (read == -1) break
+                        lastActivity.set(System.currentTimeMillis())
+                        if (intensity > 60 && ThreadLocalRandom.current().nextInt(100) < 3) {
+                            TcpTransportManager.applyWindowPulse(finalRemoteSocket)
                         }
-                    }
-                }
-                
-            // Active timeout monitoring
-                launch {
-                    while (isActive) {
-                        delay(20000)
-                        val now = System.currentTimeMillis()
-                        val lastAct = lastActivity.get()
-                        if (now - lastAct > 180000) { // 3 minutes idle
-                            Log.v("TcpTransport", "Closing idle session for $targetHost (3m inactivity)")
-                            try { clientSocket.close() } catch (e: Throwable) {}
-                            try { finalRemoteSocket.close() } catch (e: Throwable) {}
-                            cancel("Idle Timeout")
-                            break
+                        writeMutex.lock()
+                        try {
+                            finalRemoteOut.write(buffer, 0, read)
+                            finalRemoteOut.flush()
+                        } finally {
+                            writeMutex.unlock()
                         }
+                        totalWrittenClient.addAndGet(read.toLong())
+                        ProxyStats.recordStats(sessionId, read.toLong(), 0)
                     }
+                } catch (e: Throwable) {
+                    Log.v("TcpTransport", "Client to remote pump failed: ${e.message}")
+                } finally {
+                    remoteToClientJob.cancel()
                 }
             }
         } catch (e: Throwable) {
-            if (e !is CancellationException) {
-                val reason = when (e) {
-                    is java.net.ConnectException -> "CONN_REFUSED"
-                    is java.net.SocketTimeoutException -> "TIMEOUT"
-                    is java.net.SocketException -> if (e.message?.contains("reset") == true) "RESET" else "SOCKET_ERR"
-                    else -> "ERR_${e.javaClass.simpleName}"
-                }
-                Log.v("TcpTransport", "Session for $targetHost failed: $reason")
-            }
+            Log.e("TcpTransport", "Fatal session error for $targetHost: ${e.message}", e)
+            onConnectFailure?.invoke(e.message ?: "UNKNOWN")
         } finally {
-            try { clientSocket.close() } catch (e: Throwable) { Log.v("TcpTransport", "Final close client: ${e.message}") }
-            try { remoteSocket?.close() } catch (e: Throwable) { Log.v("TcpTransport", "Final close remote: ${e.message}") }
+            try { clientSocket.close() } catch (e: Throwable) {}
+            try { remoteSocket?.close() } catch (e: Throwable) {}
+            ProxyStats.unregisterFlow(sessionId, true)
             ProxyStats.closeFlow(sessionId)
         }
     }
-
-    private suspend fun connectToBestIp(
-        ips: List<java.net.InetAddress>,
-        port: Int,
-        vpnService: VpnService?,
-        config: SessionConfig,
-        host: String
-    ): Socket? = withContext(ProxyDispatcher.io) {
-        if (ips.isEmpty()) return@withContext null
-        if (ips.size == 1) {
-            val s = Socket()
-            try {
-                vpnService?.protect(s)
-                TtlHelper.tuneSocket(s)
-                TtlHelper.applyMssClamping(s, host)
-                s.connect(InetSocketAddress(ips[0], port), 5000)
-                return@withContext s
-            } catch (e: Throwable) {
-                try { s.close() } catch (ex: Throwable) {}
-                return@withContext null
-            }
-        }
-
-        // Happy Eyeballs: Connect to multiple IPs in parallel and take the first one
-        val intensity = ProxyStats.censorshipIntensity.value
-        val sortedIps = if (intensity > 70) {
-            ips.sortedByDescending { it is java.net.Inet6Address }
-        } else {
-            ips
-        }
-
-        val targetIps = sortedIps.take(8)
-        val channel = kotlinx.coroutines.channels.Channel<Socket>(targetIps.size)
-        val jobs = mutableListOf<Job>()
-        val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
-        
-        targetIps.forEachIndexed { index, ip ->
-            jobs += launch {
-                val s = Socket()
-                try {
-                    // Stagger connections: 200ms delay between attempts
-                    if (index > 0) delay(index * 200L)
-                    vpnService?.protect(s)
-                    TtlHelper.tuneSocket(s)
-                    TtlHelper.applyMssClamping(s, host)
-                    
-                    // Adaptive timeout: shorter for early attempts to trigger racing faster
-                    val timeout = if (index < 2) 4000 else 7000
-                    s.connect(InetSocketAddress(ip, port), timeout)
-                    
-                    if (!channel.trySend(s).isSuccess) {
-                        try { s.close() } catch (ex: Throwable) {}
-                    }
-                } catch (e: Throwable) {
-                    try { s.close() } catch (ex: Throwable) {}
-                } finally {
-                    if (completedCount.incrementAndGet() == targetIps.size) {
-                        channel.close()
-                    }
-                }
-            }
-        }
-        
-        var result: Socket? = null
-        try {
-            result = withTimeoutOrNull(10000) { channel.receive() }
-        } catch (e: Throwable) {
-            Log.w("TcpTransport", "Racing failed for $host: ${e.message}")
-        } finally {
-            jobs.forEach { it.cancel() }
-            channel.close()
-            // Clean up any sockets that arrived after we took one or timed out
-            while (true) {
-                val s = channel.tryReceive().getOrNull() ?: break
-                try { s.close() } catch (e: Throwable) {}
-            }
-        }
-        result
-    }
-
-    private suspend fun sendDecoyStorm(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        try {
-            val host = socket.inetAddress?.hostAddress ?: ""
-            val configuredTtl = BypassConfig.fakeTtl
-            val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(3, 7)
-            
-            // Multiple decoys in sequence to exhaust stateful inspection
-            val decoys = listOf(
-                FakePacketHelper.buildRealisticHttp2Header(),
-                FakePacketHelper.buildRealisticTlsHello("blocked.com"),
-                FakePacketHelper.buildHttpChaosPacket(),
-                FakePacketHelper.buildStunBindingRequest()
-            ).shuffled()
-
-            for (decoy in decoys.take(rnd.nextInt(2, 4))) {
-                TtlHelper.setTtl(socket, fakeTtl)
-                out.write(decoy)
-                out.flush()
-                delay(rnd.nextLong(1, 5))
-            }
-            TtlHelper.setTtl(socket, 64) // Restore normal TTL
-        } catch (e: Throwable) {
-            if (e is CancellationException) throw e
-        }
-    }
-
-    private suspend fun performSniGhosting(host: String, vpnService: VpnService?) {
-        try {
-            val decoys = listOf("google.com", "cloudflare.com", "bing.com", "apple.com", "microsoft.com")
-            val decoy = decoys.random()
-            val s = Socket()
-            vpnService?.protect(s)
-            val resolved = RobustResolver.resolve(decoy, vpnService)
-            if (resolved.isNotEmpty()) {
-                s.connect(InetSocketAddress(resolved.random(), 443), 2000)
-                val out = s.getOutputStream()
-                val hello = FakePacketHelper.buildRealisticTlsHello(decoy)
-                
-                val discoveredTtl = BypassConfig.fakeTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(decoy) ?: 4
-                TtlHelper.setTtl(s, discoveredTtl)
-                
-                out.write(hello)
-                out.flush()
-                delay(10)
-                s.close()
-            }
-        } catch (e: Throwable) {}
-    }
-
-    private fun oscillateWindowSize(socket: Socket) {
-        try {
-            val rnd = ThreadLocalRandom.current()
-            // Shake the window size to desync DPI state machine
-            socket.receiveBufferSize = if (rnd.nextBoolean()) 
-                rnd.nextInt(256, 1024) 
-            else 
-                rnd.nextInt(32768, 65536)
-        } catch (e: Throwable) {}
-    }
-
-    private suspend fun applyWindowPulse(socket: Socket) {
-        try {
-            val original = socket.receiveBufferSize
-            socket.receiveBufferSize = 1
-            // Delay to allow kernel to potentially advertise smaller window on ACKs
-            delay(10)
-            socket.receiveBufferSize = original
-        } catch (e: Throwable) {
-            if (e is CancellationException) throw e
-        }
-    }
-
-    private suspend fun sendConfusionPacket(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        try {
-            val host = socket.inetAddress?.hostAddress ?: ""
-            val configuredTtl = BypassConfig.fakeTtl
-            val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 6)
-            TtlHelper.setTtl(socket, fakeTtl)
-            val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 64))
-            out.write(noise)
-            out.flush()
-            delay(rnd.nextLong(1, 4))
-            TtlHelper.setTtl(socket, 64)
-        } catch (e: Throwable) {
-            if (e is CancellationException) throw e
-        }
-    }
-
-    private suspend fun injectGhostSegment(socket: Socket, out: OutputStream, rnd: ThreadLocalRandom) {
-        try {
-            val host = socket.inetAddress?.hostAddress ?: ""
-            val configuredTtl = BypassConfig.fakeTtl
-            val fakeTtl = configuredTtl.takeIf { it > 0 } ?: AutoTtlProber.getDiscoveredTtl(host) ?: rnd.nextInt(2, 6)
-            TtlHelper.setTtl(socket, fakeTtl)
-            val ghost = FakePacketHelper.buildRealisticTlsHello("ghost.internal")
-            out.write(ghost)
-            out.flush()
-            delay(rnd.nextLong(1, 3))
-            TtlHelper.setTtl(socket, 64)
-        } catch (e: Throwable) {
-            if (e is CancellationException) throw e
-        }
-    }
-
-    private suspend fun sendSequenceDesync(socket: Socket, rnd: ThreadLocalRandom) {
-        try {
-            // Send a tiny packet with very low TTL to confuse DPI state
-            val out = socket.getOutputStream()
-//             TtlHelper.setTtl(socket, rnd.nextInt(2, 4))
-            out.write(byteArrayOf(rnd.nextInt(256).toByte()))
-            out.flush()
-            delay(rnd.nextLong(2, 8))
-//             TtlHelper.setTtl(socket, BypassConfig.currentTtl.value)
-        } catch (e: Throwable) {
-            if (e is CancellationException) throw e
-        }
-    }
-
-    private suspend fun sendZeroWindowDesync(socket: Socket, rnd: ThreadLocalRandom) {
-        try {
-            // Signal a zero window to the remote, wait, then open it again
-            // This can break some middleboxes that don't handle flow control correctly
-            TtlHelper.setWindowSize(socket, 0)
-            delay(rnd.nextLong(100, 300))
-            TtlHelper.setWindowSize(socket, 65535)
-        } catch (e: Throwable) {
-            if (e is CancellationException) throw e
-        }
-    }
-
-    private suspend fun racingConnect(
-        ips: List<java.net.InetAddress>,
-        port: Int,
-        vpnService: VpnService?,
-        host: String,
-        strat1: BypassStrategy,
-        strat2: BypassStrategy,
-        firstPacket: ByteArray,
-        firstPacketLen: Int,
-        bufferSize: Int
-    ): RaceResult? = coroutineScope {
-        val resultChannel = kotlinx.coroutines.channels.Channel<RaceResult>(2)
-        
-        val job1 = launch(ProxyDispatcher.io) {
-            try {
-                val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize)
-                if (res != null) resultChannel.send(res)
-            } catch (e: Exception) {
-                // Silently fail, let the other job win
-            }
-        }
-        
-        val job2 = launch(ProxyDispatcher.io) {
-            try {
-                // Slight delay for the second contender to prioritize the first one
-                delay(200)
-                val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize)
-                if (res != null) resultChannel.send(res)
-            } catch (e: Exception) {
-                // Silently fail
-            }
-        }
-        
-        var winner: RaceResult? = null
-        try {
-            winner = withTimeoutOrNull(6000) {
-                resultChannel.receive()
-            }
-        } catch (e: Throwable) {
-            // Timeout or error
-        } finally {
-            job1.cancel()
-            job2.cancel()
-            
-            // Critical: Close any losers that connected after the winner or during cancellation
-            launch(ProxyDispatcher.io) {
-                repeat(2) {
-                    val other = resultChannel.tryReceive().getOrNull()
-                    if (other != null && other.socket != winner?.socket) {
-                        try { 
-                            other.input.close()
-                            other.output.close()
-                            other.socket.close() 
-                        } catch (e: Throwable) {}
-                    }
-                }
-                resultChannel.close()
-            }
-        }
-        winner
-    }
-
-    private suspend fun sendPacketWithEvasion(
-        socket: Socket,
-        out: OutputStream,
-        data: ByteArray,
-        offset: Int,
-        len: Int,
-        packetIdx: Int,
-        strategy: BypassStrategy,
-        intensity: Int,
-        rnd: ThreadLocalRandom,
-        host: String
-    ) {
-        if (packetIdx <= 8) {
-            if (intensity > 70 && rnd.nextBoolean()) {
-                injectGhostSegment(socket, out, rnd)
-            }
-            if (intensity > 85 && packetIdx < 4) {
-                if (rnd.nextBoolean()) sendZeroWindowDesync(socket, rnd) else sendSequenceDesync(socket, rnd)
-            }
-        }
-
-        if (intensity > 60 && len > 100 && packetIdx < 15) {
-            // Adaptive fragmentation
-            val split = if (TlsParser.isClientHello(data, len, offset)) 
-                (TlsParser.findSniOffset(data, len, offset) - offset - 2).coerceIn(10, len - 10)
-            else 
-                len / 2
-            
-            out.write(data, offset, split)
-            out.flush()
-            delay(rnd.nextLong(2, 20))
-            out.write(data, offset + split, len - split)
-            out.flush()
-        } else {
-            out.write(data, offset, len)
-            out.flush()
-        }
-    }
-
-    private suspend fun runSingleAttempt(
-        ips: List<java.net.InetAddress>,
-        port: Int,
-        vpnService: VpnService?,
-        host: String,
-        strategy: BypassStrategy,
-        firstPacket: ByteArray,
-        firstPacketLen: Int,
-        bufferSize: Int
-    ): RaceResult? {
-        val config = BypassConfig.getSessionConfig(host, strategy, BypassConfig.currentRttMs.value)
-        val rs = connectToBestIp(ips, port, vpnService, config, host) ?: return null
-        
-        try {
-            rs.tcpNoDelay = true
-            rs.soTimeout = (BypassConfig.currentRttMs.value * 2 + 1000).coerceAtMost(3000).toInt()
-            
-            val rsOut = rs.getOutputStream()
-            val rsIn = rs.getInputStream()
-            
-            BypassConfig.applyBypass(rs, rsOut, firstPacket, firstPacketLen, config, host)
-            
-            val responseBuf = ByteArray(bufferSize)
-            val readBytes = rsIn.read(responseBuf)
-            
-            if (readBytes > 0) {
-                DpiEngine.recordResult(strategy, true, HostClassifier.classify(host), host = host)
-                BypassConfig.recordSuccess(strategy, 100, host) // Use dummy rtt for success record
-                return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
-            } else {
-                try { rs.close() } catch (e: Throwable) {}
-                return null
-            }
-        } catch (e: Throwable) {
-            try { rs.close() } catch (ex: Throwable) {}
-            return null
-        }
-    }
-
-    data class RaceResult(
-        val socket: Socket,
-        val input: InputStream,
-        val output: OutputStream,
-        val firstResponse: ByteArray,
-        val firstResponseLen: Int,
-        val strategy: BypassStrategy
-    )
 }
