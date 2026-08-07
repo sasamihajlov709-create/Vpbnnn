@@ -173,9 +173,10 @@ object UdpStrategyHandler {
     ) {
         val ghost = DatagramPacket(fakeData, fakeData.size, targetAddr, targetPort)
         val discoveredTtl = AutoTtlProber.getDiscoveredTtl(targetAddr.hostAddress ?: "") ?: 3
-        TtlHelper.setUdpTtl(socket, discoveredTtl)
+        val isIpv6 = targetAddr is java.net.Inet6Address
+        TtlHelper.setUdpTtl(socket, discoveredTtl, isIpv6)
         try { socket.send(ghost) } catch (e: Throwable) { android.util.Log.v("UdpStrategy", "Fake UDP send failed: ${e.message}") }
-        TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl)
+        TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl, isIpv6)
         delay(delayMs)
         socket.send(realPacket)
     }

@@ -114,6 +114,19 @@ object RobustResolver {
         }
     }
 
+    suspend fun resolveDual(host: String, vpnService: VpnService? = null): List<InetAddress> = coroutineScope {
+        if (!BypassConfig.includeIpv6) return@coroutineScope resolve(host, vpnService, 1)
+
+        val deferredA = async { try { resolve(host, vpnService, 1) } catch (e: Exception) { emptyList() } }
+        val deferredAaaa = async { try { resolve(host, vpnService, 28) } catch (e: Exception) { emptyList() } }
+
+        val a = deferredA.await()
+        val aaaa = deferredAaaa.await()
+        
+        // Prefer AAAA if available, but return all for selection
+        (aaaa + a).distinct()
+    }
+
     private suspend fun performResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         val censorship = BypassConfig.censorshipLevel
         if (censorship > 50) {
@@ -224,7 +237,7 @@ object RobustResolver {
                 } catch (e: Exception) {
                     Log.v("RobustResolver", "Fake query error: ${e.message}")
                 } catch (e: Throwable) {
-                    Log.v("RobustResolver", "Critical fake query error")
+                    Log.v("RobustResolver", "Critical fake query error: ${e.message}")
                 }
                 }
             }
@@ -246,7 +259,7 @@ object RobustResolver {
             } catch (e: Exception) {
                 Log.v("RobustResolver", "ECH check error: ${e.message}")
             } catch (e: Throwable) {
-                Log.v("RobustResolver", "Critical ECH check error")
+                Log.v("RobustResolver", "Critical ECH check error: ${e.message}")
             }
             emptyList()
         }
@@ -302,7 +315,9 @@ object RobustResolver {
                         try { channel.send(res) } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
+                            Log.v("RobustResolver", "Failed to send result to channel: ${e.message}")
                         } catch (e: Throwable) {
+                            Log.v("RobustResolver", "Critical error sending result to channel: ${e.message}")
                         }
                     }
                 }
@@ -320,7 +335,10 @@ object RobustResolver {
                     emptyList()
                 }
                 try { channel.send(res) } catch (e: Exception) {
-                } catch (e: Throwable) {}
+                    Log.v("RobustResolver", "Failed to send fallback result to channel: ${e.message}")
+                } catch (e: Throwable) {
+                    Log.v("RobustResolver", "Critical error sending fallback result to channel: ${e.message}")
+                }
             }
         }
         

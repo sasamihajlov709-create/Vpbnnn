@@ -430,7 +430,7 @@ class PinkVpnService : VpnService() {
                     addressV4 = "10.0.0.2",
                     prefixV4 = 24,
                     dnsServers = dnsServers,
-                    includeIpv6 = true,
+                    includeIpv6 = BypassConfig.includeIpv6,
                     isExcludeMode = isExcludeMode,
                     selectedPackages = selectedPackages,
                     appPackageName = packageName,
@@ -459,7 +459,9 @@ class PinkVpnService : VpnService() {
 
             try {
                 wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24h max
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                Log.e("PinkVpnService", "Failed to acquire wakeLock: ${e.message}")
+            }
 
             _isRunning.value = true
             

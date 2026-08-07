@@ -200,10 +200,14 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             throw e
         } catch (e: Exception) {
             Log.e("PinkProxy", "HTTP Proxy error for $host:$port", e)
-            try { client.close() } catch (ex: Exception) {}
+            try { client.close() } catch (ex: Exception) {
+                Log.v("PinkProxy", "Failed to close client after HTTP proxy error: ${ex.message}")
+            }
         } catch (e: Throwable) {
             Log.e("PinkProxy", "Critical HTTP Proxy error", e)
-            try { client.close() } catch (ex: Exception) {}
+            try { client.close() } catch (ex: Exception) {
+                Log.v("PinkProxy", "Failed to close client after critical HTTP proxy error: ${ex.message}")
+            }
         }
     }
 

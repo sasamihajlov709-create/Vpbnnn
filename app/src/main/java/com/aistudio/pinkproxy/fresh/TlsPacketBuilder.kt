@@ -83,24 +83,42 @@ object TlsPacketBuilder {
         val rnd = ThreadLocalRandom.current()
         val sni = buildSniExtension(host)
         
-        // Simplified TLS Hello construction
-        val innerLen = 2 + 32 + 1 + 2 + 2 + 1 + 0 + 2 + (sni.size + 4) + 50
+        // Corrected TLS Hello construction and using a safer buffer allocation
+        val extensionsLen = (sni.size + 4) + 50
+        val innerLen = 2 + 32 + 1 + 2 + 2 + 1 + 1 + 2 + extensionsLen
+        
         val data = ByteArray(5 + 4 + innerLen)
         val buf = ByteBuffer.wrap(data)
         
-        buf.put(0x16.toByte()); buf.putShort(0x0303.toShort()); buf.putShort((4 + innerLen).toShort())
-        buf.put(0x01.toByte()); buf.put(0.toByte()); buf.putShort(innerLen.toShort())
-        buf.putShort(0x0303.toShort())
+        buf.put(0x16.toByte()) // Record Type: Handshake
+        buf.putShort(0x0303.toShort()) // Protocol Version: TLS 1.2
+        buf.putShort((4 + innerLen).toShort()) // Record Length
+        
+        buf.put(0x01.toByte()) // Handshake Type: Client Hello
+        buf.put(0.toByte()) // Handshake Length (high byte)
+        buf.putShort(innerLen.toShort()) // Handshake Length (low bytes)
+        
+        buf.putShort(0x0303.toShort()) // Client Version
         val random = ByteArray(32); rnd.nextBytes(random); buf.put(random)
-        buf.put(0.toByte()) // Session ID
-        buf.putShort(2.toShort()); buf.putShort(0x1301.toShort()) // Cipher
-        buf.put(1.toByte()); buf.put(0.toByte()) // Compression
+        buf.put(0.toByte()) // Session ID Length: 0
         
-        buf.putShort((sni.size + 4 + 50).toShort())
-        buf.putShort(0.toShort()); buf.putShort(sni.size.toShort()); buf.put(sni)
+        buf.putShort(2.toShort()) // Cipher Suites Length
+        buf.putShort(0x1301.toShort()) // Cipher Suite: TLS_AES_128_GCM_SHA256
         
-        // Random junk extension
-        buf.putShort(rnd.nextInt(100, 200).toShort()); buf.putShort(46.toShort()); buf.put(NoiseGenerator.buildUdpNoise(46))
+        buf.put(1.toByte()) // Compression Methods Length
+        buf.put(0.toByte()) // Compression Method: null
+        
+        buf.putShort(extensionsLen.toShort()) // Extensions Length
+        
+        // SNI Extension
+        buf.putShort(0.toShort()) // Type: server_name
+        buf.putShort(sni.size.toShort()) // Length
+        buf.put(sni)
+        
+        // Random junk extension (type between 100-200, length 46)
+        buf.putShort(rnd.nextInt(100, 200).toShort())
+        buf.putShort(46.toShort())
+        buf.put(NoiseGenerator.buildUdpNoise(46))
         
         return data
     }

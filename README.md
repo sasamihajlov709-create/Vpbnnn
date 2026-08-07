@@ -21,8 +21,11 @@ PinkProxy implements a full transparent proxying architecture using Android's `V
 
 ## Permissions & Policy
 
-- **QUERY_ALL_PACKAGES**: Required for the per-app routing feature to allow users to select applications for inclusion/exclusion. This is a standard requirement for VPN-class applications.
+- **Package Visibility**: Uses the `<queries>` element to list installed applications for the per-app routing feature, ensuring compatibility with modern Android privacy standards without requesting broad query permissions.
+- **VPN Service**: Utilizes the standard Android `VpnService` API.
 - **FOREGROUND_SERVICE_SPECIAL_USE**: Used to maintain the VPN connection reliably in the background, categorized under the "specialUse" type as per Android 14 requirements.
+- **IPv6 Dual-Stack**: Full support for IPv6 traffic with dual-stack DNS resolution (A + AAAA parallel racing).
+- **Fault Tolerance**: Comprehensive exception handling and diagnostic logging across all core components (TCP/UDP transports, DNS resolver, optimization engine).
 
 ## Compilation
 

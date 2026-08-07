@@ -77,6 +77,7 @@ object BypassConfig {
     @Volatile var fakeTtl = 0
     @Volatile var blockQuic = false
     @Volatile var preferIpv6 = false
+    @Volatile var includeIpv6 = true
     @Volatile var isCharging = true
     @Volatile var isPowerSaveMode = false
     @Volatile var batteryLevel = 100
@@ -246,6 +247,7 @@ object BypassConfig {
         if (host != null) {
             censorHeuristic.remove(host)
             hostLockTime.remove(host)
+            hostStrategyMemory[host] = strat to (System.currentTimeMillis() + SESSION_TTL)
         }
     }
 
@@ -258,6 +260,8 @@ object BypassConfig {
             val count = censorHeuristic.getOrDefault(host, 0) + 1
             censorHeuristic[host] = count
             if (count >= 5) hostLockTime[host] = System.currentTimeMillis()
+            // If failed, remove from host memory to allow re-selection
+            hostStrategyMemory.remove(host)
         }
     }
 

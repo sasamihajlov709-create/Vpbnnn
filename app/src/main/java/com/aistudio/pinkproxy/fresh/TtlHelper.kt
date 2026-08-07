@@ -60,8 +60,12 @@ object TtlHelper {
                 else -> 64 * 1024 to 128 * 1024
             }
             
-            try { socket.sendBufferSize = sndBuf } catch (e: Throwable) {}
-            try { socket.receiveBufferSize = rcvBuf } catch (e: Throwable) {}
+            try { socket.sendBufferSize = sndBuf } catch (e: Throwable) {
+                Log.v("TtlHelper", "Failed to set send buffer: ${e.message}")
+            }
+            try { socket.receiveBufferSize = rcvBuf } catch (e: Throwable) {
+                Log.v("TtlHelper", "Failed to set receive buffer: ${e.message}")
+            }
             
             setIpTos(socket, 0x10 or 0x08) // IPTOS_LOWDELAY | IPTOS_THROUGHPUT
             setTcpQuickAck(socket, true)
@@ -91,7 +95,9 @@ object TtlHelper {
                 setsockoptInt(fd, 6, 4, idle)     // TCP_KEEPIDLE = 4
                 setsockoptInt(fd, 6, 5, interval) // TCP_KEEPINTVL = 5
                 setsockoptInt(fd, 6, 6, count)    // TCP_KEEPCNT = 6
-            } catch (e: Throwable) {}
+            } catch (e: Throwable) {
+                Log.v("TtlHelper", "setKeepAliveParams failed: ${e.message}")
+            }
         }
     }
 

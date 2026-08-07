@@ -38,7 +38,7 @@ object TcpTransportHandler {
                 return
             }
 
-            val resolved = RobustResolver.resolve(targetHost, vpnService)
+            val resolved = RobustResolver.resolveDual(targetHost, vpnService)
             if (resolved.isEmpty()) {
                 Log.w("TcpTransport", "Resolution failed for $targetHost")
                 onConnectFailure?.invoke("DNS_FAILED")
@@ -168,7 +168,9 @@ object TcpTransportHandler {
                     } catch (e: Exception) {
                         Log.v("TcpTransport", "Remote to client pump error: ${e.message}")
                     } finally {
-                        try { clientSocket.close() } catch (e: java.io.IOException) {}
+                        try { clientSocket.close() } catch (e: java.io.IOException) {
+                            Log.v("TcpTransport", "Failed to close client socket in pump: ${e.message}")
+                        }
                     }
                 }
 
@@ -219,8 +221,12 @@ object TcpTransportHandler {
         } catch (e: Throwable) {
             Log.e("TcpTransport", "Critical session error for $targetHost", e)
         } finally {
-            try { clientSocket.close() } catch (e: java.io.IOException) {}
-            try { remoteSocket?.close() } catch (e: java.io.IOException) {}
+            try { clientSocket.close() } catch (e: java.io.IOException) {
+                Log.v("TcpTransport", "Failed to close client socket: ${e.message}")
+            }
+            try { remoteSocket?.close() } catch (e: java.io.IOException) {
+                Log.v("TcpTransport", "Failed to close remote socket: ${e.message}")
+            }
             ProxyStats.unregisterFlow(sessionId, true)
             ProxyStats.closeFlow(sessionId)
         }

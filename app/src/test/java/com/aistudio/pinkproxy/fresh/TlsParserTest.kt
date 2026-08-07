@@ -20,7 +20,7 @@ class TlsParserTest {
         println("Byte 5: ${fakeHello[5]}")
         
         // Find SNI
-        val offset = TlsParser.findSniOffset(fakeHello, fakeHello.size, "example.com")
+        val offset = TlsParser.findSniOffset(fakeHello, fakeHello.size, host = "example.com")
         assertTrue("SNI offset should be found and > 0, but got $offset", offset > 0)
         
         // Extract the string at offset

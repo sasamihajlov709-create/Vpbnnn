@@ -150,7 +150,7 @@ object UdpTransportHandler {
                                     activeSessions[sessionKey] = System.currentTimeMillis()
                                 }
                                 
-                                val resolved = RobustResolver.resolve(host, vpnService)
+                                val resolved = RobustResolver.resolveDual(host, vpnService)
                                 if (resolved.isNotEmpty()) {
                                     val targetInet = resolved.random()
                                     val outPacket = DatagramPacket(payload, payload.size, targetInet, port)

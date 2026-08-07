@@ -27,7 +27,7 @@ object TcpTransportManager {
         try {
             val s = Socket()
             vpnService?.protect(s)
-            val resolved = RobustResolver.resolve(decoy, vpnService)
+            val resolved = RobustResolver.resolveDual(decoy, vpnService)
             if (resolved.isNotEmpty()) {
                 s.connect(InetSocketAddress(resolved.random(), 443), 2000)
                 val out = s.getOutputStream()
@@ -60,6 +60,7 @@ object TcpTransportManager {
         } catch (e: Exception) {
             Log.v("TcpTransportManager", "Window oscillation failed: ${e.message}")
         } catch (e: Throwable) {
+            Log.v("TcpTransportManager", "Critical oscillation error: ${e.message}")
         }
     }
 
@@ -74,6 +75,7 @@ object TcpTransportManager {
         } catch (e: Exception) {
             Log.v("TcpTransportManager", "Window pulse failed: ${e.message}")
         } catch (e: Throwable) {
+            Log.v("TcpTransportManager", "Critical pulse error: ${e.message}")
         }
     }
 
@@ -94,10 +96,14 @@ object TcpTransportManager {
                 s.connect(java.net.InetSocketAddress(ips[0], port), 5000)
                 return@coroutineScope s
             } catch (e: Exception) {
-                try { s.close() } catch (ex: Exception) {}
+                try { s.close() } catch (ex: Exception) {
+                    Log.v("TcpTransportManager", "Failed to close socket: ${ex.message}")
+                }
                 return@coroutineScope null
             } catch (e: Throwable) {
-                try { s.close() } catch (ex: Throwable) {}
+                try { s.close() } catch (ex: Throwable) {
+                    Log.v("TcpTransportManager", "Critical error closing socket: ${ex.message}")
+                }
                 return@coroutineScope null
             }
         }
@@ -127,15 +133,23 @@ object TcpTransportManager {
                     s.connect(java.net.InetSocketAddress(ip, port), timeout)
                     
                     if (!channel.trySend(s).isSuccess) {
-                        try { s.close() } catch (ex: Exception) {}
+                        try { s.close() } catch (ex: Exception) {
+                            Log.v("TcpTransportManager", "Failed to close channel overflow socket: ${ex.message}")
+                        }
                     }
                 } catch (e: CancellationException) {
-                    try { s.close() } catch (ex: Exception) {}
+                    try { s.close() } catch (ex: Exception) {
+                        Log.v("TcpTransportManager", "Failed to close socket on cancellation: ${ex.message}")
+                    }
                     throw e
                 } catch (e: Exception) {
-                    try { s.close() } catch (ex: Exception) {}
+                    try { s.close() } catch (ex: Exception) {
+                        Log.v("TcpTransportManager", "Failed to close socket on error: ${ex.message}")
+                    }
                 } catch (e: Throwable) {
-                    try { s.close() } catch (ex: Throwable) {}
+                    try { s.close() } catch (ex: Throwable) {
+                        Log.v("TcpTransportManager", "Critical error closing socket on failure: ${ex.message}")
+                    }
                 } finally {
                     if (completedCount.incrementAndGet() == targetIps.size) {
                         channel.close()
@@ -158,7 +172,9 @@ object TcpTransportManager {
                 val s = channel.tryReceive().getOrNull() ?: break
                 try { s.close() } catch (e: Exception) {
                     Log.v("TcpTransportManager", "Failed to close ghost socket: ${e.message}")
-                } catch (e: Throwable) {}
+                } catch (e: Throwable) {
+                    Log.v("TcpTransportManager", "Critical error closing ghost socket: ${e.message}")
+                }
             }
         }
         result

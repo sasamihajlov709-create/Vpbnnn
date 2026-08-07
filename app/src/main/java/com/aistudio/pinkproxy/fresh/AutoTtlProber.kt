@@ -124,7 +124,11 @@ object AutoTtlProber {
             
             discoveredMtus[host] = 1400
             return 1400
+        } catch (e: Exception) {
+            Log.v("AutoTtlProber", "MTU probe failed for $host: ${e.message}")
+            return 1400
         } catch (e: Throwable) {
+            Log.e("AutoTtlProber", "Critical MTU probe error for $host", e)
             return 1400
         } finally {
             probingHosts.remove(key)
@@ -193,7 +197,11 @@ object AutoTtlProber {
             updateGlobalConsensus(finalTtl)
             
             return finalTtl
+        } catch (e: Exception) {
+            Log.v("AutoTtlProber", "TTL probe failed for $host: ${e.message}")
+            return 64
         } catch (e: Throwable) {
+            Log.e("AutoTtlProber", "Critical TTL probe error for $host", e)
             return 64
         } finally {
             probingHosts.remove(host)

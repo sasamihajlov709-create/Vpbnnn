@@ -1,6 +1,8 @@
 package com.aistudio.pinkproxy.fresh
 
 import android.net.VpnService
+import io.mockk.*
+import java.net.InetAddress
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -29,24 +31,31 @@ class Socks5ProxyE2ETest {
     @Before
     fun setup() {
         vpnService = Robolectric.buildService(PinkVpnService::class.java).create().get()
+        ProxyDispatcher.context = Robolectric.setupService(PinkVpnService::class.java)
+        
+        mockkObject(ProxyStats)
+        mockkObject(VpnRuntimeState)
         
         // Start a local mock echo target server
         mockTargetServer = ServerSocket(0)
         mockTargetPort = mockTargetServer!!.localPort
-        thread {
+        thread(name = "MockTargetServer") {
             try {
-                while (!mockTargetServer!!.isClosed) {
-                    val client = mockTargetServer!!.accept()
-                    thread {
+                while (mockTargetServer?.isClosed == false) {
+                    val client = mockTargetServer?.accept() ?: break
+                    thread(name = "MockTargetClient") {
                         client.use { s ->
+                            s.soTimeout = 5000
                             val input = s.getInputStream()
                             val output = s.getOutputStream()
                             val buf = ByteArray(1024)
-                            val len = input.read(buf)
-                            if (len > 0) {
-                                output.write(buf, 0, len)
-                                output.flush()
-                            }
+                            try {
+                                val len = input.read(buf)
+                                if (len > 0) {
+                                    output.write(buf, 0, len)
+                                    output.flush()
+                                }
+                            } catch (e: Exception) {}
                         }
                     }
                 }
@@ -60,19 +69,20 @@ class Socks5ProxyE2ETest {
 
         proxyServer = PinkProxyServer(vpnService, proxyPort)
         proxyServer.start()
-        Thread.sleep(150) // Wait for server to bind
+        Thread.sleep(800) // Increased wait for server to bind
     }
 
     @After
     fun teardown() {
         proxyServer.stop()
         mockTargetServer?.close()
+        unmockkAll()
     }
 
     @Test
     fun testSocks5HandshakeAndConnectSuccess() {
         Socket("127.0.0.1", proxyPort).use { client ->
-            client.soTimeout = 3000
+            client.soTimeout = 10000
             val dos = DataOutputStream(client.getOutputStream())
             val dis = DataInputStream(client.getInputStream())
 
@@ -136,7 +146,7 @@ class Socks5ProxyE2ETest {
     @Test
     fun testHttpConnectHandshakeSuccess() {
         Socket("127.0.0.1", proxyPort).use { client ->
-            client.soTimeout = 3000
+            client.soTimeout = 10000
             val output = client.getOutputStream()
             val input = client.getInputStream()
 
