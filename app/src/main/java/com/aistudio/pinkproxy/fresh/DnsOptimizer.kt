@@ -123,6 +123,7 @@ object DnsOptimizer {
 
     fun recordDohSuccess(url: String) {
         providerFailures[url] = ((providerFailures[url] ?: 1) - 1).coerceAtLeast(0)
+        DnsCacheManager.reportResolverResult(url, true)
     }
     
     fun recordDohFailure(url: String) {
@@ -132,6 +133,7 @@ object DnsOptimizer {
             // Ban for 10 minutes
             providerBlacklist[url] = System.currentTimeMillis() + 600000L
         }
+        DnsCacheManager.reportResolverResult(url, false)
         if (url == bestDohUrl && f > 3) {
             forceRefresh()
         }
