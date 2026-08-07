@@ -270,7 +270,8 @@ object BypassConfig {
         val intensity = ProxyStats.censorshipIntensity.value
         val effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) DpiEngine.getBestExtremeStrategy(host) else strategy
         val f1 = DpiEngine.getRecommendedFragSize()
-        val d1 = DpiEngine.getRecommendedDelay()
+        val baseDelay = DpiEngine.getRecommendedDelay()
+        val d1 = if (rtt > 0) Math.max(baseDelay, Math.min(rtt / 4, 150L)) else baseDelay
         val ttl = if (fakeTtl == 0) rnd.nextInt(3, 8) else fakeTtl
         return SessionConfig(
             strategy = effectiveStrategy,

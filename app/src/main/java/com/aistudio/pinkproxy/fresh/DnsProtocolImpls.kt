@@ -10,8 +10,31 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 
 object UdpDnsProtocols {
-    suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = emptyList() // Complex to implement without lib
-    suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = emptyList()
+    suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> {
+        return DohDnsProtocols.queryDohRacing(host, vpnService, type)
+    }
+    suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var socket: java.net.DatagramSocket? = null
+        try {
+            socket = java.net.DatagramSocket()
+            vpnService?.protect(socket)
+            socket.soTimeout = 3000
+            
+            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val packet = java.net.DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
+            socket.send(packet)
+            
+            val responseBuf = ByteArray(4096)
+            val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
+            socket.receive(responsePacket)
+            
+            DnsPacketEngine.parseDnsResponseDetailed(responseBuf, responsePacket.length)
+        } catch (e: Exception) {
+            emptyList()
+        } finally {
+            socket?.close()
+        }
+    }
     suspend fun queryUdpDnsReorder(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.DatagramSocket? = null
         try {
@@ -152,7 +175,9 @@ object DohDnsProtocols {
         return queryDohDetailed(host, "https://dns.google/dns-query", vpnService, 65)
     }
 
-    suspend fun queryDohJson(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = emptyList() // JSON DoH is less secure
+    suspend fun queryDohJson(host: String, vpnService: VpnService?, type: Int): List<InetAddress> {
+        return queryDoh(host, "https://dns.google/dns-query", vpnService, type)
+    }
 
     suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.coroutineScope {
         val selectedDns = BypassConfig.dnsType

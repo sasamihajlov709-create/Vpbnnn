@@ -253,8 +253,58 @@ object DnsCacheManager {
 
     fun isIpAddress(host: String): Boolean = host.matches(Regex("""^(\d{1,3}\.){3}\d{1,3}$""")) || host.contains(":")
 
-    fun save(context: android.content.Context) {}
-    fun load(context: android.content.Context) {}
+    fun save(context: android.content.Context) {
+        try {
+            val prefs = context.getSharedPreferences("pink_dns_cache_prefs", android.content.Context.MODE_PRIVATE)
+            val now = System.currentTimeMillis()
+            val jsonArr = org.json.JSONArray()
+            dnsCache.forEach { (key, pair) ->
+                if (pair.second > now) {
+                    val obj = org.json.JSONObject()
+                    obj.put("key", key)
+                    val ipsArr = org.json.JSONArray()
+                    pair.first.forEach { ipsArr.put(it.hostAddress) }
+                    obj.put("ips", ipsArr)
+                    obj.put("exp", pair.second)
+                    jsonArr.put(obj)
+                }
+            }
+            prefs.edit().putString("cache_data", jsonArr.toString()).apply()
+        } catch (e: Exception) {
+            Log.w("DnsCacheManager", "Failed to save DNS cache: ${e.message}")
+        }
+    }
+
+    fun load(context: android.content.Context) {
+        try {
+            val prefs = context.getSharedPreferences("pink_dns_cache_prefs", android.content.Context.MODE_PRIVATE)
+            val data = prefs.getString("cache_data", null) ?: return
+            val jsonArr = org.json.JSONArray(data)
+            val now = System.currentTimeMillis()
+            for (i in 0 until jsonArr.length()) {
+                val obj = jsonArr.getJSONObject(i)
+                val exp = obj.getLong("exp")
+                if (exp > now) {
+                    val key = obj.getString("key")
+                    val ipsArr = obj.getJSONArray("ips")
+                    val list = mutableListOf<InetAddress>()
+                    for (j in 0 until ipsArr.length()) {
+                        try {
+                            val ipStr = ipsArr.getString(j)
+                            if (ipStr != null) {
+                                list.add(InetAddress.getByName(ipStr))
+                            }
+                        } catch (ignored: Exception) {}
+                    }
+                    if (list.isNotEmpty()) {
+                        dnsCache[key] = Pair(list, exp)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("DnsCacheManager", "Failed to load DNS cache: ${e.message}")
+        }
+    }
     fun clear() = clearAll()
 
     fun ageHeatmap() {

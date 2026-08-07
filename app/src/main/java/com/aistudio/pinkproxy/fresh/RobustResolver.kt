@@ -23,11 +23,17 @@ object RobustResolver {
     private fun getScope(): CoroutineScope = resolverScope ?: ProxyDispatcher.mainScope
 
     fun loadDnsSettings(context: android.content.Context) {
-        // Now managed by BypassConfig
+        BypassConfig.loadTuningSettings(context)
+        DnsCacheManager.load(context)
     }
 
     fun saveDnsSettings(context: android.content.Context, mode: String, ip: String) {
-        // Now managed by BypassConfig.saveDnsSettings
+        val dnsType = try {
+            DnsType.valueOf(mode.uppercase())
+        } catch (e: Exception) {
+            DnsType.AUTO
+        }
+        BypassConfig.saveDnsSettings(context, dnsType, ip)
     }
 
     fun getCached(host: String, type: Int = 1): List<InetAddress>? = DnsCacheManager.getCached(host, type)
