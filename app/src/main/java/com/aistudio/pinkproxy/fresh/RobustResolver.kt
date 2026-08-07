@@ -23,19 +23,11 @@ object RobustResolver {
     private fun getScope(): CoroutineScope = resolverScope ?: ProxyDispatcher.mainScope
 
     fun loadDnsSettings(context: android.content.Context) {
-        val prefs = context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE)
-        dnsMode = prefs.getString("dns_mode", "Smart DoH") ?: "Smart DoH"
-        customDnsIp = prefs.getString("custom_dns_ip", "1.1.1.1") ?: "1.1.1.1"
+        // Now managed by BypassConfig
     }
 
     fun saveDnsSettings(context: android.content.Context, mode: String, ip: String) {
-        dnsMode = mode
-        customDnsIp = ip
-        context.getSharedPreferences("pink_proxy_settings", android.content.Context.MODE_PRIVATE).edit {
-            putString("dns_mode", mode)
-            putString("custom_dns_ip", ip)
-        }
-        DnsCacheManager.clear()
+        // Now managed by BypassConfig.saveDnsSettings
     }
 
     fun getCached(host: String, type: Int = 1): List<InetAddress>? = DnsCacheManager.getCached(host, type)
@@ -47,7 +39,9 @@ object RobustResolver {
         val cached = DnsCacheManager.getCached(host, type)
         if (cached != null) return cached
         
-        val servers = if (dnsMode == "Custom") listOf(customDnsIp) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
+        val dnsType = BypassConfig.dnsType
+        val isCustom = dnsType == DnsType.CUSTOM_DOH || dnsType == DnsType.CUSTOM_TCP || dnsType == DnsType.CUSTOM_UDP
+        val servers = if (isCustom) listOf(BypassConfig.customDnsUrl) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
         for (dns in servers) {
             try {
                 val res = DnsProtocols.queryDnsOverTcp(host, dns, vpnService, type)
@@ -185,7 +179,9 @@ object RobustResolver {
         }
 
         // 4. UDP/TCP Fallbacks
-        val servers = if (dnsMode == "Custom") listOf(customDnsIp) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
+        val dnsType = BypassConfig.dnsType
+        val isCustom = dnsType == DnsType.CUSTOM_DOH || dnsType == DnsType.CUSTOM_TCP || dnsType == DnsType.CUSTOM_UDP
+        val servers = if (isCustom) listOf(BypassConfig.customDnsUrl) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
         for (dns in servers) {
             try {
                 val res = DnsProtocols.queryUdpDnsShadow(host, dns, vpnService, type)

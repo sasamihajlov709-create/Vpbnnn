@@ -17,6 +17,10 @@ object BypassConfig {
     private val _strategy = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
     
+    fun setStrategy(new: BypassStrategy) {
+        _strategy.value = new
+    }
+    
     private val _testingStrategies = MutableStateFlow<List<BypassStrategy>>(
         listOf(
             BypassStrategy.SNI_SPLIT,
@@ -37,8 +41,29 @@ object BypassConfig {
     private val _isPanicModeFlow = MutableStateFlow(false)
     val isPanicModeFlow: StateFlow<Boolean> = _isPanicModeFlow.asStateFlow()
 
+    private val _isKillSwitchEnabled = MutableStateFlow(false)
+    val isKillSwitchEnabled: StateFlow<Boolean> = _isKillSwitchEnabled.asStateFlow()
+    fun setKillSwitch(enabled: Boolean, context: Context) {
+        _isKillSwitchEnabled.value = enabled
+        context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE).edit {
+            putBoolean("kill_switch_enabled", enabled)
+        }
+    }
+
     private val _currentMtu = MutableStateFlow(1400)
     val currentMtu: StateFlow<Int> = _currentMtu.asStateFlow()
+
+    private val _dnsType = MutableStateFlow(DnsType.AUTO)
+    val dnsTypeFlow: StateFlow<DnsType> = _dnsType.asStateFlow()
+    var dnsType: DnsType
+        get() = _dnsType.value
+        set(value) { _dnsType.value = value }
+
+    private val _customDnsUrl = MutableStateFlow("https://dns.google/dns-query")
+    val customDnsUrlFlow: StateFlow<String> = _customDnsUrl.asStateFlow()
+    var customDnsUrl: String
+        get() = _customDnsUrl.value
+        set(value) { _customDnsUrl.value = value }
 
     @Volatile var isAutoTuning = true
     @Volatile var isDiagnosticMode = false
@@ -84,6 +109,12 @@ object BypassConfig {
 
     val isPanicMode: Boolean get() = _isPanicModeFlow.value
     fun setPanicMode(enabled: Boolean) { _isPanicModeFlow.value = enabled }
+
+    fun updateMtu(context: Context, mtu: Int) {
+        setMtu(mtu)
+        val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
+        prefs.edit { putInt("mtu_size", mtu) }
+    }
 
     fun setMtu(mtu: Int) {
         val new = mtu.coerceIn(576, 1500)
@@ -147,7 +178,23 @@ object BypassConfig {
         fakeTtl = prefs.getInt("fakeTtl", 0)
         val savedStrat = prefs.getString("global_strategy", BypassStrategy.SNI_SPLIT.name)
         _strategy.value = try { BypassStrategy.valueOf(savedStrat ?: BypassStrategy.SNI_SPLIT.name) } catch (e: Exception) { BypassStrategy.SNI_SPLIT }
+        
+        val savedDns = prefs.getString("dns_strategy_type", DnsType.AUTO.name)
+        dnsType = try { DnsType.valueOf(savedDns ?: DnsType.AUTO.name) } catch(e: Exception) { DnsType.AUTO }
+        customDnsUrl = prefs.getString("custom_dns_url", "https://dns.google/dns-query") ?: "https://dns.google/dns-query"
+        _isKillSwitchEnabled.value = prefs.getBoolean("kill_switch_enabled", false)
     }
+
+    fun saveDnsSettings(context: Context, type: DnsType, customUrl: String? = null) {
+        dnsType = type
+        if (customUrl != null) customDnsUrl = customUrl
+        context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE).edit {
+            putString("dns_strategy_type", type.name)
+            putString("custom_dns_url", customDnsUrl)
+        }
+    }
+
+    fun saveBypassSettings(context: Context) = saveTuningSettings(context)
 
     fun saveTuningSettings(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
@@ -223,9 +270,25 @@ object BypassConfig {
         )
     }
 
-    fun setStrategy(strat: BypassStrategy) { _strategy.value = strat }
     fun setGlobalStrategy(strat: BypassStrategy) { _strategy.value = strat }
     fun getStrategyMetrics(): List<StrategyMetric> = DpiStrategySelector.getStrategyMetrics()
+
+    val strategyMetrics: kotlinx.coroutines.flow.Flow<List<StrategyMetric>> = flow {
+        while (true) {
+            emit(getStrategyMetrics())
+            kotlinx.coroutines.delay(5000)
+        }
+    }
+
+    fun resetScores() {
+        ProxyStats.resetScores()
+        DpiEngine.resetStrategyScoresForNetworkChange()
+    }
+
+    fun clearScores(context: Context) {
+        resetScores()
+    }
+
     fun getFallbackStrategy(current: BypassStrategy): BypassStrategy {
         return when (current.family) {
             StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
@@ -234,10 +297,6 @@ object BypassConfig {
             StrategyFamily.FRAGMENTATION -> BypassStrategy.FRAGMENT_MULTI
             else -> BypassStrategy.DIRECT
         }
-    }
-    fun clearScores(context: Context) {
-        ProxyStats.resetScores()
-        DpiEngine.resetStrategyScoresForNetworkChange()
     }
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) = 
         BypassApplier.applyBypass(socket, output, data, length, config, host)

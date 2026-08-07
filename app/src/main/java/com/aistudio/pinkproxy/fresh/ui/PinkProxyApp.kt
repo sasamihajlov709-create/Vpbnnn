@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +50,81 @@ fun PinkProxyApp(
     onDismissError: () -> Unit
 ) {
     val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+
+    Scaffold(
+        bottomBar = {
+            NavigationBar(
+                containerColor = Color.Black.copy(alpha = 0.8f),
+                tonalElevation = 0.dp
+            ) {
+                val navItemColors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = GentleLightPink,
+                    selectedTextColor = GentleLightPink,
+                    unselectedIconColor = GentleLightPink.copy(alpha = 0.4f),
+                    unselectedTextColor = GentleLightPink.copy(alpha = 0.4f),
+                    indicatorColor = GentleMediumPink.copy(alpha = 0.2f)
+                )
+                
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = { Icon(Icons.Default.Dashboard, "DASHBOARD") },
+                    label = { Text("DASHBOARD", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    colors = navItemColors
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Icon(Icons.Default.Security, "BYPASS") },
+                    label = { Text("BYPASS", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    colors = navItemColors
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    icon = { Icon(Icons.Default.Settings, "SETTINGS") },
+                    label = { Text("SETTINGS", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    colors = navItemColors
+                )
+            }
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .background(PureBlack)
+        ) {
+            androidx.compose.animation.Crossfade(targetState = selectedTab, label = "tab_fade") { tab ->
+                when (tab) {
+                    0 -> DashboardTab(
+                        vpnState = vpnState,
+                        vpnError = vpnError,
+                        onToggle = onToggle,
+                        onDismissError = onDismissError
+                    )
+                    1 -> BypassTab(onRestart = onRestart)
+                    2 -> SettingsScreen(
+                        context = context,
+                        isVpnActive = isActive,
+                        onSettingsChanged = onRestart
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DashboardTab(
+    vpnState: VpnLifecycleState,
+    vpnError: String?,
+    onToggle: () -> Unit,
+    onDismissError: () -> Unit
+) {
+    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
     val bgColor1 = Color(0xFF000000)
     val bgColor2 = Color(0xFF070305)
     val bgColor3 = Color(0xFF000000)
@@ -64,42 +140,21 @@ fun PinkProxyApp(
     )
 
     val bytesTransferred by ProxyStats.bytesTransferred.collectAsStateWithLifecycle(initialValue = 0L)
-    val activeConnections by ProxyStats.activeConnections.collectAsStateWithLifecycle(initialValue = 0)
     val speedBytes by ProxyStats.speedBytesPerSecond.collectAsStateWithLifecycle(initialValue = 0L)
     val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle(initialValue = emptyList<Long>())
-    val censorshipIntensity by ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
-    val serviceStatuses by ServiceChecker.statuses.collectAsStateWithLifecycle(initialValue = emptyList<ServiceChecker.ServiceStatus>())
     val isProxyHealthy by ServiceChecker.proxyHealth.collectAsStateWithLifecycle(initialValue = true)
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
     val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
-    val lastCheckTime by ServiceChecker.lastCheckTime.collectAsStateWithLifecycle(initialValue = 0L)
-
-    val recoveryLog by ProxyStats.recoveryLog.collectAsStateWithLifecycle(initialValue = emptyList<String>())
-    val trafficLog by ProxyStats.trafficLog.collectAsStateWithLifecycle(initialValue = emptyList<String>())
+    
     val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
     val testingStrategies by BypassConfig.testingStrategies.collectAsStateWithLifecycle(initialValue = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC))
     val signalQuality by ProxyStats.signalQuality.collectAsStateWithLifecycle(initialValue = 100)
-    val currentRttMs by BypassConfig.currentRttMs.collectAsStateWithLifecycle(initialValue = 50L)
-    val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
-    val activeFlows by ProxyStats.activeFlows.collectAsStateWithLifecycle(initialValue = emptyList())
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
     val stabilityScore by ProxyStats.stabilityScore.collectAsStateWithLifecycle(initialValue = 100)
     val currentMtu by BypassConfig.currentMtu.collectAsStateWithLifecycle(initialValue = 1400)
     val successRate by ProxyStats.successRate.collectAsStateWithLifecycle(initialValue = 100)
-    
-    val censorshipFingerprint by produceState(initialValue = DpiEngine.getCensorshipFingerprint()) {
-        while (true) {
-            delay(5000)
-            value = DpiEngine.getCensorshipFingerprint()
-        }
-    }
-    
-    var showDiagnostics by remember { mutableStateOf(false) }
-    var showActiveFlows by remember { mutableStateOf(false) }
-    var showStrategyConfig by remember { mutableStateOf(false) }
-    var showLogs by remember { mutableStateOf(false) }
-    var showStrategyStats by remember { mutableStateOf(false) }
-    
+    val censorshipIntensity by ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
+
     var sessionTime by remember { mutableStateOf(0L) }
     LaunchedEffect(isActive) {
         if (isActive) {
@@ -111,8 +166,6 @@ fun PinkProxyApp(
             sessionTime = 0L
         }
     }
-    
-    val context = LocalContext.current
     
     val speedKb = (speedBytes / 1024.0)
     val speedText = if (speedKb > 1024) String.format(java.util.Locale.US, "%.1f MB/s", speedKb / 1024.0) else String.format(java.util.Locale.US, "%.0f KB/s", speedKb)
@@ -145,7 +198,6 @@ fun PinkProxyApp(
                 .widthIn(max = 600.dp)
                 .align(Alignment.TopCenter)
                 .verticalScroll(scrollState)
-                .padding(WindowInsets.safeDrawing.asPaddingValues())
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -161,41 +213,11 @@ fun PinkProxyApp(
 
             when (vpnState) {
                 VpnLifecycleState.RUNNING -> StatusBadge(isProxyHealthy, isInternetUp, isProbing)
-                VpnLifecycleState.RECOVERING -> Text(
-                    text = "RECOVERING CONNECTION...",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFFFB74D),
-                    letterSpacing = 2.sp
-                )
-                VpnLifecycleState.STARTING -> Text(
-                    text = "STARTING ENGINES...",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = GentleMediumPink,
-                    letterSpacing = 2.sp
-                )
-                VpnLifecycleState.STOPPING -> Text(
-                    text = "STOPPING SECURELY...",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = GentleDarkPink,
-                    letterSpacing = 2.sp
-                )
-                VpnLifecycleState.FAILED, VpnLifecycleState.ERROR -> Text(
-                    text = "CRITICAL FAILURE",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFE57373),
-                    letterSpacing = 2.sp
-                )
-                else -> Text(
-                    text = stringResource(R.string.status_ready),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = GentleMediumPink.copy(alpha = 0.5f),
-                    letterSpacing = 2.sp
-                )
+                VpnLifecycleState.RECOVERING -> Text("RECOVERING CONNECTION...", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFB74D), letterSpacing = 2.sp)
+                VpnLifecycleState.STARTING -> Text("STARTING ENGINES...", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink, letterSpacing = 2.sp)
+                VpnLifecycleState.STOPPING -> Text("STOPPING SECURELY...", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleDarkPink, letterSpacing = 2.sp)
+                VpnLifecycleState.FAILED, VpnLifecycleState.ERROR -> Text("CRITICAL FAILURE", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE57373), letterSpacing = 2.sp)
+                else -> Text(stringResource(R.string.status_ready), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink.copy(alpha = 0.5f), letterSpacing = 2.sp)
             }
 
             Spacer(modifier = Modifier.height(32.dp))
@@ -205,43 +227,16 @@ fun PinkProxyApp(
                     color = Color(0xFFE57373).copy(alpha = 0.15f),
                     shape = RoundedCornerShape(16.dp),
                     border = BorderStroke(1.dp, Color(0xFFE57373).copy(alpha = 0.4f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 24.dp)
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = "Error",
-                            tint = Color(0xFFE57373),
-                            modifier = Modifier.size(24.dp)
-                        )
+                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Warning, "Error", tint = Color(0xFFE57373), modifier = Modifier.size(24.dp))
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "SYSTEM ALERT",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFE57373),
-                                letterSpacing = 1.sp
-                            )
-                            Text(
-                                text = vpnError,
-                                fontSize = 13.sp,
-                                color = GentleLightPink,
-                                lineHeight = 18.sp
-                            )
+                            Text("SYSTEM ALERT", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE57373), letterSpacing = 1.sp)
+                            Text(vpnError, fontSize = 13.sp, color = GentleLightPink, lineHeight = 18.sp)
                         }
-                        IconButton(onClick = onDismissError) {
-                            Icon(
-                                imageVector = Icons.Default.Cancel,
-                                contentDescription = "Dismiss",
-                                tint = GentleMediumPink.copy(alpha = 0.6f)
-                            )
-                        }
+                        IconButton(onClick = onDismissError) { Icon(Icons.Default.Cancel, "Dismiss", tint = GentleMediumPink.copy(alpha = 0.6f)) }
                     }
                 }
             }
@@ -255,12 +250,8 @@ fun PinkProxyApp(
                 testingStrategies = testingStrategies,
                 isProbing = isProbing,
                 isActive = isActive,
-                onSelectStrategy = { showStrategyConfig = !showStrategyConfig }
+                onSelectStrategy = { /* Managed in Bypass Tab */ }
             )
-
-            if (isActive) {
-                CensorshipFingerprintCard(censorshipFingerprint)
-            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -277,10 +268,7 @@ fun PinkProxyApp(
                         if (speedHistory.isNotEmpty()) {
                             SpeedGraph(
                                 history = speedHistory,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(60.dp)
-                                    .padding(top = 16.dp, start = 16.dp, end = 16.dp)
+                                modifier = Modifier.fillMaxWidth().height(60.dp).padding(top = 16.dp, start = 16.dp, end = 16.dp)
                             )
                         }
                         
@@ -298,299 +286,262 @@ fun PinkProxyApp(
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CompactActionButton("OPTIMIZE", Modifier.weight(1f)) { 
-                        try {
-                            val intent = Intent(context, PinkVpnService::class.java).apply { action = "RESTART" }
-                            androidx.core.content.ContextCompat.startForegroundService(context, intent)
-                        } catch (e: Throwable) {
-                            Log.e("PinkProxyApp", "Failed to restart VPN: ${e.message}")
-                        }
-                    }
-                    CompactActionButton("STATS", Modifier.weight(1f)) { showStrategyStats = true }
-                    CompactActionButton("LOGS", Modifier.weight(1f)) { showLogs = true }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                ExpandableSection(
-                    title = "CORE DIAGNOSTICS",
-                    icon = Icons.Default.Build,
-                    isExpanded = showDiagnostics,
-                    onToggle = { showDiagnostics = !showDiagnostics }
-                ) {
-                    Column(modifier = Modifier.padding(top = 8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            val pool8kSize by ProxyStats.pool8kSize.collectAsStateWithLifecycle(initialValue = 0)
-                            val pool16kSize by ProxyStats.pool16kSize.collectAsStateWithLifecycle(initialValue = 0)
-                            MetricItem("BUFFER POOL", "8K: $pool8kSize/64 | 16K: $pool16kSize/32", GentleMediumPink)
-                            MetricItem("ACTIVE TCP", "$activeConnections CONNS", Color(0xFF4FC3F7))
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            val congestionWindow by ProxyStats.congestionWindow.collectAsStateWithLifecycle(initialValue = 10)
-                            val dnsSuccess by ProxyStats.dnsSuccessCount.collectAsStateWithLifecycle(initialValue = 0L)
-                            val dnsFailure by ProxyStats.dnsFailureCount.collectAsStateWithLifecycle(initialValue = 0L)
-                            MetricItem("CONGESTION", "${congestionWindow} pkts/burst", Color(0xFFBA68C8))
-                            MetricItem("DNS HEALTH", "OK: $dnsSuccess | ERR: $dnsFailure", if (dnsFailure > 10) Color(0xFFE57373) else Color(0xFF81C784))
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                ExpandableSection(
-                    title = "ACTIVE SESSIONS",
-                    subtitle = "${activeFlows.size} FLOWS",
-                    icon = Icons.Default.SwapHoriz,
-                    isExpanded = showActiveFlows,
-                    onToggle = { showActiveFlows = !showActiveFlows }
-                ) {
-                    ActiveFlowsContent(activeFlows)
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                ExpandableSection(
-                    title = "STRATEGY CONFIG",
-                    icon = Icons.Default.Settings,
-                    isExpanded = showStrategyConfig,
-                    onToggle = { showStrategyConfig = !showStrategyConfig }
-                ) {
-                    Column(modifier = Modifier.padding(top = 8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            MetricItem("ACTIVE DPI EVASION", activeStrategy.name.replace("_", " "), GentleLightPink)
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "FRAG (Dyn/Base): $currentFragSize / ${BypassConfig.frag1} | DELAY: ${BypassConfig.delay1}ms | TTL: ${BypassConfig.fakeTtl}",
-                            fontSize = 9.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = Color(0xFF81C784)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            MetricItem("CENSORSHIP LVL", "$censorshipIntensity%", if (censorshipIntensity < 25) Color(0xFF81C784) else Color(0xFFE57373))
-                            MetricItem("STABILITY", "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else Color(0xFFFFB74D))
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-
-                ExpandableSection(
-                    title = "SYSTEM LOGS",
-                    icon = Icons.AutoMirrored.Filled.List,
-                    isExpanded = showLogs,
-                    onToggle = { showLogs = !showLogs }
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 120.dp)
-                            .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                            .padding(8.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        recoveryLog.forEach { log ->
-                            Text(
-                                text = log,
-                                color = if (log.contains("Healing") || log.contains("Optimizing")) GentleDarkPink else GentleMediumPink.copy(alpha = 0.6f),
-                                fontSize = 9.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                modifier = Modifier.padding(vertical = 1.dp)
-                            )
-                        }
-                        
-                        if (trafficLog.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "REAL-TIME TRAFFIC",
-                                color = GentleMediumPink,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                            trafficLog.forEach { host ->
-                                val category = HostClassifier.classify(host)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(4.dp)
-                                            .background(
-                                                when(category) {
-                                                    HostCategory.AI -> Color(0xFFCE93D8)
-                                                    HostCategory.STREAMING -> Color(0xFFE57373)
-                                                    HostCategory.MESSENGER -> Color(0xFF81C784)
-                                                    HostCategory.SOCIAL -> Color(0xFF64B5F6)
-                                                    HostCategory.DEV -> Color(0xFFBA68C8)
-                                                    else -> GentleMediumPink.copy(alpha = 0.5f)
-                                                },
-                                                androidx.compose.foundation.shape.CircleShape
-                                            )
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = host,
-                                        color = GentleLightPink.copy(alpha = 0.7f),
-                                        fontSize = 9.sp,
-                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    CompactActionButton("EXPORT DIAGNOSTICS", Modifier.fillMaxWidth()) {
-                        val report = StringBuilder().apply {
-                            appendLine("=== PinkProxy Diagnostic Report ===")
-                            appendLine("OS: Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
-                            appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
-                            appendLine("Strategy: ${BypassConfig.strategy.value.name}")
-                            appendLine("Censorship Level: ${ProxyStats.censorshipIntensity.value}%")
-                            appendLine("Stability: ${ProxyStats.stabilityScore.value}%")
-                            appendLine("DNS Mode: ${RobustResolver.dnsMode}")
-                            appendLine("\n=== Recent Logs ===")
-                            recoveryLog.takeLast(20).forEach { appendLine(it) }
-                        }.toString()
-
-                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "PinkProxy Diagnostics")
-                            putExtra(Intent.EXTRA_TEXT, report)
-                        }
-                        try {
-                            context.startActivity(Intent.createChooser(shareIntent, "Share Diagnostics"))
-                        } catch (e: Throwable) {
-                            android.widget.Toast.makeText(context, "Could not open share sheet", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
             }
-                        
-            var showGuide by remember { mutableStateOf(false) }
-            ExpandableSection(
-                title = "CONNECTION GUIDE",
-                icon = Icons.Default.Info,
-                isExpanded = showGuide,
-                onToggle = { showGuide = !showGuide }
+        }
+    }
+}
+
+@Composable
+fun BypassTab(
+    onRestart: () -> Unit
+) {
+    val context = LocalContext.current
+    val currentStrategy by BypassConfig.strategy.collectAsStateWithLifecycle()
+    val metrics by BypassConfig.strategyMetrics.collectAsStateWithLifecycle(initialValue = emptyList<StrategyMetric>())
+    val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle()
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text(
+            text = "BYPASS ENGINE",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Black,
+            color = GentleLightPink,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        StrategyWidget(
+            currentStrategy = currentStrategy,
+            metrics = metrics,
+            onSelect = { 
+                BypassConfig.setStrategy(it)
+                BypassConfig.saveBypassSettings(context)
+                onRestart()
+            }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (isPanicMode) {
+            PanicModeIndicator()
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Quick Stats for Bypass
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.3f)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text("ENGINE DIAGNOSTICS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                val currentDpi by ProxyStats.currentDpiType.collectAsStateWithLifecycle()
+                MetricRow(label = "Detected Block Type", value = currentDpi.name, color = if (currentDpi != DpiType.NONE) Color(0xFFE57373) else GentleLightPink)
+                
+                val stability by ProxyStats.stabilityScore.collectAsStateWithLifecycle()
+                MetricRow(label = "Path Stability", value = "$stability%", color = if (stability < 50) Color(0xFFE57373) else GentleLightPink)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        Button(
+            onClick = { 
+                BypassConfig.resetScores()
+                onRestart()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = GentleDarkPink)
+        ) {
+            Text("FORCE RE-OPTIMIZE ENGINE", fontWeight = FontWeight.Bold)
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // Strategy Config Summary
+        ExpandableSection(
+            title = "CURRENT PARAMETERS",
+            icon = Icons.Default.Settings,
+            isExpanded = true,
+            onToggle = {}
+        ) {
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                val currentFragSize by BypassConfig.currentFragSizeState.collectAsStateWithLifecycle(initialValue = 1)
+                Text(
+                    text = "FRAG: $currentFragSize | DELAY: ${BypassConfig.delay1}ms | TTL: ${BypassConfig.fakeTtl}",
+                    fontSize = 11.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = Color(0xFF81C784)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("LIVE TRAFFIC FLOWS", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
+            val activeFlows by ProxyStats.activeFlows.collectAsStateWithLifecycle()
+            Text("${activeFlows.size} ACTIVE", fontSize = 10.sp, color = GentleMediumPink)
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        val activeFlows by ProxyStats.activeFlows.collectAsStateWithLifecycle()
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                .border(1.dp, GentleMediumPink.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (activeFlows.isEmpty()) {
+                Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                    Text("No active data flows", color = GentleLightPink.copy(alpha = 0.3f), fontSize = 12.sp)
+                }
+            } else {
+                activeFlows.take(15).forEach { flow ->
+                    FlowItem(flow)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FlowItem(flow: ActiveFlow) {
+    Surface(
+        color = Color.White.copy(alpha = 0.03f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(
+                        if (flow.status == "OPEN") Color(0xFF81C784) else Color(0xFFE57373),
+                        CircleShape
+                    )
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(flow.host, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GentleLightPink, maxLines = 1)
+                Text("${flow.type} | ${flow.strategy.name}", fontSize = 9.sp, color = GentleLightPink.copy(alpha = 0.4f))
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(ProxyStats.formatBytes(flow.bytesSent + flow.bytesReceived), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
+                Text(flow.status, fontSize = 8.sp, color = GentleLightPink.copy(alpha = 0.3f))
+            }
+        }
+    }
+}
+
+@Composable
+fun PanicModeIndicator() {
+    Surface(
+        color = Color(0xFFE57373).copy(alpha = 0.1f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, Color(0xFFE57373).copy(alpha = 0.4f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.Error, null, tint = Color(0xFFE57373), modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text("PANIC MODE ACTIVE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE57373))
+                Text("Maximum DPI evasion engaged. Stability prioritized over speed.", fontSize = 9.sp, color = Color(0xFFE57373).copy(alpha = 0.8f))
+            }
+        }
+    }
+}
+
+@Composable
+fun StrategyWidget(
+    currentStrategy: BypassStrategy,
+    metrics: List<StrategyMetric>,
+    onSelect: (BypassStrategy) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.4f)),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, GentleMediumPink.copy(alpha = 0.2f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text(
-                        text = "• Системный обход:\n" +
-                                "  VPN перехватывает весь трафик через tun2socks и маршрутизирует его через DPI-bypass движок. Большинство приложений, включая официальный YouTube клиент, работают автоматически.\n\n" +
-                                "• Поддержка Telegram:\n" +
-                                "  Трафик Telegram автоматически перехватывается, но для большей надежности (например, для звонков) можно применить прямые настройки SOCKS5.",
-                        fontSize = 11.sp,
-                        color = GentleLightPink.copy(alpha = 0.6f),
-                        lineHeight = 16.sp,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    CompactActionButton("Настроить Telegram Автоматически", Modifier.fillMaxWidth()) {
-                        try {
-                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("tg://socks?server=127.0.0.1&port=18080&user=&pass="))
-                            intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                            context.startActivity(intent)
-                        } catch (e: Throwable) {
-                            android.widget.Toast.makeText(context, "Telegram не установлен", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                    Text("ACTIVE ENGINE STRATEGY", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
+                    Text(currentStrategy.name.replace("_", " "), fontSize = 18.sp, fontWeight = FontWeight.Black, color = GentleLightPink)
                 }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = GentleLightPink.copy(alpha = 0.5f)
+                )
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            var showAdvanced by remember { mutableStateOf(false) }
-            ExpandableSection(
-                title = "ADVANCED SETTINGS",
-                icon = Icons.Default.SettingsApplications,
-                isExpanded = showAdvanced,
-                onToggle = { showAdvanced = !showAdvanced }
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    AutoConnectCard(context = context)
-                    
-                    val pm = context.getSystemService(android.os.PowerManager::class.java)
-                    val isIgnoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) == true
-                    if (!isIgnoringBattery) {
-                        BatteryOptimizationInfoCard(context = context)
-                    }
-
-                    AppFilterCard(context = context, onSettingsChanged = onRestart)
-                    ExpertSettingsCard(context = context, isVpnActive = isActive)
-                }
-            }
-
-            if (isActive && serviceStatuses.isNotEmpty()) {
+            
+            if (expanded) {
                 Spacer(modifier = Modifier.height(12.dp))
-                var showServices by remember { mutableStateOf(false) }
-                ExpandableSection(
-                    title = "SERVICE MONITOR",
-                    icon = Icons.Default.Info,
-                    isExpanded = showServices,
-                    onToggle = { showServices = !showServices }
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp)
-                            .background(GentleLightPink.copy(alpha = 0.03f), RoundedCornerShape(16.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    metrics.take(8).forEach { metric ->
+                        val isSelected = metric.strategy == currentStrategy
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (isSelected) GentleDarkPink.copy(alpha = 0.2f) else Color.Transparent, RoundedCornerShape(8.dp))
+                                .clickable { 
+                                    onSelect(metric.strategy)
+                                    expanded = false
+                                }
+                                .padding(8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = if (lastCheckTime > 0) "UPDATED: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(lastCheckTime))}" else "WAITING...",
-                                fontSize = 9.sp,
-                                color = GentleLightPink.copy(alpha = 0.4f),
-                                fontWeight = FontWeight.Bold
-                            )
-                            IconButton(
-                                onClick = { ServiceChecker.triggerCheck() },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(Icons.Default.Refresh, null, tint = GentleLightPink.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                            Column {
+                                Text(metric.strategy.name.replace("_", " "), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (isSelected) GentleLightPink else GentleLightPink.copy(alpha = 0.7f))
+                                Text("Score: ${metric.score} | SR: ${if (metric.successes + metric.failures > 0) (metric.successes * 100 / (metric.successes + metric.failures)) else 0}%", fontSize = 9.sp, color = GentleLightPink.copy(alpha = 0.4f))
                             }
-                        }
-                        serviceStatuses.forEach { status ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(GentleLightPink.copy(alpha = 0.02f), RoundedCornerShape(8.dp))
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text(status.name, color = GentleLightPink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                    Text(status.url.removePrefix("https://").removePrefix("www."), color = GentleLightPink.copy(alpha = 0.3f), fontSize = 10.sp)
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (status.isUp && status.latencyMs > 0) {
-                                        Text("${status.latencyMs} ms", color = if (status.latencyMs < 300) Color(0xFF81C784) else Color(0xFFFFB74D), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp))
-                                    }
-                                    Icon(if (status.isUp) Icons.Default.CheckCircle else Icons.Default.Cancel, null, tint = if (status.isUp) Color(0xFF81C784) else Color(0xFFE57373), modifier = Modifier.size(14.dp))
-                                }
+                            if (isSelected) {
+                                Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF81C784), modifier = Modifier.size(16.dp))
                             }
                         }
                     }
                 }
             }
         }
-        if (showStrategyStats) {
-            StrategyStatsDialog { showStrategyStats = false }
-        }
+    }
+}
+
+@Composable
+private fun MetricRow(label: String, value: String, color: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontSize = 11.sp, color = GentleLightPink.copy(alpha = 0.6f))
+        Text(value, fontSize = 11.sp, color = color, fontWeight = FontWeight.Bold)
     }
 }

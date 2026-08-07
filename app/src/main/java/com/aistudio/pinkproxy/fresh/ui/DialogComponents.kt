@@ -496,3 +496,97 @@ fun StrategyMetricItem(metric: StrategyMetric) {
         }
     }
 }
+
+@Composable
+fun DnsSelectionDialog(
+    context: Context,
+    currentType: DnsType,
+    onDismiss: () -> Unit,
+    onSelected: (DnsType) -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .fillMaxHeight(0.7f),
+            shape = RoundedCornerShape(24.dp),
+            color = PureBlack,
+            border = BorderStroke(1.dp, GentleMediumPink.copy(alpha = 0.2f))
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = "ВЫБОР DNS СТРАТЕГИИ",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Black,
+                    color = GentleLightPink,
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(DnsType.entries) { type ->
+                        val isSelected = type == currentType
+                        
+                        Surface(
+                            onClick = { onSelected(type) },
+                            color = if (isSelected) GentleMediumPink.copy(alpha = 0.15f) else Color.Transparent,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, if (isSelected) GentleMediumPink.copy(alpha = 0.5f) else GentleMediumPink.copy(alpha = 0.1f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = type.name.replace("_", " "),
+                                        color = if (isSelected) GentleLightPink else GentleLightPink.copy(alpha = 0.8f),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = when(type) {
+                                            DnsType.AUTO -> "Автоматический выбор (Best Latency)"
+                                            DnsType.SYSTEM -> "Системный DNS (через TUN)"
+                                            DnsType.GOOGLE_DOH -> "Google Public DNS (DoH)"
+                                            DnsType.CLOUDFLARE_DOH -> "Cloudflare DNS (DoH)"
+                                            DnsType.ADGUARD_DOH -> "AdGuard DNS (DoH)"
+                                            DnsType.QUAD9_DOH -> "Quad9 DNS (DoH)"
+                                            DnsType.CUSTOM_DOH -> "Пользовательский DoH URL"
+                                            DnsType.CUSTOM_TCP -> "Пользовательский TCP DNS"
+                                            DnsType.CUSTOM_UDP -> "Пользовательский UDP DNS"
+                                        },
+                                        color = GentleLightPink.copy(alpha = 0.4f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(Icons.Default.CheckCircle, null, tint = GentleMediumPink, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.1f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("ЗАКРЫТЬ", color = GentleLightPink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}

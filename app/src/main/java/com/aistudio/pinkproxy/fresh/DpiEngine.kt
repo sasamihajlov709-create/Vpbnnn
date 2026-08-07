@@ -237,6 +237,11 @@ object DpiEngine {
     fun getBestStrategy(category: HostCategory, host: String? = null) = DpiStrategySelector.getBestStrategy(category, host)
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) = 
         DpiStrategySelector.recordResult(strategy, success, category, reason, latencyMs, host)
+    fun triggerRecalibration() {
+        resetStrategyScoresForNetworkChange()
+        lastGlobalReset = System.currentTimeMillis()
+    }
+
     fun recordEvent(type: DpiType) = DpiAnalyzer.recordEvent(type)
     fun getCensorshipFingerprint() = DpiAnalyzer.getCensorshipFingerprint()
 }

@@ -16,4 +16,16 @@ enum class DpiType {
     MTU_EXCEEDED
 }
 
+enum class DnsType {
+    AUTO,
+    SYSTEM,
+    GOOGLE_DOH,
+    CLOUDFLARE_DOH,
+    ADGUARD_DOH,
+    QUAD9_DOH,
+    CUSTOM_DOH,
+    CUSTOM_TCP,
+    CUSTOM_UDP
+}
+
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())

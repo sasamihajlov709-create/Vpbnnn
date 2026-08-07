@@ -62,4 +62,14 @@
     <string name="label_mode">MODE</string>
     <string name="label_censorship">CENSORSHIP</string>
     <string name="version_info">Version 1.2.0-PRO (Autonomous)</string>
+
+    <!-- Settings Refactoring -->
+    <string name="title_settings">SETTINGS</string>
+    <string name="label_dns_strategy">DNS STRATEGY</string>
+    <string name="desc_dns_strategy">Advanced DNS resolution to bypass poisoning and SNI-based blocking.</string>
+    <string name="label_current_dns">CURRENT DNS</string>
+    <string name="label_mtu_size">MTU SIZE (PACKET SEGMENTATION)</string>
+    <string name="desc_mtu_size">Maximum Transmission Unit. Lower values bypass some fragmentation-based filters but reduce throughput.</string>
+    <string name="desc_bypass_strategy">Active DPI evasion technique for current network conditions.</string>
+    <string name="label_current_strategy">CURRENT STRATEGY</string>
 </resources>
