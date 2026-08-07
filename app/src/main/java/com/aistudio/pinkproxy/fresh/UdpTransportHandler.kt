@@ -129,8 +129,15 @@ object UdpTransportHandler {
                                     headerLen = 7 + domainLen
                                 }
                                 4 -> { // IPv6
-                                    host = "ipv6_placeholder" // TODO: Real IPv6 support if needed
-                                    port = ((data[offset+20].toInt() and 0xFF) shl 8) or (data[offset+21].toInt() and 0xFF)
+                                    val addrBytes = ByteArray(16)
+                                    System.arraycopy(data, offset + 4, addrBytes, 0, 16)
+                                    host = try {
+                                        val addr = InetAddress.getByAddress(addrBytes)
+                                        if (addr.hostAddress?.contains(":") == true) "[${addr.hostAddress}]" else addr.hostAddress ?: ""
+                                    } catch (e: Exception) {
+                                        "ipv6_error"
+                                    }
+                                    port = ((data[offset + 20].toInt() and 0xFF) shl 8) or (data[offset + 21].toInt() and 0xFF)
                                     headerLen = 22
                                 }
                             }
@@ -195,7 +202,14 @@ object UdpTransportHandler {
                                     h[8] = (remotePort shr 8).toByte()
                                     h[9] = remotePort.toByte()
                                     h
-                                } else continue // Skip IPv6 for now
+                                } else if (remoteAddr.size == 16) {
+                                    val h = ByteArray(22)
+                                    h[0]=0; h[1]=0; h[2]=0; h[3]=4
+                                    System.arraycopy(remoteAddr, 0, h, 4, 16)
+                                    h[20] = (remotePort shr 8).toByte()
+                                    h[21] = remotePort.toByte()
+                                    h
+                                } else continue
                                 
                                 val fullResp = ByteArray(socksHeader.size + inPacket.length)
                                 System.arraycopy(socksHeader, 0, fullResp, 0, socksHeader.size)

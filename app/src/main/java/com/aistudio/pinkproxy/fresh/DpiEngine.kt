@@ -209,15 +209,11 @@ object DpiEngine {
                         BypassConfig.applyBypass(s, out, fake, fake.size, config, host)
                         s.soTimeout = 1500
                         s.getInputStream().read() != -1
-                    } catch (e: java.net.SocketException) {
-                        Log.v("DpiEngine", "Probe $strat SocketException: ${e.message}")
-                        false 
-                    } catch (e: java.io.IOException) {
-                        Log.v("DpiEngine", "Probe $strat IOException: ${e.message}")
-                        false
                     } catch (e: Exception) {
-                        Log.v("DpiEngine", "Probe $strat error: ${e.message}")
+                        Log.v("DpiEngine", "Probe $strat failed: ${e.message}")
                         false 
+                    } catch (e: Throwable) {
+                        false
                     } finally { 
                         try { s.close() } catch (e: java.io.IOException) {} 
                     }
@@ -226,8 +222,10 @@ object DpiEngine {
                     DpiStrategySelector.recordResult(strat, true, category, host = host)
                     return
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.v("DpiEngine", "Probe execution exception: ${e.message}")
+                Log.v("DpiEngine", "Probe execution error: ${e.message}")
             }
             delay(200)
         }

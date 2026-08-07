@@ -274,6 +274,33 @@ object RecoveryManager {
         }
     }
 
+    fun recalibrateEverything() {
+        Log.w("RecoveryManager", "RECALIBRATING EVERYTHING")
+        ProxyStats.logRecovery("Recalibrating system...")
+        
+        // Reset scores and histories
+        DpiEngine.resetStrategyScoresForNetworkChange()
+        DpiEngine.clearCircuitBreakers()
+        DpiEngine.successHistory.clear()
+        DpiEngine.failureHistory.clear()
+        DpiEngine.eventHistory.clear()
+        
+        // Clear DNS caches
+        DnsCacheManager.clearAll()
+        RobustResolver.clearCache()
+        DnsOptimizer.forceRefresh()
+        
+        // Reset escalation
+        recoveryEscalation.set(0)
+        BypassConfig.setPanicMode(false)
+        BypassConfig.setMtu(1400) // Reset to standard
+        
+        // Trigger active probing to find a working strategy ASAP
+        PinkVpnService.instance?.getServiceScope()?.launch {
+            ServiceChecker.runActiveProbing(PinkVpnService.instance ?: ProxyDispatcher.context!!)
+        }
+    }
+
     private fun requestServiceRestart(reason: String) {
         val now = System.currentTimeMillis()
         if (now - lastRestartTime < restartCooldown) {

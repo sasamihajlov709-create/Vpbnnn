@@ -19,6 +19,7 @@ object BypassConfig {
     
     fun setStrategy(new: BypassStrategy) {
         _strategy.value = new
+        VpnRuntimeState.updateStrategy(new.name, DpiStrategySelector.getSelectionReasoning(new))
     }
     
     private val _testingStrategies = MutableStateFlow<List<BypassStrategy>>(
@@ -43,6 +44,7 @@ object BypassConfig {
 
     private val _isKillSwitchEnabled = MutableStateFlow(false)
     val isKillSwitchEnabled: StateFlow<Boolean> = _isKillSwitchEnabled.asStateFlow()
+    var forcedBenchmarkStrategy: BypassStrategy? = null
     fun setKillSwitch(enabled: Boolean, context: Context) {
         _isKillSwitchEnabled.value = enabled
         context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE).edit {
@@ -209,6 +211,7 @@ object BypassConfig {
     }
 
     fun getBestStrategyForHost(host: String): BypassStrategy {
+        forcedBenchmarkStrategy?.let { return it }
         if (!isAutoTuning) return _strategy.value
         val now = System.currentTimeMillis()
         hostStrategyMemory[host]?.let { (remembered, expiry) ->
@@ -216,6 +219,11 @@ object BypassConfig {
         }
         val best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host)
         hostStrategyMemory[host] = best to (now + SESSION_TTL)
+        
+        if (java.util.concurrent.ThreadLocalRandom.current().nextInt(100) < 5) {
+            VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
+        }
+        
         return best
     }
 

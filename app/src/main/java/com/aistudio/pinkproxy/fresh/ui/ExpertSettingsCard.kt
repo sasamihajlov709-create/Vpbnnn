@@ -2,6 +2,7 @@ package com.aistudio.pinkproxy.fresh.ui
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -271,6 +272,85 @@ fun ExpertSettingsCard(
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                val isBenchmarking by BenchmarkManager.isRunning.collectAsStateWithLifecycle()
+                val benchmarkProgress by BenchmarkManager.progress.collectAsStateWithLifecycle()
+                val benchmarkResults by BenchmarkManager.results.collectAsStateWithLifecycle()
+                val scope = rememberCoroutineScope()
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(GentleMediumPink.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = "СТРАТЕГИЧЕСКИЙ БЕНЧМАРК / BENCHMARK",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black,
+                        color = GentleLightPink
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    if (isBenchmarking) {
+                        LinearProgressIndicator(
+                            progress = { benchmarkProgress },
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                            color = GentleLightPink,
+                            trackColor = GentleMediumPink.copy(alpha = 0.2f)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Проверка стратегий: ${(benchmarkProgress * 100).toInt()}%",
+                            fontSize = 9.sp,
+                            color = GentleLightPink.copy(alpha = 0.6f)
+                        )
+                    } else {
+                        Button(
+                            onClick = { BenchmarkManager.startBenchmark(scope, 18080) },
+                            modifier = Modifier.fillMaxWidth().height(32.dp),
+                            contentPadding = PaddingValues(0.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.3f)),
+                            enabled = isVpnActive
+                        ) {
+                            Text("ЗАПУСТИТЬ ТЕСТ ВСЕХ СТРАТЕГИЙ", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (benchmarkResults.any { it.isTested }) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("ТОП ПО РЕЗУЛЬТАТАМ:", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
+                        benchmarkResults.filter { it.isTested && it.isSuccess }
+                            .sortedBy { it.latencyMs }
+                            .take(5)
+                            .forEach { res ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(res.strategy.name, fontSize = 9.sp, color = GentleLightPink)
+                                    Text("${res.latencyMs}ms", fontSize = 9.sp, color = Color(0xFF81C784), fontWeight = FontWeight.Bold)
+                                }
+                            }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = {
+                        RecoveryManager.recalibrateEverything()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().height(40.dp).padding(bottom = 8.dp),
+                    contentPadding = PaddingValues(0.dp),
+                    enabled = isVpnActive
+                ) {
+                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp), tint = GentleLightPink)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("FULL SYSTEM RECALIBRATION", fontSize = 11.sp, fontWeight = FontWeight.Black, color = GentleLightPink)
+                }
 
                 Button(
                     onClick = {

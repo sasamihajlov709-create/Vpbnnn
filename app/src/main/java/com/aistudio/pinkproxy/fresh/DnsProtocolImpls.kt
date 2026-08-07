@@ -12,7 +12,35 @@ import kotlinx.coroutines.channels.Channel
 object UdpDnsProtocols {
     suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = emptyList() // Complex to implement without lib
     suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = emptyList()
-    suspend fun queryUdpDnsReorder(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = emptyList()
+    suspend fun queryUdpDnsReorder(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var socket: java.net.DatagramSocket? = null
+        try {
+            socket = java.net.DatagramSocket()
+            vpnService?.protect(socket)
+            socket.soTimeout = 3000
+            
+            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            // Reordering logic: send the query in two parts (if possible, but DNS is one packet usually)
+            // Real reordering in DNS evasion usually means sending fake packets BEFORE the real one
+            val fake = DnsPacketEngine.buildDnsQuery("google.com", 1)
+            val fakePacket = java.net.DatagramPacket(fake, fake.size, InetAddress.getByName(dnsIp), 53)
+            socket.send(fakePacket)
+            delay(10)
+            
+            val packet = java.net.DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
+            socket.send(packet)
+            
+            val responseBuf = ByteArray(4096)
+            val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
+            socket.receive(responsePacket)
+            
+            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
+        } catch (e: Exception) {
+            emptyList()
+        } finally {
+            socket?.close()
+        }
+    }
     
     suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.DatagramSocket? = null
@@ -168,6 +196,44 @@ object DohDnsProtocols {
 }
 
 object DotDnsProtocols {
+    private val socketFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+
+    suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var socket: java.net.Socket? = null
+        try {
+            val plainSocket = java.net.Socket()
+            vpnService?.protect(plainSocket)
+            plainSocket.connect(java.net.InetSocketAddress(dotIp, 853), 4000)
+            
+            socket = socketFactory.createSocket(plainSocket, dotIp, 853, true)
+            socket.soTimeout = 4000
+            
+            val query = DnsPacketEngine.buildDnsQueryTcp(host, type)
+            val os = socket.getOutputStream()
+            os.write(query)
+            os.flush()
+            
+            val isInput = socket.getInputStream()
+            val len1 = isInput.read()
+            val len2 = isInput.read()
+            if (len1 == -1 || len2 == -1) return@withContext emptyList<InetAddress>()
+            val length = (len1 shl 8) or len2
+            
+            val response = ByteArray(length)
+            var read = 0
+            while (read < length) {
+                val r = isInput.read(response, read, length - read)
+                if (r == -1) break
+                read += r
+            }
+            DnsPacketEngine.parseDnsResponse(response, read)
+        } catch (e: Exception) {
+            Log.v("DotDnsProtocols", "DoT query failed for $host via $dotIp: ${e.message}")
+            emptyList()
+        } finally {
+            try { socket?.close() } catch (e: Exception) {}
+        }
+    }
+
     fun clearPool() {}
-    suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = emptyList()
 }

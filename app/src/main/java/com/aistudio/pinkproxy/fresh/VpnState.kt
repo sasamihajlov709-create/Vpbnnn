@@ -28,6 +28,9 @@ object VpnRuntimeState {
     private val _detectedDpi = MutableStateFlow("None")
     val detectedDpi: StateFlow<String> = _detectedDpi.asStateFlow()
 
+    private val _strategySelectionReasoning = MutableStateFlow("Optimal choice for network")
+    val strategySelectionReasoning: StateFlow<String> = _strategySelectionReasoning.asStateFlow()
+
     fun updateState(newState: VpnLifecycleState, error: String? = null) {
         if (error != null) _lastError.value = error
         _lifecycleState.value = newState
@@ -37,8 +40,9 @@ object VpnRuntimeState {
         _lastError.value = null
     }
 
-    fun updateStrategy(strategy: String) {
+    fun updateStrategy(strategy: String, reason: String? = null) {
         _currentStrategy.value = strategy
+        if (reason != null) _strategySelectionReasoning.value = reason
     }
 
     fun updateDpi(dpi: String) {

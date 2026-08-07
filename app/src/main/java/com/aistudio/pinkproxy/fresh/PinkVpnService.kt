@@ -561,7 +561,7 @@ class PinkVpnService : VpnService() {
                     Log.e("PinkVpnService", "Foreground service start not allowed: ${e.message}")
                     throw e
                 } catch (e: Exception) {
-                    Log.w("PinkVpnService", "Failed specialUse foreground service type, trying default startForeground: ${e.message}")
+                    Log.w("PinkVpnService", "Failed VPN foreground service type, trying default startForeground: ${e.message}")
                     startForeground(1, notification)
                 }
             } else {

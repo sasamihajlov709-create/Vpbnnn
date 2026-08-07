@@ -51,8 +51,12 @@ object RobustResolver {
                 }
             } catch (e: java.io.IOException) {
                 Log.v("RobustResolver", "DnsOverTcp failed for $host via $dns: ${e.message}")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.v("RobustResolver", "Unexpected error in DnsOverTcp for $host: ${e.message}")
+            } catch (e: Throwable) {
+                Log.e("RobustResolver", "Critical DnsOverTcp error", e)
             }
         }
         return emptyList()
@@ -103,6 +107,10 @@ object RobustResolver {
             Log.v("RobustResolver", "Resolution error for $host: ${e.message}")
             pendingResolutions.remove(cacheKey)
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
+        } catch (e: Throwable) {
+            Log.e("RobustResolver", "Critical resolution error for $host", e)
+            pendingResolutions.remove(cacheKey)
+            emptyList()
         }
     }
 

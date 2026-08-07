@@ -15,8 +15,11 @@ object TcpTransportManager {
             socket.keepAlive = true
             socket.receiveBufferSize = 65536
             socket.sendBufferSize = 65536
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TcpTransportManager", "Failed to configure socket: ${e.message}")
+        } catch (e: Throwable) {
+             // Critical errors or OOM, just log and continue if possible
+             Log.e("TcpTransportManager", "Critical socket configuration error", e)
         }
     }
 
@@ -38,8 +41,12 @@ object TcpTransportManager {
                 kotlinx.coroutines.delay(10)
                 s.close()
             }
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.v("TcpTransportManager", "SNI ghosting failed for $decoy: ${e.message}")
+        } catch (e: Throwable) {
+            Log.e("TcpTransportManager", "Critical SNI ghosting error", e)
         }
     }
 
@@ -50,8 +57,9 @@ object TcpTransportManager {
                 rnd.nextInt(256, 1024) 
             else 
                 rnd.nextInt(32768, 65536)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TcpTransportManager", "Window oscillation failed: ${e.message}")
+        } catch (e: Throwable) {
         }
     }
 
@@ -61,8 +69,11 @@ object TcpTransportManager {
             oscillateWindowSize(socket)
             kotlinx.coroutines.delay(50)
             socket.receiveBufferSize = original
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.v("TcpTransportManager", "Window pulse failed: ${e.message}")
+        } catch (e: Throwable) {
         }
     }
 
@@ -82,6 +93,9 @@ object TcpTransportManager {
                 TtlHelper.applyMssClamping(s, host)
                 s.connect(java.net.InetSocketAddress(ips[0], port), 5000)
                 return@coroutineScope s
+            } catch (e: Exception) {
+                try { s.close() } catch (ex: Exception) {}
+                return@coroutineScope null
             } catch (e: Throwable) {
                 try { s.close() } catch (ex: Throwable) {}
                 return@coroutineScope null
@@ -113,8 +127,13 @@ object TcpTransportManager {
                     s.connect(java.net.InetSocketAddress(ip, port), timeout)
                     
                     if (!channel.trySend(s).isSuccess) {
-                        try { s.close() } catch (ex: Throwable) {}
+                        try { s.close() } catch (ex: Exception) {}
                     }
+                } catch (e: CancellationException) {
+                    try { s.close() } catch (ex: Exception) {}
+                    throw e
+                } catch (e: Exception) {
+                    try { s.close() } catch (ex: Exception) {}
                 } catch (e: Throwable) {
                     try { s.close() } catch (ex: Throwable) {}
                 } finally {
@@ -128,16 +147,18 @@ object TcpTransportManager {
         var result: Socket? = null
         try {
             result = kotlinx.coroutines.withTimeoutOrNull(10000) { channel.receive() }
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.w("TcpTransportManager", "Racing failed for $host: ${e.message}")
         } finally {
             jobs.forEach { it.cancel() }
             channel.close()
             while (true) {
                 val s = channel.tryReceive().getOrNull() ?: break
-                try { s.close() } catch (e: Throwable) {
+                try { s.close() } catch (e: Exception) {
                     Log.v("TcpTransportManager", "Failed to close ghost socket: ${e.message}")
-                }
+                } catch (e: Throwable) {}
             }
         }
         result

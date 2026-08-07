@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aistudio.pinkproxy.fresh.BypassStrategy
 import com.aistudio.pinkproxy.fresh.StrategyGroup
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
@@ -134,13 +135,24 @@ fun StrategyDisplayWidget(
                     )
                 }
 
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Настроить стратегии",
-                    tint = GentleLightPink.copy(alpha = 0.6f),
-                    modifier = Modifier.size(20.dp)
-                )
+                IconButton(onClick = onSelectStrategy) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Настроить стратегии",
+                        tint = GentleLightPink.copy(alpha = 0.6f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
+
+            val reasoning by com.aistudio.pinkproxy.fresh.VpnRuntimeState.strategySelectionReasoning.collectAsStateWithLifecycle()
+            Text(
+                text = reasoning,
+                fontSize = 11.sp,
+                color = com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(top = 4.dp)
+            )
 
             Spacer(modifier = Modifier.height(14.dp))
             HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.12f), thickness = 1.dp)

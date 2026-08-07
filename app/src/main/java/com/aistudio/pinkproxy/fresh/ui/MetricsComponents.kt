@@ -292,6 +292,18 @@ fun CompactActionButton(text: String, modifier: Modifier = Modifier, onClick: ()
 
 @Composable
 fun DiagnosticsContent(p8: Int, p16: Int, conns: Int, rtt: Long, win: Int, ds: Long, df: Long) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val report = """
+        SYSTEM DIAGNOSTICS REPORT
+        Memory Pool 8K: $p8
+        Memory Pool 16K: $p16
+        Active Connections: $conns
+        Latency (RTT): ${rtt}ms
+        TCP Window: $win
+        DNS Success: $ds
+        DNS Errors: $df
+    """.trimIndent()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -306,6 +318,18 @@ fun DiagnosticsContent(p8: Int, p16: Int, conns: Int, rtt: Long, win: Int, ds: L
         DiagRow("LATENCY (RTT)", "${rtt}ms")
         DiagRow("WINDOW", "$win PACKETS")
         DiagRow("DNS STATUS", "OK: $ds | ERR: $df")
+        
+        Spacer(modifier = Modifier.height(4.dp))
+        
+        Button(
+            onClick = { clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(report)) },
+            modifier = Modifier.fillMaxWidth().height(32.dp),
+            contentPadding = PaddingValues(0.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink.copy(alpha = 0.2f)),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text("COPY SYSTEM REPORT", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
+        }
     }
 }
 
@@ -341,25 +365,58 @@ fun StrategyConfigContent(strategy: BypassStrategy, onMenu: () -> Unit) {
 
 @Composable
 fun LogsContent(recovery: List<String>, traffic: List<String>) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val allLogs = (recovery + traffic)
+    
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 8.dp)
-            .heightIn(max = 200.dp)
+            .heightIn(min = 120.dp, max = 250.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(PureBlack)
-            .border(1.dp, GentleMediumPink.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+            .border(1.dp, GentleMediumPink.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
             .padding(12.dp)
-            .verticalScroll(rememberScrollState())
     ) {
-        (recovery + traffic).takeLast(20).reversed().forEach { log ->
-            Text(
-                text = log,
-                fontSize = 9.sp,
-                fontFamily = FontFamily.Monospace,
-                color = if (log.contains("Healing")) GentleLightPink else Color.White.copy(alpha = 0.4f),
-                modifier = Modifier.padding(vertical = 2.dp)
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("ENGINE REAL-TIME LOGS", fontSize = 10.sp, fontWeight = FontWeight.Black, color = GentleMediumPink, letterSpacing = 1.sp)
+            Surface(
+                onClick = { clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(allLogs.joinToString("\n"))) },
+                color = GentleMediumPink.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Text("COPY ALL", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = GentleLightPink, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+        ) {
+            allLogs.takeLast(40).reversed().forEach { log ->
+                val color = when {
+                    log.contains("Healing") || log.contains("Success") -> Color(0xFF81C784)
+                    log.contains("Error") || log.contains("Fail") || log.contains("Warning") -> Color(0xFFE57373)
+                    log.contains("System") || log.contains("Recovery") -> GentleMediumPink
+                    else -> Color.White.copy(alpha = 0.5f)
+                }
+                Text(
+                    text = log,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = color,
+                    modifier = Modifier.padding(vertical = 1.dp),
+                    lineHeight = 12.sp
+                )
+            }
         }
     }
 }

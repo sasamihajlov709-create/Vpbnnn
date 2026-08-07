@@ -90,33 +90,57 @@ object ServiceChecker {
 
     private fun calculateScores(results: List<ServiceStatus>) {
         var totalWeightedScore = 0f
+        var totalPossibleWeight = 0
         var controlUp = 0
         var censoredDown = 0
+        var softBlocked = 0
         
         val weights = mapOf(
             "YouTube" to 15, "YT Video Stream" to 20, "Telegram" to 15,
             "Google" to 10, "ChatGPT" to 10, "Discord" to 10,
-            "GitHub" to 10, "Instagram" to 5, "X (Twitter)" to 5
+            "GitHub" to 10, "Instagram" to 5, "X (Twitter)" to 5,
+            "Meta" to 5, "Netflix" to 5, "BBC News" to 5
         )
         
         results.forEach { status ->
             val weight = weights[status.name] ?: 0
+            if (weight > 0) totalPossibleWeight += weight
+            
             if (status.isUp) {
                 totalWeightedScore += weight
                 if (status.name.contains("(Control)")) controlUp++
+                
+                // Soft block detection (very high latency relative to base)
+                val threshold = if (status.name.contains("Stream")) 3500 else 5000
+                if (status.latencyMs > threshold) {
+                    softBlocked++
+                }
             } else {
-                if (status.name == "YouTube" || status.name == "Telegram" || status.name == "Instagram") censoredDown++
+                if (!status.name.contains("(Control)")) {
+                    censoredDown++
+                }
             }
         }
         
-        if (controlUp >= 2 && censoredDown >= 1) {
-            val newIntensity = (censoredDown * 30).coerceIn(0, 100)
-            if (newIntensity > ProxyStats.censorshipIntensity.value) {
-                ProxyStats.updateCensorshipIntensity(newIntensity)
+        // Intensity update based on blocked/slowed services vs controls
+        if (controlUp >= 2 && (censoredDown >= 1 || softBlocked >= 2)) {
+            val score = (censoredDown * 25 + softBlocked * 15).coerceIn(0, 100)
+            if (score > ProxyStats.censorshipIntensity.value) {
+                ProxyStats.updateCensorshipIntensity(score)
+                Log.i("ServiceChecker", "Censorship intensity increased to $score due to detected blocks")
+            }
+        } else if (controlUp >= 3 && censoredDown == 0 && softBlocked == 0) {
+            if (ProxyStats.censorshipIntensity.value > 0) {
+                val decayed = (ProxyStats.censorshipIntensity.value - 10).coerceAtLeast(0)
+                ProxyStats.updateCensorshipIntensity(decayed)
             }
         }
         
-        _connectivityScore.value = totalWeightedScore.toInt().coerceIn(0, 100)
+        val normalizedScore = if (totalPossibleWeight > 0) {
+            (totalWeightedScore / totalPossibleWeight * 100).toInt()
+        } else 0
+        
+        _connectivityScore.value = normalizedScore.coerceIn(0, 100)
         
         val activeLatencies = results.filter { it.isUp && it.latencyMs > 0 }.map { it.latencyMs }
         if (activeLatencies.isNotEmpty()) {

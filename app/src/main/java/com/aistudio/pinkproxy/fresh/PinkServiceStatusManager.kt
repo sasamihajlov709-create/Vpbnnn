@@ -55,8 +55,13 @@ object PinkServiceStatusManager {
         Pair("ChatGPT", "https://chatgpt.com"),
         Pair("Discord", "https://discord.com"),
         Pair("GitHub", "https://github.com"),
+        Pair("Meta", "https://www.facebook.com"),
+        Pair("Netflix", "https://www.netflix.com"),
+        Pair("BBC News", "https://www.bbc.com"),
         Pair("VK (Control)", "https://vk.com"),
         Pair("Yandex (Control)", "https://ya.ru"),
-        Pair("Mail.ru (Control)", "https://mail.ru")
+        Pair("Mail.ru (Control)", "https://mail.ru"),
+        Pair("Gosuslugi (Control)", "https://www.gosuslugi.ru"),
+        Pair("Sber (Control)", "https://www.sberbank.ru")
     )
 }

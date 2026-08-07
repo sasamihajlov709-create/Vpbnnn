@@ -202,6 +202,8 @@ object TcpTransportHandler {
                     remoteToClientJob.cancel()
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: java.net.ConnectException) {
             Log.e("TcpTransport", "Connection refused to $targetHost: ${e.message}")
             onConnectFailure?.invoke("CONNECTION_REFUSED")
@@ -214,6 +216,8 @@ object TcpTransportHandler {
         } catch (e: Exception) {
             Log.e("TcpTransport", "Unexpected session error for $targetHost: ${e.message}", e)
             onConnectFailure?.invoke(e.message ?: "UNKNOWN")
+        } catch (e: Throwable) {
+            Log.e("TcpTransport", "Critical session error for $targetHost", e)
         } finally {
             try { clientSocket.close() } catch (e: java.io.IOException) {}
             try { remoteSocket?.close() } catch (e: java.io.IOException) {}

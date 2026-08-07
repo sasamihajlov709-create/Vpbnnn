@@ -249,4 +249,20 @@ object DpiStrategySelector {
             StrategyMetric(strat, score, successes, failures, avgRtt)
         }.sortedByDescending { it.score }
     }
+
+    fun getSelectionReasoning(strategy: BypassStrategy): String {
+        val intensity = ProxyStats.censorshipIntensity.value
+        val dpiType = ProxyStats.currentDpiType.value
+        
+        if (intensity > 90) return "Extreme censorship detected ($intensity%). Using heavy evasion."
+        if (dpiType == DpiType.TLS_SNI_BLOCK) return "SNI blocking detected. Prioritizing TLS fragmentation."
+        if (dpiType == DpiType.TCP_RESET) return "TCP Resets detected. Using robust packet mangling."
+        if (dpiType == DpiType.UDP_BLOCK) return "UDP/QUIC throttling detected. Racing TCP protocols."
+        
+        val score = getAverageScore(strategy).toInt()
+        if (score > 1000) return "Strategy is highly stable for current network."
+        if (score < 100) return "Exploring new paths due to failures."
+        
+        return "Optimal balance of speed and evasion for ${strategy.family.name} traffic."
+    }
 }

@@ -31,7 +31,22 @@ class VpnNetworkMonitor(
                 networkChangeCallback(null, NetworkType.NONE)
             }
 
+            private var lastCapabilities: NetworkCapabilities? = null
+
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                // Only trigger if major capabilities or transports changed to avoid recursion/spam
+                val oldCaps = lastCapabilities
+                if (oldCaps != null) {
+                    val transportsChanged = !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                                           capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                                           !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) && oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                                           capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) && !oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    
+                    val validationChanged = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != oldCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    
+                    if (!transportsChanged && !validationChanged) return
+                }
+                lastCapabilities = capabilities
                 capabilitiesChangeCallback(network, capabilities)
             }
         }
