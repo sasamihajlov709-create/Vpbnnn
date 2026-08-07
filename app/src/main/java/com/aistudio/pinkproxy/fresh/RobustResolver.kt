@@ -430,6 +430,6 @@ object RobustResolver {
     }
 
     fun stopBackgroundProber() {
-        // Handled by scope cancellation in Service
+        DnsOptimizer.stop()
     }
 }

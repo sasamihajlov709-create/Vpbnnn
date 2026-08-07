@@ -214,9 +214,27 @@ object DnsOptimizer {
         }
     }
 
+    private var warmupJob: Job? = null
+    private var proberJob: Job? = null
+    private var prefetchJob: Job? = null
+    private var selfHealingJob: Job? = null
+
+    fun stop() {
+        warmupJob?.cancel()
+        warmupJob = null
+        proberJob?.cancel()
+        proberJob = null
+        prefetchJob?.cancel()
+        prefetchJob = null
+        selfHealingJob?.cancel()
+        selfHealingJob = null
+    }
+
     fun start(scope: CoroutineScope, vpnService: VpnService?) {
+        stop()
+
         // Immediate Warm-up phase
-        scope.launch(ProxyDispatcher.io) {
+        warmupJob = scope.launch(ProxyDispatcher.io) {
             Log.i("DnsOptimizer", "Starting DNS Warm-up...")
             probeNow(vpnService)
             criticalDomains.map { domain ->
@@ -233,7 +251,7 @@ object DnsOptimizer {
         }
 
         // Periodic Prober
-        scope.launch(ProxyDispatcher.io) {
+        proberJob = scope.launch(ProxyDispatcher.io) {
             while (isActive) {
                 val interval = if (ProxyStats.dnsFailureCount.value > 10) 2 * 60 * 1000L else 15 * 60 * 1000L
                 delay(interval)
@@ -242,7 +260,7 @@ object DnsOptimizer {
         }
 
         // Prefetcher
-        scope.launch(ProxyDispatcher.io) {
+        prefetchJob = scope.launch(ProxyDispatcher.io) {
             while (isActive) {
                 delay(15 * 60 * 1000L)
                 criticalDomains.map { domain ->
@@ -258,7 +276,7 @@ object DnsOptimizer {
         }
 
         // Self-Healing
-        scope.launch(ProxyDispatcher.io) {
+        selfHealingJob = scope.launch(ProxyDispatcher.io) {
             while (isActive) {
                 delay(5 * 60 * 1000L)
                 DnsCacheManager.clearExpired()

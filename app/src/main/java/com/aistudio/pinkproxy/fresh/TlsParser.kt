@@ -190,11 +190,102 @@ object TlsParser {
     }
 
     fun shuffleCiphers(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
-        return buffer.copyOf(length)
+        if (!isClientHello(buffer, length)) return buffer.copyOf(length)
+        val copy = buffer.copyOf(length)
+        try {
+            val sessionIdLen = copy[43].toInt() and 0xFF
+            val pos = 44 + sessionIdLen
+            if (pos + 1 >= length) return copy
+            val cipherSuitesLen = ((copy[pos].toInt() and 0xFF) shl 8) or (copy[pos + 1].toInt() and 0xFF)
+            val cipherStart = pos + 2
+            if (cipherSuitesLen < 4 || cipherStart + cipherSuitesLen > length) return copy
+
+            val count = cipherSuitesLen / 2
+            val ciphers = ArrayList<Pair<Byte, Byte>>(count)
+            for (i in 0 until count) {
+                val idx = cipherStart + i * 2
+                ciphers.add(Pair(copy[idx], copy[idx + 1]))
+            }
+
+            // Shuffle ciphers
+            for (i in count - 1 downTo 1) {
+                val j = rnd.nextInt(i + 1)
+                val tmp = ciphers[i]
+                ciphers[i] = ciphers[j]
+                ciphers[j] = tmp
+            }
+
+            for (i in 0 until count) {
+                val idx = cipherStart + i * 2
+                copy[idx] = ciphers[i].first
+                copy[idx + 1] = ciphers[i].second
+            }
+            return copy
+        } catch (e: Throwable) {
+            return buffer.copyOf(length)
+        }
     }
 
     fun mangleAlpn(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
-        return buffer.copyOf(length)
+        if (!isClientHello(buffer, length)) return buffer.copyOf(length)
+        val copy = buffer.copyOf(length)
+        try {
+            val sessionIdLen = copy[43].toInt() and 0xFF
+            var pos = 44 + sessionIdLen
+            if (pos + 1 >= length) return copy
+            val cipherSuitesLen = ((copy[pos].toInt() and 0xFF) shl 8) or (copy[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherSuitesLen
+            if (pos >= length) return copy
+            val compLen = copy[pos].toInt() and 0xFF
+            pos += 1 + compLen
+            if (pos + 1 >= length) return copy
+
+            val extensionsLen = ((copy[pos].toInt() and 0xFF) shl 8) or (copy[pos + 1].toInt() and 0xFF)
+            pos += 2
+            val extEnd = minOf(pos + extensionsLen, length)
+
+            while (pos + 3 < extEnd) {
+                val extType = ((copy[pos].toInt() and 0xFF) shl 8) or (copy[pos + 1].toInt() and 0xFF)
+                val extLen = ((copy[pos + 2].toInt() and 0xFF) shl 8) or (copy[pos + 3].toInt() and 0xFF)
+
+                if (extType == 0x0010) { // ALPN extension
+                    val alpnDataStart = pos + 4
+                    val alpnDataEnd = pos + 4 + extLen
+                    if (alpnDataStart + 2 < extEnd && alpnDataEnd <= extEnd) {
+                        // Reverse ALPN list order or swap entries
+                        val alpnListLen = ((copy[alpnDataStart].toInt() and 0xFF) shl 8) or (copy[alpnDataStart + 1].toInt() and 0xFF)
+                        var p = alpnDataStart + 2
+                        val protocols = ArrayList<ByteArray>()
+                        while (p < alpnDataStart + 2 + alpnListLen && p < length) {
+                            val pLen = copy[p].toInt() and 0xFF
+                            if (p + 1 + pLen <= length) {
+                                protocols.add(copy.copyOfRange(p + 1, p + 1 + pLen))
+                            }
+                            p += 1 + pLen
+                        }
+                        if (protocols.size >= 2) {
+                            protocols.reverse()
+                            var writePos = alpnDataStart + 2
+                            for (proto in protocols) {
+                                if (writePos + 1 + proto.size <= copy.size) {
+                                    copy[writePos] = proto.size.toByte()
+                                    System.arraycopy(proto, 0, copy, writePos + 1, proto.size)
+                                    writePos += 1 + proto.size
+                                }
+                            }
+                        }
+                    }
+                    return copy
+                }
+                pos += 4 + extLen
+            }
+
+            // If ALPN not present, inject ALPN extension
+            val fakeAlpn = byteArrayOf(0x00, 0x0c, 0x02, 'h'.code.toByte(), '2'.code.toByte(), 0x08, 'h'.code.toByte(), 't'.code.toByte(), 't'.code.toByte(), 'p'.code.toByte(), '/'.code.toByte(), '1'.code.toByte(), '.'.code.toByte(), '1'.code.toByte())
+            return TlsPacketBuilder.injectExtension(buffer, length, 0x0010, fakeAlpn)
+        } catch (e: Throwable) {
+            return buffer.copyOf(length)
+        }
     }
 
     fun mangleSessionId(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
@@ -235,7 +326,22 @@ object TlsParser {
     }
 
     fun replaceSni(buffer: ByteArray, length: Int, newSni: String): ByteArray {
-        return buffer.copyOf(length)
+        val offset = findSniOffset(buffer, length)
+        if (offset == -1) return buffer.copyOf(length)
+        val copy = buffer.copyOf(length)
+        try {
+            val oldNameLen = ((copy[offset - 2].toInt() and 0xFF) shl 8) or (copy[offset - 1].toInt() and 0xFF)
+            val newSniBytes = newSni.toByteArray(java.nio.charset.StandardCharsets.US_ASCII)
+            if (newSniBytes.size == oldNameLen && offset + oldNameLen <= length) {
+                System.arraycopy(newSniBytes, 0, copy, offset, oldNameLen)
+                return copy
+            } else {
+                val newSniExt = TlsPacketBuilder.buildSniExtension(newSni)
+                return TlsPacketBuilder.injectExtension(buffer, length, 0x0000, newSniExt)
+            }
+        } catch (e: Throwable) {
+            return buffer.copyOf(length)
+        }
     }
 
     fun findHostInPayload(buffer: ByteArray, length: Int, host: String): Int {

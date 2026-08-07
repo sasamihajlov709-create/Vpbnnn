@@ -423,6 +423,7 @@ class PinkVpnService : VpnService() {
             ServiceChecker.proxyPort = PROXY_PORT
             ServiceChecker.startChecking(engineScope, this@PinkVpnService)
             RobustResolver.initialize(engineScope)
+            RobustResolver.startDnsOptimizer(engineScope, this@PinkVpnService)
             DpiEngine.start(this@PinkVpnService)
             CensorshipExpert.start()
             RecoveryManager.startHealthCheck(engineScope)
@@ -639,6 +640,7 @@ class PinkVpnService : VpnService() {
             
             ServiceChecker.stopChecking()
             DpiEngine.stop()
+            RobustResolver.stopBackgroundProber()
             CensorshipExpert.stop()
             PrefetchManager.stop()
             AutoTtlProber.stopProbing()
