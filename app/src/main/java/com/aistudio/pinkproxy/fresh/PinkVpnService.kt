@@ -81,6 +81,8 @@ class PinkVpnService : VpnService() {
     
     private var watchdogJob: Job? = null
     private var engineMonitorJob: Job? = null
+    private var memoryMonitorJob: Job? = null
+    private var chaffJob: Job? = null
     
     private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
@@ -260,12 +262,30 @@ class PinkVpnService : VpnService() {
     }
 
     private fun startChaffGenerator() {
-        // Disabled background traffic generator to save bandwidth and battery
+        chaffJob?.cancel()
+        chaffJob = engineScope.launch {
+            val rnd = java.util.concurrent.ThreadLocalRandom.current()
+            val decoys = listOf("google.com", "cloudflare.com", "microsoft.com", "wikipedia.org")
+            while (isActive) {
+                val delayMs = if (BypassConfig.isPanicMode) rnd.nextLong(15000, 30000) else rnd.nextLong(45000, 90000)
+                delay(delayMs)
+                if (!_isRunning.value) break
+                
+                if (BypassConfig.isPanicMode || ProxyStats.censorshipIntensity.value > 60) {
+                    try {
+                        val decoy = decoys[rnd.nextInt(decoys.size)]
+                        DnsProtocols.queryUdpDnsShadow(decoy, "1.1.1.1", this@PinkVpnService)
+                    } catch (e: Exception) {
+                        Log.v("PinkVpnService", "Chaff packet error: ${e.message}")
+                    }
+                }
+            }
+        }
     }
 
     private fun startMemoryMonitor() {
-        engineMonitorJob?.cancel()
-        engineMonitorJob = engineScope.launch {
+        memoryMonitorJob?.cancel()
+        memoryMonitorJob = engineScope.launch {
             while (isActive) {
                 delay(60000) // Check every minute
                 val rt = Runtime.getRuntime()
@@ -608,6 +628,10 @@ class PinkVpnService : VpnService() {
             watchdogJob = null
             engineMonitorJob?.cancel()
             engineMonitorJob = null
+            memoryMonitorJob?.cancel()
+            memoryMonitorJob = null
+            chaffJob?.cancel()
+            chaffJob = null
             
             stopTun2Socks()
             proxyServer?.stop()

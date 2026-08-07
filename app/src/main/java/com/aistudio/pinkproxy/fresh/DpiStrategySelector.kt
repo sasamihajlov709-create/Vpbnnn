@@ -57,7 +57,7 @@ object DpiStrategySelector {
         
         if (validStrategies.isEmpty()) {
             if (host != null) DpiEngine.hostStrategyBlacklist.remove(host)
-            DpiEngine.circuitBreakers.clear()
+            DpiEngine.circuitBreakers.entries.removeIf { it.value < now }
             return BypassStrategy.CHAOS
         }
 
