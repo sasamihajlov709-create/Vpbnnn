@@ -63,6 +63,10 @@ object EvasionPacketMangler {
         if (length > 44 && res[0] == 0x16.toByte()) {
             res = TlsParser.mangleSni(res, res.size, rnd)
             res = TlsParser.addGrease(res, res.size, rnd)
+            res = TlsParser.shuffleExtensions(res, res.size, rnd)
+            if (rnd.nextBoolean()) {
+                res = TlsParser.shuffleCiphers(res, res.size, rnd)
+            }
             if (rnd.nextBoolean()) {
                 res = TlsParser.addPadding(res, res.size, rnd.nextInt(32, 128))
             }
@@ -74,6 +78,7 @@ object EvasionPacketMangler {
         var res = mangleHttpMethodCase(data, length)
         res = randomizeHeaderCase(res, res.size)
         res = addSpaceToHttpMethod(res, res.size)
+        res = addDotToHost(res, res.size)
         return res
     }
 }

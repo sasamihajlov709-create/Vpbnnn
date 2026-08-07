@@ -87,17 +87,58 @@ object DpiStrategySelector {
             s += (DpiEngine.strategyMaturity[strat]?.get() ?: 0) / 6.0
             
             when (currentDpi) {
-                DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
-                DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
-                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 1.8
-                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.5
+                DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 2.0
+                DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 2.0
+                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 2.2
+                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.8
                 else -> {}
             }
+
+            // Censorship Intensity Tier Weighting
+            val intensity = ProxyStats.censorshipIntensity.value
+            when {
+                intensity > 90 -> {
+                    if (strat.group == StrategyGroup.EXTREME) s *= 2.5
+                    else if (strat.group == StrategyGroup.HEAVY) s *= 1.8
+                    else s *= 0.4
+                }
+                intensity > 70 -> {
+                    if (strat.group == StrategyGroup.HEAVY || strat.group == StrategyGroup.EXTREME) s *= 1.8
+                    else if (strat.group == StrategyGroup.MEDIUM) s *= 1.2
+                    else s *= 0.6
+                }
+                intensity > 30 -> {
+                    if (strat.group == StrategyGroup.MEDIUM || strat.group == StrategyGroup.HEAVY) s *= 1.5
+                    else if (strat.group == StrategyGroup.LIGHT) s *= 1.2
+                }
+                else -> {
+                    if (strat.group == StrategyGroup.LIGHT || strat.group == StrategyGroup.MEDIUM) s *= 1.6
+                    else s *= 0.7
+                }
+            }
             
+            // Category-Specific Weighting Matrix
             when (category) {
-                HostCategory.STREAMING, HostCategory.SOCIAL -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 1.4
-                HostCategory.AI, HostCategory.FINANCE -> if (strat.family == StrategyFamily.FRAGMENTATION) s *= 1.3
+                HostCategory.STREAMING, HostCategory.GAMING -> {
+                    if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC || strat == BypassStrategy.SNI_SPLIT || strat == BypassStrategy.TLS_RECORD_FRAGMENTATION) s *= 1.8
+                    if (strat.family == StrategyFamily.TIMING) s *= 0.7 // Avoid timing delays for real-time traffic
+                }
+                HostCategory.SOCIAL, HostCategory.MESSENGER -> {
+                    if (strat == BypassStrategy.HTTP_MULTI_LINE_MANGLE || strat == BypassStrategy.BYEBYEDPI_HYBRID || strat == BypassStrategy.TCP_COMBINED_HYBRID || strat == BypassStrategy.TLS_SNI_EXT_MANGLE) s *= 1.9
+                }
+                HostCategory.AI, HostCategory.FINANCE -> {
+                    if (strat.family == StrategyFamily.FRAGMENTATION || strat == BypassStrategy.TLS_SNI_JITTER_SPLIT || strat == BypassStrategy.TCP_PULSE_FRAG) s *= 1.7
+                }
                 else -> {}
+            }
+
+            // Network Type Specific Weighting
+            val netTypeVal = BypassConfig.currentNetworkType.value
+            if (netTypeVal == NetworkType.MOBILE || netTypeVal == NetworkType.MOBILE_LOW) {
+                if (strat == BypassStrategy.TCP_PULSE_FRAG || strat == BypassStrategy.TLS_SNI_EXT_MANGLE || strat == BypassStrategy.SNI_SPLIT) s *= 1.5
+                if (strat == BypassStrategy.TCP_COMBINED_NUCLEAR) s *= 0.85 // Heavy desync can drop on mobile towers
+            } else if (netTypeVal == NetworkType.WIFI || netTypeVal == NetworkType.ETHERNET) {
+                if (strat.group == StrategyGroup.EXTREME) s *= 1.3
             }
 
             if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20) {
@@ -173,7 +214,11 @@ object DpiStrategySelector {
             DpiEngine.globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(5)
 
             DpiEngine.strategyScores[category]?.get(strategy)?.let { score ->
-                val bonus = if (latencyMs in 1..300) 35 else 15
+                var bonus = if (latencyMs in 1..300) 35 else 15
+                val intensity = ProxyStats.censorshipIntensity.value
+                if (intensity > 50) {
+                    bonus += (intensity / 10) * 5
+                }
                 score.addAndGet(bonus)
                 if (score.get() > 3000) score.set(3000)
             }
@@ -206,7 +251,9 @@ object DpiStrategySelector {
                 DpiEngine.consecutiveFailuresByHost.getOrPut(host) { AtomicInteger(0) }.incrementAndGet()
             }
 
-            val penalty = when (reason) {
+            val hostFails = host?.let { DpiEngine.consecutiveFailuresByHost[it]?.get() } ?: 0
+            val expMultiplier = Math.pow(1.35, hostFails.toDouble().coerceAtMost(5.0))
+            val basePenalty = when (reason) {
                 FailureReason.TCP_RESET -> {
                     DpiEngine.globalPenalties.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(50)
                     DpiEngine.globalBoosts[strategy]?.set(0)
@@ -219,7 +266,11 @@ object DpiStrategySelector {
                 }
                 else -> 40
             }
-            DpiEngine.strategyScores[category]?.get(strategy)?.let { it.addAndGet(-penalty); if (it.get() < 0) it.set(0) }
+            val finalPenalty = (basePenalty * expMultiplier).toInt()
+            DpiEngine.strategyScores[category]?.get(strategy)?.let { score ->
+                score.addAndGet(-finalPenalty)
+                score.set((score.get() * 0.85).toInt().coerceAtLeast(0))
+            }
             
             val fails = DpiEngine.consecutiveFailures.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             if (fails >= 4 || (fails >= 2 && reason == FailureReason.TCP_RESET)) {

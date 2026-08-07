@@ -77,6 +77,7 @@ object DpiEngine {
                 try {
                     DpiAnalyzer.analyzeAndAdjust()
                     DpiAnalyzer.checkGlobalStall()
+                    decayPenaltiesAndRecover()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -84,6 +85,14 @@ object DpiEngine {
                 }
             }
         }
+    }
+
+    fun decayPenaltiesAndRecover() {
+        globalPenalties.values.forEach { p -> p.updateAndGet { (it * 0.85).toInt() } }
+        globalBoosts.values.forEach { b -> b.updateAndGet { (it * 0.9).toInt() } }
+        val now = System.currentTimeMillis()
+        circuitBreakers.entries.removeIf { it.value < now }
+        hostStrategyBlacklist.values.forEach { map -> map.entries.removeIf { it.value < now } }
     }
 
     fun stop() {
