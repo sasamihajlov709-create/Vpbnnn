@@ -148,10 +148,19 @@ object DpiStrategySelector {
     fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null): BypassStrategy {
         val candidates = BypassStrategy.entries.filter { 
             (it.group == StrategyGroup.EXTREME || it.group == StrategyGroup.HEAVY) && 
-            it != failed &&
-            (if (category != null) (it.family == failed?.family) else true)
+            it != failed
         }
-        return if (candidates.isNotEmpty()) candidates.random() else BypassStrategy.ZAPRET_EXTREME
+        
+        if (candidates.isEmpty()) return BypassStrategy.ZAPRET_EXTREME
+
+        // Try to select a family that fits the category, or a different one than the failed one
+        val preferred = when(category) {
+            HostCategory.STREAMING, HostCategory.GAMING -> candidates.filter { it.family == StrategyFamily.UDP || it.family == StrategyFamily.QUIC }
+            HostCategory.AI, HostCategory.SOCIAL -> candidates.filter { it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TLS }
+            else -> candidates.filter { failed == null || it.family != failed.family }
+        }.ifEmpty { candidates }
+
+        return preferred.random()
     }
 
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {

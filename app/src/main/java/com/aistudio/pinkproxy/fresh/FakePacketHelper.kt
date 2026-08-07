@@ -67,10 +67,12 @@ object FakePacketHelper {
     fun getCachedDhcp() = synchronized(this) { checkCacheRefresh(); getDhcp() }
 
     fun getSmallNoise(size: Int): ByteArray {
-        val out = ByteArray(size)
         val noise = getStaticNoise()
-        val offset = ThreadLocalRandom.current().nextInt(noise.size - size)
-        System.arraycopy(noise, offset, out, 0, size)
+        val safeSize = size.coerceAtMost(noise.size)
+        val out = ByteArray(safeSize)
+        val maxOffset = (noise.size - safeSize).coerceAtLeast(0)
+        val offset = if (maxOffset > 0) ThreadLocalRandom.current().nextInt(maxOffset) else 0
+        System.arraycopy(noise, offset, out, 0, safeSize)
         return out
     }
 

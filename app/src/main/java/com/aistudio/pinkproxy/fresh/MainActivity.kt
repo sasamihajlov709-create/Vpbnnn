@@ -52,6 +52,8 @@ class MainActivity : ComponentActivity() {
             Log.e("MainActivity", "Error loading initial settings", e)
         }
         
+        requestIgnoreBatteryOptimizations()
+        
         val prefs = getSharedPreferences("pink_proxy_settings", MODE_PRIVATE)
         val autoConnect = prefs.getBoolean("auto_connect_on_launch", false)
         

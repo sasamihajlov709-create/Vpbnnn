@@ -200,7 +200,11 @@ class PinkVpnService : VpnService() {
 
                 override fun onLost(network: android.net.Network) {
                     Log.i("PinkVpnService", "Network lost: $network")
-                    try { setUnderlyingNetworks(null) } catch (e: Throwable) {}
+                    try { 
+                        setUnderlyingNetworks(null) 
+                    } catch (e: Throwable) {
+                        Log.v("PinkVpnService", "Failed to clear underlying networks: ${e.message}")
+                    }
                     DnsCacheManager.onNetworkChanged()
                     RobustResolver.clearCache()
                 }
@@ -213,9 +217,13 @@ class PinkVpnService : VpnService() {
                     val isMobile = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
                     
                     if (isWifi && _isRunning.value) {
-                        try { if (wifiLock?.isHeld == false) wifiLock?.acquire() } catch(e: Throwable) {}
+                        try { if (wifiLock?.isHeld == false) wifiLock?.acquire() } catch(e: Throwable) {
+                            Log.v("PinkVpnService", "WifiLock acquire error: ${e.message}")
+                        }
                     } else {
-                        try { if (wifiLock?.isHeld == true) wifiLock?.release() } catch(e: Throwable) {}
+                        try { if (wifiLock?.isHeld == true) wifiLock?.release() } catch(e: Throwable) {
+                            Log.v("PinkVpnService", "WifiLock release error: ${e.message}")
+                        }
                     }
                     
                     BypassConfig.updateNetworkType(if (isWifi) NetworkType.WIFI else if (isMobile) NetworkType.MOBILE else NetworkType.UNKNOWN)

@@ -81,7 +81,7 @@ object ServiceChecker {
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
                 conn.requestMethod = "GET"
-                if (conn.responseCode in 200..499) {
+                if (conn.responseCode in 200..399) {
                     internetUp = true
                     break
                 }
