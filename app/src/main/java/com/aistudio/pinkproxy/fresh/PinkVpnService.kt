@@ -647,6 +647,7 @@ class PinkVpnService : VpnService() {
             DnsProtocols.clearPool()
             UdpTransportHandler.clearBuffers()
             RecoveryManager.stopHealthCheck()
+            DeviceMonitor.stopDeviceMonitoring(this@PinkVpnService)
             
             vpnNetworkMonitor?.stop()
             vpnNetworkMonitor = null

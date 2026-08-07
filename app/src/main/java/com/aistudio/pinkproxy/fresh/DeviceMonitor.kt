@@ -11,6 +11,7 @@ import android.util.Log
 
 object DeviceMonitor {
     private var isMonitoringStarted = false
+    private var batteryReceiver: BroadcastReceiver? = null
 
     fun startDeviceMonitoring(context: Context) {
         if (isMonitoringStarted) return
@@ -20,7 +21,9 @@ object DeviceMonitor {
         BypassConfig.isPowerSaveMode = powerManager.isPowerSaveMode
 
         val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { filter ->
-            context.registerReceiver(null, filter)
+            try {
+                context.registerReceiver(null, filter)
+            } catch (e: Exception) { null }
         }
         
         batteryStatus?.let { intent ->
@@ -29,7 +32,7 @@ object DeviceMonitor {
                            status == BatteryManager.BATTERY_STATUS_FULL
             val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
             val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-            val batPct = (level * 100 / scale.toFloat()).toInt()
+            val batPct = if (scale > 0) (level * 100 / scale.toFloat()).toInt() else 100
             
             BypassConfig.isCharging = charging
             BypassConfig.batteryLevel = batPct
@@ -49,7 +52,7 @@ object DeviceMonitor {
             addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
         }
         
-        context.registerReceiver(object : BroadcastReceiver() {
+        val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 when (intent.action) {
                     Intent.ACTION_BATTERY_CHANGED -> {
@@ -58,7 +61,7 @@ object DeviceMonitor {
                                        status == BatteryManager.BATTERY_STATUS_FULL
                         val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
                         val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                        val batPct = (level * 100 / scale.toFloat()).toInt()
+                        val batPct = if (scale > 0) (level * 100 / scale.toFloat()).toInt() else 100
                         
                         BypassConfig.isCharging = charging
                         BypassConfig.batteryLevel = batPct
@@ -70,6 +73,25 @@ object DeviceMonitor {
                     }
                 }
             }
-        }, filter)
+        }
+        batteryReceiver = receiver
+        try {
+            context.registerReceiver(receiver, filter)
+        } catch (e: Exception) {
+            Log.e("DeviceMonitor", "Failed to register battery receiver: ${e.message}")
+        }
+    }
+
+    fun stopDeviceMonitoring(context: Context) {
+        if (!isMonitoringStarted) return
+        batteryReceiver?.let {
+            try {
+                context.unregisterReceiver(it)
+            } catch (e: Exception) {
+                Log.w("DeviceMonitor", "Unregister battery receiver error: ${e.message}")
+            }
+        }
+        batteryReceiver = null
+        isMonitoringStarted = false
     }
 }

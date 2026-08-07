@@ -19,7 +19,7 @@ object PrefetchManager {
         "facebook.com", "instagram.com", "twitter.com", "x.com", "discord.com"
     )
 
-    fun start(context: Context, vpnService: VpnService) {
+    fun start(context: Context, vpnService: VpnService?) {
         prefetchJob?.cancel()
         prefetchJob = scope.launch {
             while (isActive) {
@@ -45,7 +45,7 @@ object PrefetchManager {
         }
     }
 
-    private suspend fun performPrefetch(vpnService: VpnService) {
+    private suspend fun performPrefetch(vpnService: VpnService?) {
         Log.i("PrefetchManager", "Starting proactive prefetch for ${topDomains.size} domains")
         
         topDomains.shuffled().forEach { host ->
@@ -63,13 +63,13 @@ object PrefetchManager {
         }
     }
 
-    private suspend fun warmupConnection(host: String, ips: List<InetAddress>, vpnService: VpnService) {
+    private suspend fun warmupConnection(host: String, ips: List<InetAddress>, vpnService: VpnService?) {
         val strat = BypassConfig.getBestStrategyForHost(host)
         if (strat.group == StrategyGroup.LIGHT || strat.group == StrategyGroup.MEDIUM) {
             withContext(ProxyDispatcher.io) {
                 val s = Socket()
                 try {
-                    vpnService.protect(s)
+                    vpnService?.protect(s)
                     TtlHelper.tuneSocket(s)
                     TtlHelper.applyMssClamping(s, host)
                     // Пытаемся просто открыть соединение на 443 порт
