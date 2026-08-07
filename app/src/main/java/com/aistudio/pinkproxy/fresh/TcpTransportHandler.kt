@@ -81,8 +81,10 @@ object TcpTransportHandler {
             var firstClientPacketLen = 0
             try {
                 firstClientPacketLen = clientIn.read(firstClientPacket)
-            } catch (e: Throwable) {
-                Log.v("TcpTransport", "Initial client read failed (might be normal): ${e.message}")
+            } catch (e: java.net.SocketTimeoutException) {
+                Log.v("TcpTransport", "Initial client read timed out (normal for some protocols)")
+            } catch (e: java.io.IOException) {
+                Log.v("TcpTransport", "Initial client read failed: ${e.message}")
             }
 
             if (firstClientPacketLen <= 0) {
@@ -133,7 +135,9 @@ object TcpTransportHandler {
                                 if (finalRemoteSocket.isConnected && !finalRemoteSocket.isClosed) {
                                     Log.v("TcpTransport", "Idle keep-alive pulse for $targetHost")
                                 }
-                            } catch (e: Throwable) {
+                            } catch (e: java.net.SocketException) {
+                                Log.v("TcpTransport", "Idle pulse SocketException: ${e.message}")
+                            } catch (e: Exception) {
                                 Log.v("TcpTransport", "Idle pulse failed: ${e.message}")
                             } finally {
                                 writeMutex.unlock()
@@ -157,10 +161,14 @@ object TcpTransportHandler {
                             clientOut.flush()
                             ProxyStats.recordStats(sessionId, 0, read.toLong())
                         }
-                    } catch (e: Throwable) {
-                        Log.v("TcpTransport", "Remote to client pump failed: ${e.message}")
+                    } catch (e: java.net.SocketException) {
+                        Log.v("TcpTransport", "Remote to client pump socket closed: ${e.message}")
+                    } catch (e: java.io.IOException) {
+                        Log.v("TcpTransport", "Remote to client pump IOException: ${e.message}")
+                    } catch (e: Exception) {
+                        Log.v("TcpTransport", "Remote to client pump error: ${e.message}")
                     } finally {
-                        try { clientSocket.close() } catch (e: Throwable) {}
+                        try { clientSocket.close() } catch (e: java.io.IOException) {}
                     }
                 }
 
@@ -184,18 +192,31 @@ object TcpTransportHandler {
                         totalWrittenClient.addAndGet(read.toLong())
                         ProxyStats.recordStats(sessionId, read.toLong(), 0)
                     }
-                } catch (e: Throwable) {
-                    Log.v("TcpTransport", "Client to remote pump failed: ${e.message}")
+                } catch (e: java.net.SocketException) {
+                    Log.v("TcpTransport", "Client to remote pump socket closed: ${e.message}")
+                } catch (e: java.io.IOException) {
+                    Log.v("TcpTransport", "Client to remote pump IOException: ${e.message}")
+                } catch (e: Exception) {
+                    Log.v("TcpTransport", "Client to remote pump error: ${e.message}")
                 } finally {
                     remoteToClientJob.cancel()
                 }
             }
-        } catch (e: Throwable) {
-            Log.e("TcpTransport", "Fatal session error for $targetHost: ${e.message}", e)
+        } catch (e: java.net.ConnectException) {
+            Log.e("TcpTransport", "Connection refused to $targetHost: ${e.message}")
+            onConnectFailure?.invoke("CONNECTION_REFUSED")
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.e("TcpTransport", "Connection timed out for $targetHost")
+            onConnectFailure?.invoke("TIMEOUT")
+        } catch (e: java.io.IOException) {
+            Log.e("TcpTransport", "IO error for $targetHost: ${e.message}")
+            onConnectFailure?.invoke("IO_ERROR")
+        } catch (e: Exception) {
+            Log.e("TcpTransport", "Unexpected session error for $targetHost: ${e.message}", e)
             onConnectFailure?.invoke(e.message ?: "UNKNOWN")
         } finally {
-            try { clientSocket.close() } catch (e: Throwable) {}
-            try { remoteSocket?.close() } catch (e: Throwable) {}
+            try { clientSocket.close() } catch (e: java.io.IOException) {}
+            try { remoteSocket?.close() } catch (e: java.io.IOException) {}
             ProxyStats.unregisterFlow(sessionId, true)
             ProxyStats.closeFlow(sessionId)
         }

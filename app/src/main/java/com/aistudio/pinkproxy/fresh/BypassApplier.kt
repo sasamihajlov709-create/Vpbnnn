@@ -27,7 +27,13 @@ object BypassApplier {
             output.write(data, 0, length); output.flush(); return
         }
 
-        try { socket.tcpNoDelay = true } catch (e: Throwable) {}
+        try { 
+            socket.tcpNoDelay = true 
+        } catch (e: java.net.SocketException) {
+            android.util.Log.v("BypassApplier", "Failed to set tcpNoDelay: ${e.message}")
+        } catch (e: Exception) {
+            android.util.Log.v("BypassApplier", "Unexpected error setting tcpNoDelay: ${e.message}")
+        }
 
         var finalData = data
         var finalLen = length

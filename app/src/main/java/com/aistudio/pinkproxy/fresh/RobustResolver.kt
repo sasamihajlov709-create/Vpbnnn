@@ -55,7 +55,11 @@ object RobustResolver {
                     DnsCacheManager.put(host, res, type = type)
                     return res
                 }
-            } catch (e: Throwable) {}
+            } catch (e: java.io.IOException) {
+                Log.v("RobustResolver", "DnsOverTcp failed for $host via $dns: ${e.message}")
+            } catch (e: Exception) {
+                Log.v("RobustResolver", "Unexpected error in DnsOverTcp for $host: ${e.message}")
+            }
         }
         return emptyList()
     }
@@ -64,11 +68,14 @@ object RobustResolver {
     suspend fun resolve(host: String, vpnService: VpnService? = null, type: Int = 1): List<InetAddress> {
         if (DnsCacheManager.isIpAddress(host)) {
             return try {
-            listOf(InetAddress.getByName(host))
-        } catch (e: Throwable) {
-            Log.v("RobustResolver", "Failed to parse IP $host: ${e.message}")
-            emptyList()
-        }
+                listOf(InetAddress.getByName(host))
+            } catch (e: java.net.UnknownHostException) {
+                Log.v("RobustResolver", "Failed to parse IP $host: ${e.message}")
+                emptyList()
+            } catch (e: Exception) {
+                Log.v("RobustResolver", "Unexpected error parsing IP $host: ${e.message}")
+                emptyList()
+            }
         }
         if (DnsCacheManager.isNegative(host)) return emptyList()
 
@@ -96,8 +103,9 @@ object RobustResolver {
             pendingResolutions.remove(cacheKey)
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         } catch (e: CancellationException) {
+            pendingResolutions.remove(cacheKey)
             throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("RobustResolver", "Resolution error for $host: ${e.message}")
             pendingResolutions.remove(cacheKey)
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
@@ -121,8 +129,10 @@ object RobustResolver {
                     DnsCacheManager.put(host, res, type = type)
                     return res
                 }
-            } catch (e: Throwable) {
-                // // if (e is CancellationException) throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.v("RobustResolver", "Shadow UDP DNS failed for $host: ${e.message}")
             }
         }
 
@@ -141,25 +151,31 @@ object RobustResolver {
                     val sorted = DnsCacheManager.getSortedIps(par)
                     DnsCacheManager.put(host, sorted, type = type)
                     
-                // Smart Prefetch common subdomains with throttling
-                if (type == 1 && !host.startsWith("www.") && host.split(".").size == 2 && !BypassConfig.isPowerSaveMode) {
-                    getScope().launch {
-                        listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
-                            try { 
-                                delay(if (BypassConfig.batteryLevel < 30) 1500L else 500L) // Longer delay on low battery
-                                val preHost = prefix + host
-                                if (DnsCacheManager.getCached(preHost) == null) {
-                                    performParallelResolution(preHost, vpnService, 1) 
+                    // Smart Prefetch common subdomains with throttling
+                    if (type == 1 && !host.startsWith("www.") && host.split(".").size == 2 && !BypassConfig.isPowerSaveMode) {
+                        getScope().launch {
+                            listOf("www.", "api.", "assets.", "static.", "m.").forEach { prefix ->
+                                try { 
+                                    delay(if (BypassConfig.batteryLevel < 30) 1500L else 500L) // Longer delay on low battery
+                                    val preHost = prefix + host
+                                    if (DnsCacheManager.getCached(preHost) == null) {
+                                        performParallelResolution(preHost, vpnService, 1) 
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) { 
+                                    Log.v("RobustResolver", "Prefetch failed for $prefix$host: ${e.message}")
                                 }
-                            } catch (e: Throwable) { }
+                            }
                         }
                     }
-                }
                     return sorted
                 }
             }
-        } catch (e: Throwable) {
-            // // if (e is CancellationException) throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.v("RobustResolver", "Parallel resolution failed for $host: ${e.message}")
         }
 
         // 3. Emergency Fallback & Stale Cache
@@ -177,8 +193,10 @@ object RobustResolver {
                     DnsCacheManager.put(host, res, type = type)
                     return res
                 }
-            } catch (e: Throwable) {
-                // // if (e is CancellationException) throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.v("RobustResolver", "Fallback UDP DNS failed for $host via $dns: ${e.message}")
             }
         }
 

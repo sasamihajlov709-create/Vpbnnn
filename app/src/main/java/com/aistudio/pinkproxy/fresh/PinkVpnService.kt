@@ -61,7 +61,9 @@ class PinkVpnService : VpnService() {
         @JvmStatic fun updateTile(context: Context) {
             try {
                 TileService.requestListeningState(context, ComponentName(context, PinkProxyTileService::class.java))
-            } catch (e: Throwable) {}
+            } catch (e: Exception) {
+                Log.w("PinkVpnService", "Failed to request tile listening state: ${e.message}")
+            }
         }
     }
 
@@ -161,12 +163,14 @@ class PinkVpnService : VpnService() {
                                     }
                                 }
                             }
-                        } catch (e: Throwable) {
-                            ProxyStats.logRecovery("Watchdog: Proxy server unresponsive. Restarting...")
-                            stopVpnInternal()
-                            delay(500)
-                            startVpnInternal()
-                        }
+                    } catch (e: java.io.IOException) {
+                        ProxyStats.logRecovery("Watchdog: Proxy server unresponsive (${e.message}). Restarting...")
+                        stopVpnInternal()
+                        delay(500)
+                        startVpnInternal()
+                    } catch (e: Exception) {
+                        Log.e("PinkVpnService", "Watchdog diagnostic error", e)
+                    }
                     }
                     
                     if (dnsFailures > lastDnsFailures + 10) {
@@ -193,7 +197,11 @@ class PinkVpnService : VpnService() {
             networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
                     Log.i("PinkVpnService", "Network available: $network")
-                    try { setUnderlyingNetworks(arrayOf(network)) } catch (e: Throwable) {}
+                    try { 
+                        setUnderlyingNetworks(arrayOf(network)) 
+                    } catch (e: Exception) {
+                        Log.e("PinkVpnService", "Failed to set underlying networks: ${e.message}")
+                    }
                     DnsCacheManager.onNetworkChanged()
                     RobustResolver.clearCache()
                 }
@@ -202,7 +210,7 @@ class PinkVpnService : VpnService() {
                     Log.i("PinkVpnService", "Network lost: $network")
                     try { 
                         setUnderlyingNetworks(null) 
-                    } catch (e: Throwable) {
+                    } catch (e: Exception) {
                         Log.v("PinkVpnService", "Failed to clear underlying networks: ${e.message}")
                     }
                     DnsCacheManager.onNetworkChanged()
@@ -217,11 +225,15 @@ class PinkVpnService : VpnService() {
                     val isMobile = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
                     
                     if (isWifi && _isRunning.value) {
-                        try { if (wifiLock?.isHeld == false) wifiLock?.acquire() } catch(e: Throwable) {
+                        try { 
+                            if (wifiLock?.isHeld == false) wifiLock?.acquire() 
+                        } catch(e: Exception) {
                             Log.v("PinkVpnService", "WifiLock acquire error: ${e.message}")
                         }
                     } else {
-                        try { if (wifiLock?.isHeld == true) wifiLock?.release() } catch(e: Throwable) {
+                        try { 
+                            if (wifiLock?.isHeld == true) wifiLock?.release() 
+                        } catch(e: Exception) {
                             Log.v("PinkVpnService", "WifiLock release error: ${e.message}")
                         }
                     }
@@ -563,20 +575,23 @@ class PinkVpnService : VpnService() {
             .setOngoing(true)
             .build()
 
-        try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                try {
-                    startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-                } catch (e: Throwable) {
-                    Log.w("PinkVpnService", "Failed specialUse foreground service type, trying default startForeground: ${e.message}")
+            try {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    try {
+                        startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                    } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
+                        Log.e("PinkVpnService", "Foreground service start not allowed: ${e.message}")
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("PinkVpnService", "Failed specialUse foreground service type, trying default startForeground: ${e.message}")
+                        startForeground(1, notification)
+                    }
+                } else {
                     startForeground(1, notification)
                 }
-            } else {
-                startForeground(1, notification)
+            } catch (e: Exception) {
+                Log.e("PinkVpnService", "startForeground failed: ${e.message}", e)
             }
-        } catch (e: Throwable) {
-            Log.e("PinkVpnService", "startForeground failed: ${e.message}", e)
-        }
     }
 
     private fun stopVpn() {
@@ -631,7 +646,9 @@ class PinkVpnService : VpnService() {
                     it.close()
                     Log.i("PinkVpnService", "TUN Interface released")
                 }
-            } catch (e: Throwable) {
+            } catch (e: java.io.IOException) {
+                Log.e("PinkVpnService", "Interface close IOException", e)
+            } catch (e: Exception) {
                 Log.e("PinkVpnService", "Interface close error", e)
             } finally {
                 vpnInterface = null
@@ -640,7 +657,9 @@ class PinkVpnService : VpnService() {
             try {
                 if (wakeLock?.isHeld == true) wakeLock?.release()
                 if (wifiLock?.isHeld == true) wifiLock?.release()
-            } catch (e: Throwable) {}
+            } catch (e: Exception) {
+                Log.v("PinkVpnService", "Lock release error: ${e.message}")
+            }
 
             try {
                 if (Build.VERSION.SDK_INT >= 33) {

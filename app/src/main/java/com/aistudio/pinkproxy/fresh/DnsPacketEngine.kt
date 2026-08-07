@@ -169,7 +169,12 @@ object DnsPacketEngine {
                     bb.position(bb.position() + rdLen)
                 }
             }
-        } catch (e: Throwable) {
+        } catch (e: java.nio.BufferUnderflowException) {
+            android.util.Log.v("DnsPacketEngine", "Buffer underflow parsing DNS response")
+        } catch (e: java.net.UnknownHostException) {
+            android.util.Log.v("DnsPacketEngine", "Invalid address in DNS response: ${e.message}")
+        } catch (e: Exception) {
+            android.util.Log.e("DnsPacketEngine", "Error parsing DNS response", e)
         }
         return ips
     }
@@ -242,7 +247,13 @@ object DnsPacketEngine {
                     bb.position(bb.position() + rdLen)
                 }
             }
-        } catch (e: Throwable) {}
+        } catch (e: java.nio.BufferUnderflowException) {
+            android.util.Log.v("DnsPacketEngine", "Buffer underflow parsing detailed DNS response")
+        } catch (e: java.net.UnknownHostException) {
+            android.util.Log.v("DnsPacketEngine", "Invalid address in detailed DNS response: ${e.message}")
+        } catch (e: Exception) {
+            android.util.Log.e("DnsPacketEngine", "Error parsing detailed DNS response", e)
+        }
         return records
     }
 

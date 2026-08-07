@@ -49,8 +49,10 @@ object DnsProtocols {
                         sc.init(null, arrayOf(defaultTrustManager), null)
                         builder.sslSocketFactory(ProtectedSSLSocketFactory(sc.socketFactory, vpnService), defaultTrustManager)
                     }
-                } catch (e: Throwable) {
-                    Log.e("DnsProtocols", "Failed to setup protected SSL", e)
+                } catch (e: java.security.GeneralSecurityException) {
+                    Log.e("DnsProtocols", "Security exception setting up protected SSL", e)
+                } catch (e: Exception) {
+                    Log.e("DnsProtocols", "Unexpected error setting up protected SSL", e)
                 }
                 
                 val client = builder.build()

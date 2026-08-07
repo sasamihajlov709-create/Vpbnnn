@@ -69,7 +69,11 @@ object UdpTransportHandler {
                                 }
                             } catch (e: CancellationException) {
                                 // Normal
-                            } catch (e: Throwable) {
+                            } catch (e: java.net.SocketException) {
+                                Log.v("UdpTransport", "HB SocketException: ${e.message}")
+                            } catch (e: java.io.IOException) {
+                                Log.v("UdpTransport", "HB IOException: ${e.message}")
+                            } catch (e: Exception) {
                                 Log.v("UdpTransport", "HB error: ${e.message}")
                             }
                         }
@@ -78,7 +82,11 @@ object UdpTransportHandler {
                             try {
                                 outSocket.send(work.first)
                                 activeSessions[work.second] = System.currentTimeMillis()
-                            } catch (e: Throwable) {
+                            } catch (e: java.net.SocketException) {
+                                Log.v("UdpTransport", "Outbound SocketException: ${e.message}")
+                            } catch (e: java.io.IOException) {
+                                Log.v("UdpTransport", "Outbound IOException: ${e.message}")
+                            } catch (e: Exception) {
                                 Log.v("UdpTransport", "Outbound send failed: ${e.message}")
                             }
                         }
@@ -146,13 +154,19 @@ object UdpTransportHandler {
                                     launch {
                                         try {
                                             BypassApplier.applyUdpBypass(outSockets[workerIdx], outPacket, config, host)
-                                        } catch (e: Throwable) {
+                                        } catch (e: java.io.IOException) {
+                                            Log.v("UdpTransport", "UDP Bypass IOException: ${e.message}")
+                                        } catch (e: Exception) {
                                             Log.v("UdpTransport", "UDP Bypass apply failed: ${e.message}")
                                         }
                                     }
                                 }
                             }
-                        } catch (e: Throwable) {
+                        } catch (e: java.net.SocketException) {
+                            if (e !is CancellationException) Log.v("UdpTransport", "UDP Receive loop SocketException: ${e.message}")
+                        } catch (e: java.io.IOException) {
+                            Log.v("UdpTransport", "UDP Receive loop IOException: ${e.message}")
+                        } catch (e: Exception) {
                             if (e !is CancellationException) Log.v("UdpTransport", "UDP Receive loop error: ${e.message}")
                         }
                     }
@@ -189,7 +203,11 @@ object UdpTransportHandler {
                                 
                                 udpSocket.send(DatagramPacket(fullResp, fullResp.size, targetAddr, targetPort))
                                 ProxyStats.recordStats("udp_inbound", 0, inPacket.length.toLong())
-                            } catch (e: Throwable) {
+                            } catch (e: java.net.SocketException) {
+                                if (e !is CancellationException) Log.v("UdpTransport", "Inbound UDP SocketException: ${e.message}")
+                            } catch (e: java.io.IOException) {
+                                Log.v("UdpTransport", "Inbound UDP IOException: ${e.message}")
+                            } catch (e: Exception) {
                                 if (e !is CancellationException) Log.v("UdpTransport", "Inbound UDP failed: ${e.message}")
                             }
                         }
@@ -201,15 +219,19 @@ object UdpTransportHandler {
                     try {
                         val input = clientSocket.getInputStream()
                         while (input.read() != -1) { /* Just wait */ }
-                    } catch (e: Throwable) {} finally {
+                    } catch (e: java.io.IOException) {
+                        Log.v("UdpTransport", "Client control connection closed: ${e.message}")
+                    } catch (e: Exception) {
+                        Log.v("UdpTransport", "Client control connection error: ${e.message}")
+                    } finally {
                         this@coroutineScope.cancel()
                     }
                 }
             }
         } finally {
             udpSocket.close()
-            outSockets.forEach { try { it.close() } catch (e: Throwable) {} }
-            clientSocket.close()
+            outSockets.forEach { try { it.close() } catch (e: Exception) { Log.v("UdpTransport", "Failed to close outSocket: ${e.message}") } }
+            try { clientSocket.close() } catch (e: Exception) { Log.v("UdpTransport", "Failed to close clientSocket: ${e.message}") }
         }
     }
 

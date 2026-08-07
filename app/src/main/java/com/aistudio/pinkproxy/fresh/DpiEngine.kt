@@ -66,15 +66,16 @@ object DpiEngine {
             }
         }
 
-        optimizerJob = scope.launch {
+                    optimizerJob = scope.launch {
             while (isActive) {
                 delay(30000)
                 try {
                     DpiAnalyzer.analyzeAndAdjust()
                     DpiAnalyzer.checkGlobalStall()
-                } catch (e: Throwable) {
-                    if (e is CancellationException) throw e
-                    Log.e("DpiEngine", "Optimizer error", e)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("DpiEngine", "Optimizer analysis error: ${e.message}", e)
                 }
             }
         }
@@ -183,7 +184,15 @@ object DpiEngine {
 
     suspend fun triggerMicroProbe(host: String, category: HostCategory) {
         val probes = BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }.shuffled().take(3)
-        val resolved = try { RobustResolver.resolve(host) } catch (e: Throwable) { emptyList() }
+        val resolved = try { 
+            RobustResolver.resolve(host) 
+        } catch (e: java.net.UnknownHostException) {
+            Log.v("DpiEngine", "MicroProbe DNS failed for $host: ${e.message}")
+            emptyList() 
+        } catch (e: Exception) {
+            Log.v("DpiEngine", "MicroProbe DNS unexpected error for $host: ${e.message}")
+            emptyList()
+        }
         if (resolved.isEmpty()) return
         val addr = resolved.first()
 
@@ -200,13 +209,26 @@ object DpiEngine {
                         BypassConfig.applyBypass(s, out, fake, fake.size, config, host)
                         s.soTimeout = 1500
                         s.getInputStream().read() != -1
-                    } catch (e: Throwable) { false } finally { try { s.close() } catch (e: Throwable) {} }
+                    } catch (e: java.net.SocketException) {
+                        Log.v("DpiEngine", "Probe $strat SocketException: ${e.message}")
+                        false 
+                    } catch (e: java.io.IOException) {
+                        Log.v("DpiEngine", "Probe $strat IOException: ${e.message}")
+                        false
+                    } catch (e: Exception) {
+                        Log.v("DpiEngine", "Probe $strat error: ${e.message}")
+                        false 
+                    } finally { 
+                        try { s.close() } catch (e: java.io.IOException) {} 
+                    }
                 }
                 if (ok == true) {
                     DpiStrategySelector.recordResult(strat, true, category, host = host)
                     return
                 }
-            } catch (e: Throwable) {}
+            } catch (e: Exception) {
+                Log.v("DpiEngine", "Probe execution exception: ${e.message}")
+            }
             delay(200)
         }
     }

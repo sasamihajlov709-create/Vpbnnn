@@ -31,9 +31,10 @@ object CensorshipExpert {
                     if (ProxyStats.activeConnections.value == 0) {
                         performLightBackgroundScan()
                     }
-                } catch (e: Throwable) {
-                    if (e is CancellationException) throw e
-                    Log.e("CensorshipExpert", "Analysis loop error", e)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("CensorshipExpert", "Analysis loop error: ${e.message}", e)
                 }
                 delay(UPDATE_INTERVAL_MS)
             }
@@ -80,7 +81,11 @@ object CensorshipExpert {
                         if (res.isEmpty()) {
                             ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
                         }
-                    } catch (e: Throwable) {}
+                    } catch (e: java.io.IOException) {
+                        Log.v("CensorshipExpert", "Light scan query failed for $host: ${e.message}")
+                    } catch (e: Exception) {
+                        Log.v("CensorshipExpert", "Light scan unexpected error for $host: ${e.message}")
+                    }
                 }
             }.forEach { it.join() }
         }
@@ -133,7 +138,15 @@ object CensorshipExpert {
                             // Check if connection is still alive after sending SNI (waiting for ServerHello or just checking socket state)
                             val buffer = ByteArray(1)
                             val read = withContext(Dispatchers.IO) {
-                                try { probeSocket.getInputStream().read(buffer) } catch(e: Throwable) { -1 }
+                                try { 
+                                    probeSocket.getInputStream().read(buffer) 
+                                } catch(e: java.net.SocketTimeoutException) {
+                                    -1 
+                                } catch(e: java.io.IOException) {
+                                    -1
+                                } catch(e: Exception) {
+                                    -1
+                                }
                             }
                             
                             val rtt = System.currentTimeMillis() - start
@@ -141,10 +154,17 @@ object CensorshipExpert {
                             
                             DpiEngine.recordResult(strat, success, HostCategory.OTHER, latencyMs = rtt)
                         }
-                    } catch (e: Throwable) {
+                    } catch (e: java.net.ConnectException) {
+                        Log.v("CensorshipExpert", "Probe $strat connect failed: ${e.message}")
+                        DpiEngine.recordResult(strat, false, HostCategory.OTHER)
+                    } catch (e: java.net.SocketTimeoutException) {
+                        Log.v("CensorshipExpert", "Probe $strat timed out")
+                        DpiEngine.recordResult(strat, false, HostCategory.OTHER)
+                    } catch (e: Exception) {
+                        Log.v("CensorshipExpert", "Probe $strat unexpected error: ${e.message}")
                         DpiEngine.recordResult(strat, false, HostCategory.OTHER)
                     } finally {
-                        try { probeSocket?.close() } catch (e: Throwable) {}
+                        try { probeSocket?.close() } catch (e: java.io.IOException) {}
                     }
                 }
                 delay(500) // Staggered tests
@@ -292,7 +312,11 @@ object CensorshipExpert {
             critical.forEach { host ->
                 try {
                     RobustResolver.resolveDnsOverTcpOnly(host)
-                } catch (e: Throwable) {}
+                } catch (e: java.net.UnknownHostException) {
+                    Log.v("CensorshipExpert", "Harden DNS pre-resolve failed for $host")
+                } catch (e: Exception) {
+                    Log.v("CensorshipExpert", "Harden DNS unexpected error for $host: ${e.message}")
+                }
             }
         }
     }
