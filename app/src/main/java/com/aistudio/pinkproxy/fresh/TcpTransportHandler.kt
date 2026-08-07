@@ -28,6 +28,7 @@ object TcpTransportHandler {
         var remoteSocket: Socket? = null
         var remoteIn: InputStream? = null
         var remoteOut: OutputStream? = null
+        var sessionSuccess = false
         try {
             TcpTransportManager.configureSocket(clientSocket)
 
@@ -122,6 +123,7 @@ object TcpTransportHandler {
             val finalRemoteOut = remoteOut!!
 
             onConnectSuccess?.invoke()
+            sessionSuccess = true
 
             coroutineScope {
                 // Keep-alive pulse
@@ -227,7 +229,7 @@ object TcpTransportHandler {
             try { remoteSocket?.close() } catch (e: java.io.IOException) {
                 Log.v("TcpTransport", "Failed to close remote socket: ${e.message}")
             }
-            ProxyStats.unregisterFlow(sessionId, true)
+            ProxyStats.unregisterFlow(sessionId, sessionSuccess)
             ProxyStats.closeFlow(sessionId)
         }
     }

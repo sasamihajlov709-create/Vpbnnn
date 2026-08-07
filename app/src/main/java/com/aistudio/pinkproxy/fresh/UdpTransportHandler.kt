@@ -37,7 +37,6 @@ object UdpTransportHandler {
             var clientUdpPort = 0
             
             val activeSessions = ConcurrentHashMap<String, Long>()
-            val udpOutChannels = Array(8) { kotlinx.coroutines.channels.Channel<Pair<DatagramPacket, String>>(500) }
             
             coroutineScope {
                 val jobs = mutableListOf<Job>()
@@ -45,50 +44,35 @@ object UdpTransportHandler {
                 repeat(8) { i ->
                     val outSocket = outSockets[i]
                     jobs += launch(ProxyDispatcher.io) {
-                        launch {
-                            val rnd = ThreadLocalRandom.current()
-                            try {
-                                while (isActive) {
-                                    delay(rnd.nextLong(30000, 60000))
-                                    val now = System.currentTimeMillis()
-                                    activeSessions.entries.removeIf { entry ->
-                                        if (now - entry.value > 90000) {
-                                            ProxyStats.closeFlow("udp_${entry.key}")
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                    
-                                    for (session in activeSessions.keys) {
-                                        val parts = session.split(":")
-                                        if (parts.size == 2) {
-                                            UdpTransportManager.sendUdpHeartbeat(outSocket, parts[0], parts[1].toInt())
-                                        }
+                        val rnd = ThreadLocalRandom.current()
+                        try {
+                            while (isActive) {
+                                delay(rnd.nextLong(30000, 60000))
+                                val now = System.currentTimeMillis()
+                                activeSessions.entries.removeIf { entry ->
+                                    if (now - entry.value > 90000) {
+                                        ProxyStats.closeFlow("udp_${entry.key}")
+                                        true
+                                    } else {
+                                        false
                                     }
                                 }
-                            } catch (e: CancellationException) {
-                                // Normal
-                            } catch (e: java.net.SocketException) {
-                                Log.v("UdpTransport", "HB SocketException: ${e.message}")
-                            } catch (e: java.io.IOException) {
-                                Log.v("UdpTransport", "HB IOException: ${e.message}")
-                            } catch (e: Exception) {
-                                Log.v("UdpTransport", "HB error: ${e.message}")
+                                
+                                for (session in activeSessions.keys) {
+                                    val parts = session.split(":")
+                                    if (parts.size == 2) {
+                                        UdpTransportManager.sendUdpHeartbeat(outSocket, parts[0], parts[1].toInt())
+                                    }
+                                }
                             }
-                        }
-
-                        for (work in udpOutChannels[i]) {
-                            try {
-                                outSocket.send(work.first)
-                                activeSessions[work.second] = System.currentTimeMillis()
-                            } catch (e: java.net.SocketException) {
-                                Log.v("UdpTransport", "Outbound SocketException: ${e.message}")
-                            } catch (e: java.io.IOException) {
-                                Log.v("UdpTransport", "Outbound IOException: ${e.message}")
-                            } catch (e: Exception) {
-                                Log.v("UdpTransport", "Outbound send failed: ${e.message}")
-                            }
+                        } catch (e: CancellationException) {
+                            // Normal
+                        } catch (e: java.net.SocketException) {
+                            Log.v("UdpTransport", "HB SocketException: ${e.message}")
+                        } catch (e: java.io.IOException) {
+                            Log.v("UdpTransport", "HB IOException: ${e.message}")
+                        } catch (e: Exception) {
+                            Log.v("UdpTransport", "HB error: ${e.message}")
                         }
                     }
                 }
@@ -145,6 +129,12 @@ object UdpTransportHandler {
                             if (headerLen > 0 && len > headerLen) {
                                 val payload = data.copyOfRange(offset + headerLen, offset + len)
                                 val sessionKey = "$host:$port"
+                                
+                                if (BypassConfig.blockQuic && isQuicPacket(port, payload)) {
+                                    Log.d("UdpTransport", "QUIC packet blocked for $host:$port to force TCP fallback")
+                                    continue
+                                }
+
                                 if (!activeSessions.containsKey(sessionKey)) {
                                     ProxyStats.registerFlow("udp_$sessionKey", host, "UDP", BypassConfig.getBestStrategyForHost(host))
                                     activeSessions[sessionKey] = System.currentTimeMillis()
@@ -251,5 +241,12 @@ object UdpTransportHandler {
 
     fun clearBuffers() {
         // Shared buffers cleanup if any
+    }
+
+    private fun isQuicPacket(port: Int, payload: ByteArray): Boolean {
+        if (port == 443 || port == 8443) return true
+        if (payload.isEmpty()) return false
+        val first = payload[0].toInt() and 0xFF
+        return (first and 0x80) != 0 || (first and 0x40) != 0
     }
 }

@@ -70,6 +70,14 @@ object StabilityAnalyzer {
         _signalQuality.value = (baseQual - stabPenalty - panicPenalty - intensityPenalty).coerceIn(0, 100)
     }
 
+    fun setCensorshipIntensity(value: Int) {
+        _censorshipIntensity.value = value.coerceIn(0, 100)
+    }
+
+    fun setStabilityScore(value: Int) {
+        _stabilityScore.value = value.coerceIn(0, 100)
+    }
+
     fun reset() {
         _lastLatency.value = 0
         _jitter.value = 0

@@ -120,7 +120,7 @@ object ProxyStats {
     val errors: StateFlow<Long> = _errors.asStateFlow()
 
     val censorshipIntensity = StabilityAnalyzer.censorshipIntensity
-    fun updateCensorshipIntensity(newVal: Int) { /* Logic now in StabilityAnalyzer */ }
+    fun updateCensorshipIntensity(newVal: Int) { StabilityAnalyzer.setCensorshipIntensity(newVal) }
     fun clearCensorshipHistory() { StabilityAnalyzer.reset() }
 
     fun recordCensorshipEvent(isFailure: Boolean) {
@@ -163,7 +163,7 @@ object ProxyStats {
     val stabilityScore = StabilityAnalyzer.stabilityScore
     val successRate = StabilityAnalyzer.successRate
 
-    fun updateStabilityScore(newVal: Int) { /* In StabilityAnalyzer */ }
+    fun updateStabilityScore(newVal: Int) { StabilityAnalyzer.setStabilityScore(newVal) }
     fun updateCongestionWindow(delta: Int) { _congestionWindow.update { (it + delta).coerceIn(1, 1000) } }
 
     private val _maxMss = MutableStateFlow(1460)
