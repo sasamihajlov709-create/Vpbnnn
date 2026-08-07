@@ -47,9 +47,17 @@ object BypassApplier {
                 finalData = FakePacketHelper.randomizeHeaderCase(finalData, finalLen)
                 finalLen = finalData.size
             }
+            if (strategy == BypassStrategy.HTTP_MULTI_LINE_MANGLE || strategy == BypassStrategy.BYEBYEDPI_HYBRID || strategy == BypassStrategy.TCP_COMBINED_HYBRID) {
+                finalData = EvasionPacketMangler.applyHybridHttpMangle(finalData, finalLen)
+                finalLen = finalData.size
+            }
         } else if (isProbableTls(data, length)) {
             if (strategy == BypassStrategy.TLS_SESSION_ID_MANGLE || (strategy.family == StrategyFamily.TLS && rnd.nextInt(100) < 15)) {
                 finalData = FakePacketHelper.mangleSessionId(finalData, finalLen)
+                finalLen = finalData.size
+            }
+            if (strategy == BypassStrategy.TLS_SNI_JITTER_SPLIT || strategy == BypassStrategy.TLS_SNI_EXT_MANGLE || strategy == BypassStrategy.TLS_EXT_CHAOS || strategy == BypassStrategy.BYEBYEDPI_HYBRID || strategy == BypassStrategy.TCP_COMBINED_HYBRID || strategy == BypassStrategy.BYEBYEDPI_EXTREME) {
+                finalData = EvasionPacketMangler.applyHybridTlsMangle(finalData, finalLen, rnd)
                 finalLen = finalData.size
             }
         }

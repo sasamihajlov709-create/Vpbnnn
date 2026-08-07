@@ -57,4 +57,23 @@ object EvasionPacketMangler {
         }
         return data.copyOf(length)
     }
+
+    fun applyHybridTlsMangle(data: ByteArray, length: Int, rnd: ThreadLocalRandom = ThreadLocalRandom.current()): ByteArray {
+        var res = data.copyOf(length)
+        if (length > 44 && res[0] == 0x16.toByte()) {
+            res = TlsParser.mangleSni(res, res.size, rnd)
+            res = TlsParser.addGrease(res, res.size, rnd)
+            if (rnd.nextBoolean()) {
+                res = TlsParser.addPadding(res, res.size, rnd.nextInt(32, 128))
+            }
+        }
+        return res
+    }
+
+    fun applyHybridHttpMangle(data: ByteArray, length: Int): ByteArray {
+        var res = mangleHttpMethodCase(data, length)
+        res = randomizeHeaderCase(res, res.size)
+        res = addSpaceToHttpMethod(res, res.size)
+        return res
+    }
 }
