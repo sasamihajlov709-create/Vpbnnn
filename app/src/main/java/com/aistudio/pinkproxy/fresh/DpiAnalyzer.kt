@@ -115,16 +115,16 @@ object DpiAnalyzer {
 
         val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
         val fingerprint = getCensorshipFingerprint()
-        val calculatedIntensity = (fingerprint.rstRate * 55 + fingerprint.sniBlockRate * 65 + fingerprint.timeoutRate * 20 + fingerprint.stallRate * 35).toInt()
+        val calculatedIntensity = (fingerprint.rstRate * 55 + fingerprint.sniBlockRate * 65 + fingerprint.timeoutRate * 25 + fingerprint.stallRate * 40 + fingerprint.udpBlockRate * 35).toInt().coerceIn(0, 100)
 
         if (globalSuccessRate < 15 && calculatedIntensity > 40) {
             DpiEngine.enterPanicMode()
         }
 
         val targetIntensity = if (calculatedIntensity > ProxyStats.censorshipIntensity.value) {
-            (ProxyStats.censorshipIntensity.value * 0.3 + calculatedIntensity * 0.7).toInt()
+            (ProxyStats.censorshipIntensity.value * 0.2 + calculatedIntensity * 0.8).toInt()
         } else {
-            if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05) {
+            if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05) {
                 (ProxyStats.censorshipIntensity.value * 0.7 + calculatedIntensity * 0.3).toInt()
             } else {
                 (ProxyStats.censorshipIntensity.value * 0.9 + calculatedIntensity * 0.1).toInt()
@@ -135,17 +135,22 @@ object DpiAnalyzer {
             ProxyStats.updateCensorshipIntensity(targetIntensity)
         }
 
-        val stability = (globalSuccessRate * 0.5 + (100 - (fingerprint.rstRate + fingerprint.sniBlockRate) * 100).coerceAtLeast(0.0) * 0.5).toInt().coerceIn(0, 100)
+        val stability = (globalSuccessRate * 0.5 + (100 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100).coerceAtLeast(0.0) * 0.5).toInt().coerceIn(0, 100)
         ProxyStats.updateStabilityScore(stability)
         
-        if (fingerprint.timeoutRate > 0.4 || fingerprint.stallRate > 0.5) {
+        if (fingerprint.timeoutRate > 0.35 || fingerprint.stallRate > 0.45) {
              val mtu = BypassConfig.currentMtu.value
              if (mtu > 1000) BypassConfig.setMtu(mtu - 32)
+             DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
+             DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
         } else if (stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
              BypassConfig.setMtu(BypassConfig.currentMtu.value + 16)
         }
         
-        if (fingerprint.jitter > 800) DpiEngine.boostStrategyFamily(StrategyFamily.ADAPTIVE, null)
+        if (fingerprint.jitter > 600) {
+            DpiEngine.boostStrategyFamily(StrategyFamily.ADAPTIVE, null)
+            DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
+        }
 
         DpiEngine.strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
