@@ -74,7 +74,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     } ?: break
 
                     if (!activeConnectionSemaphore.tryAcquire()) {
-                        try { client.close() } catch (e: Throwable) {}
+                        try { client.close() } catch (e: Exception) { Log.v("PinkProxy", "Close error: ${e.message}") }
                         continue
                     }
                                 
@@ -83,25 +83,33 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         try {
                             TtlHelper.tuneSocket(client)
                             handleClient(client, this)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.e("PinkProxy", "Error handling client: ${e.message}")
                         } catch (e: Throwable) {
-                            if (e !is CancellationException) {
-                                Log.e("PinkProxy", "Error handling client: ${e.message}")
-                            }
+                            Log.e("PinkProxy", "Critical client handling error", e)
                         } finally {
-                            try { client.close() } catch (e: Throwable) {}
+                            try { client.close() } catch (e: Exception) { Log.v("PinkProxy", "Close error: ${e.message}") }
                             ProxyStats.updateConnections(-1)
                             activeConnectionSemaphore.release()
                         }
                     }
                 }
-            } catch (e: Throwable) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 if (isActive) {
-                    Log.e("PinkProxy", "Server error", e)
+                    Log.e("PinkProxy", "Server loop error", e)
                     VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Internal proxy server error: ${e.localizedMessage}")
                 }
+            } catch (e: Throwable) {
+                if (isActive) {
+                    Log.e("PinkProxy", "Critical server error", e)
+                    VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Critical proxy server failure")
+                }
             } finally {
-                try { serverSocket?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+                try { serverSocket?.close() } catch (e: Exception) { Log.v("PinkProxy", "Socket close error: ${e.message}") }
                 serverSocket = null
             }
         }
@@ -109,7 +117,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
 
     fun stop() {
         serverJob?.cancel()
-        try { serverSocket?.close() } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        try { serverSocket?.close() } catch (e: Exception) { Log.v("PinkProxy", "Stop socket close error: ${e.message}") }
         serverSocket = null
     }
 
@@ -183,14 +191,19 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     try {
                         output.write("HTTP/1.1 502 Bad Gateway\r\n\r\n".toByteArray())
                         output.flush()
-                    } catch (e: Throwable) {
-                        Log.v("PinkProxy", "Failed to close client in HTTP Proxy: ${e.message}")
+                    } catch (e: Exception) {
+                        Log.v("PinkProxy", "Failed to send 502: ${e.message}")
                     }
                 }
             )
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.e("PinkProxy", "HTTP Proxy error for $host:$port", e)
-            try { client.close() } catch (ex: Throwable) {}
+            try { client.close() } catch (ex: Exception) {}
+        } catch (e: Throwable) {
+            Log.e("PinkProxy", "Critical HTTP Proxy error", e)
+            try { client.close() } catch (ex: Exception) {}
         }
     }
 
@@ -211,9 +224,12 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         return
                     }
                 }
-            } catch (e: Throwable) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 Log.v("PinkProxy", "UID check exception: ${e.message}")
+            } catch (e: Throwable) {
+                Log.v("PinkProxy", "Critical UID check error")
             }
         }
 
@@ -343,7 +359,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 forcedStrategy = forcedStrategy,
                 onConnectSuccess = {
                     client.soTimeout = 0 // Remove timeout for the tunneled connection
-                    try { client.keepAlive = true } catch (e: Throwable) {}
+                    try { client.keepAlive = true } catch (e: Exception) { Log.v("PinkProxy", "Keepalive error: ${e.message}") }
                     output.write(SOCKS5_CONNECT_SUCCESS)
                     output.flush()
                 },
@@ -356,21 +372,22 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                         }
                         output.write(byteArrayOf(5, errByte, 0, 1, 0, 0, 0, 0, 0, 0))
                         output.flush()
-                    } catch (e: Throwable) {
+                    } catch (e: Exception) {
                         Log.v("PinkProxy", "Failed to send SOCKS5 error response: ${e.message}")
                     }
                 }
             )
 
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: java.io.IOException) {
+            Log.v("PinkProxy", "Client I/O error: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("PinkProxy", "Client handling error from ${client.remoteSocketAddress}", e)
         } catch (e: Throwable) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            if (e !is java.io.EOFException && e !is java.net.SocketException) {
-                Log.e("PinkProxy", "Client handling error from ${client.remoteSocketAddress}", e)
-            } else {
-                Log.v("PinkProxy", "Client disconnected: ${e.message}")
-            }
+            Log.e("PinkProxy", "Critical client handling error", e)
         } finally {
-            try { client.close() } catch (ex: Throwable) {
+            try { client.close() } catch (ex: Exception) {
                 Log.v("PinkProxy", "Failed to close client: ${ex.message}")
             }
         }

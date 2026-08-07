@@ -76,8 +76,12 @@ object ServiceChecker {
             _lastCheckTime.value = System.currentTimeMillis()
             
             handlePanicLogic(results, finalInternet)
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.e("ServiceChecker", "Check failed: ${e.message}")
+        } catch (e: Throwable) {
+            Log.e("ServiceChecker", "Critical checker error", e)
         } finally {
             isProbing.set(false)
             _isProbingState.value = false

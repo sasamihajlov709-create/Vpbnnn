@@ -153,27 +153,35 @@ class PinkVpnService : VpnService() {
                         proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
                         proxyServer?.start()
                     } else if (System.currentTimeMillis() % 300000 < delayMs) { // Every 5 mins
-                        try {
-                            val s = java.net.Socket()
-                            s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1000)
-                            s.close()
-                            
-                            // If proxy is alive, also run background diagnostic occasionally
-                            if (System.currentTimeMillis() % 600000 < delayMs) {
-                                engineScope.launch {
+                        val s = java.net.Socket()
+                    try {
+                        s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1000)
+                        s.close()
+                        
+                        // If proxy is alive, also run background diagnostic occasionally
+                        if (System.currentTimeMillis() % 600000 < delayMs) {
+                            engineScope.launch {
+                                try {
                                     val health = DiagnosticManager.runFullDiagnostic()
                                     if (!health.tcpOk || !health.dnsOk) {
                                         ProxyStats.logRecovery("Health Warning: ${health.recommendation}")
                                     }
+                                } catch (e: Exception) {
+                                    if (e is CancellationException) throw e
+                                    Log.e("PinkVpnService", "Diagnostic check failed: ${e.message}")
                                 }
                             }
+                        }
                     } catch (e: java.io.IOException) {
                         ProxyStats.logRecovery("Watchdog: Proxy server unresponsive (${e.message}). Restarting...")
                         stopVpnInternal()
                         delay(500)
                         startVpnInternal()
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         Log.e("PinkVpnService", "Watchdog diagnostic error", e)
+                    } finally {
+                        try { s.close() } catch (e: Exception) {}
                     }
                     }
                     
@@ -185,9 +193,11 @@ class PinkVpnService : VpnService() {
                     lastBytes = currentBytes
                     lastDnsFailures = dnsFailures
                 } catch (e: CancellationException) {
-                    break
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("PinkVpnService", "Watchdog loop error", e)
                 } catch (e: Throwable) {
-                    Log.e("PinkVpnService", "Watchdog error", e)
+                    Log.e("PinkVpnService", "Critical Watchdog error", e)
                 }
             }
         }
@@ -301,8 +311,12 @@ class PinkVpnService : VpnService() {
                         _isRunning.value = false
                         VpnRuntimeState.updateState(VpnLifecycleState.STOPPING)
                         stopSelf()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e("PinkVpnService", "Stop service error", e)
                     } catch (e: Throwable) {
-                        Log.e("PinkVpnService", "Stop error", e)
+                        Log.e("PinkVpnService", "Critical Stop service error", e)
                     }
                 }
             }
@@ -314,8 +328,12 @@ class PinkVpnService : VpnService() {
                 try {
                     ProxyStats.logRecovery("Strategy Changed: Applied dynamically & instantly")
                     showNotification()
-                } catch (e: Throwable) {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     Log.e("PinkVpnService", "Change strategy error", e)
+                } catch (e: Throwable) {
+                    Log.e("PinkVpnService", "Critical Change strategy error", e)
                 }
             }
             return START_STICKY
@@ -330,8 +348,12 @@ class PinkVpnService : VpnService() {
                         delay(500) // Gap for OS cleanup
                         showNotification()
                         startVpnInternal()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e("PinkVpnService", "Restart internal error", e)
                     } catch (e: Throwable) {
-                        Log.e("PinkVpnService", "Restart error", e)
+                        Log.e("PinkVpnService", "Critical Restart internal error", e)
                     }
                 }
             }
@@ -344,8 +366,14 @@ class PinkVpnService : VpnService() {
             serviceLock.withLock {
                 try {
                     startVpnInternal()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("PinkVpnService", "Start action error", e)
+                    VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Start failed: ${e.message}")
                 } catch (e: Throwable) {
-                    Log.e("PinkVpnService", "Start error", e)
+                    Log.e("PinkVpnService", "Critical Start error", e)
+                    VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Critical Start failure")
                 }
             }
         }
@@ -492,15 +520,25 @@ class PinkVpnService : VpnService() {
                 try {
                     engine.Engine.start()
                     Log.i("PinkVpnService", "tun2socks stopped naturally")
-                } catch (e: Throwable) {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     Log.e("PinkVpnService", "tun2socks run-time error", e)
-                    VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Transport engine stopped unexpectedly: ${e.localizedMessage}")
+                    VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Transport engine error: ${e.localizedMessage}")
+                } catch (e: Throwable) {
+                    Log.e("PinkVpnService", "Critical tun2socks run-time error", e)
+                    VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Transport engine crashed")
                 }
             }
             Log.i("PinkVpnService", "tun2socks started on fd $fd")
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.e("PinkVpnService", "Failed to start tun2socks", e)
-            VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Failed to initialize transport engine (tun2socks)")
+            VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Transport engine init failed: ${e.localizedMessage}")
+        } catch (e: Throwable) {
+            Log.e("PinkVpnService", "Critical tun2socks start error", e)
+            VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Transport engine critical failure")
         }
     }
 
@@ -539,9 +577,13 @@ class PinkVpnService : VpnService() {
             serviceLock.withLock {
                 try {
                     stopVpnInternal()
-                } catch (e: Throwable) {
-                    Log.e("PinkVpnService", "Stop internal error", e)
-                }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e("PinkVpnService", "Stop internal error", e)
+        } catch (e: Throwable) {
+            Log.e("PinkVpnService", "Critical Stop internal error", e)
+        }
             }
         }
     }

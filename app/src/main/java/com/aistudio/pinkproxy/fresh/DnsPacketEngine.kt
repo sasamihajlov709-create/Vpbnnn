@@ -175,6 +175,8 @@ object DnsPacketEngine {
             android.util.Log.v("DnsPacketEngine", "Invalid address in DNS response: ${e.message}")
         } catch (e: Exception) {
             android.util.Log.e("DnsPacketEngine", "Error parsing DNS response", e)
+        } catch (e: Throwable) {
+            android.util.Log.e("DnsPacketEngine", "Critical DNS parsing error", e)
         }
         return ips
     }
@@ -239,7 +241,10 @@ object DnsPacketEngine {
                                 paramsProcessed++
                             }
                         }
+                    } catch (e: Exception) {
+                        android.util.Log.v("DnsPacketEngine", "HTTPS record param error: ${e.message}")
                     } catch (e: Throwable) {
+                        android.util.Log.v("DnsPacketEngine", "Critical HTTPS record error")
                     } finally {
                         bb.position(minOf(startPos + rdLen, length))
                     }
@@ -253,6 +258,8 @@ object DnsPacketEngine {
             android.util.Log.v("DnsPacketEngine", "Invalid address in detailed DNS response: ${e.message}")
         } catch (e: Exception) {
             android.util.Log.e("DnsPacketEngine", "Error parsing detailed DNS response", e)
+        } catch (e: Throwable) {
+            android.util.Log.e("DnsPacketEngine", "Critical detailed DNS parsing error", e)
         }
         return records
     }

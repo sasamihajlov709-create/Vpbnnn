@@ -1,6 +1,7 @@
 package com.aistudio.pinkproxy.fresh
 
 import android.net.VpnService
+import android.util.Log
 import java.net.InetAddress
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -29,7 +30,10 @@ object UdpDnsProtocols {
             socket.receive(responsePacket)
             
             DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
+        } catch (e: java.net.SocketTimeoutException) {
+            emptyList()
         } catch (e: Exception) {
+            Log.v("UdpDnsProtocols", "UDP DNS query failed for $host via $dnsIp: ${e.message}")
             emptyList()
         } finally {
             socket?.close()
@@ -72,10 +76,13 @@ object TcpDnsProtocols {
                 read += r
             }
             DnsPacketEngine.parseDnsResponse(response, read)
+        } catch (e: java.net.SocketTimeoutException) {
+            emptyList()
         } catch (e: Exception) {
+            Log.v("TcpDnsProtocols", "TCP DNS query failed for $host via $dnsIp: ${e.message}")
             emptyList()
         } finally {
-            try { socket?.close() } catch (e: Exception) {}
+            try { socket?.close() } catch (e: Exception) { Log.v("TcpDnsProtocols", "Socket close error: ${e.message}") }
         }
     }
 }
@@ -104,6 +111,7 @@ object DohDnsProtocols {
                 return@withContext DnsPacketEngine.parseDnsResponseDetailed(body, body.size)
             }
         } catch (e: Exception) {
+            Log.v("DohDnsProtocols", "DoH query failed for $host via $dohUrl: ${e.message}")
             emptyList()
         }
     }
@@ -134,7 +142,10 @@ object DohDnsProtocols {
                 try {
                     val res = queryDoh(host, url, vpnService, type)
                     channel.send(res)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
+                    Log.v("DohDnsProtocols", "Racing DoH failed for $url: ${e.message}")
                     channel.send(emptyList())
                 }
             }

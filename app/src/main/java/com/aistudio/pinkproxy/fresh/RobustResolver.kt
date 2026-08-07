@@ -211,7 +211,13 @@ object RobustResolver {
                     try { 
                         delay(rnd.nextLong(10, 100))
                         DnsProtocols.queryUdpDnsShadow(shadow, "8.8.8.8", vpnService) 
-                    } catch (e: Throwable) {}
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.v("RobustResolver", "Fake query error: ${e.message}")
+                } catch (e: Throwable) {
+                    Log.v("RobustResolver", "Critical fake query error")
+                }
                 }
             }
         }
@@ -227,7 +233,13 @@ object RobustResolver {
                 if (httpsRecords.isNotEmpty()) {
                     DnsCacheManager.putEchSupport(host, true)
                 }
-            } catch (e: Throwable) {}
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.v("RobustResolver", "ECH check error: ${e.message}")
+            } catch (e: Throwable) {
+                Log.v("RobustResolver", "Critical ECH check error")
+            }
             emptyList()
         }
         val fallbackDns: suspend () -> List<InetAddress> = {
@@ -271,11 +283,19 @@ object RobustResolver {
                 if (group.isEmpty()) continue
                 group.forEach { query ->
                     launch {
-                        val res = try { query() } catch (e: Throwable) {
-                            if (e is CancellationException) throw e
+                        val res = try { query() } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            emptyList()
+                        } catch (e: Throwable) {
+                            Log.e("RobustResolver", "Critical query failure", e)
                             emptyList()
                         }
-                        try { channel.send(res) } catch (e: Throwable) {}
+                        try { channel.send(res) } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
+                        }
                     }
                 }
 
@@ -284,11 +304,15 @@ object RobustResolver {
 
             // Finally launch emergency fallback if nothing worked after staggered starts
             launch {
-                val res = try { fallbackDns() } catch (e: Throwable) {
-                    if (e is CancellationException) throw e
+                val res = try { fallbackDns() } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    emptyList()
+                } catch (e: Throwable) {
                     emptyList()
                 }
-                try { channel.send(res) } catch (e: Throwable) {}
+                try { channel.send(res) } catch (e: Exception) {
+                } catch (e: Throwable) {}
             }
         }
         
@@ -298,9 +322,13 @@ object RobustResolver {
         
         try {
             while (completed < queries.size) {
-                val res = try { withTimeout(5000L) { channel.receive() } } catch (e: Throwable) { 
-                    if (e !is TimeoutCancellationException && e is CancellationException) throw e
-                    emptyList() 
+                val res = try { withTimeout(5000L) { channel.receive() } } catch (e: CancellationException) {
+                    if (e !is TimeoutCancellationException) throw e
+                    emptyList()
+                } catch (e: Exception) {
+                    emptyList()
+                } catch (e: Throwable) {
+                    emptyList()
                 }
                 if (res.isNotEmpty()) {
                     // Check if any of these were detailed records with TTL
