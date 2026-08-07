@@ -239,8 +239,10 @@ object UdpTransportHandler {
         }
     }
 
+    private val udpSessionCache = ConcurrentHashMap<String, Long>()
+
     fun clearBuffers() {
-        // Shared buffers cleanup if any
+        udpSessionCache.clear()
     }
 
     private fun isQuicPacket(port: Int, payload: ByteArray): Boolean {

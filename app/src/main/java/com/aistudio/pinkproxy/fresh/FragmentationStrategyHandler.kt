@@ -14,6 +14,7 @@ object FragmentationStrategyHandler {
         rnd: ThreadLocalRandom,
         host: String,
         strategy: BypassStrategy,
+        config: SessionConfig,
         effectiveDelay: Long
     ) {
         if (strategy == BypassStrategy.TCP_BYTE_FRAG) {
@@ -30,24 +31,33 @@ object FragmentationStrategyHandler {
         if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE || 
             strategy == BypassStrategy.TLS_SNI_FRAGMENT || strategy == BypassStrategy.TLS_SNI_SPLIT || 
             strategy == BypassStrategy.TLS_SNI_JITTER_SPLIT || strategy == BypassStrategy.TLS_RECORD_FRAGMENTATION || 
-            strategy == BypassStrategy.ECH_FRAG) {
+            strategy == BypassStrategy.ECH_FRAG || strategy == BypassStrategy.FRAGMENT_MULTI) {
             
             if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
                 val sniPos = TlsParser.findSni(data, length)
                 if (sniPos > 0) {
-                    val split1 = sniPos - rnd.nextInt(1, 3)
+                    val split1 = if (config.frag1 in 1 until length) config.frag1 else (sniPos - rnd.nextInt(1, 3)).coerceIn(1, length - 1)
                     if (split1 > 0) {
                         output.write(data, 0, split1)
                         output.flush()
                         val delayVal = if (strategy == BypassStrategy.TLS_SNI_JITTER_SPLIT) rnd.nextLong(10, 50) else effectiveDelay.coerceAtLeast(1L)
                         delay(delayVal)
                         
-                        if (strategy == BypassStrategy.SNI_TRIPLE) {
-                            val split2 = split1 + rnd.nextInt(2, 6).coerceAtMost(length - split1)
+                        if (strategy == BypassStrategy.SNI_TRIPLE || strategy == BypassStrategy.FRAGMENT_MULTI) {
+                            val split2 = if (config.frag2 > split1 && config.frag2 < length) config.frag2 else (split1 + rnd.nextInt(2, 6)).coerceIn(split1 + 1, length - 1)
                             output.write(data, split1, split2 - split1)
                             output.flush()
                             delay(effectiveDelay.coerceAtLeast(1L))
-                            output.write(data, split2, length - split2)
+
+                            if (config.frag3 > split2 && config.frag3 < length) {
+                                val split3 = config.frag3
+                                output.write(data, split2, split3 - split2)
+                                output.flush()
+                                delay(effectiveDelay.coerceAtLeast(1L))
+                                output.write(data, split3, length - split3)
+                            } else {
+                                output.write(data, split2, length - split2)
+                            }
                         } else {
                             output.write(data, split1, length - split1)
                         }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -48,15 +49,18 @@ object DpiEngine {
 
     private var lastGlobalReset = System.currentTimeMillis()
     private var lastPanicTime = 0L
-    val isPanicMode = MutableStateFlow(false)
+    val isPanicMode: StateFlow<Boolean> get() = BypassConfig.isPanicModeFlow
 
     private var optimizerJob: Job? = null
+    private var microProbeJob: Job? = null
 
     fun start(context: Context) {
+        stop()
         initStrategyChains()
         DpiStorage.loadScores(context)
 
-        scope.launch {
+        microProbeJob?.cancel()
+        microProbeJob = scope.launch {
             while (isActive) {
                 delay(TimeUnit.MINUTES.toMillis(5))
                 if (ProxyStats.censorshipIntensity.value > 75) {
@@ -66,7 +70,8 @@ object DpiEngine {
             }
         }
 
-                    optimizerJob = scope.launch {
+        optimizerJob?.cancel()
+        optimizerJob = scope.launch {
             while (isActive) {
                 delay(30000)
                 try {
@@ -84,6 +89,8 @@ object DpiEngine {
     fun stop() {
         optimizerJob?.cancel()
         optimizerJob = null
+        microProbeJob?.cancel()
+        microProbeJob = null
     }
     
     fun clearCircuitBreakers() {
@@ -133,12 +140,12 @@ object DpiEngine {
     }
 
     fun enterPanicMode() {
-        if (isPanicMode.value) return
-        isPanicMode.value = true
+        if (BypassConfig.isPanicMode) return
+        BypassConfig.setPanicMode(true)
         Log.e("DpiEngine", "ENTERING PANIC MODE")
         scope.launch {
             delay(TimeUnit.MINUTES.toMillis(15))
-            isPanicMode.value = false
+            BypassConfig.setPanicMode(false)
         }
     }
 

@@ -260,5 +260,12 @@ object DotDnsProtocols {
         }
     }
 
-    fun clearPool() {}
+    private val socketPool = java.util.concurrent.ConcurrentHashMap<String, java.net.Socket>()
+
+    fun clearPool() {
+        socketPool.values.forEach { socket ->
+            try { socket.close() } catch (e: Exception) {}
+        }
+        socketPool.clear()
+    }
 }

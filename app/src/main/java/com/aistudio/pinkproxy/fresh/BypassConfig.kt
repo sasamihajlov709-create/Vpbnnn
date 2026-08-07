@@ -213,12 +213,20 @@ object BypassConfig {
 
     fun getBestStrategyForHost(host: String): BypassStrategy {
         forcedBenchmarkStrategy?.let { return it }
-        if (!isAutoTuning) return _strategy.value
+        if (!isAutoTuning) {
+            val base = _strategy.value
+            return if (isStrictBypassMode && base == BypassStrategy.DIRECT) BypassStrategy.SNI_SPLIT else base
+        }
         val now = System.currentTimeMillis()
         hostStrategyMemory[host]?.let { (remembered, expiry) ->
-            if (now < expiry) return remembered
+            if (now < expiry) {
+                return if (isStrictBypassMode && remembered == BypassStrategy.DIRECT) BypassStrategy.SNI_SPLIT else remembered
+            }
         }
-        val best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host)
+        var best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host)
+        if (isStrictBypassMode && best == BypassStrategy.DIRECT) {
+            best = BypassStrategy.SNI_SPLIT
+        }
         hostStrategyMemory[host] = best to (now + SESSION_TTL)
         
         if (java.util.concurrent.ThreadLocalRandom.current().nextInt(100) < 5) {
@@ -268,14 +276,21 @@ object BypassConfig {
     fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long): SessionConfig {
         val rnd = ThreadLocalRandom.current()
         val intensity = ProxyStats.censorshipIntensity.value
-        val effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) DpiEngine.getBestExtremeStrategy(host) else strategy
-        val f1 = DpiEngine.getRecommendedFragSize()
+        var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) DpiEngine.getBestExtremeStrategy(host) else strategy
+        if (isStrictBypassMode && effectiveStrategy == BypassStrategy.DIRECT) {
+            effectiveStrategy = BypassStrategy.SNI_SPLIT
+        }
+        val f1 = if (frag1 > 0) frag1 else DpiEngine.getRecommendedFragSize()
+        val f2 = if (frag2 > 0) frag2 else (f1 + rnd.nextInt(1, 4))
+        val f3 = if (frag3 > 0) frag3 else (f2 + rnd.nextInt(1, 4))
         val baseDelay = DpiEngine.getRecommendedDelay()
         val d1 = if (rtt > 0) Math.max(baseDelay, Math.min(rtt / 4, 150L)) else baseDelay
         val ttl = if (fakeTtl == 0) rnd.nextInt(3, 8) else fakeTtl
         return SessionConfig(
             strategy = effectiveStrategy,
             frag1 = f1,
+            frag2 = f2,
+            frag3 = f3,
             delay1 = d1,
             fakeTtl = ttl,
             useIPv6 = host.contains(":") || (rnd.nextInt(100) < 15 && intensity > 60),

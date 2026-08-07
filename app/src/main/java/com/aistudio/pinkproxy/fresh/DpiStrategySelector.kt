@@ -52,7 +52,9 @@ object DpiStrategySelector {
         
         val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
         val validStrategies = catScores.entries.filter { (strat, _) ->
-            (DpiEngine.circuitBreakers[strat] ?: 0L) < now && (hostBlacklist?.get(strat) ?: 0L) < now
+            (DpiEngine.circuitBreakers[strat] ?: 0L) < now && 
+            (hostBlacklist?.get(strat) ?: 0L) < now &&
+            (!BypassConfig.isStrictBypassMode || strat != BypassStrategy.DIRECT)
         }
         
         if (validStrategies.isEmpty()) {

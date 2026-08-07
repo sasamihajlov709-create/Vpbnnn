@@ -114,7 +114,10 @@ object DnsProtocols {
     suspend fun queryDohSmuggling(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
         DohDnsProtocols.queryDohSmuggling(host, vpnService, type)
 
-    fun clearPool() = DotDnsProtocols.clearPool()
+    fun clearPool() {
+        DotDnsProtocols.clearPool()
+        DnsCacheManager.clearAll()
+    }
 
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
         DotDnsProtocols.queryDot(host, dotIp, vpnService, type)

@@ -58,7 +58,7 @@ object BypassApplier {
             StrategyFamily.HTTP -> HttpStrategyHandler.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
             StrategyFamily.TLS -> TlsStrategyHandler.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
             StrategyFamily.TCP -> TcpBasicStrategyHandler.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.FRAGMENTATION -> FragmentationStrategyHandler.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, effectiveDelay)
+            StrategyFamily.FRAGMENTATION -> FragmentationStrategyHandler.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config, effectiveDelay)
             StrategyFamily.ADAPTIVE -> AdaptiveStrategyHandler.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
             StrategyFamily.TIMING -> TimingStrategyHandler.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
             else -> {
