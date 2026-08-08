@@ -116,7 +116,9 @@ object DnsCacheManager {
         val now = System.currentTimeMillis()
         dnsCache[cacheKey]?.let { (addresses, expiry) ->
             if (now < expiry) return getSortedIps(addresses)
-            else dnsCache.remove(cacheKey)
+            else if (ProxyStats.censorshipIntensity.value > 60 || BypassConfig.censorshipLevel > 50) {
+                return getSortedIps(addresses)
+            } else dnsCache.remove(cacheKey)
         }
         return null
     }
@@ -137,7 +139,15 @@ object DnsCacheManager {
     fun put(host: String, ips: List<InetAddress>, ttlMs: Long = CACHE_TTL_MS, type: Int = 1) {
         if (ips.isEmpty()) return
         val cacheKey = if (type == 1) host else "$host:$type"
-        dnsCache[cacheKey] = ips to (System.currentTimeMillis() + ttlMs)
+        val isCriticalDomain = isCriticalHost(host)
+        val finalTtl = if (isCriticalDomain) Math.max(ttlMs, 2 * 3600 * 1000L) else ttlMs
+        dnsCache[cacheKey] = ips to (System.currentTimeMillis() + finalTtl)
+    }
+
+    private fun isCriticalHost(host: String): Boolean {
+        val lHost = host.lowercase()
+        val critical = listOf("youtube.com", "googlevideo.com", "google.com", "telegram.org", "t.me", "github.com", "instagram.com", "discord.com", "x.com", "twitter.com")
+        return critical.any { lHost == it || lHost.endsWith(".$it") }
     }
 
     fun getCachedDetailed(host: String, type: Int = 1): List<DnsPacketEngine.DnsRecord>? {
