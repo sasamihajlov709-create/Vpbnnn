@@ -131,7 +131,20 @@ object DnsCacheManager {
         val cacheKey = if (type == 1) host else "$host:$type"
         val now = System.currentTimeMillis()
         dnsCache[cacheKey]?.let { (addresses, expiry) ->
-            if (now < expiry + maxStaleMs) return getSortedIps(addresses)
+            if (now < expiry) {
+                return getSortedIps(addresses)
+            } else if (now < expiry + maxStaleMs) {
+                // Stale-While-Revalidate: Return stale cached IPs immediately, and trigger async background update
+                ProxyDispatcher.mainScope.launch {
+                    try {
+                        Log.d("DnsCacheManager", "Stale DNS hit for $host. Triggering background revalidation...")
+                        RobustResolver.resolve(host, null, type)
+                    } catch (e: Exception) {
+                        Log.v("DnsCacheManager", "Async revalidation failed for $host: ${e.message}")
+                    }
+                }
+                return getSortedIps(addresses)
+            }
         }
         return getEmergencyFallback(host)
     }

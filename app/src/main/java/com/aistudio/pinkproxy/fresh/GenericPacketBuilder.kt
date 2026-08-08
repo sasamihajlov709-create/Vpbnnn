@@ -7,12 +7,42 @@ import java.util.concurrent.ThreadLocalRandom
 object GenericPacketBuilder {
 
     fun buildQuicInitial(scid: String? = null): ByteArray {
-        return NoiseGenerator.buildUdpNoise(1200).apply {
-            this[0] = 0xC3.toByte()
-            val buf = ByteBuffer.wrap(this)
-            buf.position(1)
-            buf.putInt(0x00000001)
-        }
+        val rnd = ThreadLocalRandom.current()
+        val packet = ByteArray(1200)
+        val buf = ByteBuffer.wrap(packet)
+        
+        // Header Form: 1 (Long), Fixed Bit: 1, Packet Type: 00 (Initial), Reserved Bits: 00, Packet Number Length: 00 (1 byte) -> 0xC0
+        buf.put(0xC0.toByte())
+        buf.putInt(0x00000001) // QUIC Version 1
+        
+        // DCID length: 8
+        buf.put(8.toByte())
+        val dcid = ByteArray(8); rnd.nextBytes(dcid); buf.put(dcid)
+        
+        // SCID length: 8
+        buf.put(8.toByte())
+        val scidBytes = scid?.toByteArray(StandardCharsets.UTF_8)?.take(8)?.toByteArray() ?: ByteArray(8).also { rnd.nextBytes(it) }
+        buf.put(scidBytes)
+        if (scidBytes.size < 8) buf.put(ByteArray(8 - scidBytes.size))
+        
+        // Token Length: 0 (varint 0x00)
+        buf.put(0.toByte())
+        
+        // Payload Length: 1160 bytes (varint 2-byte encoding)
+        val payloadLen = 1160
+        buf.put(((payloadLen shr 8) or 0x40).toByte())
+        buf.put((payloadLen and 0xFF).toByte())
+        
+        // Packet Number: 0x00
+        buf.put(0.toByte())
+        
+        // Fill remainder with random encrypted payload simulation / PADDING frames (0x00)
+        val payloadStart = buf.position()
+        val payloadBytes = ByteArray(packet.size - payloadStart)
+        rnd.nextBytes(payloadBytes)
+        buf.put(payloadBytes)
+        
+        return packet
     }
 
     fun buildDtlsClientHello(): ByteArray {

@@ -317,24 +317,32 @@ object TcpBasicStrategyHandler {
                 return
             }
             BypassStrategy.TCP_ZERO_WINDOW_DESYNC -> {
-                TtlHelper.setWindowSize(socket, 0)
-                delay(rnd.nextLong(10, 40))
-                TtlHelper.setWindowSize(socket, 65535)
-                output.write(data, 0, length)
+                TtlHelper.setWindowSize(socket, 1)
+                output.write(data, 0, minOf(1, length))
                 output.flush()
+                delay(rnd.nextLong(30, 90))
+                TtlHelper.setWindowSize(socket, 65535)
+                if (length > 1) {
+                    output.write(data, 1, length - 1)
+                    output.flush()
+                }
                 return
             }
             BypassStrategy.TCP_OVERLAP, BypassStrategy.TCP_OVERLAP_SKEW, BypassStrategy.TCP_SEGMENT_OVERLAP -> {
-                if (length > 2) {
-                    output.write(data, 0, 2)
-                    output.flush()
-                    delay(rnd.nextLong(1, 3))
-                    output.write(data, 2, length - 2)
-                    output.flush()
-                } else {
-                    output.write(data, 0, length)
-                    output.flush()
-                }
+                val sniPos = if (length > 44 && data[0] == 0x16.toByte()) TlsParser.findSni(data, length) else 10
+                val splitPos = if (sniPos > 0 && sniPos < length) sniPos else (length / 2).coerceAtLeast(1)
+                
+                // 1. Send fake overlapping segment with short TTL to poison DPI middlebox state
+                val fakeOverlap = FakePacketHelper.getSmallNoise(splitPos)
+                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
+                output.write(fakeOverlap)
+                output.flush()
+                delay(rnd.nextLong(1, 4))
+                
+                // 2. Send real payload with valid TTL
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                output.write(data, 0, length)
+                output.flush()
                 return
             }
             BypassStrategy.TCP_WINDOW_SHAKE, BypassStrategy.TCP_WINDOW_RESIZE_PACING, BypassStrategy.TCP_WINDOW_SHRINK, BypassStrategy.TCP_WINDOW_STALL -> {

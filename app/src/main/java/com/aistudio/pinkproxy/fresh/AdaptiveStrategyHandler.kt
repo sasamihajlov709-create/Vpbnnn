@@ -98,18 +98,28 @@ object AdaptiveStrategyHandler {
         ProxyStats.logTraffic("Triggering ByeByeDPI Extreme for $host")
         val sniPos = TlsParser.findSni(data, length)
         val splitPos = if (sniPos > 0) sniPos else (length / 2).coerceAtLeast(1)
-        
         val fakeTtl = config.fakeTtl.takeIf { it > 0 } ?: StrategyUtils.getFakeTtl(host, rnd)
+
+        // 1. Send fake decoy payload to confuse DPI state tracking
+        val fakeDecoy = FakePacketHelper.buildRealisticHttp2Header()
+        TtlHelper.setTtl(socket, fakeTtl)
+        output.write(fakeDecoy)
+        output.flush()
+        delay(rnd.nextLong(1, 4))
+
+        // 2. Out-of-order segment desync with low TTL
         TtlHelper.setTtl(socket, fakeTtl)
         output.write(data, splitPos, length - splitPos)
         output.flush()
-        delay(rnd.nextLong(2, 10))
+        delay(rnd.nextLong(2, 8))
         
+        // 3. Send original first part with normal TTL
         TtlHelper.setTtl(socket, 64)
         output.write(data, 0, splitPos)
         output.flush()
-        delay(rnd.nextLong(5, 15))
+        delay(rnd.nextLong(3, 10))
         
+        // 4. Send original second part with normal TTL
         output.write(data, splitPos, length - splitPos)
         output.flush()
     }
@@ -117,15 +127,20 @@ object AdaptiveStrategyHandler {
     private suspend fun handleZapretExtreme(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
         ProxyStats.logTraffic("Triggering Zapret Extreme for $host")
         if (TlsParser.isClientHello(data, length)) {
+            val fakeTtl = StrategyUtils.getFakeTtl(host, rnd)
             var pos = 0
             while (pos < length) {
-                val sz = if (pos == 0) rnd.nextInt(1, 5) else rnd.nextInt(5, 40)
+                val sz = if (pos == 0) rnd.nextInt(1, 4) else rnd.nextInt(4, 30)
                 val chunk = sz.coerceAtMost(length - pos)
                 
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(data, pos, chunk)
+                // Inject fake packet with scrambled payload to poison middlebox reassembler
+                val fakeNoise = FakePacketHelper.getSmallNoise(chunk)
+                TtlHelper.setTtl(socket, fakeTtl)
+                output.write(fakeNoise)
                 output.flush()
-                delay(rnd.nextLong(1, 5))
+                delay(rnd.nextLong(1, 3))
+
+                // Send real payload chunk with normal TTL
                 TtlHelper.setTtl(socket, 64)
                 output.write(data, pos, chunk)
                 output.flush()
