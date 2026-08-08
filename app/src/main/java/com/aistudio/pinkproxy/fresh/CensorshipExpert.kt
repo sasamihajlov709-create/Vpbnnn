@@ -97,9 +97,15 @@ object CensorshipExpert {
     }
 
     private suspend fun evaluateBestStrategies() {
-        Log.i("CensorshipExpert", "Evaluating optimal strategies proactively...")
-        val testHost = "www.google.com"
-        val testPort = 443
+        Log.i("CensorshipExpert", "Evaluating optimal strategies proactively with TLS ServerHello verification...")
+        
+        val probeTargets = listOf(
+            Pair("www.google.com", HostCategory.OTHER),
+            Pair("www.youtube.com", HostCategory.STREAMING),
+            Pair("api.telegram.org", HostCategory.MESSENGER),
+            Pair("chatgpt.com", HostCategory.AI)
+        )
+        
         val strategiesToTest = listOf(
             BypassStrategy.SNI_SPLIT,
             BypassStrategy.TCP_OOB_DESYNC,
@@ -117,57 +123,63 @@ object CensorshipExpert {
         )
         
         coroutineScope {
-            strategiesToTest.forEach { strat ->
-                launch {
-                    val start = System.currentTimeMillis()
-                    var probeSocket: Socket? = null
-                    try {
-                        val ips = RobustResolver.resolve(testHost)
-                        if (ips.isNotEmpty()) {
-                            val targetAddr = ips.random()
-                            val config = BypassConfig.getSessionConfig(testHost, strat, 100)
-                            val hello = FakePacketHelper.buildRealisticTlsHello(testHost)
-                            
-                            probeSocket = Socket()
-                            BypassConfig.activeVpnService?.protect(probeSocket)
-                            probeSocket.soTimeout = 4000
-                            probeSocket.connect(InetSocketAddress(targetAddr, testPort), 3000)
-                            
-                            BypassConfig.applyBypass(probeSocket, probeSocket.getOutputStream(), hello, hello.size, config, testHost)
-                            
-                            // Check if connection is still alive after sending SNI (waiting for ServerHello or just checking socket state)
-                            val buffer = ByteArray(1)
-                            val read = withContext(Dispatchers.IO) {
-                                try { 
-                                    probeSocket.getInputStream().read(buffer) 
-                                } catch(e: java.net.SocketTimeoutException) {
-                                    -1 
-                                } catch(e: java.io.IOException) {
-                                    -1
-                                } catch(e: Exception) {
-                                    -1
+            probeTargets.forEach { (testHost, category) ->
+                strategiesToTest.shuffled().take(5).forEach { strat ->
+                    launch {
+                        val start = System.currentTimeMillis()
+                        var probeSocket: Socket? = null
+                        try {
+                            val ips = RobustResolver.resolve(testHost)
+                            if (ips.isNotEmpty()) {
+                                val targetAddr = ips.random()
+                                val config = BypassConfig.getSessionConfig(testHost, strat, 100)
+                                val hello = FakePacketHelper.buildRealisticTlsHello(testHost)
+                                
+                                probeSocket = Socket()
+                                BypassConfig.activeVpnService?.protect(probeSocket)
+                                probeSocket.soTimeout = 3500
+                                probeSocket.connect(InetSocketAddress(targetAddr, 443), 2500)
+                                
+                                BypassConfig.applyBypass(probeSocket, probeSocket.getOutputStream(), hello, hello.size, config, testHost)
+                                
+                                // Real TLS Handshake Verification: Read first byte from server.
+                                // TLS Record Handshake header starts with byte 0x16 (22)
+                                val buffer = ByteArray(5)
+                                var readBytes = 0
+                                val readSuccess = withContext(Dispatchers.IO) {
+                                    try {
+                                        readBytes = probeSocket.getInputStream().read(buffer)
+                                        readBytes > 0 && buffer[0] == 0x16.toByte()
+                                    } catch (e: Exception) {
+                                        false
+                                    }
+                                }
+                                
+                                val rtt = System.currentTimeMillis() - start
+                                val success = probeSocket.isConnected && readSuccess
+                                
+                                DpiEngine.recordResult(strat, success, category, latencyMs = if (success) rtt else 0)
+                                if (success) {
+                                    Log.d("CensorshipExpert", "Probe SUCCESS: $strat on $testHost ($category) RTT=${rtt}ms")
+                                } else {
+                                    Log.v("CensorshipExpert", "Probe FAIL: $strat on $testHost ($category) readBytes=$readBytes")
                                 }
                             }
-                            
-                            val rtt = System.currentTimeMillis() - start
-                            val success = probeSocket.isConnected && (read != -1 || !probeSocket.isClosed)
-                            
-                            DpiEngine.recordResult(strat, success, HostCategory.OTHER, latencyMs = rtt)
+                        } catch (e: java.net.ConnectException) {
+                            Log.v("CensorshipExpert", "Probe $strat connect failed on $testHost: ${e.message}")
+                            DpiEngine.recordResult(strat, false, category)
+                        } catch (e: java.net.SocketTimeoutException) {
+                            Log.v("CensorshipExpert", "Probe $strat timed out on $testHost")
+                            DpiEngine.recordResult(strat, false, category)
+                        } catch (e: Exception) {
+                            Log.v("CensorshipExpert", "Probe $strat unexpected error on $testHost: ${e.message}")
+                            DpiEngine.recordResult(strat, false, category)
+                        } finally {
+                            try { probeSocket?.close() } catch (e: java.io.IOException) {}
                         }
-                    } catch (e: java.net.ConnectException) {
-                        Log.v("CensorshipExpert", "Probe $strat connect failed: ${e.message}")
-                        DpiEngine.recordResult(strat, false, HostCategory.OTHER)
-                    } catch (e: java.net.SocketTimeoutException) {
-                        Log.v("CensorshipExpert", "Probe $strat timed out")
-                        DpiEngine.recordResult(strat, false, HostCategory.OTHER)
-                    } catch (e: Exception) {
-                        Log.v("CensorshipExpert", "Probe $strat unexpected error: ${e.message}")
-                        DpiEngine.recordResult(strat, false, HostCategory.OTHER)
-                    } finally {
-                        try { probeSocket?.close() } catch (e: java.io.IOException) {}
                     }
+                    delay(150) // Staggered probes
                 }
-                delay(500) // Staggered tests
             }
         }
     }

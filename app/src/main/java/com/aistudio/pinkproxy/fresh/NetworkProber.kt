@@ -62,6 +62,7 @@ object NetworkProber {
     suspend fun checkProxyReachable(proxyPort: Int): Boolean {
         return try {
             val sock = java.net.Socket()
+            try { PinkVpnService.instance?.protect(sock) } catch (e: Throwable) {}
             sock.connect(InetSocketAddress("127.0.0.1", proxyPort), 1000)
             sock.close()
             true

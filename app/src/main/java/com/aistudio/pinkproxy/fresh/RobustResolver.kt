@@ -88,12 +88,16 @@ object RobustResolver {
 
         val cacheKey = if (type == 1) host.lowercase() else "${host.lowercase()}:$type"
         val scope = getScope()
-        val deferred = pendingResolutions.computeIfAbsent(cacheKey) {
-            scope.async {
-                try {
-                    performResolution(host, vpnService, type)
-                } finally {
-                    pendingResolutions.remove(cacheKey)
+        val deferred = synchronized(pendingResolutions) {
+            pendingResolutions.getOrPut(cacheKey) {
+                scope.async {
+                    try {
+                        performResolution(host, vpnService, type)
+                    } finally {
+                        synchronized(pendingResolutions) {
+                            pendingResolutions.remove(cacheKey)
+                        }
+                    }
                 }
             }
         }
@@ -134,13 +138,13 @@ object RobustResolver {
     }
 
     private suspend fun performResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
-        val censorship = BypassConfig.censorshipLevel
+        val censorship = runCatching { BypassConfig.censorshipLevel }.getOrDefault(0)
         if (censorship > 50) {
             return performParallelResolution(host, vpnService, type)
         }
         
-        val isCensored = BypassConfig.isHostCensored(host)
-        val isDirect = BypassConfig.isHostDirect(host)
+        val isCensored = runCatching { BypassConfig.isHostCensored(host) }.getOrDefault(false)
+        val isDirect = runCatching { BypassConfig.isHostDirect(host) }.getOrDefault(false)
 
         // 1. Try Direct if not censored
         if (isDirect && !isCensored) {
@@ -159,7 +163,8 @@ object RobustResolver {
 
         // 2. Try Smart Parallel Resolution (DoH, DoT, Shadow UDP)
         try {
-            if (ProxyStats.censorshipIntensity.value > 95) {
+            val intensity = runCatching { ProxyStats.censorshipIntensity.value }.getOrDefault(0)
+            if (intensity > 95) {
                 val cached = DnsCacheManager.getCached(host, type) ?: DnsCacheManager.getCachedOrStale(host, type)
                 if (cached != null) return cached
             }
@@ -167,7 +172,7 @@ object RobustResolver {
             val par = performParallelResolution(host, vpnService, type)
             if (par.isNotEmpty()) {
                 if (DnsCacheManager.isSuspicious(host, par)) {
-                    ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
+                    runCatching { ProxyStats.recordDpiEvent(DpiType.DNS_POISONING) }
                 } else {
                     val sorted = DnsCacheManager.getSortedIps(par)
                     DnsCacheManager.put(host, sorted, type = type)

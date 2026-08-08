@@ -216,9 +216,16 @@ object RecoveryManager {
                 }
             }
             RecoveryEvent.PROXY_UNREACHABLE -> {
-                recoveryEscalation.set(3)
-                triggerPanic("Proxy unreachable")
-                requestServiceRestart("Proxy crash or unreachable")
+                val currentEsc = recoveryEscalation.get()
+                if (currentEsc < 2) {
+                    recoveryEscalation.incrementAndGet()
+                    Log.w("RecoveryManager", "Proxy unresponsive, attempting proxy server restart (escalation ${currentEsc + 1})")
+                    PinkVpnService.instance?.restartProxyServer()
+                } else {
+                    recoveryEscalation.set(3)
+                    triggerPanic("Proxy unreachable")
+                    requestServiceRestart("Proxy crash or unreachable")
+                }
             }
             RecoveryEvent.TUNNEL_STALL, RecoveryEvent.TCP_STALL, RecoveryEvent.SSL_STALL, RecoveryEvent.CENSORSHIP_STALL -> {
                 val currentEsc = recoveryEscalation.get()

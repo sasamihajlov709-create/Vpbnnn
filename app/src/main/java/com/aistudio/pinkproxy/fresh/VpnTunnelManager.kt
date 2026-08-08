@@ -22,63 +22,74 @@ class VpnTunnelManager(private val service: VpnService) {
         allowBypass: Boolean = false,
         isBlocking: Boolean = true
     ): ParcelFileDescriptor? {
-        val builder = service.Builder()
-            .setSession(sessionName)
-            .setMtu(mtu)
-            .addAddress(addressV4, prefixV4)
-            .addRoute("0.0.0.0", 0)
-            .setBlocking(isBlocking)
+        val candidates = listOf(
+            Pair(addressV4, if (prefixV4 == 24) 32 else prefixV4),
+            Pair("10.233.233.2", 32),
+            Pair("172.19.0.1", 30),
+            Pair("10.0.0.2", 32),
+            Pair("192.168.250.1", 32)
+        ).distinct()
 
-        dnsServers.forEach { dns ->
-            try {
-                builder.addDnsServer(dns)
-            } catch (e: Exception) {
-                Log.e("VpnTunnelManager", "Failed to add DNS server $dns: ${e.message}")
-            }
-        }
+        val ipv6Options = if (includeIpv6) listOf(true, false) else listOf(false)
 
-        if (includeIpv6) {
-            try {
-                builder.addAddress("fd00::2", 64)
-                builder.addRoute("::", 0)
-                builder.addDnsServer("2606:4700:4700::1111")
-                builder.addDnsServer("2001:4860:4860::8888")
-            } catch (e: Exception) {
-                Log.w("VpnTunnelManager", "Failed to add IPv6 route/DNS: ${e.message}")
-            }
-        }
-
-        if (isExcludeMode) {
-            builder.addDisallowedApplication(appPackageName)
-            selectedPackages.forEach { pkg ->
+        for (tryIpv6 in ipv6Options) {
+            for ((addr, prefix) in candidates) {
                 try {
-                    builder.addDisallowedApplication(pkg)
+                    val builder = service.Builder()
+                        .setSession(sessionName)
+                        .setMtu(mtu.coerceIn(1200, 1500))
+                        .addAddress(addr, prefix)
+                        .addRoute("0.0.0.0", 0)
+                        .setBlocking(isBlocking)
+
+                    dnsServers.forEach { dns ->
+                        try {
+                            builder.addDnsServer(dns)
+                        } catch (e: Exception) {
+                            Log.w("VpnTunnelManager", "Failed to add DNS server $dns: ${e.message}")
+                        }
+                    }
+
+                    if (tryIpv6) {
+                        try {
+                            builder.addAddress("fd00::2", 64)
+                            builder.addRoute("::", 0)
+                            builder.addDnsServer("2606:4700:4700::1111")
+                            builder.addDnsServer("2001:4860:4860::8888")
+                        } catch (e: Exception) {
+                            Log.w("VpnTunnelManager", "Failed to setup IPv6: ${e.message}")
+                        }
+                    }
+
+                    if (isExcludeMode) {
+                        try { builder.addDisallowedApplication(appPackageName) } catch (_: Exception) {}
+                        selectedPackages.forEach { pkg ->
+                            try { builder.addDisallowedApplication(pkg) } catch (_: Exception) {}
+                        }
+                    } else {
+                        selectedPackages.filter { it != appPackageName }.forEach { pkg ->
+                            try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
+                        }
+                    }
+
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        try { builder.setMetered(false) } catch (_: Exception) {}
+                    }
+
+                    val descriptor = builder.establish()
+                    if (descriptor != null) {
+                        vpnInterface = descriptor
+                        Log.i("VpnTunnelManager", "TUN Interface established with addr=$addr/$prefix, ipv6=$tryIpv6: $descriptor")
+                        return descriptor
+                    }
                 } catch (e: Exception) {
-                    Log.v("VpnTunnelManager", "Ignored disallowed app: $pkg")
+                    Log.w("VpnTunnelManager", "Establish attempt failed (addr=$addr/$prefix, ipv6=$tryIpv6): ${e.message}")
                 }
             }
-        } else {
-            selectedPackages.filter { it != appPackageName }.forEach { pkg ->
-                try {
-                    builder.addAllowedApplication(pkg)
-                } catch (e: Exception) {
-                    Log.v("VpnTunnelManager", "Ignored allowed app: $pkg")
-                }
-            }
         }
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            builder.setMetered(false)
-        }
-
-        try {
-            vpnInterface = builder.establish()
-            Log.i("VpnTunnelManager", "TUN Interface established: $vpnInterface")
-            return vpnInterface
-        } catch (e: Exception) {
-            Log.e("VpnTunnelManager", "Failed to establish TUN interface: ${e.message}")
-            return null
-        }
+        Log.e("VpnTunnelManager", "Failed to establish TUN interface with all address candidates.")
+        return null
     }
 
     fun getDescriptor(): ParcelFileDescriptor? = vpnInterface

@@ -29,7 +29,8 @@ object ProxyDispatcher {
     }.asCoroutineDispatcher()
 
     val globalHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
-        android.util.Log.e("ProxyDispatcher", "Uncaught coroutine exception", throwable)
+        runCatching { android.util.Log.e("ProxyDispatcher", "Uncaught coroutine exception", throwable) }
+            .onFailure { throwable.printStackTrace() }
     }
 
     val mainScope = kotlinx.coroutines.CoroutineScope(io + kotlinx.coroutines.SupervisorJob() + globalHandler)

@@ -116,7 +116,7 @@ object DnsCacheManager {
         val now = System.currentTimeMillis()
         dnsCache[cacheKey]?.let { (addresses, expiry) ->
             if (now < expiry) return getSortedIps(addresses)
-            else if (ProxyStats.censorshipIntensity.value > 60 || BypassConfig.censorshipLevel > 50) {
+            else if (runCatching { ProxyStats.censorshipIntensity.value > 60 || BypassConfig.censorshipLevel > 50 }.getOrDefault(false)) {
                 return getSortedIps(addresses)
             } else dnsCache.remove(cacheKey)
         }

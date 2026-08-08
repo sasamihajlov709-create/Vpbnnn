@@ -33,9 +33,6 @@ class Socks5ProxyE2ETest {
         vpnService = Robolectric.buildService(PinkVpnService::class.java).create().get()
         ProxyDispatcher.context = Robolectric.setupService(PinkVpnService::class.java)
         
-        mockkObject(ProxyStats)
-        mockkObject(VpnRuntimeState)
-        
         // Start a local mock echo target server
         mockTargetServer = ServerSocket(0)
         mockTargetPort = mockTargetServer!!.localPort
@@ -74,9 +71,10 @@ class Socks5ProxyE2ETest {
 
     @After
     fun teardown() {
-        proxyServer.stop()
+        if (::proxyServer.isInitialized) {
+            proxyServer.stop()
+        }
         mockTargetServer?.close()
-        unmockkAll()
     }
 
     @Test

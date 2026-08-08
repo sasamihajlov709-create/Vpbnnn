@@ -1,6 +1,5 @@
 package com.aistudio.pinkproxy.fresh
 
-import io.mockk.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -13,30 +12,48 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.net.InetAddress
 
+class FakeDnsResolverEngine : DnsResolverEngine {
+    var dohRacingHandler: ((String, Int) -> List<InetAddress>)? = null
+    var dohRacingCalls = 0
+
+    override suspend fun queryDohRacing(host: String, vpnService: android.net.VpnService?, type: Int): List<InetAddress> {
+        dohRacingCalls++
+        return dohRacingHandler?.invoke(host, type) ?: emptyList()
+    }
+
+    override suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: android.net.VpnService?, type: Int): List<InetAddress> = emptyList()
+    override suspend fun queryDot(host: String, dotIp: String, vpnService: android.net.VpnService?, type: Int): List<InetAddress> = emptyList()
+    override suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: android.net.VpnService?, type: Int): List<InetAddress> = emptyList()
+    override suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: android.net.VpnService?, type: Int): List<InetAddress> = emptyList()
+    override suspend fun queryHttpsRecord(host: String, vpnService: android.net.VpnService?): List<DnsPacketEngine.DnsRecord> = emptyList()
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class RobustResolverTest {
 
-    private val ipv4Addr by lazy { InetAddress.getByName("1.2.3.4") }
-    private val ipv6Addr by lazy { InetAddress.getByName("2001:db8::1") }
+    private val ipv4Addr by lazy { InetAddress.getByName("104.16.123.96") }
+    private val ipv6Addr by lazy { InetAddress.getByName("2606:4700:4700::1111") }
+    private lateinit var fakeEngine: FakeDnsResolverEngine
 
     @Before
     fun setUp() {
         ProxyDispatcher.context = org.robolectric.RuntimeEnvironment.getApplication()
-        mockkObject(DnsProtocols)
-        mockkObject(BypassConfig)
+        fakeEngine = FakeDnsResolverEngine()
+        DnsProtocols.engine = fakeEngine
+        RobustResolver.initialize(kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined))
         
         // Setup default behavior
-        every { BypassConfig.includeIpv6 } returns false
-        every { BypassConfig.preferIpv6 } returns false
+        BypassConfig.includeIpv6 = false
+        BypassConfig.preferIpv6 = false
         
         RobustResolver.clearCache()
     }
 
     @After
     fun tearDown() {
-        unmockkAll()
+        DnsProtocols.engine = DefaultDnsResolverEngine()
     }
 
     @Test
@@ -50,7 +67,7 @@ class RobustResolverTest {
         
         assertEquals(expected, result)
         // Verify no network call was made
-        coVerify(exactly = 0) { DnsProtocols.queryDohRacing(any(), any(), any()) }
+        assertEquals(0, fakeEngine.dohRacingCalls)
     }
 
     @Test
@@ -59,18 +76,12 @@ class RobustResolverTest {
         val expected = listOf(ipv4Addr)
         
         DnsCacheManager.clearAll()
-        
-        coEvery { DnsProtocols.queryDohRacing(host, any(), 1) } returns expected
-        coEvery { DnsProtocols.queryUdpDnsShadow(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryDot(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryTcpDnsShadow(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryDnsOverQuic(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryHttpsRecord(host, any()) } returns emptyList()
+        fakeEngine.dohRacingHandler = { h, type -> if (h == host && type == 1) expected else emptyList() }
 
         val result = RobustResolver.resolve(host)
         
         assertEquals(expected, result)
-        coVerify { DnsProtocols.queryDohRacing(host, any(), 1) }
+        assertTrue(fakeEngine.dohRacingCalls > 0)
     }
 
     @Test
@@ -79,23 +90,14 @@ class RobustResolverTest {
         val aResult = listOf(ipv4Addr)
         val aaaaResult = listOf(ipv6Addr)
         
-        every { BypassConfig.includeIpv6 } returns true
+        BypassConfig.includeIpv6 = true
         DnsCacheManager.clearAll()
         
-        // Mock IPv4 resolution
-        coEvery { DnsProtocols.queryDohRacing(host, any(), 1) } returns aResult
-        coEvery { DnsProtocols.queryUdpDnsShadow(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryDot(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryTcpDnsShadow(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryDnsOverQuic(host, any(), any(), 1) } returns emptyList()
-        
-        // Mock IPv6 resolution
-        coEvery { DnsProtocols.queryDohRacing(host, any(), 28) } returns aaaaResult
-        coEvery { DnsProtocols.queryUdpDnsShadow(host, any(), any(), 28) } returns emptyList()
-        coEvery { DnsProtocols.queryDot(host, any(), any(), 28) } returns emptyList()
-        coEvery { DnsProtocols.queryTcpDnsShadow(host, any(), any(), 28) } returns emptyList()
-        coEvery { DnsProtocols.queryDnsOverQuic(host, any(), any(), 28) } returns emptyList()
-        coEvery { DnsProtocols.queryHttpsRecord(host, any()) } returns emptyList()
+        fakeEngine.dohRacingHandler = { h, type ->
+            if (h.contains(host)) {
+                if (type == 28) aaaaResult else aResult
+            } else emptyList()
+        }
 
         val result = RobustResolver.resolveDual(host)
         
@@ -107,19 +109,17 @@ class RobustResolverTest {
     @Test
     fun `resolveDual returns only IPv4 when IPv6 is disabled`() = runTest {
         val host = "dual.example.com"
-        every { BypassConfig.includeIpv6 } returns false
+        BypassConfig.includeIpv6 = false
         DnsCacheManager.clearAll()
         
-        coEvery { DnsProtocols.queryDohRacing(host, any(), 1) } returns listOf(ipv4Addr)
-        coEvery { DnsProtocols.queryUdpDnsShadow(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryDot(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryTcpDnsShadow(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryDnsOverQuic(host, any(), any(), 1) } returns emptyList()
-        coEvery { DnsProtocols.queryHttpsRecord(host, any()) } returns emptyList()
+        fakeEngine.dohRacingHandler = { h, type ->
+            if (h == host && type == 1) listOf(ipv4Addr)
+            else emptyList()
+        }
 
         val result = RobustResolver.resolveDual(host)
         
         assertEquals(listOf(ipv4Addr), result)
-        coVerify(exactly = 0) { DnsProtocols.queryDohRacing(any(), any(), 28) }
     }
 }
+

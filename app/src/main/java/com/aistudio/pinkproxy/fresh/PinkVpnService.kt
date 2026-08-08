@@ -156,30 +156,29 @@ class PinkVpnService : VpnService() {
                         proxyServer?.start()
                     } else if (System.currentTimeMillis() % 300000 < delayMs) { // Every 5 mins
                         val s = java.net.Socket()
-                    try {
-                        s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1000)
-                        s.close()
-                        
-                        // If proxy is alive, also run background diagnostic occasionally
-                        if (System.currentTimeMillis() % 600000 < delayMs) {
-                            engineScope.launch {
-                                try {
-                                    val health = DiagnosticManager.runFullDiagnostic()
-                                    if (!health.tcpOk || !health.dnsOk) {
-                                        ProxyStats.logRecovery("Health Warning: ${health.recommendation}")
+                        try {
+                            try { protect(s) } catch (e: Throwable) {}
+                            s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1000)
+                            s.close()
+                            
+                            // If proxy is alive, also run background diagnostic occasionally
+                            if (System.currentTimeMillis() % 600000 < delayMs) {
+                                engineScope.launch {
+                                    try {
+                                        val health = DiagnosticManager.runFullDiagnostic()
+                                        if (!health.tcpOk || !health.dnsOk) {
+                                            ProxyStats.logRecovery("Health Warning: ${health.recommendation}")
+                                        }
+                                    } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
+                                        Log.e("PinkVpnService", "Diagnostic check failed: ${e.message}")
                                     }
-                                } catch (e: Exception) {
-                                    if (e is CancellationException) throw e
-                                    Log.e("PinkVpnService", "Diagnostic check failed: ${e.message}")
                                 }
                             }
-                        }
-                    } catch (e: java.io.IOException) {
-                        ProxyStats.logRecovery("Watchdog: Proxy server unresponsive (${e.message}). Restarting...")
-                        stopVpnInternal()
-                        delay(500)
-                        startVpnInternal()
-                    } catch (e: Exception) {
+                        } catch (e: java.io.IOException) {
+                            ProxyStats.logRecovery("Watchdog: Proxy server unresponsive (${e.message}). Restarting proxy...")
+                            restartProxyServer()
+                        } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         Log.e("PinkVpnService", "Watchdog diagnostic error", e)
                     } finally {
@@ -428,6 +427,9 @@ class PinkVpnService : VpnService() {
             CensorshipExpert.start()
             RecoveryManager.startHealthCheck(engineScope)
             
+            proxyServer?.stop()
+            proxyServer = null
+            delay(150)
             proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
             proxyServer?.start()
             
@@ -495,6 +497,7 @@ class PinkVpnService : VpnService() {
                     if (_isRunning.value && vpnTunnelManager?.isEstablished() == true) {
                         try {
                             val s = java.net.Socket()
+                            try { protect(s) } catch (e: Throwable) {}
                             s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1500)
                             s.close()
                         } catch (e: Exception) {
@@ -696,6 +699,21 @@ class PinkVpnService : VpnService() {
     override fun onRevoke() {
         super.onRevoke()
         stopVpn()
+    }
+
+    fun restartProxyServer() {
+        engineScope.launch(ProxyDispatcher.io) {
+            try {
+                proxyServer?.stop()
+                proxyServer = null
+                delay(250)
+                proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
+                proxyServer?.start()
+                ProxyStats.logRecovery("Proxy server restarted successfully")
+            } catch (e: Throwable) {
+                Log.e("PinkVpnService", "Failed to restart proxy server: ${e.message}")
+            }
+        }
     }
 
     override fun onDestroy() {

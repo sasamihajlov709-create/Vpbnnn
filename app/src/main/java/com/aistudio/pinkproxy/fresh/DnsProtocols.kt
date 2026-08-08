@@ -7,7 +7,26 @@ import javax.net.ssl.SSLContext
 import okhttp3.*
 import java.util.concurrent.TimeUnit
 
+interface DnsResolverEngine {
+    suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress>
+    suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress>
+    suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress>
+    suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress>
+    suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress>
+    suspend fun queryHttpsRecord(host: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord>
+}
+
+class DefaultDnsResolverEngine : DnsResolverEngine {
+    override suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = DohDnsProtocols.queryDohRacing(host, vpnService, type)
+    override suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = UdpDnsProtocols.queryUdpDnsShadow(host, dnsIp, vpnService, type)
+    override suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = DotDnsProtocols.queryDot(host, dotIp, vpnService, type)
+    override suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = TcpDnsProtocols.queryTcpDnsShadow(host, dnsIp, vpnService, type)
+    override suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = UdpDnsProtocols.queryDnsOverQuic(host, dnsIp, vpnService, type)
+    override suspend fun queryHttpsRecord(host: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> = DohDnsProtocols.queryHttpsRecord(host, vpnService)
+}
+
 object DnsProtocols {
+    @Volatile var engine: DnsResolverEngine = DefaultDnsResolverEngine()
 
     private val baseOkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -64,7 +83,7 @@ object DnsProtocols {
     }
 
     suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
-        UdpDnsProtocols.queryDnsOverQuic(host, dnsIp, vpnService, type)
+        engine.queryDnsOverQuic(host, dnsIp, vpnService, type)
 
     suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<DnsPacketEngine.DnsRecord> =
         UdpDnsProtocols.queryUdpDnsDetailed(host, dnsIp, vpnService, type)
@@ -79,10 +98,10 @@ object DnsProtocols {
         UdpDnsProtocols.queryUdpDnsNuclear(host, dnsIp, vpnService, type)
 
     suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
-        UdpDnsProtocols.queryUdpDnsShadow(host, dnsIp, vpnService, type)
+        engine.queryUdpDnsShadow(host, dnsIp, vpnService, type)
 
     suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
-        TcpDnsProtocols.queryTcpDnsShadow(host, dnsIp, vpnService, type)
+        engine.queryTcpDnsShadow(host, dnsIp, vpnService, type)
 
     suspend fun queryTcpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
         TcpDnsProtocols.queryTcpDnsNuclear(host, dnsIp, vpnService, type)
@@ -100,13 +119,13 @@ object DnsProtocols {
         DohDnsProtocols.queryDoh(host, dohUrl, vpnService, type)
 
     suspend fun queryHttpsRecord(host: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> =
-        DohDnsProtocols.queryHttpsRecord(host, vpnService)
+        engine.queryHttpsRecord(host, vpnService)
 
     suspend fun queryDohJson(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
         DohDnsProtocols.queryDohJson(host, vpnService, type)
 
     suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
-        DohDnsProtocols.queryDohRacing(host, vpnService, type)
+        engine.queryDohRacing(host, vpnService, type)
 
     suspend fun queryDohExtreme(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
         DohDnsProtocols.queryDohExtreme(host, vpnService, type)
@@ -120,10 +139,10 @@ object DnsProtocols {
     }
 
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
-        DotDnsProtocols.queryDot(host, dotIp, vpnService, type)
+        engine.queryDot(host, dotIp, vpnService, type)
 
     suspend fun queryDnsExtremeRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
         // High concurrency DNS strategy delegated to DoH racing
-        return DohDnsProtocols.queryDohRacing(host, vpnService, type)
+        return engine.queryDohRacing(host, vpnService, type)
     }
 }

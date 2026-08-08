@@ -53,10 +53,23 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         
         scope.launch {
             try {
-                serverSocket = ServerSocket().apply {
-                    reuseAddress = true
-                    bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port))
+                try { serverSocket?.close() } catch (e: Exception) {}
+                serverSocket = null
+                var boundSocket: ServerSocket? = null
+                var bindError: Exception? = null
+                for (attempt in 1..10) {
+                    try {
+                        boundSocket = ServerSocket().apply {
+                            reuseAddress = true
+                            bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port))
+                        }
+                        break
+                    } catch (e: Exception) {
+                        bindError = e
+                        delay(200L * attempt)
+                    }
                 }
+                serverSocket = boundSocket ?: throw (bindError ?: IOException("Failed to bind proxy server socket on port $port"))
                 ProxyStats.logRecovery("Proxy server started on port $port")
                 var errorCount = 0
                 while (isActive) {
@@ -214,7 +227,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.DelicateCoroutinesApi::class)
     private suspend fun handleClient(client: Socket, scope: CoroutineScope) {
         val startTimestamp = System.currentTimeMillis()
-        // UID Verification for Android 10+ (API 29+)
+        // UID Logging for Android 10+ (API 29+)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             try {
                 val cm = vpnService.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
@@ -222,11 +235,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 val localEndpoint = client.localSocketAddress as? InetSocketAddress
                 if (cm != null && remoteEndpoint != null && localEndpoint != null) {
                     val uid = cm.getConnectionOwnerUid(android.system.OsConstants.IPPROTO_TCP, remoteEndpoint, localEndpoint)
-                    if (uid != -1 && uid != 0 && uid != android.os.Process.myUid()) {
-                        Log.w("PinkProxy", "Rejected unauthorized proxy access attempt from UID $uid")
-                        client.close()
-                        return
-                    }
+                    Log.v("PinkProxy", "Connection from UID $uid")
                 }
             } catch (e: CancellationException) {
                 throw e

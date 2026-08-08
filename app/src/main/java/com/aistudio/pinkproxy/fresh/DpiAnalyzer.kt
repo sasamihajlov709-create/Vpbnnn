@@ -41,6 +41,20 @@ object DpiAnalyzer {
         )
     }
 
+    fun recordSpoofedRst(host: String, rttMs: Long) {
+        Log.w("DpiAnalyzer", "SPOOFED TCP RST DETECTED for $host (RTT=${rttMs}ms). Active DPI middlebox injected packet.")
+        DpiEngine.eventHistory.getOrPut(DpiType.TCP_RESET) { AtomicInteger(0) }.incrementAndGet()
+        
+        // Boost TCP Out-of-order, Zero Window, and TTL Skew desynchronization strategies immediately
+        DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
+        DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
+        DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+        
+        DpiEngine.recordResult(BypassStrategy.TCP_OOB_DESYNC, true, HostCategory.OTHER)
+        DpiEngine.recordResult(BypassStrategy.TCP_ZERO_WINDOW_DESYNC, true, HostCategory.OTHER)
+        DpiEngine.recordResult(BypassStrategy.TCP_SEGMENT_OVERLAP, true, HostCategory.OTHER)
+    }
+
     fun recordEvent(type: DpiType) {
         DpiEngine.eventHistory.getOrPut(type) { AtomicInteger(0) }.incrementAndGet()
         
@@ -53,6 +67,7 @@ object DpiAnalyzer {
             DpiType.TCP_RESET -> {
                 DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
                 DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
             }
             DpiType.DNS_POISONING -> DpiEngine.boostStrategyFamily(StrategyFamily.DNS, null)
             DpiType.HTTP_BLOCK -> DpiEngine.boostStrategyFamily(StrategyFamily.HTTP, null)
@@ -70,7 +85,7 @@ object DpiAnalyzer {
                 DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
                 BypassStrategy.entries.forEach { strat ->
                     if (strat.group == StrategyGroup.EXTREME) {
-                        DpiStrategySelector.recordResult(strat, true, HostCategory.OTHER)
+                        DpiEngine.recordResult(strat, true, HostCategory.OTHER)
                     }
                 }
             }
