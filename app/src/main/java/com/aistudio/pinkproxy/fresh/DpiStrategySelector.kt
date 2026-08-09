@@ -16,12 +16,18 @@ object DpiStrategySelector {
 
         if (host != null) {
             val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
-            if (hostFails > 4) {
+            if (hostFails > 2) {
                 val lastMem = DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null) {
-                    val escalated = getFallbackStrategy(lastMem.strategy)
-                    if (escalated != null && (DpiEngine.circuitBreakers[escalated] ?: 0L) < now) {
-                        return escalated
+                    var currentStep: BypassStrategy? = lastMem.strategy
+                    for (i in 0 until (hostFails - 2)) {
+                        currentStep = currentStep?.let { getFallbackStrategy(it) }
+                    }
+                    if (currentStep != null && (DpiEngine.circuitBreakers[currentStep] ?: 0L) < now) {
+                        val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
+                        if ((hostBlacklist?.get(currentStep) ?: 0L) < now) {
+                            return currentStep
+                        }
                     }
                 }
                 return getBestExtremeStrategy(host)
@@ -120,14 +126,14 @@ object DpiStrategySelector {
             // Category-Specific Weighting Matrix
             when (category) {
                 HostCategory.STREAMING, HostCategory.GAMING -> {
-                    if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC || strat == BypassStrategy.SNI_SPLIT || strat == BypassStrategy.TLS_RECORD_FRAGMENTATION) s *= 1.8
-                    if (strat.family == StrategyFamily.TIMING) s *= 0.7 // Avoid timing delays for real-time traffic
+                    if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC || strat == BypassStrategy.SNI_SPLIT || strat == BypassStrategy.TLS_RECORD_FRAGMENTATION || strat == BypassStrategy.TLS_APP_DATA_SPLIT) s *= 1.85
+                    if (strat.family == StrategyFamily.TIMING) s *= 0.65 // Avoid heavy timing delays for real-time streams
                 }
-                HostCategory.SOCIAL, HostCategory.MESSENGER -> {
-                    if (strat == BypassStrategy.HTTP_MULTI_LINE_MANGLE || strat == BypassStrategy.BYEBYEDPI_HYBRID || strat == BypassStrategy.TCP_COMBINED_HYBRID || strat == BypassStrategy.TLS_SNI_EXT_MANGLE) s *= 1.9
+                HostCategory.SOCIAL, HostCategory.MESSENGER, HostCategory.NEWS -> {
+                    if (strat == BypassStrategy.HTTP_MULTI_LINE_MANGLE || strat == BypassStrategy.BYEBYEDPI_HYBRID || strat == BypassStrategy.TCP_COMBINED_HYBRID || strat == BypassStrategy.TLS_SNI_EXT_MANGLE || strat == BypassStrategy.TLS_ECH_FAKE) s *= 1.95
                 }
                 HostCategory.AI, HostCategory.FINANCE -> {
-                    if (strat.family == StrategyFamily.FRAGMENTATION || strat == BypassStrategy.TLS_SNI_JITTER_SPLIT || strat == BypassStrategy.TCP_PULSE_FRAG) s *= 1.7
+                    if (strat.family == StrategyFamily.FRAGMENTATION || strat == BypassStrategy.TLS_SNI_JITTER_SPLIT || strat == BypassStrategy.TCP_PULSE_FRAG || strat == BypassStrategy.ECH_GREASE) s *= 1.75
                 }
                 else -> {}
             }
