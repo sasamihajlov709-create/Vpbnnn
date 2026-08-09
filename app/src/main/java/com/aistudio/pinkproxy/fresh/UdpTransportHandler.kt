@@ -59,9 +59,13 @@ object UdpTransportHandler {
                                 }
                                 
                                 for (session in activeSessions.keys) {
-                                    val parts = session.split(":")
-                                    if (parts.size == 2) {
-                                        UdpTransportManager.sendUdpHeartbeat(outSocket, parts[0], parts[1].toInt())
+                                    val lastColon = session.lastIndexOf(':')
+                                    if (lastColon > 0 && lastColon < session.length - 1) {
+                                        val rawHost = session.substring(0, lastColon).removePrefix("[").removeSuffix("]")
+                                        val portInt = session.substring(lastColon + 1).toIntOrNull()
+                                        if (rawHost.isNotEmpty() && portInt != null) {
+                                            UdpTransportManager.sendUdpHeartbeat(outSocket, rawHost, portInt)
+                                        }
                                     }
                                 }
                             }
