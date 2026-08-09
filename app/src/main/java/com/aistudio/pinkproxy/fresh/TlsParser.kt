@@ -137,11 +137,13 @@ object TlsParser {
         if (offset == -1) return buffer.copyOf(length)
         val copy = buffer.copyOf(length)
         val nameLen = ((copy[offset - 2].toInt() and 0xFF) shl 8) or (copy[offset - 1].toInt() and 0xFF)
+        var modified = false
         for (i in 0 until nameLen) {
             val b = copy[offset + i]
             if ((b >= 'A'.code.toByte() && b <= 'Z'.code.toByte()) || (b >= 'a'.code.toByte() && b <= 'z'.code.toByte())) {
-                if (rnd.nextBoolean()) {
+                if (!modified || rnd.nextBoolean()) {
                     copy[offset + i] = (b.toInt() xor 32).toByte()
+                    modified = true
                 }
             }
         }
@@ -310,7 +312,7 @@ object TlsParser {
             while (pos + 3 < extEnd) {
                 val extType = ((buffer[pos].toInt() and 0xFF) shl 8) or (buffer[pos + 1].toInt() and 0xFF)
                 val extLen = ((buffer[pos + 2].toInt() and 0xFF) shl 8) or (buffer[pos + 3].toInt() and 0xFF)
-                if (extType == 0xfe0d || extType == 0xff0d || extType == 0x1102) return pos
+                if (extType == 0xfe0d || extType == 0xff0d || extType == 0x1102 || extType == 0x0037 || (extType in 0xfe08..0xfe0d)) return pos
                 pos += 4 + extLen
             }
         } catch (e: Throwable) {}
@@ -318,7 +320,9 @@ object TlsParser {
     }
 
     fun addSniGrease(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
-        return injectEchGrease(buffer, length)
+        val greaseType = (rnd.nextInt(16) shl 8) or 0x0A
+        val greaseData = ByteArray(rnd.nextInt(2, 12)).also { rnd.nextBytes(it) }
+        return TlsPacketBuilder.injectExtension(buffer, length, greaseType, greaseData)
     }
 
     fun addFakeEch(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
@@ -337,7 +341,7 @@ object TlsParser {
                 return copy
             } else {
                 val newSniExt = TlsPacketBuilder.buildSniExtension(newSni)
-                return TlsPacketBuilder.injectExtension(buffer, length, 0x0000, newSniExt)
+                return TlsPacketBuilder.replaceOrInjectExtension(buffer, length, 0x0000, newSniExt)
             }
         } catch (e: Throwable) {
             return buffer.copyOf(length)

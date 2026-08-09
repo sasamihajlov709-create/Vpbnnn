@@ -17,10 +17,16 @@ object TlsStrategyHandler {
             BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_SNI_SPLIT, BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT -> {
                 val sniPos = TlsParser.findSni(data, length)
                 if (sniPos != -1) {
-                    output.write(data, 0, sniPos + 1)
+                    val splitOffset = if (strategy == BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT) {
+                        val hostname = TlsParser.extractHostname(data, length, sniPos)
+                        if (hostname != null && hostname.length > 2) sniPos + (hostname.length / 2) else sniPos + 1
+                    } else {
+                        sniPos + 1
+                    }
+                    output.write(data, 0, splitOffset)
                     output.flush()
                     delay(rnd.nextLong(1, 5))
-                    output.write(data, sniPos + 1, length - (sniPos + 1))
+                    output.write(data, splitOffset, length - splitOffset)
                     output.flush()
                 } else {
                     output.write(data, 0, length)
@@ -30,13 +36,13 @@ object TlsStrategyHandler {
             BypassStrategy.SNI_TRIPLE -> {
                 val sniPos = TlsParser.findSni(data, length)
                 if (sniPos != -1 && length > sniPos + 3) {
-                    output.write(data, 0, sniPos)
+                    output.write(data, 0, sniPos + 1)
                     output.flush()
                     delay(rnd.nextLong(1, 3))
-                    output.write(data, sniPos, 2)
+                    output.write(data, sniPos + 1, 2)
                     output.flush()
                     delay(rnd.nextLong(1, 3))
-                    output.write(data, sniPos + 2, length - (sniPos + 2))
+                    output.write(data, sniPos + 3, length - (sniPos + 3))
                     output.flush()
                 } else {
                     output.write(data, 0, length)
@@ -165,11 +171,12 @@ object TlsStrategyHandler {
             }
             BypassStrategy.ECH_FRAG -> {
                 val echPos = TlsParser.findEch(data, length)
-                if (echPos != -1) {
-                    output.write(data, 0, echPos)
+                if (echPos != -1 && echPos + 4 < length) {
+                    val splitPos = echPos + 2 // Split inside ECH extension header/payload
+                    output.write(data, 0, splitPos)
                     output.flush()
                     delay(rnd.nextLong(1, 4))
-                    output.write(data, echPos, length - echPos)
+                    output.write(data, splitPos, length - splitPos)
                     output.flush()
                 } else {
                     output.write(data, 0, length)

@@ -68,7 +68,77 @@ object TlsPacketBuilder {
         }
     }
 
-    private fun updateTlsLengths(data: ByteArray) {
+    fun replaceOrInjectExtension(data: ByteArray, length: Int, type: Int, extData: ByteArray): ByteArray {
+        if (length < 44 || data[0] != 0x16.toByte()) return data.copyOf(length)
+        try {
+            var pos = 5 + 4 + 2 + 32
+            if (length < pos + 1) return data.copyOf(length)
+            val sidLen = data[pos].toInt() and 0xFF
+            pos += 1 + sidLen
+
+            if (length < pos + 2) return data.copyOf(length)
+            val cipherLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherLen
+
+            if (length < pos + 1) return data.copyOf(length)
+            val compLen = data[pos].toInt() and 0xFF
+            pos += 1 + compLen
+
+            if (length < pos + 2) return data.copyOf(length)
+            val extLenPos = pos
+            val oldExtLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+            pos += 2
+
+            val extEnd = minOf(pos + oldExtLen, length)
+
+            var p = pos
+            var existingStart = -1
+            var existingTotalLen = 0
+
+            while (p + 3 < extEnd) {
+                val curType = ((data[p].toInt() and 0xFF) shl 8) or (data[p + 1].toInt() and 0xFF)
+                val curLen = ((data[p + 2].toInt() and 0xFF) shl 8) or (data[p + 3].toInt() and 0xFF)
+                if (curType == type) {
+                    existingStart = p
+                    existingTotalLen = 4 + curLen
+                    break
+                }
+                p += 4 + curLen
+            }
+
+            if (existingStart != -1 && existingStart + existingTotalLen <= extEnd) {
+                val newExtLen = oldExtLen - existingTotalLen + 4 + extData.size
+                val newTotalLen = length - existingTotalLen + 4 + extData.size
+                if (newTotalLen > 65535) return data.copyOf(length)
+
+                val result = ByteArray(newTotalLen)
+                System.arraycopy(data, 0, result, 0, existingStart)
+                result[existingStart] = (type shr 8).toByte()
+                result[existingStart + 1] = (type and 0xFF).toByte()
+                result[existingStart + 2] = (extData.size shr 8).toByte()
+                result[existingStart + 3] = (extData.size and 0xFF).toByte()
+                System.arraycopy(extData, 0, result, existingStart + 4, extData.size)
+
+                val remStart = existingStart + existingTotalLen
+                val remLen = length - remStart
+                if (remLen > 0) {
+                    System.arraycopy(data, remStart, result, existingStart + 4 + extData.size, remLen)
+                }
+
+                result[extLenPos] = (newExtLen shr 8).toByte()
+                result[extLenPos + 1] = (newExtLen and 0xFF).toByte()
+
+                updateTlsLengths(result)
+                return result
+            } else {
+                return injectExtension(data, length, type, extData)
+            }
+        } catch (e: Exception) {
+            return data.copyOf(length)
+        }
+    }
+
+    fun updateTlsLengths(data: ByteArray) {
         if (data.size < 9) return
         val recLen = data.size - 5
         data[3] = (recLen shr 8).toByte()
