@@ -6,35 +6,38 @@ import java.util.concurrent.ThreadLocalRandom
 
 object GenericPacketBuilder {
 
-    fun buildQuicInitial(scid: String? = null): ByteArray {
+    fun buildQuicInitial(scid: String? = null, version: Int = 0x00000001, targetPacketSize: Int = 1200): ByteArray {
         val rnd = ThreadLocalRandom.current()
-        val packet = ByteArray(1200)
+        val pktSize = targetPacketSize.coerceIn(1200, 1420)
+        val packet = ByteArray(pktSize)
         val buf = ByteBuffer.wrap(packet)
         
         // Header Form: 1 (Long), Fixed Bit: 1, Packet Type: 00 (Initial), Reserved Bits: 00, Packet Number Length: 00 (1 byte) -> 0xC0
         buf.put(0xC0.toByte())
-        buf.putInt(0x00000001) // QUIC Version 1
+        buf.putInt(version) // QUIC Version (e.g. 1, or draft/negotiation version)
         
-        // DCID length: 8
-        buf.put(8.toByte())
-        val dcid = ByteArray(8); rnd.nextBytes(dcid); buf.put(dcid)
+        // DCID length: 8-12 bytes
+        val dcidLen = rnd.nextInt(8, 13)
+        buf.put(dcidLen.toByte())
+        val dcid = ByteArray(dcidLen); rnd.nextBytes(dcid); buf.put(dcid)
         
-        // SCID length: 8
-        buf.put(8.toByte())
-        val scidBytes = scid?.toByteArray(StandardCharsets.UTF_8)?.take(8)?.toByteArray() ?: ByteArray(8).also { rnd.nextBytes(it) }
-        buf.put(scidBytes)
-        if (scidBytes.size < 8) buf.put(ByteArray(8 - scidBytes.size))
+        // SCID length: 8-12 bytes
+        val scidBytes = scid?.toByteArray(StandardCharsets.UTF_8) ?: ByteArray(8).also { rnd.nextBytes(it) }
+        val scidLen = scidBytes.size.coerceIn(8, 12)
+        buf.put(scidLen.toByte())
+        buf.put(scidBytes.take(scidLen).toByteArray())
+        if (scidBytes.size < scidLen) buf.put(ByteArray(scidLen - scidBytes.size))
         
         // Token Length: 0 (varint 0x00)
         buf.put(0.toByte())
         
-        // Payload Length: 1160 bytes (varint 2-byte encoding)
-        val payloadLen = 1160
+        // Payload Length
+        val payloadLen = pktSize - buf.position() - 3
         buf.put(((payloadLen shr 8) or 0x40).toByte())
         buf.put((payloadLen and 0xFF).toByte())
         
-        // Packet Number: 0x00
-        buf.put(0.toByte())
+        // Packet Number: 0x00 - 0x03
+        buf.put(rnd.nextInt(0, 4).toByte())
         
         // Fill remainder with random encrypted payload simulation / PADDING frames (0x00)
         val payloadStart = buf.position()

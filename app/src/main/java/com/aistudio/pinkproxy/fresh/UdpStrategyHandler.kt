@@ -27,7 +27,8 @@ object UdpStrategyHandler {
                 writeUdpWithFake(socket, address, port, noise, DatagramPacket(data, length, address, port), rnd.nextLong(1, 3))
             }
             BypassStrategy.PROTOCOL_CONFUSION_QUIC, BypassStrategy.QUIC_INITIAL_FAKE, BypassStrategy.QUIC_VERSION_SKEW -> {
-                val quic = FakePacketHelper.buildQuicInitial()
+                val fakeVersion = if (strategy == BypassStrategy.QUIC_VERSION_SKEW) 0xff00001d.toInt() else 0x00000001
+                val quic = GenericPacketBuilder.buildQuicInitial(version = fakeVersion, targetPacketSize = rnd.nextInt(1200, 1350))
                 writeUdpWithFake(socket, address, port, quic, DatagramPacket(data, length, address, port), rnd.nextLong(2, 6))
             }
             BypassStrategy.UDP_WIREGUARD_FAKE, BypassStrategy.UDP_IKE_FAKE, BypassStrategy.UDP_DHCP_FAKE, 

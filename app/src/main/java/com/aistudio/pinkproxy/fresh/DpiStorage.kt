@@ -60,6 +60,17 @@ object DpiStorage {
             }
         }
         editor.apply()
+
+        val blPrefs = context.getSharedPreferences("dpi_engine_host_blacklist", Context.MODE_PRIVATE)
+        val blEditor = blPrefs.edit()
+        blEditor.clear()
+        DpiEngine.hostStrategyBlacklist.forEach { (host, map) ->
+            val validEntries = map.filter { it.value > now }.map { "${it.key.name}:${it.value}" }.joinToString(",")
+            if (validEntries.isNotEmpty()) {
+                blEditor.putString(host, validEntries)
+            }
+        }
+        blEditor.apply()
     }
 
     private fun loadHostMemory(context: Context) {
@@ -77,6 +88,25 @@ object DpiStorage {
                             DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strat, ts)
                         }
                     } catch (e: Throwable) {}
+                }
+            }
+        }
+
+        val blPrefs = context.getSharedPreferences("dpi_engine_host_blacklist", Context.MODE_PRIVATE)
+        blPrefs.all.forEach { (host, value) ->
+            if (value is String) {
+                val map = DpiEngine.hostStrategyBlacklist.getOrPut(host) { ConcurrentHashMap() }
+                value.split(",").forEach { entry ->
+                    val parts = entry.split(":")
+                    if (parts.size == 2) {
+                        try {
+                            val strat = BypassStrategy.valueOf(parts[0])
+                            val until = parts[1].toLong()
+                            if (until > now) {
+                                map[strat] = until
+                            }
+                        } catch (e: Throwable) {}
+                    }
                 }
             }
         }

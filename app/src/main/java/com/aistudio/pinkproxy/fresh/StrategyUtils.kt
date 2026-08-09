@@ -21,11 +21,15 @@ object StrategyUtils {
     }
 
     fun getFakeTtl(host: String, rnd: Random): Int {
-        return if (BypassConfig.fakeTtl > 0) BypassConfig.fakeTtl else rnd.nextInt(3, 7)
+        if (BypassConfig.fakeTtl > 0) return BypassConfig.fakeTtl
+        val discovered = AutoTtlProber.getDiscoveredTtl(host)
+        return if (discovered != null && discovered in 2..30) discovered else rnd.nextInt(3, 7)
     }
 
     fun getFakeTtl(host: String, rnd: ThreadLocalRandom): Int {
-        return if (BypassConfig.fakeTtl > 0) BypassConfig.fakeTtl else rnd.nextInt(3, 7)
+        if (BypassConfig.fakeTtl > 0) return BypassConfig.fakeTtl
+        val discovered = AutoTtlProber.getDiscoveredTtl(host)
+        return if (discovered != null && discovered in 2..30) discovered else rnd.nextInt(3, 7)
     }
 
     fun getRealisticTlsHello(host: String): ByteArray {

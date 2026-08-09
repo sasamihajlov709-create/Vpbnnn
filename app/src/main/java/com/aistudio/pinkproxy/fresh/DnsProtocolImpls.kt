@@ -172,11 +172,11 @@ object DohDnsProtocols {
     }
 
     suspend fun queryHttpsRecord(host: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> {
-        return queryDohDetailed(host, "https://dns.google/dns-query", vpnService, 65)
+        return queryDohDetailed(host, DnsOptimizer.bestDohUrl, vpnService, 65)
     }
 
     suspend fun queryDohJson(host: String, vpnService: VpnService?, type: Int): List<InetAddress> {
-        return queryDoh(host, "https://dns.google/dns-query", vpnService, type)
+        return queryDoh(host, DnsOptimizer.bestDohUrl, vpnService, type)
     }
 
     suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.coroutineScope {
@@ -186,7 +186,7 @@ object DohDnsProtocols {
             DnsType.CLOUDFLARE_DOH -> listOf("https://1.1.1.1/dns-query")
             DnsType.QUAD9_DOH -> listOf("https://9.9.9.9/dns-query")
             DnsType.CUSTOM_DOH -> listOf(BypassConfig.customDnsUrl)
-            else -> racingUrls
+            else -> DnsOptimizer.getDohUrls().take(4).ifEmpty { racingUrls }
         }
 
         val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(urls.size)

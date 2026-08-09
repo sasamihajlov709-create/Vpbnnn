@@ -225,8 +225,79 @@ object TlsPacketBuilder {
     }
 
     fun shuffleTlsExtensions(data: ByteArray, length: Int): ByteArray {
-        // Shuffling extensions is complex, for now we just add a random grease to change the layout
-        return addTlsGreaseExtensions(data, length)
+        if (length < 44 || data[0] != 0x16.toByte() || data[5] != 0x01.toByte()) {
+            return addTlsGreaseExtensions(data, length)
+        }
+        try {
+            var pos = 5 + 4 + 2 + 32
+            if (length < pos + 1) return data.copyOf(length)
+            val sidLen = data[pos].toInt() and 0xFF
+            pos += 1 + sidLen
+
+            if (length < pos + 2) return data.copyOf(length)
+            val cipherLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+            pos += 2 + cipherLen
+
+            if (length < pos + 1) return data.copyOf(length)
+            val compLen = data[pos].toInt() and 0xFF
+            pos += 1 + compLen
+
+            if (length < pos + 2) return data.copyOf(length)
+            val extStartPos = pos
+            val oldExtLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+            pos += 2
+
+            val extEnd = minOf(pos + oldExtLen, length)
+            val extensions = mutableListOf<Pair<Int, ByteArray>>()
+            var p = pos
+
+            while (p + 3 < extEnd) {
+                val extType = ((data[p].toInt() and 0xFF) shl 8) or (data[p + 1].toInt() and 0xFF)
+                val extLen = ((data[p + 2].toInt() and 0xFF) shl 8) or (data[p + 3].toInt() and 0xFF)
+                p += 4
+                if (p + extLen > extEnd) break
+                val payload = data.copyOfRange(p, p + extLen)
+                extensions.add(Pair(extType, payload))
+                p += extLen
+            }
+
+            if (extensions.size < 2) return data.copyOf(length)
+
+            // Separate padding (0x0015) and PSK (0x0029) to remain at end
+            val endExtensions = extensions.filter { it.first == 0x0015 || it.first == 0x0029 }
+            val shufflable = extensions.filter { it.first != 0x0015 && it.first != 0x0029 }.toMutableList()
+
+            val rnd = ThreadLocalRandom.current()
+            for (i in shufflable.size - 1 downTo 1) {
+                val j = rnd.nextInt(i + 1)
+                val tmp = shufflable[i]
+                shufflable[i] = shufflable[j]
+                shufflable[j] = tmp
+            }
+
+            val finalExts = shufflable + endExtensions
+            val extBuf = ByteBuffer.allocate(oldExtLen + 64)
+            for ((type, payload) in finalExts) {
+                extBuf.putShort(type.toShort())
+                extBuf.putShort(payload.size.toShort())
+                extBuf.put(payload)
+            }
+
+            val newExtData = ByteArray(extBuf.position())
+            extBuf.flip()
+            extBuf.get(newExtData)
+
+            val result = ByteArray(extStartPos + 2 + newExtData.size)
+            System.arraycopy(data, 0, result, 0, extStartPos)
+            result[extStartPos] = (newExtData.size shr 8).toByte()
+            result[extStartPos + 1] = (newExtData.size and 0xFF).toByte()
+            System.arraycopy(newExtData, 0, result, extStartPos + 2, newExtData.size)
+
+            updateTlsLengths(result)
+            return result
+        } catch (e: Exception) {
+            return addTlsGreaseExtensions(data, length)
+        }
     }
 
     fun injectMultipleSni(data: ByteArray, length: Int, extraHost: String): ByteArray {
@@ -234,7 +305,186 @@ object TlsPacketBuilder {
         return injectExtension(data, length, 0x0000, extraSni)
     }
 
-    fun buildChromeHello(host: String): ByteArray = buildRealisticTlsHello(host)
-    fun buildFirefoxHello(host: String): ByteArray = buildRealisticTlsHello(host)
-    fun buildTls13Hello(host: String): ByteArray = buildRealisticTlsHello(host)
+    fun buildChromeHello(host: String): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val greaseVal = 0x0a0a or (rnd.nextInt(16) shl 8) or (rnd.nextInt(16) shl 4)
+        
+        val sni = buildSniExtension(host)
+        val extBuf = ByteBuffer.allocate(1024)
+        
+        // GREASE Extension
+        extBuf.putShort(greaseVal.toShort())
+        extBuf.putShort(0.toShort())
+        
+        // SNI (0x0000)
+        extBuf.putShort(0x0000.toShort())
+        extBuf.putShort(sni.size.toShort())
+        extBuf.put(sni)
+        
+        // Extended Master Secret (0x0017)
+        extBuf.putShort(0x0017.toShort())
+        extBuf.putShort(0.toShort())
+
+        // Renegotiation Info (0xff01)
+        extBuf.putShort(0xff01.toShort())
+        extBuf.putShort(1.toShort())
+        extBuf.put(0.toByte())
+
+        // Supported Groups (0x000a) - GREASE, x25519, secp256r1, secp384r1
+        extBuf.putShort(0x000a.toShort())
+        extBuf.putShort(10.toShort())
+        extBuf.putShort(8.toShort()) // List len
+        extBuf.putShort(greaseVal.toShort())
+        extBuf.putShort(0x001d.toShort())
+        extBuf.putShort(0x0017.toShort())
+        extBuf.putShort(0x0018.toShort())
+
+        // EC Point Formats (0x000b)
+        extBuf.putShort(0x000b.toShort())
+        extBuf.putShort(2.toShort())
+        extBuf.put(1.toByte()); extBuf.put(0.toByte())
+
+        // SessionTicket TLS (0x0023)
+        extBuf.putShort(0x0023.toShort())
+        extBuf.putShort(0.toShort())
+
+        // ALPN (0x0010)
+        extBuf.putShort(0x0010.toShort())
+        extBuf.putShort(14.toShort())
+        extBuf.putShort(12.toShort())
+        extBuf.put(2.toByte()); extBuf.put("h2".toByteArray(StandardCharsets.US_ASCII))
+        extBuf.put(8.toByte()); extBuf.put("http/1.1".toByteArray(StandardCharsets.US_ASCII))
+
+        // Supported Versions (0x002b) - GREASE, TLS 1.3, TLS 1.2
+        extBuf.putShort(0x002b.toShort())
+        extBuf.putShort(7.toShort())
+        extBuf.put(6.toByte())
+        extBuf.putShort(greaseVal.toShort())
+        extBuf.putShort(0x0304.toShort())
+        extBuf.putShort(0x0303.toShort())
+
+        // Key Share (0x0033) - GREASE + x25519
+        val keyShare = ByteArray(32); rnd.nextBytes(keyShare)
+        extBuf.putShort(0x0033.toShort())
+        extBuf.putShort(42.toShort())
+        extBuf.putShort(40.toShort())
+        extBuf.putShort(greaseVal.toShort())
+        extBuf.putShort(1.toShort()); extBuf.put(0.toByte())
+        extBuf.putShort(0x001d.toShort())
+        extBuf.putShort(32.toShort())
+        extBuf.put(keyShare)
+
+        val extData = ByteArray(extBuf.position())
+        extBuf.flip(); extBuf.get(extData)
+
+        return assembleClientHello(extData, rnd)
+    }
+
+    fun buildFirefoxHello(host: String): ByteArray {
+        val rnd = ThreadLocalRandom.current()
+        val sni = buildSniExtension(host)
+        val extBuf = ByteBuffer.allocate(1024)
+
+        // SNI (0x0000)
+        extBuf.putShort(0x0000.toShort())
+        extBuf.putShort(sni.size.toShort())
+        extBuf.put(sni)
+
+        // Extended Master Secret (0x0017)
+        extBuf.putShort(0x0017.toShort())
+        extBuf.putShort(0.toShort())
+
+        // Supported Groups (0x000a) - x25519, secp256r1, secp384r1, ffdhe2048, ffdhe3072
+        extBuf.putShort(0x000a.toShort())
+        extBuf.putShort(12.toShort())
+        extBuf.putShort(10.toShort())
+        extBuf.putShort(0x001d.toShort())
+        extBuf.putShort(0x0017.toShort())
+        extBuf.putShort(0x0018.toShort())
+        extBuf.putShort(0x0100.toShort())
+        extBuf.putShort(0x0101.toShort())
+
+        // ALPN (0x0010)
+        extBuf.putShort(0x0010.toShort())
+        extBuf.putShort(14.toShort())
+        extBuf.putShort(12.toShort())
+        extBuf.put(2.toByte()); extBuf.put("h2".toByteArray(StandardCharsets.US_ASCII))
+        extBuf.put(8.toByte()); extBuf.put("http/1.1".toByteArray(StandardCharsets.US_ASCII))
+
+        // Supported Versions (0x002b) - TLS 1.3, TLS 1.2
+        extBuf.putShort(0x002b.toShort())
+        extBuf.putShort(5.toShort())
+        extBuf.put(4.toByte())
+        extBuf.putShort(0x0304.toShort())
+        extBuf.putShort(0x0303.toShort())
+
+        // Key Share (0x0033) - x25519 share
+        val keyShare = ByteArray(32); rnd.nextBytes(keyShare)
+        extBuf.putShort(0x0033.toShort())
+        extBuf.putShort(38.toShort())
+        extBuf.putShort(36.toShort())
+        extBuf.putShort(0x001d.toShort())
+        extBuf.putShort(32.toShort())
+        extBuf.put(keyShare)
+
+        // Padding (0x0015) to emulate Firefox 512-byte Hello padding
+        val currentSize = extBuf.position() + 44
+        val targetSize = 512
+        if (targetSize > currentSize + 4) {
+            val padLen = targetSize - (currentSize + 4)
+            extBuf.putShort(0x0015.toShort())
+            extBuf.putShort(padLen.toShort())
+            extBuf.put(ByteArray(padLen))
+        }
+
+        val extData = ByteArray(extBuf.position())
+        extBuf.flip(); extBuf.get(extData)
+
+        return assembleClientHello(extData, rnd)
+    }
+
+    fun buildTls13Hello(host: String): ByteArray = buildChromeHello(host)
+
+    private fun assembleClientHello(extensionsData: ByteArray, rnd: ThreadLocalRandom): ByteArray {
+        val cipherSuites = byteArrayOf(
+            0x13.toByte(), 0x01.toByte(), // TLS_AES_128_GCM_SHA256
+            0x13.toByte(), 0x02.toByte(), // TLS_AES_256_GCM_SHA384
+            0x13.toByte(), 0x03.toByte(), // TLS_CHACHA20_POLY1305_SHA256
+            0xc0.toByte(), 0x2b.toByte(), // ECDHE-ECDSA-AES128-GCM-SHA256
+            0xc0.toByte(), 0x2f.toByte(), // ECDHE-RSA-AES128-GCM-SHA256
+            0xc0.toByte(), 0x2c.toByte(), // ECDHE-ECDSA-AES256-GCM-SHA384
+            0xc0.toByte(), 0x30.toByte()  // ECDHE-RSA-AES256-GCM-SHA384
+        )
+        val sessionId = ByteArray(32); rnd.nextBytes(sessionId)
+        val innerLen = 2 + 32 + 1 + sessionId.size + 2 + cipherSuites.size + 1 + 1 + 2 + extensionsData.size
+        val totalLen = 5 + 4 + innerLen
+
+        val data = ByteArray(totalLen)
+        val buf = ByteBuffer.wrap(data)
+
+        buf.put(0x16.toByte()) // Handshake record
+        buf.putShort(0x0301.toShort()) // Legacy TLS 1.0
+        buf.putShort((4 + innerLen).toShort())
+
+        buf.put(0x01.toByte()) // Client Hello
+        buf.put(0.toByte())
+        buf.putShort(innerLen.toShort())
+
+        buf.putShort(0x0303.toShort()) // Legacy Version TLS 1.2
+        val clientRandom = ByteArray(32); rnd.nextBytes(clientRandom); buf.put(clientRandom)
+
+        buf.put(sessionId.size.toByte())
+        buf.put(sessionId)
+
+        buf.putShort(cipherSuites.size.toShort())
+        buf.put(cipherSuites)
+
+        buf.put(1.toByte()) // Compression method length
+        buf.put(0.toByte()) // null compression
+
+        buf.putShort(extensionsData.size.toShort())
+        buf.put(extensionsData)
+
+        return data
+    }
 }
