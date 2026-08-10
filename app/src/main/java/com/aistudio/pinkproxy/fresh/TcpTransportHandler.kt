@@ -48,7 +48,9 @@ object TcpTransportHandler {
             }
             ProxyStats.addTraffic(targetHost)
             val strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
-            ProxyStats.registerFlow(sessionId, targetHost, "TCP", strategy)
+            val reasoning = DpiStrategySelector.getSelectionReasoning(strategy, targetHost)
+            ProxyStats.registerFlow(sessionId, targetHost, "TCP", strategy, reasoning)
+            VpnRuntimeState.updateStrategy(strategy.name, reasoning)
             
             val totalWrittenClient = AtomicLong(0)
             val isTls = targetPort == 443 || targetPort == 8443

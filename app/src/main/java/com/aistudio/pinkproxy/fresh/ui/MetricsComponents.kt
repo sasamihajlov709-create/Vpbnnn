@@ -511,6 +511,14 @@ fun FlowRow(flow: com.aistudio.pinkproxy.fresh.ActiveFlow) {
                 fontSize = 9.sp,
                 color = GentleMediumPink.copy(alpha = 0.5f)
             )
+            if (flow.reasoning.isNotEmpty()) {
+                Text(
+                    flow.reasoning,
+                    fontSize = 8.5.sp,
+                    color = GentleLightPink.copy(alpha = 0.7f),
+                    maxLines = 1
+                )
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             MetricSmallDetail("UP", formatFlowSize(flow.bytesSent), GentleLightPink)

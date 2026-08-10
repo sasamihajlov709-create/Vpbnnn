@@ -229,9 +229,7 @@ object BypassConfig {
         }
         hostStrategyMemory[host] = best to (now + SESSION_TTL)
         
-        if (java.util.concurrent.ThreadLocalRandom.current().nextInt(100) < 5) {
-            VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
-        }
+        VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best, host))
         
         return best
     }

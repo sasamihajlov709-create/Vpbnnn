@@ -501,6 +501,7 @@ class PinkVpnService : VpnService() {
                             s.connect(java.net.InetSocketAddress("127.0.0.1", PROXY_PORT), 1500)
                             s.close()
                         } catch (e: Exception) {
+                            if (e is CancellationException) throw e
                             Log.e("PinkVpnService", "Engine health check failed: ${e.message}. Restarting...")
                             ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
                             withContext(Dispatchers.Main) {
@@ -518,6 +519,7 @@ class PinkVpnService : VpnService() {
             VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
             VpnRuntimeState.clearError()
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e("PinkVpnService", "Error starting VPN", e)
             VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Critical startup error: ${e.localizedMessage}")
             stopVpn()

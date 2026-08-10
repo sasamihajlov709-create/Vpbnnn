@@ -309,19 +309,41 @@ object DpiStrategySelector {
         }.sortedByDescending { it.score }
     }
 
-    fun getSelectionReasoning(strategy: BypassStrategy): String {
+    fun getSelectionReasoning(strategy: BypassStrategy, host: String? = null): String {
         val intensity = ProxyStats.censorshipIntensity.value
         val dpiType = ProxyStats.currentDpiType.value
+        val netType = BypassConfig.currentNetworkType.value.toString()
         
-        if (intensity > 90) return "Extreme censorship detected ($intensity%). Using heavy evasion."
-        if (dpiType == DpiType.TLS_SNI_BLOCK) return "SNI blocking detected. Prioritizing TLS fragmentation."
-        if (dpiType == DpiType.TCP_RESET) return "TCP Resets detected. Using robust packet mangling."
-        if (dpiType == DpiType.UDP_BLOCK) return "UDP/QUIC throttling detected. Racing TCP protocols."
+        if (host != null) {
+            val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
+            if (hostFails > 2) {
+                return "Каскадная эскалация для $host ($hostFails сбоев подряд) -> ${strategy.name.replace("_", " ")}"
+            }
+        }
+        
+        if (DpiEngine.isPanicMode.value || intensity > 92) {
+            return "Экстремальная блокировка ($intensity%). Активирован режим глубокого обхода."
+        }
+        if (dpiType == DpiType.TLS_SNI_BLOCK) {
+            return "Обнаружена блокировка SNI. Применяется мультифрагментация TLS."
+        }
+        if (dpiType == DpiType.TCP_RESET) {
+            return "Обнаружен сброс TCP Reset. Применяются OOB и кастомные флаги TCP."
+        }
+        if (dpiType == DpiType.UDP_BLOCK) {
+            return "Обнаружено дроппирование UDP/QUIC. Переключение на гонку протоколов."
+        }
         
         val score = getAverageScore(strategy).toInt()
-        if (score > 1000) return "Strategy is highly stable for current network."
-        if (score < 100) return "Exploring new paths due to failures."
+        val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         
-        return "Optimal balance of speed and evasion for ${strategy.family.name} traffic."
+        if (score > 1000) {
+            return "Высокий рейтинг надежности ($score) для категории ${category.name} в сети $netType."
+        }
+        if (score < 100) {
+            return "Адаптивный поиск оптимального пути для ${category.name}."
+        }
+        
+        return "Оптимальный баланс скорости и незаметности для ${strategy.family.name}."
     }
 }

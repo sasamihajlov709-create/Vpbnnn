@@ -124,6 +124,8 @@ object AutoTtlProber {
             
             discoveredMtus[host] = 1400
             return 1400
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.v("AutoTtlProber", "MTU probe failed for $host: ${e.message}")
             return 1400
@@ -163,10 +165,12 @@ object AutoTtlProber {
                 socket.soTimeout = 800
                 socket.getInputStream().read()
                 true
-            } catch (e: Throwable) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 false
             } finally {
-                try { socket?.close() } catch (e: Throwable) {}
+                try { socket?.close() } catch (e: Exception) {}
             }
         }
     }

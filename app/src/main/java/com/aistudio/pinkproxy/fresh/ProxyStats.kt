@@ -12,8 +12,8 @@ object ProxyStats {
     val activeFlows: StateFlow<List<ActiveFlow>> = _activeFlows.map { it.values.toList().sortedByDescending { f -> f.startTime } }
         .stateIn(ProxyDispatcher.mainScope, SharingStarted.Eagerly, emptyList())
 
-    fun registerFlow(id: String, host: String, type: String, strategy: BypassStrategy) {
-        _activeFlows.update { it + (id to ActiveFlow(id, host, type, strategy)) }
+    fun registerFlow(id: String, host: String, type: String, strategy: BypassStrategy, reasoning: String = "") {
+        _activeFlows.update { it + (id to ActiveFlow(id, host, type, strategy, reasoning = reasoning)) }
     }
 
     fun updateFlow(id: String, sent: Long = 0, received: Long = 0, status: String? = null) {

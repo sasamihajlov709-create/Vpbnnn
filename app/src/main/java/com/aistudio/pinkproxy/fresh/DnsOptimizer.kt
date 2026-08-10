@@ -244,7 +244,8 @@ object DnsOptimizer {
                     try {
                         val ips = RobustResolver.resolve(domain, vpnService)
                         if (ips.isNotEmpty()) DnsCacheManager.put(domain, ips)
-                    } catch (e: Throwable) {
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                         Log.v("DnsOptimizer", "Warm-up failed for $domain: ${e.message}")
                     }
                 }
@@ -269,7 +270,8 @@ object DnsOptimizer {
                     async {
                         try {
                             RobustResolver.resolve(domain, vpnService)
-                        } catch (e: Throwable) {
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
                             Log.v("DnsOptimizer", "Prefetch failed for $domain: ${e.message}")
                         }
                     }

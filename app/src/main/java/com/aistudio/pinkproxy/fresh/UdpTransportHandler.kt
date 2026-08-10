@@ -140,7 +140,10 @@ object UdpTransportHandler {
                                 }
 
                                 if (!activeSessions.containsKey(sessionKey)) {
-                                    ProxyStats.registerFlow("udp_$sessionKey", host, "UDP", BypassConfig.getBestStrategyForHost(host))
+                                    val udpStrat = BypassConfig.getBestStrategyForHost(host)
+                                    val reasoning = DpiStrategySelector.getSelectionReasoning(udpStrat, host)
+                                    ProxyStats.registerFlow("udp_$sessionKey", host, "UDP", udpStrat, reasoning)
+                                    VpnRuntimeState.updateStrategy(udpStrat.name, reasoning)
                                     activeSessions[sessionKey] = System.currentTimeMillis()
                                 }
                                 

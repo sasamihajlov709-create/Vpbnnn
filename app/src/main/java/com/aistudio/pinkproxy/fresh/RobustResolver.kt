@@ -127,8 +127,8 @@ object RobustResolver {
     suspend fun resolveDual(host: String, vpnService: VpnService? = null): List<InetAddress> = coroutineScope {
         if (!BypassConfig.includeIpv6) return@coroutineScope resolve(host, vpnService, 1)
 
-        val deferredA = async { try { resolve(host, vpnService, 1) } catch (e: Exception) { emptyList() } }
-        val deferredAaaa = async { try { resolve(host, vpnService, 28) } catch (e: Exception) { emptyList() } }
+        val deferredA = async { try { resolve(host, vpnService, 1) } catch (e: Exception) { if (e is CancellationException) throw e; emptyList() } }
+        val deferredAaaa = async { try { resolve(host, vpnService, 28) } catch (e: Exception) { if (e is CancellationException) throw e; emptyList() } }
 
         val a = deferredA.await()
         val aaaa = deferredAaaa.await()

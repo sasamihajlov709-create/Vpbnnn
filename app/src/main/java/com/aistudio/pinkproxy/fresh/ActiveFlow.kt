@@ -5,6 +5,7 @@ data class ActiveFlow(
     val host: String,
     val type: String, // "TCP" or "UDP"
     val strategy: BypassStrategy,
+    val reasoning: String = "",
     val startTime: Long = System.currentTimeMillis(),
     var bytesSent: Long = 0,
     var bytesReceived: Long = 0,
