@@ -235,10 +235,18 @@ object BypassConfig {
     }
 
     fun rotateGlobalStrategy() {
-        val best = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT && it != _strategy.value }.random()
+        val category = HostCategory.OTHER
+        val now = System.currentTimeMillis()
+        val candidates = BypassStrategy.entries.filter { 
+            it != BypassStrategy.DIRECT && 
+            it != _strategy.value &&
+            (DpiEngine.circuitBreakers[it] ?: 0L) < now
+        }
+        val best = candidates.maxByOrNull { DpiStrategySelector.getWeightedScore(it, category) } 
+            ?: BypassStrategy.SNI_SPLIT
         _strategy.value = best
-        VpnRuntimeState.updateStrategy(best.name)
-        ProxyStats.logRecovery("Strategy rotated: ${best.name}")
+        VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
+        ProxyStats.logRecovery("Strategy rotated to highest-scoring alternative: ${best.name}")
     }
 
     fun recordSuccess(strat: BypassStrategy, rtt: Long, host: String?) {

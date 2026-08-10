@@ -15,8 +15,8 @@ object DpiStorage {
             }
         }
         DpiEngine.networkStrategyMemory.forEach { (netType, catMap) ->
-            catMap.forEach { (cat, strat) ->
-                editor.putString("netmem_${netType}_${cat.name}", strat.name)
+            catMap.forEach { (cat, mem) ->
+                editor.putString("netmem_${netType}_${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
             }
         }
         editor.apply()
@@ -36,13 +36,16 @@ object DpiStorage {
             if (parts.size == 2) {
                 val netType = parts[0]
                 val catName = parts[1]
-                val stratName = prefs.getString(key, null)
-                if (stratName != null) {
+                val valStr = prefs.getString(key, null)
+                if (valStr != null) {
                     try {
                         val cat = HostCategory.valueOf(catName)
-                        val strat = BypassStrategy.valueOf(stratName)
+                        val valParts = valStr.split("|")
+                        val strat = BypassStrategy.valueOf(valParts[0])
+                        val ts = if (valParts.size > 1) valParts[1].toLongOrNull() ?: System.currentTimeMillis() else System.currentTimeMillis()
+                        val conf = if (valParts.size > 2) valParts[2].toDoubleOrNull() ?: 1.0 else 1.0
                         val catMap = DpiEngine.networkStrategyMemory.getOrPut(netType) { ConcurrentHashMap() }
-                        catMap[cat] = strat
+                        catMap[cat] = DpiEngine.NetworkMemory(strat, ts, conf)
                     } catch (e: Throwable) {}
                 }
             }

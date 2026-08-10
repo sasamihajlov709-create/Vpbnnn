@@ -44,12 +44,18 @@ object DpiStrategySelector {
             if ((DpiEngine.circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
         }
 
-        DpiEngine.networkStrategyMemory[netType]?.get(category)?.let { strat ->
-            if ((DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
-                val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
-                val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
-                if (blacklistedUntil < now) {
-                    return strat
+        DpiEngine.networkStrategyMemory[netType]?.get(category)?.let { netMem ->
+            val nowMs = System.currentTimeMillis()
+            val ageMs = nowMs - netMem.timestamp
+            val maxAge = 6 * 3600 * 1000L // 6 hours TTL
+            if (ageMs < maxAge && netMem.confidence >= 0.3) {
+                val strat = netMem.strategy
+                if ((DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                    val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
+                    val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
+                    if (blacklistedUntil < now) {
+                        return strat
+                    }
                 }
             }
         }
@@ -69,9 +75,35 @@ object DpiStrategySelector {
             return BypassStrategy.CHAOS
         }
 
+        // Confidence-guided dynamic exploration
+        val sortedByBase = validStrategies.map { (strat, sRaw) ->
+            strat to sRaw.get().toDouble()
+        }.sortedByDescending { it.second }
+
+        val topScore = sortedByBase.firstOrNull()?.second ?: 100.0
+        val runnerUpScore = sortedByBase.getOrNull(1)?.second ?: 0.0
+        val scoreGap = (topScore - runnerUpScore).coerceAtLeast(0.0)
+
+        val totalObsInCat = validStrategies.sumOf { (strat, _) ->
+            (DpiEngine.successHistory[strat]?.get() ?: 0) + (DpiEngine.failureHistory[strat]?.get() ?: 0)
+        }
+
+        val obsConfidence = (totalObsInCat / 25.0).coerceIn(0.0, 1.0)
+        val gapConfidence = (scoreGap / 400.0).coerceIn(0.0, 1.0)
+        val overallConfidence = obsConfidence * gapConfidence
+
+        val exploreProb = if (totalObsInCat < 5) {
+            0.15
+        } else {
+            (0.02 + 0.13 * (1.0 - overallConfidence)).coerceIn(0.02, 0.15)
+        }
+
         val rnd = ThreadLocalRandom.current()
-        if (rnd.nextInt(100) < 7) {
-            return validStrategies.random().key
+        if (rnd.nextDouble() < exploreProb) {
+            val topCandidates = sortedByBase.take(3).map { it.first }
+            if (topCandidates.isNotEmpty()) {
+                return topCandidates.random()
+            }
         }
 
         val weightedList = mutableListOf<Pair<BypassStrategy, Double>>()
@@ -225,8 +257,11 @@ object DpiStrategySelector {
                 if (intensity > 50) {
                     bonus += (intensity / 10) * 5
                 }
-                score.addAndGet(bonus)
-                if (score.get() > 3000) score.set(3000)
+                val currentScore = score.get()
+                val targetScore = (currentScore + bonus).coerceAtMost(3000)
+                // EWMA score update (alpha = 0.35)
+                val ewmaScore = (0.35 * targetScore + 0.65 * currentScore).toInt()
+                score.set(ewmaScore)
             }
             
             if (host != null) {
@@ -237,7 +272,8 @@ object DpiStrategySelector {
                 val netType = BypassConfig.currentNetworkType.value.toString()
                 val netMemory = DpiEngine.networkStrategyMemory.getOrPut(netType) { java.util.concurrent.ConcurrentHashMap() }
                 if ((DpiEngine.strategyMaturity[strategy]?.get() ?: 0) > 3) {
-                    netMemory[category] = strategy
+                    val prevConf = netMemory[category]?.confidence ?: 0.5
+                    netMemory[category] = DpiEngine.NetworkMemory(strategy, System.currentTimeMillis(), (prevConf + 0.15).coerceAtMost(1.0))
                 }
             }
 
@@ -274,10 +310,29 @@ object DpiStrategySelector {
             }
             val finalPenalty = (basePenalty * expMultiplier).toInt()
             DpiEngine.strategyScores[category]?.get(strategy)?.let { score ->
-                score.addAndGet(-finalPenalty)
-                score.set((score.get() * 0.85).toInt().coerceAtLeast(0))
+                val currentScore = score.get()
+                val targetScore = (currentScore - finalPenalty).coerceAtLeast(10)
+                // EWMA dampening (alpha = 0.30)
+                val ewmaScore = (0.30 * targetScore + 0.70 * currentScore).toInt()
+                score.set(ewmaScore)
             }
             
+            // Confidence decay for network strategy memory
+            val netType = BypassConfig.currentNetworkType.value.toString()
+            DpiEngine.networkStrategyMemory[netType]?.get(category)?.let { netMem ->
+                if (netMem.strategy == strategy) {
+                    val decayedConf = netMem.confidence * 0.6
+                    val netMap = DpiEngine.networkStrategyMemory[netType]
+                    if (netMap != null) {
+                        if (decayedConf < 0.2) {
+                            netMap.remove(category)
+                        } else {
+                            netMap[category] = netMem.copy(confidence = decayedConf)
+                        }
+                    }
+                }
+            }
+
             val fails = DpiEngine.consecutiveFailures.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             if (fails >= 4 || (fails >= 2 && reason == FailureReason.TCP_RESET)) {
                 val duration = if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) 600_000L else 300_000L
@@ -293,11 +348,20 @@ object DpiStrategySelector {
         }
     }
 
-    fun getAverageScore(strategy: BypassStrategy): Double {
-        val scores = DpiEngine.strategyScores.values.map { it[strategy]?.get() ?: 0 }.map { it.toDouble() }
-        if (scores.isEmpty()) return 0.0
-        return scores.average()
+    fun getWeightedScore(strategy: BypassStrategy, targetCategory: HostCategory? = null): Double {
+        if (targetCategory != null) {
+            val catScore = DpiEngine.strategyScores[targetCategory]?.get(strategy)?.get()?.toDouble() ?: 100.0
+            val otherScores = DpiEngine.strategyScores.entries
+                .filter { it.key != targetCategory }
+                .map { it.value[strategy]?.get()?.toDouble() ?: 100.0 }
+            val avgOther = if (otherScores.isNotEmpty()) otherScores.average() else catScore
+            return 0.75 * catScore + 0.25 * avgOther
+        }
+        val scores = DpiEngine.strategyScores.values.map { it[strategy]?.get()?.toDouble() ?: 100.0 }
+        return if (scores.isNotEmpty()) scores.average() else 100.0
     }
+
+    fun getAverageScore(strategy: BypassStrategy): Double = getWeightedScore(strategy, null)
 
     fun getStrategyMetrics(): List<StrategyMetric> {
         return BypassStrategy.entries.map { strat ->

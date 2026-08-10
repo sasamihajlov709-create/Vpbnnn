@@ -41,7 +41,8 @@ object DpiEngine {
     val globalPenalties = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     val globalBoosts = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     val strategyMaturity = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
-    val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, BypassStrategy>>()
+    data class NetworkMemory(val strategy: BypassStrategy, val timestamp: Long = System.currentTimeMillis(), val confidence: Double = 1.0)
+    val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
     
     data class HostMemory(val strategy: BypassStrategy, val timestamp: Long)
     val hostSpecificMemory = ConcurrentHashMap<String, HostMemory>()
