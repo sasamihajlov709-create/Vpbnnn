@@ -239,11 +239,16 @@ object RecoveryManager {
                             ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to $event")
                         }
                         
-                        // Dynamic TTL shifting
+                        // Dynamic TTL shifting for fake desync packets
                         val currentTtl = BypassConfig.currentTtl
-                        val newTtl = if (currentTtl == 64) 128 else if (currentTtl == 128) 255 else 64
+                        val newTtl = when (currentTtl) {
+                            3 -> 5
+                            5 -> 8
+                            8 -> 10
+                            else -> 3
+                        }
                         BypassConfig.setTtl(newTtl)
-                        ProxyStats.logRecovery("Watchdog: Shifting TTL to $newTtl due to $event")
+                        ProxyStats.logRecovery("Watchdog: Shifting Fake TTL to $newTtl due to $event")
                     }
                     recoveryEscalation.incrementAndGet()
                     

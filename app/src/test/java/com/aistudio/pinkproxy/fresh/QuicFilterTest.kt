@@ -21,12 +21,17 @@ class QuicFilterTest {
     }
 
     @Test
-    fun `isQuicPacket detects UDP port 443 as QUIC`() {
-        // Port 443 is QUIC standard
-        val port = 443
-        val dummyPayload = byteArrayOf(0x80.toByte(), 0x00, 0x00, 0x01)
-        
-        // Check port matching
-        assertTrue(port == 443 || port == 8443)
+    fun `isQuicPacket detects UDP port and payload headers as QUIC`() {
+        // Check port 443
+        assertTrue(UdpTransportHandler.isQuicPacket(443, byteArrayOf()))
+        assertTrue(UdpTransportHandler.isQuicPacket(8443, byteArrayOf()))
+
+        // Non-443 port with QUIC long header bit (0x80)
+        val quicLongHeaderPayload = byteArrayOf(0xC0.toByte(), 0x00, 0x00, 0x01)
+        assertTrue(UdpTransportHandler.isQuicPacket(12345, quicLongHeaderPayload))
+
+        // Non-443 port with regular non-QUIC UDP payload
+        val regularUdpPayload = byteArrayOf(0x00, 0x01, 0x02, 0x03)
+        assertFalse(UdpTransportHandler.isQuicPacket(12345, regularUdpPayload))
     }
 }

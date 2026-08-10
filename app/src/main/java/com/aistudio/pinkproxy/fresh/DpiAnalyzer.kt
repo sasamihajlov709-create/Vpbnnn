@@ -49,10 +49,6 @@ object DpiAnalyzer {
         DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
         DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
         DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-        
-        DpiEngine.recordResult(BypassStrategy.TCP_OOB_DESYNC, true, HostCategory.OTHER)
-        DpiEngine.recordResult(BypassStrategy.TCP_ZERO_WINDOW_DESYNC, true, HostCategory.OTHER)
-        DpiEngine.recordResult(BypassStrategy.TCP_SEGMENT_OVERLAP, true, HostCategory.OTHER)
     }
 
     fun recordEvent(type: DpiType) {
@@ -83,11 +79,6 @@ object DpiAnalyzer {
                 DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
                 DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
                 DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-                BypassStrategy.entries.forEach { strat ->
-                    if (strat.group == StrategyGroup.EXTREME) {
-                        DpiEngine.recordResult(strat, true, HostCategory.OTHER)
-                    }
-                }
             }
             else -> {}
         }

@@ -135,20 +135,30 @@ object BypassConfig {
     fun isHostCensored(host: String): Boolean = isHostProbablyCensored(host)
     fun isHostDirect(host: String): Boolean = HostClassifier.classify(host) == com.aistudio.pinkproxy.fresh.HostCategory.DIRECT
 
+    private var warmupJob: Job? = null
+
     fun startWarmupTask(scope: CoroutineScope) {
-        scope.launch {
+        warmupJob?.cancel()
+        warmupJob = scope.launch {
             while (isActive) {
                 try {
                     val target = if (ThreadLocalRandom.current().nextBoolean()) "google.com" else "cloudflare.com"
                     DpiEngine.triggerMicroProbe(target, HostCategory.OTHER)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: Throwable) {}
                 delay(TimeUnit.MINUTES.toMillis(15))
             }
         }
     }
 
-    fun setTtl(ttl: Int) { fakeTtl = ttl }
-    val currentTtl: Int get() = 64 // Standard TTL for real packets
+    fun stopWarmupTask() {
+        warmupJob?.cancel()
+        warmupJob = null
+    }
+
+    fun setTtl(ttl: Int) { fakeTtl = ttl.coerceIn(0, 30) }
+    val currentTtl: Int get() = if (fakeTtl > 0) fakeTtl else 3
 
     fun getFakeTtlForHost(host: String): Int {
         return if (fakeTtl > 0) fakeTtl else 3

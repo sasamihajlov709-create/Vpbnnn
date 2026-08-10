@@ -42,6 +42,10 @@ class VpnTunnelManager(private val service: VpnService) {
                         .addRoute("0.0.0.0", 0)
                         .setBlocking(isBlocking)
 
+                    if (allowBypass) {
+                        try { builder.allowBypass() } catch (e: Exception) { Log.w("VpnTunnelManager", "allowBypass error: ${e.message}") }
+                    }
+
                     dnsServers.forEach { dns ->
                         try {
                             builder.addDnsServer(dns)

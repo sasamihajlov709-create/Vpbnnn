@@ -48,8 +48,7 @@ class VpnLifecycleTest {
         val service = controller.create().get()
         
         assertNotNull(service)
-        // Verify proxy server was initialized
-        // Since we can't easily check private fields, we look at the log or public state
         assertTrue(PinkVpnService.instance == service)
+        assertNotNull(VpnRuntimeState.lifecycleState.value)
     }
 }

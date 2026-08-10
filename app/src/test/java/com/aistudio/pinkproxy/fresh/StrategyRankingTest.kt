@@ -44,4 +44,53 @@ class StrategyRankingTest {
         println("DEBUG: best strategy for example.com is $best")
         assertEquals(BypassStrategy.FAKE_PACKET, best)
     }
+
+    @Test
+    fun testTopCandidateSelection() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        BypassConfig.clearScores(context)
+
+        repeat(5) {
+            DpiStrategySelector.recordResult(BypassStrategy.TLS_APP_DATA_SPLIT, true, HostCategory.MESSENGER, latencyMs = 20)
+        }
+        repeat(5) {
+            DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, false, HostCategory.MESSENGER)
+        }
+
+        val best = DpiStrategySelector.getBestStrategy(HostCategory.MESSENGER)
+        assertTrue("Selected strategy should be high scoring", best == BypassStrategy.TLS_APP_DATA_SPLIT || best.group != StrategyGroup.LIGHT)
+    }
+
+    @Test
+    fun testDpiStoragePersistence() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        BypassConfig.clearScores(context)
+
+        repeat(3) {
+            DpiEngine.recordStrategyResult("testdomain.org", BypassStrategy.SNI_SPLIT, true, 30)
+        }
+        val scoreBeforeSave = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
+
+        DpiStorage.saveScores(context)
+        DpiEngine.resetStrategyScoresForNetworkChange()
+        DpiStorage.loadScores(context)
+
+        val scoreAfterLoad = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
+        assertEquals("Loaded score should match saved score", scoreBeforeSave, scoreAfterLoad)
+    }
+
+    @Test
+    fun testNetworkChangeReset() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        BypassConfig.clearScores(context)
+
+        DpiEngine.recordStrategyResult("netdomain.com", BypassStrategy.SNI_SPLIT, false)
+        assertTrue(DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT) < 100)
+
+        DpiEngine.resetStrategyScoresForNetworkChange()
+
+        assertEquals(100, DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT).toInt())
+        assertTrue(DpiEngine.successHistory.isEmpty())
+        assertTrue(DpiEngine.failureHistory.isEmpty())
+    }
 }

@@ -280,20 +280,21 @@ class PinkVpnService : VpnService() {
         try {
             ProxyStats.reset(false)
             ServiceChecker.proxyPort = PROXY_PORT
-            ServiceChecker.startChecking(engineScope, this@PinkVpnService)
+
+            // 1. Initialize DNS
             RobustResolver.initialize(engineScope)
             RobustResolver.startDnsOptimizer(engineScope, this@PinkVpnService)
-            DpiEngine.start(this@PinkVpnService)
-            CensorshipExpert.start()
-            RecoveryManager.startHealthCheck(engineScope)
 
+            // 2. Start Proxy Server
             proxyServer?.stop()
             proxyServer = null
             delay(150)
             proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
             proxyServer?.start()
 
-            healthMonitor?.start(engineScope)
+            // 3. Start DPI Engine & Censorship Expert
+            DpiEngine.start(this@PinkVpnService)
+            CensorshipExpert.start()
 
             sessionScope?.cancel()
             sessionScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
@@ -306,6 +307,7 @@ class PinkVpnService : VpnService() {
                 else -> listOf("1.1.1.1", "8.8.8.8")
             }
 
+            // 4. Establish TUN interface
             val pfd = try {
                 vpnTunnelManager?.establish(
                     sessionName = "PinkProxy VPN",
@@ -348,7 +350,14 @@ class PinkVpnService : VpnService() {
 
             _isRunning.value = true
 
+            // 5. Start tun2socks engine
             startTun2Socks(pfd, PROXY_PORT)
+
+            // 6. Now that proxy & tun2socks are fully running, start health checkers & monitors
+            ServiceChecker.startChecking(engineScope, this@PinkVpnService)
+            RecoveryManager.startHealthCheck(engineScope)
+            healthMonitor?.start(engineScope)
+
             startSessionWarmup()
 
             VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
@@ -443,6 +452,7 @@ class PinkVpnService : VpnService() {
 
             ServiceChecker.stopChecking()
             DpiEngine.stop()
+            BypassConfig.stopWarmupTask()
             RobustResolver.stopBackgroundProber()
             CensorshipExpert.stop()
             PrefetchManager.stop()
@@ -490,17 +500,20 @@ class PinkVpnService : VpnService() {
 
     fun restartProxyServer() {
         engineScope.launch(ProxyDispatcher.io) {
-            try {
-                proxyServer?.stop()
-                proxyServer = null
-                delay(250)
-                proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
-                proxyServer?.start()
-                ProxyStats.logRecovery("Proxy server restarted successfully")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e("PinkVpnService", "Failed to restart proxy server: ${e.message}")
+            serviceLock.withLock {
+                if (isStopping || !_isRunning.value) return@withLock
+                try {
+                    proxyServer?.stop()
+                    proxyServer = null
+                    delay(250)
+                    proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
+                    proxyServer?.start()
+                    ProxyStats.logRecovery("Proxy server restarted successfully")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("PinkVpnService", "Failed to restart proxy server: ${e.message}")
+                }
             }
         }
     }

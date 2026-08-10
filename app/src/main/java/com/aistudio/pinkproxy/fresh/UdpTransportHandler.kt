@@ -252,7 +252,7 @@ object UdpTransportHandler {
         udpSessionCache.clear()
     }
 
-    private fun isQuicPacket(port: Int, payload: ByteArray): Boolean {
+    internal fun isQuicPacket(port: Int, payload: ByteArray): Boolean {
         if (port == 443 || port == 8443) return true
         if (payload.isEmpty()) return false
         val first = payload[0].toInt() and 0xFF

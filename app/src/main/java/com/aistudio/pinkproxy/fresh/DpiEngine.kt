@@ -54,11 +54,14 @@ object DpiEngine {
 
     private var optimizerJob: Job? = null
     private var microProbeJob: Job? = null
+    private var appContext: Context? = null
 
     fun start(context: Context) {
         stop()
+        val ctx = context.applicationContext
+        appContext = ctx
         initStrategyChains()
-        DpiStorage.loadScores(context)
+        DpiStorage.loadScores(ctx)
 
         microProbeJob?.cancel()
         microProbeJob = scope.launch {
@@ -73,12 +76,18 @@ object DpiEngine {
 
         optimizerJob?.cancel()
         optimizerJob = scope.launch {
+            var saveCounter = 0
             while (isActive) {
                 delay(30000)
                 try {
                     DpiAnalyzer.analyzeAndAdjust()
                     DpiAnalyzer.checkGlobalStall()
                     decayPenaltiesAndRecover()
+                    saveCounter++
+                    if (saveCounter >= 4) { // Save every 2 minutes
+                        saveCounter = 0
+                        appContext?.let { DpiStorage.saveScores(it) }
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -97,6 +106,13 @@ object DpiEngine {
     }
 
     fun stop() {
+        appContext?.let { ctx ->
+            try {
+                DpiStorage.saveScores(ctx)
+            } catch (e: Exception) {
+                Log.w("DpiEngine", "Failed to save scores on stop: ${e.message}")
+            }
+        }
         optimizerJob?.cancel()
         optimizerJob = null
         microProbeJob?.cancel()
@@ -116,6 +132,15 @@ object DpiEngine {
         globalPenalties.clear()
         globalBoosts.clear()
         strategyLatency.clear()
+        successHistory.clear()
+        failureHistory.clear()
+        eventHistory.clear()
+        strategyMaturity.clear()
+        circuitBreakers.clear()
+        consecutiveFailures.clear()
+        consecutiveFailuresByHost.clear()
+        hostSpecificMemory.clear()
+        hostStrategyBlacklist.clear()
     }
     
     fun getBestExtremeStrategy(host: String? = null): BypassStrategy = DpiStrategySelector.getBestExtremeStrategy(host)
@@ -225,7 +250,9 @@ object DpiEngine {
                         val config = BypassConfig.getSessionConfig(host, strat, 50)
                         BypassConfig.applyBypass(s, out, fake, fake.size, config, host)
                         s.soTimeout = 1500
-                        s.getInputStream().read() != -1
+                        val headerBuf = ByteArray(5)
+                        val readLen = s.getInputStream().read(headerBuf)
+                        readLen >= 5 && headerBuf[0] == 0x16.toByte() && headerBuf[1] == 0x03.toByte()
                     } catch (e: Exception) {
                         Log.v("DpiEngine", "Probe $strat failed: ${e.message}")
                         false 
