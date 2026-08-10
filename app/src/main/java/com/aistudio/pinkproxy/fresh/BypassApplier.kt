@@ -102,14 +102,15 @@ object BypassApplier {
 
     private fun isProbableHttp(data: ByteArray, length: Int): Boolean {
         if (length < 8) return false
-        val s = String(data, 0, minOf(length, 16), Charsets.US_ASCII)
-        return s.startsWith("GET ") || s.startsWith("POST ") || s.startsWith("HEAD ") || s.startsWith("HTTP/")
+        return HttpParser.isHttpRequest(data, length)
     }
 
     private fun isProbableTls(data: ByteArray, length: Int): Boolean {
         if (length < 5) return false
-        // TLS Record Layer: 0x16 (Handshake), 0x03 (Version major), 0x01/03 (Version minor)
-        return data[0] == 0x16.toByte() && data[1] == 0x03.toByte() && (data[2] == 0x01.toByte() || data[2] == 0x03.toByte())
+        // TLS Record Layer: 0x16 (Handshake), 0x03 (Version major 3), version minor 0..4
+        val major = data[1].toInt() and 0xFF
+        val minor = data[2].toInt() and 0xFF
+        return data[0] == 0x16.toByte() && major == 3 && minor in 0..4
     }
 
     fun findHeaderEnd(data: ByteArray, length: Int): Int {

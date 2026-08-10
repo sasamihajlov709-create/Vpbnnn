@@ -88,17 +88,26 @@ object RobustResolver {
 
         val cacheKey = if (type == 1) host.lowercase() else "${host.lowercase()}:$type"
         val scope = getScope()
+        var newDeferred: Deferred<List<InetAddress>>? = null
         val deferred = synchronized(pendingResolutions) {
-            pendingResolutions.getOrPut(cacheKey) {
-                scope.async {
+            val existing = pendingResolutions[cacheKey]
+            if (existing != null) {
+                existing
+            } else {
+                val created = scope.async {
                     try {
                         performResolution(host, vpnService, type)
                     } finally {
                         synchronized(pendingResolutions) {
-                            pendingResolutions.remove(cacheKey)
+                            if (pendingResolutions[cacheKey] === newDeferred) {
+                                pendingResolutions.remove(cacheKey)
+                            }
                         }
                     }
                 }
+                newDeferred = created
+                pendingResolutions[cacheKey] = created
+                created
             }
         }
 
@@ -108,19 +117,15 @@ object RobustResolver {
             }
         } catch (e: TimeoutCancellationException) {
             Log.v("RobustResolver", "Resolution timeout for $host")
-            pendingResolutions.remove(cacheKey)
+            synchronized(pendingResolutions) { pendingResolutions.remove(cacheKey, deferred) }
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         } catch (e: CancellationException) {
-            pendingResolutions.remove(cacheKey)
+            synchronized(pendingResolutions) { pendingResolutions.remove(cacheKey, deferred) }
             throw e
         } catch (e: Exception) {
             Log.v("RobustResolver", "Resolution error for $host: ${e.message}")
-            pendingResolutions.remove(cacheKey)
+            synchronized(pendingResolutions) { pendingResolutions.remove(cacheKey, deferred) }
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
-        } catch (e: Throwable) {
-            Log.e("RobustResolver", "Critical resolution error for $host", e)
-            pendingResolutions.remove(cacheKey)
-            emptyList()
         }
     }
 

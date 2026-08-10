@@ -2,7 +2,7 @@ package com.aistudio.pinkproxy.fresh
 
 object TlsParser {
     fun isClientHello(buffer: ByteArray, length: Int, offset: Int = 0): Boolean {
-        if (length < 44) return false
+        if (length < 44 || offset < 0 || offset + length > buffer.size) return false
         if (offset + 5 >= buffer.size) return false
         return buffer[offset] == 0x16.toByte() && buffer[offset + 5] == 0x01.toByte()
     }
@@ -12,7 +12,7 @@ object TlsParser {
      * Returns the offset of the first character of the hostname, or -1 if not found.
      */
     fun findSniOffset(buffer: ByteArray, length: Int, offset: Int = 0, host: String? = null): Int {
-        if (length < 44) return -1
+        if (length < 44 || offset < 0 || offset + length > buffer.size) return -1
         
         // Ensure it's a TLS Handshake (0x16) and ClientHello (0x01)
         if (buffer[offset] != 0x16.toByte()) return -1
