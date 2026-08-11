@@ -6,12 +6,20 @@ import java.util.concurrent.atomic.AtomicInteger
 
 object DpiStrategySelector {
 
-    fun getBestStrategy(category: HostCategory, host: String? = null): BypassStrategy {
+    fun isFamilyCompatible(family: StrategyFamily, transport: TransportType): Boolean {
+        return when (transport) {
+            TransportType.TCP -> family != StrategyFamily.UDP && family != StrategyFamily.QUIC && family != StrategyFamily.DNS
+            TransportType.UDP -> family != StrategyFamily.TCP && family != StrategyFamily.TLS && family != StrategyFamily.HTTP && family != StrategyFamily.FRAGMENTATION && family != StrategyFamily.TIMING && family != StrategyFamily.DNS
+            TransportType.DNS -> family == StrategyFamily.DNS || family == StrategyFamily.UDP || family == StrategyFamily.TCP || family == StrategyFamily.ADAPTIVE || family == StrategyFamily.DIRECT || family == StrategyFamily.GENERIC
+        }
+    }
+
+    fun getBestStrategy(category: HostCategory, host: String? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
         val now = System.currentTimeMillis()
         val netType = BypassConfig.currentNetworkType.value.toString()
         
         if (DpiEngine.isPanicMode.value || ProxyStats.censorshipIntensity.value > 92) {
-             return getBestExtremeStrategy(host)
+             return getBestExtremeStrategy(host, transport)
         }
 
         if (host != null) {
@@ -20,7 +28,7 @@ object DpiStrategySelector {
                 val lastMem = DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null && now - lastMem.timestamp < 24 * 3600 * 1000L) {
                     val strat = lastMem.strategy
-                    if ((DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                    if (isFamilyCompatible(strat.family, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                         val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
                         if ((hostBlacklist?.get(strat) ?: 0L) < now) {
                             return strat
@@ -34,24 +42,26 @@ object DpiStrategySelector {
                     for (i in 0 until (hostFails - 2)) {
                         currentStep = currentStep?.let { getFallbackStrategy(it) }
                     }
-                    if (currentStep != null && (DpiEngine.circuitBreakers[currentStep] ?: 0L) < now) {
+                    if (currentStep != null && isFamilyCompatible(currentStep.family, transport) && (DpiEngine.circuitBreakers[currentStep] ?: 0L) < now) {
                         val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
                         if ((hostBlacklist?.get(currentStep) ?: 0L) < now) {
                             return currentStep
                         }
                     }
                 }
-                return getBestExtremeStrategy(host)
+                return getBestExtremeStrategy(host, transport)
             }
         }
 
         if (ProxyStats.censorshipIntensity.value > 95) {
             val nuclear = listOf(BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.UDP_COMBINED_NUCLEAR, BypassStrategy.UDP_RACING)
-            val bestNuclear = nuclear.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_NUCLEAR
+                .filter { isFamilyCompatible(it.family, transport) }
+            val bestNuclear = nuclear.maxByOrNull { getAverageScore(it) } ?: if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.TCP_COMBINED_NUCLEAR
             if ((DpiEngine.circuitBreakers[bestNuclear] ?: 0L) < now) return bestNuclear
         } else if (ProxyStats.censorshipIntensity.value > 85) {
             val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID, BypassStrategy.TCP_PULSE_FRAG)
-            val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: BypassStrategy.TCP_COMBINED_HYBRID
+                .filter { isFamilyCompatible(it.family, transport) }
+            val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_HYBRID else BypassStrategy.TCP_COMBINED_HYBRID
             if ((DpiEngine.circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
         }
 
@@ -61,7 +71,7 @@ object DpiStrategySelector {
             val maxAge = 6 * 3600 * 1000L // 6 hours TTL
             if (ageMs < maxAge && netMem.confidence >= 0.3) {
                 val strat = netMem.strategy
-                if ((DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                if (isFamilyCompatible(strat.family, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                     val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
                     val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
                     if (blacklistedUntil < now) {
@@ -71,10 +81,11 @@ object DpiStrategySelector {
             }
         }
 
-        val catScores = DpiEngine.strategyScores[category] ?: return BypassStrategy.SNI_SPLIT
+        val catScores = DpiEngine.strategyScores[category] ?: return if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_HYBRID else BypassStrategy.SNI_SPLIT
         
         val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
         val validStrategies = catScores.entries.filter { (strat, _) ->
+            isFamilyCompatible(strat.family, transport) &&
             (DpiEngine.circuitBreakers[strat] ?: 0L) < now && 
             (hostBlacklist?.get(strat) ?: 0L) < now &&
             (!BypassConfig.isStrictBypassMode || strat != BypassStrategy.DIRECT)
@@ -83,7 +94,7 @@ object DpiStrategySelector {
         if (validStrategies.isEmpty()) {
             if (host != null) DpiEngine.hostStrategyBlacklist.remove(host)
             DpiEngine.circuitBreakers.entries.removeIf { it.value < now }
-            return BypassStrategy.CHAOS
+            return if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.CHAOS
         }
 
         // Confidence-guided dynamic exploration
@@ -218,14 +229,18 @@ object DpiStrategySelector {
         return bestByWeight ?: weightedList.last().first
     }
 
-    fun getBestExtremeStrategy(host: String? = null): BypassStrategy {
+    fun getBestExtremeStrategy(host: String? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        val extreme = DpiEngine.strategyScores[cat]?.entries?.filter { it.key.group == StrategyGroup.EXTREME } ?: emptyList()
+        val extreme = DpiEngine.strategyScores[cat]?.entries?.filter { 
+            it.key.group == StrategyGroup.EXTREME && isFamilyCompatible(it.key.family, transport)
+        } ?: emptyList()
+        val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.ZAPRET_EXTREME
         if (extreme.isEmpty()) {
-            return BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
-                .maxByOrNull { getAverageScore(it) } ?: BypassStrategy.ZAPRET_EXTREME
+            return BypassStrategy.entries.filter { 
+                it.group == StrategyGroup.EXTREME && isFamilyCompatible(it.family, transport)
+            }.maxByOrNull { getAverageScore(it) } ?: defaultFallback
         }
-        return extreme.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.ZAPRET_EXTREME
+        return extreme.maxByOrNull { it.value.get() }?.key ?: defaultFallback
     }
 
     fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {

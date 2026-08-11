@@ -37,7 +37,7 @@ object UdpStrategyHandler {
                 val fake = FakePacketHelper.buildUdpProtocolFake(protocol)
                 writeUdpWithFake(socket, address, port, fake, DatagramPacket(data, length, address, port), rnd.nextLong(2, 5))
             }
-            BypassStrategy.UDP_NOISE_PAD, BypassStrategy.UDP_PADDING_CHAOS, BypassStrategy.UDP_QUIC_PAD, BypassStrategy.UDP_QUIC_JITTER_PAD -> {
+            BypassStrategy.UDP_NOISE_PAD, BypassStrategy.UDP_QUIC_PAD, BypassStrategy.UDP_QUIC_JITTER_PAD -> {
                 val padded = data.copyOf(length + rnd.nextInt(16, 64))
                 val noise = ByteArray(padded.size - length)
                 rnd.nextBytes(noise)
@@ -143,7 +143,7 @@ object UdpStrategyHandler {
                     socket.send(DatagramPacket(data, length, address, port))
                 }
             }
-            BypassStrategy.UDP_HEARTBEAT, BypassStrategy.UDP_STUTTER -> {
+            BypassStrategy.UDP_HEARTBEAT -> {
                 socket.send(DatagramPacket(data, length, address, port))
                 delay(rnd.nextLong(200, 500))
                 socket.send(DatagramPacket(ByteArray(1) { 0x00 }, 1, address, port))

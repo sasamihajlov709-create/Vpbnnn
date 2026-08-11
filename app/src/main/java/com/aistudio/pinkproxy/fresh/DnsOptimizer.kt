@@ -149,8 +149,13 @@ object DnsOptimizer {
     private suspend fun probeNow(vpnService: VpnService?) {
         lastProbeTime = System.currentTimeMillis()
         val testDomains = listOf("google.com", "bing.com", "cloudflare.com")
+        val currentDohUrls = if (BypassConfig.dnsType == DnsType.CUSTOM_DOH && BypassConfig.customDnsUrl.isNotBlank()) {
+            listOf(BypassConfig.customDnsUrl) + dohUrls
+        } else {
+            dohUrls
+        }
         coroutineScope {
-            val dohJobs = dohUrls.mapIndexed { index, url ->
+            val dohJobs = currentDohUrls.mapIndexed { index, url ->
                 async {
                     if (index > 0) delay(index * 30L) // 30ms stagger
                     val start = System.currentTimeMillis()
@@ -208,7 +213,7 @@ object DnsOptimizer {
             dotJobs.awaitAll()
             doqJobs.awaitAll()
             
-            bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dohUrls[0]
+            bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: currentDohUrls[0]
             bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") && !it.startsWith("doq://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dotServers[0]
             bestDoqServer = providerLatencies.filterKeys { it.startsWith("doq://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key?.substringAfter("doq://") ?: doqServers[0]
             

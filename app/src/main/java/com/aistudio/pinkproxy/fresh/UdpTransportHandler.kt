@@ -140,7 +140,7 @@ object UdpTransportHandler {
                                 }
 
                                 if (!activeSessions.containsKey(sessionKey)) {
-                                    val udpStrat = BypassConfig.getBestStrategyForHost(host)
+                                    val udpStrat = BypassConfig.getBestStrategyForHost(host, TransportType.UDP)
                                     val reasoning = DpiStrategySelector.getSelectionReasoning(udpStrat, host)
                                     ProxyStats.registerFlow("udp_$sessionKey", host, "UDP", udpStrat, reasoning)
                                     VpnRuntimeState.updateStrategy(udpStrat.name, reasoning)
@@ -153,7 +153,7 @@ object UdpTransportHandler {
                                     val outPacket = DatagramPacket(payload, payload.size, targetInet, port)
                                     val workerIdx = (host.hashCode() and 0x7FFFFFFF) % 8
                                     
-                                    val config = BypassConfig.getSessionConfig(host, BypassConfig.getBestStrategyForHost(host), BypassConfig.currentRttMs.value)
+                                    val config = BypassConfig.getSessionConfig(host, BypassConfig.getBestStrategyForHost(host, TransportType.UDP), BypassConfig.currentRttMs.value, TransportType.UDP)
                                     // Use BypassApplier for all UDP evasion
                                     launch {
                                         try {

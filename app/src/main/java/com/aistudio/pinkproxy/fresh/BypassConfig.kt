@@ -221,19 +221,23 @@ object BypassConfig {
         }
     }
 
-    fun getBestStrategyForHost(host: String): BypassStrategy {
-        forcedBenchmarkStrategy?.let { return it }
+    fun getBestStrategyForHost(host: String, transport: TransportType = TransportType.TCP): BypassStrategy {
+        forcedBenchmarkStrategy?.let {
+            if (DpiStrategySelector.isFamilyCompatible(it.family, transport)) return it
+        }
         if (!isAutoTuning) {
             val base = _strategy.value
-            return if (isStrictBypassMode && base == BypassStrategy.DIRECT) BypassStrategy.SNI_SPLIT else base
+            if (DpiStrategySelector.isFamilyCompatible(base.family, transport)) {
+                return if (isStrictBypassMode && base == BypassStrategy.DIRECT) BypassStrategy.SNI_SPLIT else base
+            }
         }
         val now = System.currentTimeMillis()
         hostStrategyMemory[host]?.let { (remembered, expiry) ->
-            if (now < expiry) {
+            if (now < expiry && DpiStrategySelector.isFamilyCompatible(remembered.family, transport)) {
                 return if (isStrictBypassMode && remembered == BypassStrategy.DIRECT) BypassStrategy.SNI_SPLIT else remembered
             }
         }
-        var best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host)
+        var best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host, transport)
         if (isStrictBypassMode && best == BypassStrategy.DIRECT) {
             best = BypassStrategy.SNI_SPLIT
         }
@@ -289,10 +293,10 @@ object BypassConfig {
         }
     }
 
-    fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long): SessionConfig {
+    fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long, transport: TransportType = TransportType.TCP): SessionConfig {
         val rnd = ThreadLocalRandom.current()
         val intensity = ProxyStats.censorshipIntensity.value
-        var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) DpiEngine.getBestExtremeStrategy(host) else strategy
+        var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) DpiEngine.getBestExtremeStrategy(host, transport) else strategy
         if (isStrictBypassMode && effectiveStrategy == BypassStrategy.DIRECT) {
             effectiveStrategy = BypassStrategy.SNI_SPLIT
         }

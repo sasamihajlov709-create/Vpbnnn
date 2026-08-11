@@ -109,7 +109,6 @@ object TcpRaceConnector {
             val readBytes = withTimeoutOrNull(2500) { rsIn.read(responseBuf) } ?: -1
             
             if (readBytes > 0) {
-                DpiEngine.recordResult(strategy, true, HostClassifier.classify(host), host = host)
                 BypassConfig.recordSuccess(strategy, 100, host)
                 return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
             } else {

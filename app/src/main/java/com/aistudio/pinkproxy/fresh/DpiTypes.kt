@@ -28,4 +28,10 @@ enum class DnsType {
     CUSTOM_UDP
 }
 
+enum class TransportType {
+    TCP,
+    UDP,
+    DNS
+}
+
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())

@@ -51,4 +51,15 @@ class MultiNetworkAndDnsTest {
         }
         assertNotNull(resNuclear)
     }
+
+    @Test
+    fun testDnsTypeCustomSelection() {
+        BypassConfig.dnsType = DnsType.CUSTOM_DOH
+        BypassConfig.customDnsUrl = "https://my-custom-doh.org/dns-query"
+        assertEquals(DnsType.CUSTOM_DOH, BypassConfig.dnsType)
+        assertEquals("https://my-custom-doh.org/dns-query", BypassConfig.customDnsUrl)
+
+        BypassConfig.dnsType = DnsType.SYSTEM
+        assertEquals(DnsType.SYSTEM, BypassConfig.dnsType)
+    }
 }

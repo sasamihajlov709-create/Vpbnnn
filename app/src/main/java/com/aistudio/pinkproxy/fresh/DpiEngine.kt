@@ -252,7 +252,12 @@ object DpiEngine {
                         s.soTimeout = 1500
                         val headerBuf = ByteArray(5)
                         val readLen = s.getInputStream().read(headerBuf)
-                        readLen >= 5 && headerBuf[0] == 0x16.toByte() && headerBuf[1] == 0x03.toByte()
+                        val success = readLen >= 5 && headerBuf[0] == 0x16.toByte() && headerBuf[1] == 0x03.toByte()
+                        if (success) {
+                            DpiStrategySelector.recordResult(config.strategy, true, category, host = host)
+                            return@withTimeoutOrNull true
+                        }
+                        false
                     } catch (e: Exception) {
                         Log.v("DpiEngine", "Probe $strat failed: ${e.message}")
                         false 
@@ -262,10 +267,7 @@ object DpiEngine {
                         try { s.close() } catch (e: java.io.IOException) {} 
                     }
                 }
-                if (ok == true) {
-                    DpiStrategySelector.recordResult(strat, true, category, host = host)
-                    return
-                }
+                if (ok == true) return
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -276,7 +278,8 @@ object DpiEngine {
     }
     
     // Delegation methods for backward compatibility
-    fun getBestStrategy(category: HostCategory, host: String? = null) = DpiStrategySelector.getBestStrategy(category, host)
+    fun getBestStrategy(category: HostCategory, host: String? = null, transport: TransportType = TransportType.TCP) = DpiStrategySelector.getBestStrategy(category, host, transport)
+    fun getBestExtremeStrategy(host: String? = null, transport: TransportType = TransportType.TCP) = DpiStrategySelector.getBestExtremeStrategy(host, transport)
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) = 
         DpiStrategySelector.recordResult(strategy, success, category, reason, latencyMs, host)
     fun triggerRecalibration() {
