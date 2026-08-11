@@ -5,8 +5,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 object DpiStorage {
 
-    fun saveScores(context: Context) {
-        saveHostMemory(context)
+    fun saveScores(context: Context, synchronous: Boolean = false) {
+        saveHostMemory(context, synchronous)
         val prefs = context.getSharedPreferences("dpi_engine_scores", Context.MODE_PRIVATE)
         val editor = prefs.edit()
         editor.clear()
@@ -20,7 +20,7 @@ object DpiStorage {
                 editor.putString("netmem_${netType}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
             }
         }
-        editor.apply()
+        if (synchronous) editor.commit() else editor.apply()
     }
 
     fun loadScores(context: Context) {
@@ -54,9 +54,10 @@ object DpiStorage {
         }
     }
 
-    private fun saveHostMemory(context: Context) {
+    private fun saveHostMemory(context: Context, isSynchronous: Boolean = false) {
         val prefs = context.getSharedPreferences("dpi_engine_host_memory", Context.MODE_PRIVATE)
         val editor = prefs.edit()
+        editor.clear()
         val now = System.currentTimeMillis()
         val expiry = 86400000L * 7
         DpiEngine.hostSpecificMemory.forEach { (host, mem) ->
@@ -64,7 +65,7 @@ object DpiStorage {
                 editor.putString(host, "${mem.strategy.name}|${mem.timestamp}")
             }
         }
-        editor.apply()
+        if (isSynchronous) editor.commit() else editor.apply()
 
         val blPrefs = context.getSharedPreferences("dpi_engine_host_blacklist", Context.MODE_PRIVATE)
         val blEditor = blPrefs.edit()
@@ -75,7 +76,7 @@ object DpiStorage {
                 blEditor.putString(host, validEntries)
             }
         }
-        blEditor.apply()
+        if (isSynchronous) blEditor.commit() else blEditor.apply()
     }
 
     private fun loadHostMemory(context: Context) {

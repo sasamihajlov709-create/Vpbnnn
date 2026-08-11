@@ -8,6 +8,8 @@ import java.net.InetAddress
 
 class VpnTunnelManager(private val service: VpnService) {
     private var vpnInterface: ParcelFileDescriptor? = null
+    var isIpv6Active: Boolean = false
+        private set
 
     fun establish(
         sessionName: String,
@@ -34,6 +36,7 @@ class VpnTunnelManager(private val service: VpnService) {
 
         for (tryIpv6 in ipv6Options) {
             for ((addr, prefix) in candidates) {
+                var ipv6SetupSuccessful = false
                 try {
                     val builder = service.Builder()
                         .setSession(sessionName)
@@ -60,8 +63,10 @@ class VpnTunnelManager(private val service: VpnService) {
                             builder.addRoute("::", 0)
                             builder.addDnsServer("2606:4700:4700::1111")
                             builder.addDnsServer("2001:4860:4860::8888")
+                            ipv6SetupSuccessful = true
                         } catch (e: Exception) {
                             Log.w("VpnTunnelManager", "Failed to setup IPv6: ${e.message}")
+                            ipv6SetupSuccessful = false
                         }
                     }
 
@@ -83,7 +88,8 @@ class VpnTunnelManager(private val service: VpnService) {
                     val descriptor = builder.establish()
                     if (descriptor != null) {
                         vpnInterface = descriptor
-                        Log.i("VpnTunnelManager", "TUN Interface established with addr=$addr/$prefix, ipv6=$tryIpv6: $descriptor")
+                        isIpv6Active = tryIpv6 && ipv6SetupSuccessful
+                        Log.i("VpnTunnelManager", "TUN Interface established with addr=$addr/$prefix, ipv6=$isIpv6Active: $descriptor")
                         return descriptor
                     }
                 } catch (e: Exception) {
@@ -92,6 +98,7 @@ class VpnTunnelManager(private val service: VpnService) {
             }
         }
 
+        isIpv6Active = false
         Log.e("VpnTunnelManager", "Failed to establish TUN interface with all address candidates.")
         return null
     }

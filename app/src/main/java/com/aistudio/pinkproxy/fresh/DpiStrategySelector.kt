@@ -16,7 +16,18 @@ object DpiStrategySelector {
 
         if (host != null) {
             val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
-            if (hostFails > 2) {
+            if (hostFails == 0) {
+                val lastMem = DpiEngine.hostSpecificMemory[host]
+                if (lastMem != null && now - lastMem.timestamp < 24 * 3600 * 1000L) {
+                    val strat = lastMem.strategy
+                    if ((DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                        val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
+                        if ((hostBlacklist?.get(strat) ?: 0L) < now) {
+                            return strat
+                        }
+                    }
+                }
+            } else if (hostFails > 2) {
                 val lastMem = DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null) {
                     var currentStep: BypassStrategy? = lastMem.strategy
@@ -203,13 +214,8 @@ object DpiStrategySelector {
             return validStrategies.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
         }
 
-        var randomPivot = rnd.nextDouble() * currentTotal
-        for ((strat, weight) in weightedList) {
-            randomPivot -= weight
-            if (randomPivot <= 1e-9) return strat
-        }
-
-        return weightedList.last().first
+        val bestByWeight = weightedList.maxByOrNull { it.second }?.first
+        return bestByWeight ?: weightedList.last().first
     }
 
     fun getBestExtremeStrategy(host: String? = null): BypassStrategy {

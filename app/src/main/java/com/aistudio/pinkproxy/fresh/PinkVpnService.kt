@@ -299,7 +299,17 @@ class PinkVpnService : VpnService() {
             sessionScope?.cancel()
             sessionScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
 
+            val systemDnsIps = try {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val activeNet = cm.activeNetwork
+                val linkProps = cm.getLinkProperties(activeNet)
+                linkProps?.dnsServers?.mapNotNull { it.hostAddress }?.filter { it.contains(".") } ?: emptyList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+
             val dnsServers = when (BypassConfig.dnsType) {
+                DnsType.SYSTEM -> if (systemDnsIps.isNotEmpty()) systemDnsIps else listOf("1.1.1.1", "8.8.8.8")
                 DnsType.GOOGLE_DOH -> listOf("8.8.8.8", "8.8.4.4")
                 DnsType.CLOUDFLARE_DOH -> listOf("1.1.1.1", "1.0.0.1")
                 DnsType.ADGUARD_DOH -> listOf("94.140.14.14", "94.140.15.15")
@@ -308,7 +318,7 @@ class PinkVpnService : VpnService() {
                     val ips = extractIpsFromDnsUrl(BypassConfig.customDnsUrl)
                     if (ips.isNotEmpty()) ips else listOf("1.1.1.1", "8.8.8.8")
                 }
-                else -> listOf("1.1.1.1", "8.8.8.8")
+                else -> if (systemDnsIps.isNotEmpty()) systemDnsIps else listOf("1.1.1.1", "8.8.8.8")
             }
 
             // 4. Establish TUN interface
@@ -328,7 +338,8 @@ class PinkVpnService : VpnService() {
                 ) ?: throw java.io.IOException("Failed to establish tunnel")
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w("PinkVpnService", "Failed with IPv6/Full config, retrying IPv4 basic: ${e.message}")
+                Log.w("PinkVpnService", "Emergency fallback TUN activated! Reason: ${e.message}. Reconfiguring: IPv4-only, MTU 1400, Default DNS 8.8.8.8")
+                VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Fallback tunnel mode activated (IPv4-only)")
                 vpnTunnelManager?.establish(
                     sessionName = "PinkProxy VPN",
                     mtu = 1400,

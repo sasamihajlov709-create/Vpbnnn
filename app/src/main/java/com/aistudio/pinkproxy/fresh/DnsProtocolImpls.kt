@@ -11,9 +11,14 @@ import kotlinx.coroutines.channels.Channel
 
 object UdpDnsProtocols {
     suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> {
-        val dotRes = DotDnsProtocols.queryDot(host, dnsIp, vpnService, type)
-        if (dotRes.isNotEmpty()) return dotRes
-        return DohDnsProtocols.queryDohRacing(host, vpnService, type)
+        try {
+            val dotRes = DotDnsProtocols.queryDot(host, dnsIp, vpnService, type)
+            if (dotRes.isNotEmpty()) return dotRes
+            return DohDnsProtocols.queryDohRacing(host, vpnService, type)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            return emptyList()
+        }
     }
     suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.DatagramSocket? = null
@@ -32,6 +37,7 @@ object UdpDnsProtocols {
             
             DnsPacketEngine.parseDnsResponseDetailed(responseBuf, responsePacket.length)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             emptyList()
         } finally {
             socket?.close()
@@ -45,8 +51,6 @@ object UdpDnsProtocols {
             socket.soTimeout = 3000
             
             val query = DnsPacketEngine.buildDnsQuery(host, type)
-            // Reordering logic: send the query in two parts (if possible, but DNS is one packet usually)
-            // Real reordering in DNS evasion usually means sending fake packets BEFORE the real one
             val fake = DnsPacketEngine.buildDnsQuery("google.com", 1)
             val fakePacket = java.net.DatagramPacket(fake, fake.size, InetAddress.getByName(dnsIp), 53)
             socket.send(fakePacket)
@@ -61,6 +65,7 @@ object UdpDnsProtocols {
             
             DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             emptyList()
         } finally {
             socket?.close()
@@ -86,6 +91,7 @@ object UdpDnsProtocols {
         } catch (e: java.net.SocketTimeoutException) {
             emptyList()
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.v("UdpDnsProtocols", "UDP DNS query failed for $host via $dnsIp: ${e.message}")
             emptyList()
         } finally {
@@ -302,6 +308,7 @@ object DohDnsProtocols {
         val urls = when (selectedDns) {
             DnsType.GOOGLE_DOH -> listOf("https://dns.google/dns-query")
             DnsType.CLOUDFLARE_DOH -> listOf("https://1.1.1.1/dns-query")
+            DnsType.ADGUARD_DOH -> listOf("https://dns.adguard-dns.com/dns-query", "https://94.140.14.14/dns-query")
             DnsType.QUAD9_DOH -> listOf("https://9.9.9.9/dns-query")
             DnsType.CUSTOM_DOH -> listOf(BypassConfig.customDnsUrl)
             else -> DnsOptimizer.getDohUrls().take(4).ifEmpty { racingUrls }
@@ -334,8 +341,60 @@ object DohDnsProtocols {
         result
     }
 
-    suspend fun queryDohExtreme(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = queryDohRacing(host, vpnService, type)
-    suspend fun queryDohSmuggling(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = queryDohRacing(host, vpnService, type)
+    suspend fun queryDohExtreme(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.coroutineScope {
+        val extremeEndpoints = listOf(
+            "https://dns.google/dns-query",
+            "https://1.1.1.1/dns-query",
+            "https://9.9.9.9/dns-query",
+            "https://dns.adguard-dns.com/dns-query",
+            "https://cloudflare-dns.com/dns-query"
+        )
+        val channel = Channel<List<InetAddress>>(extremeEndpoints.size)
+        extremeEndpoints.forEach { url ->
+            launch {
+                try {
+                    val res = queryDoh(host, url, vpnService, type)
+                    channel.send(res)
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    channel.send(emptyList())
+                }
+            }
+        }
+        var result = emptyList<InetAddress>()
+        repeat(extremeEndpoints.size) {
+            val res = channel.receive()
+            if (res.isNotEmpty() && result.isEmpty()) {
+                result = res
+                coroutineContext.cancelChildren()
+                return@coroutineScope result
+            }
+        }
+        result
+    }
+
+    suspend fun queryDohSmuggling(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val client = DnsProtocols.getProtectedClient(vpnService)
+            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val request = Request.Builder()
+                .url(DnsOptimizer.bestDohUrl)
+                .post(query.toRequestBody("application/dns-message".toMediaTypeOrNull()))
+                .header("Accept", "application/dns-message")
+                .header("X-Forwarded-For", "127.0.0.1")
+                .header("Cache-Control", "no-cache, no-transform")
+                .build()
+            
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext queryDohRacing(host, vpnService, type)
+                val body = response.body?.bytes() ?: return@withContext emptyList()
+                return@withContext DnsPacketEngine.parseDnsResponse(body, body.size)
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            queryDohRacing(host, vpnService, type)
+        }
+    }
 }
 
 object DotDnsProtocols {

@@ -108,7 +108,7 @@ object DpiEngine {
     fun stop() {
         appContext?.let { ctx ->
             try {
-                DpiStorage.saveScores(ctx)
+                DpiStorage.saveScores(ctx, synchronous = true)
             } catch (e: Exception) {
                 Log.w("DpiEngine", "Failed to save scores on stop: ${e.message}")
             }

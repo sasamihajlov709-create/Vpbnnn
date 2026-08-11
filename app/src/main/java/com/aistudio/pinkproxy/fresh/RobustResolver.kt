@@ -286,7 +286,31 @@ object RobustResolver {
             DnsCacheManager.getEmergencyFallback(host) ?: emptyList()
         }
 
+        val customDnsQuery: (suspend () -> List<InetAddress>)? = when (BypassConfig.dnsType) {
+            DnsType.CUSTOM_DOH -> {
+                if (BypassConfig.customDnsUrl.isNotBlank()) {
+                    { DnsProtocols.queryDoh(host, BypassConfig.customDnsUrl, vpnService, type) }
+                } else null
+            }
+            DnsType.CUSTOM_UDP -> {
+                val ipRegex = Regex("""\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b""")
+                val ip = ipRegex.find(BypassConfig.customDnsUrl)?.value ?: BypassConfig.customDnsUrl
+                if (ip.isNotBlank()) {
+                    { DnsProtocols.queryUdpDnsShadow(host, ip, vpnService, type) }
+                } else null
+            }
+            DnsType.CUSTOM_TCP -> {
+                val ipRegex = Regex("""\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b""")
+                val ip = ipRegex.find(BypassConfig.customDnsUrl)?.value ?: BypassConfig.customDnsUrl
+                if (ip.isNotBlank()) {
+                    { DnsProtocols.queryTcpDnsShadow(host, ip, vpnService, type) }
+                } else null
+            }
+            else -> null
+        }
+
         val queries = mutableListOf<suspend () -> List<InetAddress>>()
+        customDnsQuery?.let { queries.add(it) }
         queries.add(primaryDoH)
         queries.add(primaryDoT)
         queries.add(shadowUdp)
@@ -308,11 +332,12 @@ object RobustResolver {
         val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(queries.size + 1)
 
         // Grouped Happy Eyeballs-like staggered start
+        val firstGroup = if (customDnsQuery != null) listOf(customDnsQuery, primaryDoH) else listOf(primaryDoH, shadowUdp)
         val queryGroups = listOf(
-            listOf(primaryDoH, shadowUdp),
+            firstGroup,
             listOf(primaryDoT, dnsQuic),
             listOf(shadowTcp, echCheck),
-            queries.filter { it !in listOf(primaryDoH, primaryDoT, shadowUdp, shadowTcp, dnsQuic, echCheck) }
+            queries.filter { it !in firstGroup && it !in listOf(primaryDoT, dnsQuic, shadowTcp, echCheck) }
         )
 
         val staggerDelay = if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 15) 600L else 250L // 250ms delay between groups if no result yet

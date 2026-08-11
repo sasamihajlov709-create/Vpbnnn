@@ -6,6 +6,7 @@ import java.net.InetAddress
 import javax.net.ssl.SSLContext
 import okhttp3.*
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.*
 
 interface DnsResolverEngine {
     suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress>
@@ -141,8 +142,35 @@ object DnsProtocols {
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> =
         engine.queryDot(host, dotIp, vpnService, type)
 
-    suspend fun queryDnsExtremeRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {
-        // High concurrency DNS strategy delegated to DoH racing
-        return engine.queryDohRacing(host, vpnService, type)
+    suspend fun queryDnsExtremeRacing(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> = kotlinx.coroutines.coroutineScope {
+        val resolvers: List<suspend () -> List<InetAddress>> = listOf(
+            { queryDohRacing(host, vpnService, type) },
+            { queryDot(host, "8.8.8.8", vpnService, type) },
+            { queryDot(host, "1.1.1.1", vpnService, type) },
+            { queryUdpDnsShadow(host, "8.8.8.8", vpnService, type) },
+            { queryTcpDnsShadow(host, "1.1.1.1", vpnService, type) }
+        )
+        val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(resolvers.size)
+        resolvers.forEach { resolver ->
+            launch {
+                try {
+                    val res = resolver()
+                    channel.send(res)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    channel.send(emptyList())
+                }
+            }
+        }
+        var result = emptyList<InetAddress>()
+        repeat(resolvers.size) {
+            val res = channel.receive()
+            if (res.isNotEmpty() && result.isEmpty()) {
+                result = res
+                coroutineContext.cancelChildren()
+                return@coroutineScope result
+            }
+        }
+        result
     }
 }

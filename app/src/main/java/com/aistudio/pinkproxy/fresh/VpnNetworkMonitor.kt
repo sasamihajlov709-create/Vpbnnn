@@ -36,16 +36,22 @@ class VpnNetworkMonitor(
                 activeNetworks.remove(network)
                 networkCapabilitiesMap.remove(network)
                 Log.i("VpnNetworkMonitor", "Network lost: $network")
-                val active = activeNetworks.entries.firstOrNull()
-                if (active != null) {
-                    networkChangeCallback(active.key, active.value)
+                val systemActiveNet = connectivityManager.activeNetwork
+                if (systemActiveNet != null && activeNetworks.containsKey(systemActiveNet)) {
+                    networkChangeCallback(systemActiveNet, activeNetworks[systemActiveNet] ?: NetworkType.NONE)
                 } else {
-                    networkChangeCallback(null, NetworkType.NONE)
+                    val active = activeNetworks.entries.firstOrNull()
+                    if (active != null) {
+                        networkChangeCallback(active.key, active.value)
+                    } else {
+                        networkChangeCallback(null, NetworkType.NONE)
+                    }
                 }
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                // Only trigger if major capabilities or transports changed to avoid recursion/spam
+                val newType = getNetworkType(capabilities)
+                activeNetworks[network] = newType
                 val oldCaps = networkCapabilitiesMap[network]
                 if (oldCaps != null) {
                     val transportsChanged = !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
@@ -64,6 +70,7 @@ class VpnNetworkMonitor(
 
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .build()
         
         try {
