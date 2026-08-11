@@ -11,6 +11,8 @@ import kotlinx.coroutines.channels.Channel
 
 object UdpDnsProtocols {
     suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> {
+        val dotRes = DotDnsProtocols.queryDot(host, dnsIp, vpnService, type)
+        if (dotRes.isNotEmpty()) return dotRes
         return DohDnsProtocols.queryDohRacing(host, vpnService, type)
     }
     suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -91,13 +93,129 @@ object UdpDnsProtocols {
         }
     }
 
-    suspend fun queryUdpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = queryUdpDns(host, dnsIp, vpnService, type)
-    suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = queryUdpDns(host, dnsIp, vpnService, type)
+    suspend fun queryUdpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.coroutineScope {
+        val resolvers = listOf(dnsIp, "8.8.8.8", "1.1.1.1", "9.9.9.9").distinct()
+        val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(resolvers.size)
+        resolvers.forEach { ip ->
+            launch {
+                try {
+                    val res = queryUdpDns(host, ip, vpnService, type)
+                    channel.send(res)
+                } catch (e: Exception) {
+                    channel.send(emptyList())
+                }
+            }
+        }
+        var result = emptyList<InetAddress>()
+        repeat(resolvers.size) {
+            val res = channel.receive()
+            if (res.isNotEmpty() && result.isEmpty()) {
+                result = res
+                coroutineContext.cancelChildren()
+                return@coroutineScope result
+            }
+        }
+        result
+    }
+
+    suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var socket: java.net.DatagramSocket? = null
+        try {
+            socket = java.net.DatagramSocket()
+            vpnService?.protect(socket)
+            socket.soTimeout = 3000
+            
+            // Send shadow packet with low TTL or fake query first to desync stateful firewall state
+            val shadowQuery = DnsPacketEngine.buildDnsQuery("shadow.internal.net", 1)
+            val shadowPacket = java.net.DatagramPacket(shadowQuery, shadowQuery.size, InetAddress.getByName(dnsIp), 53)
+            socket.send(shadowPacket)
+            kotlinx.coroutines.delay(5)
+
+            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val packet = java.net.DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
+            socket.send(packet)
+            
+            val responseBuf = ByteArray(4096)
+            val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
+            socket.receive(responsePacket)
+            
+            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
+        } catch (e: Exception) {
+            emptyList()
+        } finally {
+            socket?.close()
+        }
+    }
 }
 
 object TcpDnsProtocols {
-    suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = queryDnsOverTcp(host, dnsIp, vpnService, type)
-    suspend fun queryTcpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = queryDnsOverTcp(host, dnsIp, vpnService, type)
+    suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var socket: java.net.Socket? = null
+        try {
+            socket = java.net.Socket()
+            vpnService?.protect(socket)
+            socket.connect(java.net.InetSocketAddress(dnsIp, 53), 4000)
+            socket.soTimeout = 4000
+            
+            val query = DnsPacketEngine.buildDnsQueryTcp(host, type)
+            val os = socket.getOutputStream()
+            // TCP fragmentation: Write length prefix separately to desync DPI inspection
+            if (query.size > 2) {
+                os.write(query, 0, 2)
+                os.flush()
+                kotlinx.coroutines.delay(5)
+                os.write(query, 2, query.size - 2)
+            } else {
+                os.write(query)
+            }
+            os.flush()
+            
+            val isInput = socket.getInputStream()
+            val len1 = isInput.read()
+            val len2 = isInput.read()
+            if (len1 == -1 || len2 == -1) return@withContext emptyList<InetAddress>()
+            val length = (len1 shl 8) or len2
+            
+            val response = ByteArray(length)
+            var read = 0
+            while (read < length) {
+                val r = isInput.read(response, read, length - read)
+                if (r == -1) break
+                read += r
+            }
+            DnsPacketEngine.parseDnsResponse(response, read)
+        } catch (e: Exception) {
+            emptyList()
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun queryTcpDnsNuclear(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.coroutineScope {
+        val resolvers = listOf(dnsIp, "8.8.8.8", "1.1.1.1").distinct()
+        val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(resolvers.size)
+        resolvers.forEach { ip ->
+            launch {
+                try {
+                    val res = queryDnsOverTcp(host, ip, vpnService, type)
+                    channel.send(res)
+                } catch (e: Exception) {
+                    channel.send(emptyList())
+                }
+            }
+        }
+        var result = emptyList<InetAddress>()
+        repeat(resolvers.size) {
+            val res = channel.receive()
+            if (res.isNotEmpty() && result.isEmpty()) {
+                result = res
+                coroutineContext.cancelChildren()
+                return@coroutineScope result
+            }
+        }
+        result
+    }
+
     suspend fun queryTcpDns(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = queryDnsOverTcp(host, dnsIp, vpnService, type)
     
     suspend fun queryDnsOverTcp(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
