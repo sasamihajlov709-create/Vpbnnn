@@ -302,8 +302,12 @@ class PinkVpnService : VpnService() {
             val dnsServers = when (BypassConfig.dnsType) {
                 DnsType.GOOGLE_DOH -> listOf("8.8.8.8", "8.8.4.4")
                 DnsType.CLOUDFLARE_DOH -> listOf("1.1.1.1", "1.0.0.1")
+                DnsType.ADGUARD_DOH -> listOf("94.140.14.14", "94.140.15.15")
                 DnsType.QUAD9_DOH -> listOf("9.9.9.9", "149.112.112.112")
-                DnsType.CUSTOM_UDP -> listOf(BypassConfig.customDnsUrl)
+                DnsType.CUSTOM_UDP, DnsType.CUSTOM_TCP, DnsType.CUSTOM_DOH -> {
+                    val ips = extractIpsFromDnsUrl(BypassConfig.customDnsUrl)
+                    if (ips.isNotEmpty()) ips else listOf("1.1.1.1", "8.8.8.8")
+                }
                 else -> listOf("1.1.1.1", "8.8.8.8")
             }
 
@@ -378,6 +382,11 @@ class PinkVpnService : VpnService() {
         }
     }
 
+    private fun extractIpsFromDnsUrl(url: String): List<String> {
+        val ipRegex = Regex("""\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b""")
+        return ipRegex.findAll(url).map { it.value }.toList()
+    }
+
     private fun startTun2Socks(vpnInterface: ParcelFileDescriptor, proxyPort: Int) {
         try {
             engine.Engine.touch()
@@ -405,6 +414,7 @@ class PinkVpnService : VpnService() {
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Failed to start tun2socks", e)
             VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Transport engine init failed: ${e.localizedMessage}")
+            throw e
         }
     }
 

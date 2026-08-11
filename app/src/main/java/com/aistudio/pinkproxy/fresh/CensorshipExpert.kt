@@ -341,10 +341,6 @@ object CensorshipExpert {
         
         // Clear all blacklists to allow fresh evaluation under extreme conditions
         DpiEngine.clearCircuitBreakers()
-        
-        // Boost nuclear strategies
-        DpiEngine.recordResult(BypassStrategy.TCP_COMBINED_NUCLEAR, true, HostCategory.OTHER)
-        DpiEngine.recordResult(BypassStrategy.UDP_COMBINED_NUCLEAR, true, HostCategory.OTHER)
     }
 
     private fun successRateAbove(threshold: Int): Boolean {

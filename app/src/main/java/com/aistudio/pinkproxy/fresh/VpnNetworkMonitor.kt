@@ -14,6 +14,8 @@ class VpnNetworkMonitor(
 ) {
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val activeNetworks = java.util.concurrent.ConcurrentHashMap<Network, NetworkType>()
+    private val networkCapabilitiesMap = java.util.concurrent.ConcurrentHashMap<Network, NetworkCapabilities>()
 
     fun start() {
         if (networkCallback != null) return
@@ -22,20 +24,29 @@ class VpnNetworkMonitor(
             override fun onAvailable(network: Network) {
                 val capabilities = connectivityManager.getNetworkCapabilities(network)
                 val type = getNetworkType(capabilities)
+                activeNetworks[network] = type
+                if (capabilities != null) {
+                    networkCapabilitiesMap[network] = capabilities
+                }
                 Log.i("VpnNetworkMonitor", "Network available: $network (Type: $type)")
                 networkChangeCallback(network, type)
             }
 
             override fun onLost(network: Network) {
+                activeNetworks.remove(network)
+                networkCapabilitiesMap.remove(network)
                 Log.i("VpnNetworkMonitor", "Network lost: $network")
-                networkChangeCallback(null, NetworkType.NONE)
+                val active = activeNetworks.entries.firstOrNull()
+                if (active != null) {
+                    networkChangeCallback(active.key, active.value)
+                } else {
+                    networkChangeCallback(null, NetworkType.NONE)
+                }
             }
-
-            private var lastCapabilities: NetworkCapabilities? = null
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 // Only trigger if major capabilities or transports changed to avoid recursion/spam
-                val oldCaps = lastCapabilities
+                val oldCaps = networkCapabilitiesMap[network]
                 if (oldCaps != null) {
                     val transportsChanged = !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                                            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
@@ -46,7 +57,7 @@ class VpnNetworkMonitor(
                     
                     if (!transportsChanged && !validationChanged) return
                 }
-                lastCapabilities = capabilities
+                networkCapabilitiesMap[network] = capabilities
                 capabilitiesChangeCallback(network, capabilities)
             }
         }

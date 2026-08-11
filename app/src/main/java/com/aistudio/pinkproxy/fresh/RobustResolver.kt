@@ -218,7 +218,9 @@ object RobustResolver {
         // 4. UDP/TCP Fallbacks
         val dnsType = BypassConfig.dnsType
         val isCustom = dnsType == DnsType.CUSTOM_DOH || dnsType == DnsType.CUSTOM_TCP || dnsType == DnsType.CUSTOM_UDP
-        val servers = if (isCustom) listOf(BypassConfig.customDnsUrl) else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
+        val ipRegex = Regex("""\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b""")
+        val customIps = if (isCustom) ipRegex.findAll(BypassConfig.customDnsUrl).map { it.value }.toList() else emptyList()
+        val servers = if (customIps.isNotEmpty()) customIps else listOf("8.8.8.8", "1.1.1.1", "9.9.9.9")
         for (dns in servers) {
             try {
                 val res = DnsProtocols.queryUdpDnsShadow(host, dns, vpnService, type)

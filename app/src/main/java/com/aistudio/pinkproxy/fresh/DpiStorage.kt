@@ -9,6 +9,7 @@ object DpiStorage {
         saveHostMemory(context)
         val prefs = context.getSharedPreferences("dpi_engine_scores", Context.MODE_PRIVATE)
         val editor = prefs.edit()
+        editor.clear()
         DpiEngine.strategyScores.forEach { (cat, scores) ->
             scores.forEach { (strat, score) ->
                 editor.putInt("${cat.name}_${strat.name}", score.get())
@@ -16,7 +17,7 @@ object DpiStorage {
         }
         DpiEngine.networkStrategyMemory.forEach { (netType, catMap) ->
             catMap.forEach { (cat, mem) ->
-                editor.putString("netmem_${netType}_${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
+                editor.putString("netmem_${netType}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
             }
         }
         editor.apply()
@@ -32,7 +33,8 @@ object DpiStorage {
             }
         }
         prefs.all.keys.filter { it.startsWith("netmem_") }.forEach { key ->
-            val parts = key.removePrefix("netmem_").split("_", limit = 2)
+            val raw = key.removePrefix("netmem_")
+            val parts = if (raw.contains("::")) raw.split("::", limit = 2) else raw.split("_", limit = 2)
             if (parts.size == 2) {
                 val netType = parts[0]
                 val catName = parts[1]
