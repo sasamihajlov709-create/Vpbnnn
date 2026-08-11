@@ -18,6 +18,8 @@ object DpiEngine {
     
     val successHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     val failureHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+    val categorySuccessHistory = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
+    val categoryFailureHistory = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
     val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
     
     private val _currentDpiLevel = MutableStateFlow(0)
@@ -143,9 +145,8 @@ object DpiEngine {
         hostStrategyBlacklist.clear()
     }
     
-    fun getBestExtremeStrategy(host: String? = null): BypassStrategy = DpiStrategySelector.getBestExtremeStrategy(host)
     fun getFallbackStrategy(strat: BypassStrategy): BypassStrategy? = DpiStrategySelector.getFallbackStrategy(strat)
-    fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null): BypassStrategy = DpiStrategySelector.getDiverseFallback(failed, category)
+    fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null, transport: TransportType = TransportType.TCP): BypassStrategy = DpiStrategySelector.getDiverseFallback(failed, category, transport)
     
     fun updateTestingStrategies(list: List<BypassStrategy>) {
         BypassConfig.updateTestingStrategies(list)

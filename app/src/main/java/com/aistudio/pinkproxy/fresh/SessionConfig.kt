@@ -2,6 +2,7 @@ package com.aistudio.pinkproxy.fresh
 
 data class SessionConfig(
     val strategy: BypassStrategy,
+    val requestedStrategy: BypassStrategy = strategy,
     val frag1: Int,
     val delay1: Long,
     val fakeTtl: Int,

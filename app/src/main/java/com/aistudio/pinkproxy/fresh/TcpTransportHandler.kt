@@ -47,16 +47,17 @@ object TcpTransportHandler {
                 return
             }
             ProxyStats.addTraffic(targetHost)
-            val strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
-            val reasoning = DpiStrategySelector.getSelectionReasoning(strategy, targetHost)
-            ProxyStats.registerFlow(sessionId, targetHost, "TCP", strategy, reasoning)
-            VpnRuntimeState.updateStrategy(strategy.name, reasoning)
+            val requestedStrategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
+            val config = BypassConfig.getSessionConfig(targetHost, requestedStrategy, BypassConfig.currentRttMs.value, TransportType.TCP)
+            val effectiveStrategy = config.strategy
+            val reasoning = DpiStrategySelector.getSelectionReasoning(effectiveStrategy, targetHost)
+            ProxyStats.registerFlow(sessionId, targetHost, "TCP", effectiveStrategy, reasoning)
+            VpnRuntimeState.updateStrategy(effectiveStrategy.name, reasoning)
             
             val totalWrittenClient = AtomicLong(0)
             val isTls = targetPort == 443 || targetPort == 8443
 
             val censorship = BypassConfig.censorshipLevel
-            val config = BypassConfig.getSessionConfig(targetHost, strategy, BypassConfig.currentRttMs.value)
 
             if (censorship > 65 && isTls) {
                 scope.launch(ProxyDispatcher.io) {
@@ -97,7 +98,7 @@ object TcpTransportHandler {
             } else {
                 val raceResult = TcpRaceConnector.racingConnect(
                     resolved, targetPort, vpnService, targetHost, 
-                    strategy, BypassConfig.getFallbackStrategy(strategy),
+                    effectiveStrategy, BypassConfig.getFallbackStrategy(effectiveStrategy),
                     firstClientPacket, firstClientPacketLen, transportBufferSize
                 )
                 

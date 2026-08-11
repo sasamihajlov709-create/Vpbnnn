@@ -1,6 +1,7 @@
 package com.aistudio.pinkproxy.fresh
 
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -106,8 +107,13 @@ object DpiStrategySelector {
         val runnerUpScore = sortedByBase.getOrNull(1)?.second ?: 0.0
         val scoreGap = (topScore - runnerUpScore).coerceAtLeast(0.0)
 
+        val catSuccessMap = DpiEngine.categorySuccessHistory[category]
+        val catFailureMap = DpiEngine.categoryFailureHistory[category]
         val totalObsInCat = validStrategies.sumOf { (strat, _) ->
-            (DpiEngine.successHistory[strat]?.get() ?: 0) + (DpiEngine.failureHistory[strat]?.get() ?: 0)
+            val catS = catSuccessMap?.get(strat)?.get() ?: 0
+            val catF = catFailureMap?.get(strat)?.get() ?: 0
+            if (catS + catF > 0) (catS + catF)
+            else (DpiEngine.successHistory[strat]?.get() ?: 0) + (DpiEngine.failureHistory[strat]?.get() ?: 0)
         }
 
         val obsConfidence = (totalObsInCat / 25.0).coerceIn(0.0, 1.0)
@@ -225,8 +231,23 @@ object DpiStrategySelector {
             return validStrategies.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
         }
 
-        val bestByWeight = weightedList.maxByOrNull { it.second }?.first
-        return bestByWeight ?: weightedList.last().first
+        val bestByWeightPair = weightedList.maxByOrNull { it.second }
+        val bestCandidate = bestByWeightPair?.first ?: weightedList.last().first
+
+        // Hysteresis: prevent rapid oscillation if candidate score is only slightly higher than current strategy
+        val currentStrategy = BypassConfig.strategy.value
+        if (currentStrategy != bestCandidate) {
+            val currentPair = weightedList.firstOrNull { it.first == currentStrategy }
+            if (currentPair != null && bestByWeightPair != null) {
+                val currentWeight = currentPair.second
+                val hysteresisThreshold = Math.max(currentWeight * 1.08, currentWeight + 8.0)
+                if (bestByWeightPair.second < hysteresisThreshold) {
+                    return currentStrategy
+                }
+            }
+        }
+
+        return bestCandidate
     }
 
     fun getBestExtremeStrategy(host: String? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
@@ -247,20 +268,25 @@ object DpiStrategySelector {
         return DpiEngine.strategyChains[failedStrategy]
     }
 
-    fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null): BypassStrategy {
+    fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
         val candidates = BypassStrategy.entries.filter { 
             (it.group == StrategyGroup.EXTREME || it.group == StrategyGroup.HEAVY) && 
-            it != failed
+            it != failed &&
+            isFamilyCompatible(it.family, transport)
         }
         
-        if (candidates.isEmpty()) return BypassStrategy.ZAPRET_EXTREME
+        val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.ZAPRET_EXTREME
+        if (candidates.isEmpty()) return defaultFallback
 
         // Try to select a family that fits the category, or a different one than the failed one
         val preferred = when(category) {
-            HostCategory.STREAMING, HostCategory.GAMING -> candidates.filter { it.family == StrategyFamily.UDP || it.family == StrategyFamily.QUIC }
+            HostCategory.STREAMING, HostCategory.GAMING -> candidates.filter { 
+                if (transport == TransportType.UDP) (it.family == StrategyFamily.UDP || it.family == StrategyFamily.QUIC)
+                else (it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TLS)
+            }
             HostCategory.AI, HostCategory.SOCIAL -> candidates.filter { it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TLS }
             else -> candidates.filter { failed == null || it.family != failed.family }
-        }.ifEmpty { candidates }
+        }.filter { isFamilyCompatible(it.family, transport) }.ifEmpty { candidates }
 
         return preferred.random()
     }
@@ -268,6 +294,7 @@ object DpiStrategySelector {
     fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
         if (success) {
             DpiEngine.successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            DpiEngine.categorySuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.globalPenalties[strategy]?.updateAndGet { (it * 0.8).toInt() }
             DpiEngine.globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(5)
@@ -307,6 +334,7 @@ object DpiStrategySelector {
             DpiEngine.circuitBreakers.remove(strategy)
         } else {
             DpiEngine.failureHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            DpiEngine.categoryFailureHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) {
                 ProxyStats.recordCensorshipEvent(true)
             }

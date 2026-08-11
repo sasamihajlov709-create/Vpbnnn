@@ -144,7 +144,6 @@ class VpnHealthMonitor(
                     DnsCacheManager.clearAll()
                     UdpTransportHandler.clearBuffers()
                     ProxyStats.releaseAllPools()
-                    System.gc()
 
                     if (percent > 92 && isVpnRunning()) {
                         Log.e("VpnHealthMonitor", "MEMORY EXHAUSTED ($percent%). Emergency session restart.")

@@ -161,25 +161,29 @@ class PinkVpnService : VpnService() {
                     }
                 }
             },
-            capabilitiesChangeCallback = { _, capabilities ->
-                val isWifi = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
-                val isMobile = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
+            capabilitiesChangeCallback = { net, capabilities ->
+                val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                val activeNet = cm?.activeNetwork
+                if (activeNet == null || activeNet == net) {
+                    val isWifi = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                    val isMobile = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
 
-                if (isWifi && _isRunning.value) {
-                    try {
-                        if (wifiLock?.isHeld == false) wifiLock?.acquire()
-                    } catch (e: Exception) {
-                        Log.v("PinkVpnService", "WifiLock acquire error: ${e.message}")
+                    if (isWifi && _isRunning.value) {
+                        try {
+                            if (wifiLock?.isHeld == false) wifiLock?.acquire()
+                        } catch (e: Exception) {
+                            Log.v("PinkVpnService", "WifiLock acquire error: ${e.message}")
+                        }
+                    } else {
+                        try {
+                            if (wifiLock?.isHeld == true) wifiLock?.release()
+                        } catch (e: Exception) {
+                            Log.v("PinkVpnService", "WifiLock release error: ${e.message}")
+                        }
                     }
-                } else {
-                    try {
-                        if (wifiLock?.isHeld == true) wifiLock?.release()
-                    } catch (e: Exception) {
-                        Log.v("PinkVpnService", "WifiLock release error: ${e.message}")
-                    }
+
+                    BypassConfig.updateNetworkType(if (isWifi) NetworkType.WIFI else if (isMobile) NetworkType.MOBILE else NetworkType.NONE)
                 }
-
-                BypassConfig.updateNetworkType(if (isWifi) NetworkType.WIFI else if (isMobile) NetworkType.MOBILE else NetworkType.NONE)
             }
         )
         vpnNetworkMonitor?.start()
@@ -510,7 +514,6 @@ class PinkVpnService : VpnService() {
             ProxyStats.releaseAllPools()
             DnsCacheManager.ensureEfficiency()
             RobustResolver.clearCache()
-            java.lang.System.gc()
         }
     }
 

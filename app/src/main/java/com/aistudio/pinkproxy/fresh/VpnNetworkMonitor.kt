@@ -29,7 +29,10 @@ class VpnNetworkMonitor(
                     networkCapabilitiesMap[network] = capabilities
                 }
                 Log.i("VpnNetworkMonitor", "Network available: $network (Type: $type)")
-                networkChangeCallback(network, type)
+                val defaultNet = connectivityManager.activeNetwork
+                if (defaultNet == null || defaultNet == network) {
+                    networkChangeCallback(network, type)
+                }
             }
 
             override fun onLost(network: Network) {

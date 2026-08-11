@@ -248,16 +248,18 @@ object BypassConfig {
         return best
     }
 
-    fun rotateGlobalStrategy() {
+    fun rotateGlobalStrategy(transport: TransportType = TransportType.TCP) {
         val category = HostCategory.OTHER
         val now = System.currentTimeMillis()
         val candidates = BypassStrategy.entries.filter { 
             it != BypassStrategy.DIRECT && 
             it != _strategy.value &&
+            DpiStrategySelector.isFamilyCompatible(it.family, transport) &&
             (DpiEngine.circuitBreakers[it] ?: 0L) < now
         }
+        val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_HYBRID else BypassStrategy.SNI_SPLIT
         val best = candidates.maxByOrNull { DpiStrategySelector.getWeightedScore(it, category) } 
-            ?: BypassStrategy.SNI_SPLIT
+            ?: defaultFallback
         _strategy.value = best
         VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
         ProxyStats.logRecovery("Strategy rotated to highest-scoring alternative: ${best.name}")
@@ -308,6 +310,7 @@ object BypassConfig {
         val ttl = if (fakeTtl == 0) rnd.nextInt(3, 8) else fakeTtl
         return SessionConfig(
             strategy = effectiveStrategy,
+            requestedStrategy = strategy,
             frag1 = f1,
             frag2 = f2,
             frag3 = f3,
@@ -326,7 +329,11 @@ object BypassConfig {
             emit(getStrategyMetrics())
             kotlinx.coroutines.delay(5000)
         }
-    }
+    }.shareIn(
+        scope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
+        started = SharingStarted.WhileSubscribed(5000),
+        replay = 1
+    )
 
     fun resetScores() {
         ProxyStats.resetScores()
