@@ -233,7 +233,9 @@ object DnsPacketEngine {
                                 if (bb.remaining() < paramLen) break
                                 
                                 if (paramKey == 5) { // ECH (Encrypted Client Hello)
-                                    records.add(DnsRecord(InetAddress.getByName("0.0.0.1"), ttl, 65)) // Use special IP as flag
+                                    if (!BypassConfig.filterEch) {
+                                        records.add(DnsRecord(InetAddress.getByName("0.0.0.1"), ttl, 65)) // Use special IP as flag
+                                    }
                                     bb.position(bb.position() + paramLen)
                                 } else {
                                     bb.position(bb.position() + paramLen)

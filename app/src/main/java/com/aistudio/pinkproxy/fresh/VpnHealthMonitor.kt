@@ -47,7 +47,13 @@ class VpnHealthMonitor(
             while (isActive) {
                 try {
                     val activeConns = ProxyStats.activeConnections.value
-                    val delayMs = if (activeConns > 0) 90000L else 180000L
+                    val isScreenOn = BypassConfig.isScreenOn
+                    val delayMs = when {
+                        !isScreenOn && activeConns == 0 -> 360000L // 6 min deep sleep when screen off and idle
+                        !isScreenOn -> 180000L                     // 3 min when screen off with traffic
+                        activeConns > 0 -> 90000L
+                        else -> 180000L
+                    }
                     delay(delayMs)
 
                     if (!isVpnRunning()) continue
@@ -58,7 +64,7 @@ class VpnHealthMonitor(
                     if (getProxyServer() == null) {
                         ProxyStats.logRecovery("Watchdog: Proxy server missing! Restarting...")
                         restartProxyServer()
-                    } else if (System.currentTimeMillis() % 300000 < delayMs) {
+                    } else if (isScreenOn && System.currentTimeMillis() % 300000 < delayMs) {
                         val socket = Socket()
                         try {
                             protectSocket(socket)
@@ -109,8 +115,9 @@ class VpnHealthMonitor(
     private fun startEngineMonitor(scope: CoroutineScope) {
         engineMonitorJob = scope.launch {
             while (isActive && isVpnRunning()) {
-                delay(30000)
-                if (isVpnRunning()) {
+                val delayMs = if (!BypassConfig.isScreenOn) 90000L else 30000L
+                delay(delayMs)
+                if (isVpnRunning() && (BypassConfig.isScreenOn || ProxyStats.activeConnections.value > 0)) {
                     try {
                         val socket = Socket()
                         try { protectSocket(socket) } catch (e: Exception) {}
@@ -160,9 +167,10 @@ class VpnHealthMonitor(
             val rnd = ThreadLocalRandom.current()
             val decoys = listOf("google.com", "cloudflare.com", "microsoft.com", "wikipedia.org")
             while (isActive && isVpnRunning()) {
-                val delayMs = if (BypassConfig.isPanicMode) rnd.nextLong(15000, 30000) else rnd.nextLong(45000, 90000)
+                val baseDelay = if (BypassConfig.isPanicMode) rnd.nextLong(15000, 30000) else rnd.nextLong(45000, 90000)
+                val delayMs = if (!BypassConfig.isScreenOn) baseDelay * 3 else baseDelay
                 delay(delayMs)
-                if (!isVpnRunning()) break
+                if (!isVpnRunning() || !BypassConfig.isScreenOn) continue
 
                 if (BypassConfig.isPanicMode || ProxyStats.censorshipIntensity.value > 60) {
                     try {

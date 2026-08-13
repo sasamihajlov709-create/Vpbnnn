@@ -76,10 +76,12 @@ object BypassConfig {
     @Volatile var delay2 = 0L
     @Volatile var fakeTtl = 0
     @Volatile var blockQuic = false
+    @Volatile var filterEch = true
     @Volatile var preferIpv6 = false
     @Volatile var includeIpv6 = true
     @Volatile var isCharging = true
     @Volatile var isPowerSaveMode = false
+    @Volatile var isScreenOn = true
     @Volatile var batteryLevel = 100
     @Volatile var thermalStatus = 0
     @Volatile var activeVpnService: VpnService? = null
@@ -184,6 +186,7 @@ object BypassConfig {
         val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
         isAutoTuning = prefs.getBoolean("is_auto_tuning", true)
         blockQuic = prefs.getBoolean("block_quic", false)
+        filterEch = prefs.getBoolean("filter_ech", true)
         frag1 = prefs.getInt("frag1", 1)
         delay1 = prefs.getLong("delay1", 20L)
         fakeTtl = prefs.getInt("fakeTtl", 0)
@@ -212,6 +215,7 @@ object BypassConfig {
         prefs.edit {
             putBoolean("is_auto_tuning", isAutoTuning)
             putBoolean("block_quic", blockQuic)
+            putBoolean("filter_ech", filterEch)
             putInt("frag1", frag1)
             putLong("delay1", delay1)
             putInt("fakeTtl", fakeTtl)

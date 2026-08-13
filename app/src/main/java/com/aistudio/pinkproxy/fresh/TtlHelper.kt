@@ -131,11 +131,17 @@ object TtlHelper {
 
     fun applyMssClamping(socket: Socket, host: String?) {
         try {
-            val mtu = BypassConfig.currentMtu.value
+            val baseMtu = BypassConfig.currentMtu.value
             val isIpv6 = socket.inetAddress is Inet6Address || (host != null && host.contains(":"))
             val overhead = if (isIpv6) 60 else 40
-            val mss = mtu - overhead
-            setMss(socket, mss)
+            
+            // Dynamic host-specific probed Path MTU with cellular network safety floor
+            val probedMtu = if (!host.isNullOrBlank()) AutoTtlProber.getDiscoveredMtu(host) else null
+            val effectiveMtu = probedMtu ?: baseMtu
+
+            // Clamp MSS between 512 and (effectiveMtu - overhead)
+            val clampedMss = (effectiveMtu - overhead).coerceIn(512, 1460)
+            setMss(socket, clampedMss)
         } catch (e: Throwable) {}
     }
 

@@ -71,6 +71,7 @@ object TcpRaceConnector {
                         try { 
                             other.input.close()
                             other.output.close()
+                            try { other.socket.setSoLinger(true, 0) } catch (ignored: Exception) {}
                             other.socket.close() 
                         } catch (e: Throwable) {
                             Log.v("TcpRaceConnector", "Failed to close loser socket: ${e.message}")

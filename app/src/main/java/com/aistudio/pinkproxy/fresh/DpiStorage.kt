@@ -27,6 +27,16 @@ object DpiStorage {
                 editor.putInt("${cat.name}_${strat.name}", score.get())
             }
         }
+        DpiEngine.categorySuccessHistory.forEach { (cat, map) ->
+            map.forEach { (strat, cnt) ->
+                editor.putInt("succ_${cat.name}_${strat.name}", cnt.get())
+            }
+        }
+        DpiEngine.categoryFailureHistory.forEach { (cat, map) ->
+            map.forEach { (strat, cnt) ->
+                editor.putInt("fail_${cat.name}_${strat.name}", cnt.get())
+            }
+        }
         DpiEngine.networkStrategyMemory.forEach { (netType, catMap) ->
             catMap.forEach { (cat, mem) ->
                 editor.putString("netmem_${netType}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
@@ -50,6 +60,19 @@ object DpiStorage {
             scores.forEach { (strat, score) ->
                 val saved = sourcePrefs.getInt("${cat.name}_${strat.name}", -1)
                 if (saved != -1) score.set(saved) else score.set(100)
+            }
+        }
+
+        DpiEngine.categorySuccessHistory.forEach { (cat, map) ->
+            map.forEach { (strat, cnt) ->
+                val saved = sourcePrefs.getInt("succ_${cat.name}_${strat.name}", 0)
+                cnt.set(saved)
+            }
+        }
+        DpiEngine.categoryFailureHistory.forEach { (cat, map) ->
+            map.forEach { (strat, cnt) ->
+                val saved = sourcePrefs.getInt("fail_${cat.name}_${strat.name}", 0)
+                cnt.set(saved)
             }
         }
 

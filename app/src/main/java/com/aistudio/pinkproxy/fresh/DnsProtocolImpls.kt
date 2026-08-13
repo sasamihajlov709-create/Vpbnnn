@@ -296,6 +296,12 @@ object DohDnsProtocols {
     }
 
     suspend fun queryHttpsRecord(host: String, vpnService: VpnService?): List<DnsPacketEngine.DnsRecord> {
+        if (BypassConfig.filterEch) {
+            // ECH records (Type 65 HTTPS) cause TSPU RST drops on TLS handshakes.
+            // Returning empty list forces browsers/clients to safely fall back to standard TLS 1.3
+            // with plain SNI, allowing our advanced Zapret & SNI-split bypass to work seamlessly.
+            return emptyList()
+        }
         return queryDohDetailed(host, DnsOptimizer.bestDohUrl, vpnService, 65)
     }
 

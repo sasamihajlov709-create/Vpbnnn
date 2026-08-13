@@ -13,8 +13,11 @@ object UdpTransportManager {
         val s = DatagramSocket()
         try {
             vpnService.protect(s)
+            // Optimize UDP buffer sizes for smooth voice (Discord/Telegram) and low-jitter video packets
+            s.receiveBufferSize = 256 * 1024 // 256 KB buffer to prevent packet drop on burst
+            s.sendBufferSize = 256 * 1024
         } catch (e: Throwable) {
-            Log.e("UdpTransportManager", "Failed to protect UDP socket: ${e.message}")
+            Log.e("UdpTransportManager", "Failed to configure UDP socket: ${e.message}")
         }
         return s
     }

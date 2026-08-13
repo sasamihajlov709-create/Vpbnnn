@@ -19,6 +19,7 @@ object DeviceMonitor {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         
         BypassConfig.isPowerSaveMode = powerManager.isPowerSaveMode
+        BypassConfig.isScreenOn = powerManager.isInteractive
 
         val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { filter ->
             try {
@@ -50,11 +51,21 @@ object DeviceMonitor {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_BATTERY_CHANGED)
             addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
         }
         
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 when (intent.action) {
+                    Intent.ACTION_SCREEN_ON -> {
+                        BypassConfig.isScreenOn = true
+                        Log.v("DeviceMonitor", "Screen ON: Resuming high-responsiveness mode")
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        BypassConfig.isScreenOn = false
+                        Log.v("DeviceMonitor", "Screen OFF: Entering power-saving deep sleep")
+                    }
                     Intent.ACTION_BATTERY_CHANGED -> {
                         val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
                         val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
