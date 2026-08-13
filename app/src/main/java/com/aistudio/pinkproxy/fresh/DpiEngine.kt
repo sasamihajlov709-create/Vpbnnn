@@ -173,6 +173,19 @@ object DpiEngine {
         hostStrategyBlacklist.clear()
     }
     
+    fun isBlacklisted(strat: BypassStrategy, host: String? = null): Boolean {
+        val now = System.currentTimeMillis()
+        if ((circuitBreakers[strat] ?: 0L) >= now) return true
+        if (host != null) {
+            val bl = hostStrategyBlacklist[host]?.get(strat) ?: 0L
+            if (bl >= now) return true
+        }
+        return false
+    }
+
+    fun selectStrategy(host: String? = null, category: HostCategory = HostCategory.OTHER, transport: TransportType = TransportType.TCP): BypassStrategy =
+        DpiStrategySelector.getBestStrategy(category, host, transport)
+
     fun getFallbackStrategy(strat: BypassStrategy): BypassStrategy? = DpiStrategySelector.getFallbackStrategy(strat)
     fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null, transport: TransportType = TransportType.TCP): BypassStrategy = DpiStrategySelector.getDiverseFallback(failed, category, transport)
     

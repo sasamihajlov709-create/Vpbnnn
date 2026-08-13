@@ -37,12 +37,19 @@ class BootstrapDns : okhttp3.Dns {
     override fun lookup(hostname: String): List<InetAddress> {
         val known = mapOf(
             "dns.google" to listOf("8.8.8.8", "8.8.4.4"),
+            "dns.google.com" to listOf("8.8.8.8", "8.8.4.4"),
             "cloudflare-dns.com" to listOf("1.1.1.1", "1.0.0.1"),
+            "1.1.1.1" to listOf("1.1.1.1"),
             "dns.quad9.net" to listOf("9.9.9.9", "149.112.112.112"),
+            "9.9.9.9" to listOf("9.9.9.9"),
             "dns.adguard.com" to listOf("94.140.14.14", "94.140.15.15"),
-            "dns.controld.com" to listOf("76.76.2.0", "76.76.10.0")
+            "dns.adguard-dns.com" to listOf("94.140.14.14", "94.140.15.15"),
+            "unfiltered.adguard-dns.com" to listOf("94.140.14.140", "94.140.14.141"),
+            "dns.controld.com" to listOf("76.76.2.0", "76.76.10.0"),
+            "doh.opendns.com" to listOf("208.67.222.222", "208.67.220.220"),
+            "doh.mullvad.net" to listOf("194.242.2.2")
         )
-        known[hostname]?.let { ips -> return ips.map { InetAddress.getByName(it) } }
+        known[hostname.lowercase()]?.let { ips -> return ips.mapNotNull { try { InetAddress.getByName(it) } catch(e: Throwable) { null } } }
         return try {
             DnsCacheManager.getCached(hostname) ?: InetAddress.getAllByName(hostname).toList()
         } catch (e: Throwable) {

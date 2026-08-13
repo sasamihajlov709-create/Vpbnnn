@@ -115,10 +115,21 @@ object DnsCacheManager {
         val cacheKey = if (type == 1) host else "$host:$type"
         val now = System.currentTimeMillis()
         dnsCache[cacheKey]?.let { (addresses, expiry) ->
-            if (now < expiry) return getSortedIps(addresses)
-            else if (runCatching { ProxyStats.censorshipIntensity.value > 60 || BypassConfig.censorshipLevel > 50 }.getOrDefault(false)) {
+            if (now < expiry) {
+                // If cache is about to expire (in <20% of TTL), trigger background refresh early
+                if (expiry - now < CACHE_TTL_MS / 5) {
+                    ProxyDispatcher.mainScope.launch {
+                        try {
+                            RobustResolver.resolve(host, null, type)
+                        } catch (e: Exception) {}
+                    }
+                }
                 return getSortedIps(addresses)
-            } else dnsCache.remove(cacheKey)
+            } else if (runCatching { ProxyStats.censorshipIntensity.value > 60 || BypassConfig.censorshipLevel > 50 }.getOrDefault(false)) {
+                return getSortedIps(addresses)
+            } else {
+                dnsCache.remove(cacheKey)
+            }
         }
         return null
     }

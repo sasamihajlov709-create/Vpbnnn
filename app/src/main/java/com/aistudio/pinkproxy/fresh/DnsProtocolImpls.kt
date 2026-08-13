@@ -303,42 +303,8 @@ object DohDnsProtocols {
         return queryDoh(host, DnsOptimizer.bestDohUrl, vpnService, type)
     }
 
-    suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.coroutineScope {
-        val selectedDns = BypassConfig.dnsType
-        val urls = when (selectedDns) {
-            DnsType.GOOGLE_DOH -> listOf("https://dns.google/dns-query")
-            DnsType.CLOUDFLARE_DOH -> listOf("https://1.1.1.1/dns-query")
-            DnsType.ADGUARD_DOH -> listOf("https://dns.adguard-dns.com/dns-query", "https://94.140.14.14/dns-query")
-            DnsType.QUAD9_DOH -> listOf("https://9.9.9.9/dns-query")
-            DnsType.CUSTOM_DOH -> listOf(BypassConfig.customDnsUrl)
-            else -> DnsOptimizer.getDohUrls().take(4).ifEmpty { racingUrls }
-        }
-
-        val channel = kotlinx.coroutines.channels.Channel<List<InetAddress>>(urls.size)
-        urls.forEach { url ->
-            launch {
-                try {
-                    val res = queryDoh(host, url, vpnService, type)
-                    channel.send(res)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.v("DohDnsProtocols", "Racing DoH failed for $url: ${e.message}")
-                    channel.send(emptyList())
-                }
-            }
-        }
-        
-        var result = emptyList<InetAddress>()
-        repeat(urls.size) {
-            val res = channel.receive()
-            if (res.isNotEmpty()) {
-                result = res
-                coroutineContext.cancelChildren()
-                return@coroutineScope result
-            }
-        }
-        result
+    suspend fun queryDohRacing(host: String, vpnService: VpnService?, type: Int): List<InetAddress> {
+        return DohRacingMesh.raceDoH(host, vpnService, type)
     }
 
     suspend fun queryDohExtreme(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.coroutineScope {

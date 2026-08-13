@@ -151,6 +151,7 @@ class PinkVpnService : VpnService() {
                     ProxyStats.resetMssFailureCount()
                     DnsCacheManager.onNetworkChanged()
                     RobustResolver.clearCache()
+                    ProactiveAutoTuner.startProactiveTune(this, this)
 
                     if (_isRunning.value) {
                         engineScope.launch {

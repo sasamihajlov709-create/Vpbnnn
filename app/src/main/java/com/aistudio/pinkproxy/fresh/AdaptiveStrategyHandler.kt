@@ -21,7 +21,7 @@ object AdaptiveStrategyHandler {
                 return
             }
             BypassStrategy.ZAPRET_EXTREME -> {
-                handleZapretExtreme(socket, output, data, length, rnd, host, config)
+                CompositePipelineApplier.applyZapretTriplePipeline(socket, output, data, length, host, config, rnd)
                 return
             }
             else -> {}

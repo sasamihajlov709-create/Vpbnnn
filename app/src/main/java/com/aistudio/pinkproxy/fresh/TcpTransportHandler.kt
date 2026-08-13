@@ -83,26 +83,52 @@ object TcpTransportHandler {
             val firstClientPacket = ByteArray(transportBufferSize)
             val firstClientPacketLen = accumulateInitialPacket(clientSocket, clientIn, firstClientPacket, transportBufferSize, 3000)
 
+            var firstResponseData: ByteArray? = null
+            var firstResponseLen = 0
+
             if (firstClientPacketLen <= 0) {
                 // If we can't read anything initially, it might be a server-first protocol or just slow client.
-                // For HTTPS it shouldn't happen usually.
                 remoteSocket = TcpTransportManager.connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
             } else {
-                val raceResult = TcpRaceConnector.racingConnect(
-                    resolved, targetPort, vpnService, targetHost, 
-                    effectiveStrategy, BypassConfig.getFallbackStrategy(effectiveStrategy),
-                    firstClientPacket, firstClientPacketLen, transportBufferSize
-                )
+                // Check if host has high failures or in panic mode - use multi-strategy race
+                val useRace = censorship > 40 || DpiEngine.isBlacklisted(effectiveStrategy, targetHost) || (ProxyStats.censorshipIntensity.value > 50)
                 
-                if (raceResult != null) {
-                    remoteSocket = raceResult.socket
-                    remoteIn = raceResult.input
-                    remoteOut = raceResult.output
-                    // Write back the first response we got during racing
-                    clientOut.write(raceResult.firstResponse, 0, raceResult.firstResponseLen)
-                    clientOut.flush()
-                } else {
-                    remoteSocket = TcpTransportManager.connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
+                if (useRace) {
+                    val fallback = BypassConfig.getFallbackStrategy(effectiveStrategy)
+                    val raceResult = TcpRaceConnector.racingConnect(
+                        resolved, targetPort, vpnService, targetHost, 
+                        effectiveStrategy, fallback,
+                        firstClientPacket, firstClientPacketLen, transportBufferSize
+                    )
+                    
+                    if (raceResult != null) {
+                        remoteSocket = raceResult.socket
+                        remoteIn = raceResult.input
+                        remoteOut = raceResult.output
+                        firstResponseData = raceResult.firstResponse
+                        firstResponseLen = raceResult.firstResponseLen
+                    }
+                }
+
+                // If not racing or race didn't connect, perform single-connect with Fast-Rescue Fallthrough
+                if (remoteSocket == null) {
+                    val attemptRes = connectAndSendWithRescue(
+                        resolved = resolved,
+                        port = targetPort,
+                        vpnService = vpnService,
+                        targetHost = targetHost,
+                        primaryStrategy = effectiveStrategy,
+                        firstPacket = firstClientPacket,
+                        packetLen = firstClientPacketLen,
+                        bufferSize = transportBufferSize
+                    )
+                    if (attemptRes != null) {
+                        remoteSocket = attemptRes.socket
+                        remoteIn = attemptRes.input
+                        remoteOut = attemptRes.output
+                        firstResponseData = attemptRes.firstResponse
+                        firstResponseLen = attemptRes.firstResponseLen
+                    }
                 }
             }
 
@@ -116,6 +142,12 @@ object TcpTransportHandler {
             remoteOut = remoteOut ?: finalRemoteSocket.getOutputStream()
             val finalRemoteIn = remoteIn!!
             val finalRemoteOut = remoteOut!!
+
+            if (firstResponseData != null && firstResponseLen > 0) {
+                clientOut.write(firstResponseData, 0, firstResponseLen)
+                clientOut.flush()
+                ProxyStats.recordStats(sessionId, 0, firstResponseLen.toLong())
+            }
 
             onConnectSuccess?.invoke()
             sessionSuccess = true
@@ -143,10 +175,11 @@ object TcpTransportHandler {
                     }
                 }
 
-                // Data pump jobs
+                // Data pump jobs with BufferPool
+                val isStreaming = HostClassifier.classify(targetHost) == HostCategory.STREAMING
                 val remoteToClientJob = launch {
+                    val buffer = if (isStreaming) BufferPool.obtain() else ByteArray(transportBufferSize)
                     try {
-                        val buffer = ByteArray(transportBufferSize)
                         while (isActive) {
                             val read = finalRemoteIn.read(buffer)
                             if (read == -1) break
@@ -165,6 +198,7 @@ object TcpTransportHandler {
                     } catch (e: Exception) {
                         Log.v("TcpTransport", "Remote to client pump error: ${e.message}")
                     } finally {
+                        if (isStreaming) BufferPool.release(buffer)
                         try { clientSocket.close() } catch (e: java.io.IOException) {
                             Log.v("TcpTransport", "Failed to close client socket in pump: ${e.message}")
                         }
@@ -291,5 +325,84 @@ object TcpTransportHandler {
             Log.v("TcpTransport", "Initial client read failed: ${e.message}")
         }
         return totalRead
+    }
+
+    private data class RescueAttemptResult(
+        val socket: Socket,
+        val input: InputStream,
+        val output: OutputStream,
+        val firstResponse: ByteArray,
+        val firstResponseLen: Int,
+        val usedStrategy: BypassStrategy
+    )
+
+    private suspend fun connectAndSendWithRescue(
+        resolved: List<java.net.InetAddress>,
+        port: Int,
+        vpnService: VpnService?,
+        targetHost: String,
+        primaryStrategy: BypassStrategy,
+        firstPacket: ByteArray,
+        packetLen: Int,
+        bufferSize: Int
+    ): RescueAttemptResult? {
+        val attempts = mutableListOf<BypassStrategy>()
+        attempts.add(primaryStrategy)
+        
+        val fallback1 = BypassConfig.getFallbackStrategy(primaryStrategy)
+        if (fallback1 != null && !attempts.contains(fallback1)) {
+            attempts.add(fallback1)
+        }
+        val diverseFallback = DpiStrategySelector.getDiverseFallback(primaryStrategy, HostClassifier.classify(targetHost), TransportType.TCP)
+        if (!attempts.contains(diverseFallback)) {
+            attempts.add(diverseFallback)
+        }
+
+        val rtt = BypassConfig.currentRttMs.value
+        // Silent drop detection threshold: 750ms + 1.5 * RTT (capped at 1600ms)
+        val watchdogTimeoutMs = (750 + (rtt * 1.5).toInt()).coerceIn(600, 1600)
+
+        for ((index, strategy) in attempts.take(3).withIndex()) {
+            val config = BypassConfig.getSessionConfig(targetHost, strategy, rtt, TransportType.TCP)
+            val rs = TcpTransportManager.connectToBestIp(resolved, port, vpnService, config, targetHost) ?: continue
+
+            try {
+                rs.tcpNoDelay = true
+                rs.soTimeout = watchdogTimeoutMs
+                val rsOut = rs.getOutputStream()
+                val rsIn = rs.getInputStream()
+
+                val startTime = System.currentTimeMillis()
+                BypassApplier.applyBypass(rs, rsOut, firstPacket, packetLen, config, targetHost)
+
+                val responseBuf = ByteArray(bufferSize)
+                val readBytes = withTimeoutOrNull(watchdogTimeoutMs.toLong()) {
+                    try {
+                        rsIn.read(responseBuf)
+                    } catch (e: Exception) {
+                        -1
+                    }
+                } ?: -1
+
+                if (readBytes > 0) {
+                    val latency = System.currentTimeMillis() - startTime
+                    DpiEngine.recordStrategyResult(targetHost, strategy, true, latency)
+                    if (index > 0) {
+                        ProxyStats.logRecovery("Fast rescue successful for $targetHost using $strategy (attempt #${index + 1})")
+                    }
+                    return RescueAttemptResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
+                } else {
+                    // Silent drop or RST detected by TSPU
+                    DpiEngine.recordStrategyResult(targetHost, strategy, false, 0)
+                    Log.w("TcpTransport", "Watchdog triggered for $targetHost with $strategy (attempt #${index + 1}). Fast failover to next strategy.")
+                    try { rs.close() } catch (e: Exception) {}
+                }
+            } catch (e: Exception) {
+                DpiEngine.recordStrategyResult(targetHost, strategy, false, 0)
+                Log.w("TcpTransport", "Connection error on strategy $strategy for $targetHost: ${e.message}. Rescuing with fallback.")
+                try { rs.close() } catch (ex: Exception) {}
+            }
+        }
+        return null
     }
 }

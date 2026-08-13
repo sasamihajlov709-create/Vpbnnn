@@ -263,14 +263,24 @@ object UdpTransportHandler {
     }
 
     internal fun shouldBlockQuicForHost(host: String, port: Int, payload: ByteArray): Boolean {
-        if (!BypassConfig.blockQuic) return false
-        if (!isQuicPacket(port, payload)) return false
+        // If voice STUN packet (Discord/Telegram voice sessions), NEVER block QUIC/UDP
         if (isStunPacket(payload)) return false
         
         val category = HostClassifier.classify(host)
         if (category == HostCategory.MESSENGER || category == HostCategory.GAMING) {
             return false
         }
+
+        // For video streaming (YouTube CDN googlevideo, twitch) and heavy CDN endpoints,
+        // Russian TSPU corrupts QUIC Initial packets causing 5-8s stream playback stalls.
+        // Fast-blocking QUIC here allows the player to instantly (0ms) establish HTTP/1.1 or HTTP/2 over our accelerated TCP bypass engine.
+        if (category == HostCategory.STREAMING || host.contains("googlevideo.com") || host.contains("ytimg.com")) {
+            return true
+        }
+
+        if (!BypassConfig.blockQuic) return false
+        if (!isQuicPacket(port, payload)) return false
+        
         return true
     }
 

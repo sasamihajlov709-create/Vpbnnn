@@ -98,20 +98,31 @@ object TcpRaceConnector {
         
         try {
             rs.tcpNoDelay = true
-            rs.soTimeout = (BypassConfig.currentRttMs.value * 2 + 1000).coerceAtMost(3000).toInt()
+            val rtt = BypassConfig.currentRttMs.value
+            val raceTimeout = (750 + (rtt * 1.5).toInt()).coerceIn(600, 1800)
+            rs.soTimeout = raceTimeout
             
             val rsOut = rs.getOutputStream()
             val rsIn = rs.getInputStream()
             
+            val startTime = System.currentTimeMillis()
             BypassApplier.applyBypass(rs, rsOut, firstPacket, firstPacketLen, config, host)
             
             val responseBuf = ByteArray(bufferSize)
-            val readBytes = withTimeoutOrNull(2500) { rsIn.read(responseBuf) } ?: -1
+            val readBytes = withTimeoutOrNull(raceTimeout.toLong()) {
+                try {
+                    rsIn.read(responseBuf)
+                } catch (e: Exception) {
+                    -1
+                }
+            } ?: -1
             
             if (readBytes > 0) {
-                BypassConfig.recordSuccess(strategy, 100, host)
+                val latency = System.currentTimeMillis() - startTime
+                DpiEngine.recordStrategyResult(host, strategy, true, latency)
                 return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
             } else {
+                DpiEngine.recordStrategyResult(host, strategy, false, 0)
                 try { rs.close() } catch (e: Throwable) {}
                 return null
             }

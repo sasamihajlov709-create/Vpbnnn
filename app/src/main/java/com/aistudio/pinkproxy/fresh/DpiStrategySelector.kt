@@ -102,70 +102,54 @@ object DpiStrategySelector {
             return if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.CHAOS
         }
 
-        // Confidence-guided dynamic exploration
-        val sortedByBase = validStrategies.map { (strat, sRaw) ->
-            strat to sRaw.get().toDouble()
-        }.sortedByDescending { it.second }
-
-        val topScore = sortedByBase.firstOrNull()?.second ?: 100.0
-        val runnerUpScore = sortedByBase.getOrNull(1)?.second ?: 0.0
-        val scoreGap = (topScore - runnerUpScore).coerceAtLeast(0.0)
-
+        // Bayesian Thompson Sampling (Multi-Armed Bandit) integration
         val catSuccessMap = DpiEngine.categorySuccessHistory[category]
         val catFailureMap = DpiEngine.categoryFailureHistory[category]
-        val totalObsInCat = validStrategies.sumOf { (strat, _) ->
-            val catS = catSuccessMap?.get(strat)?.get() ?: 0
-            val catF = catFailureMap?.get(strat)?.get() ?: 0
-            if (catS + catF > 0) (catS + catF)
-            else (DpiEngine.successHistory[strat]?.get() ?: 0) + (DpiEngine.failureHistory[strat]?.get() ?: 0)
-        }
-
-        val obsConfidence = (totalObsInCat / 25.0).coerceIn(0.0, 1.0)
-        val gapConfidence = (scoreGap / 400.0).coerceIn(0.0, 1.0)
-        val overallConfidence = obsConfidence * gapConfidence
-
-        val exploreProb = if (totalObsInCat < 5) {
-            0.15
-        } else {
-            (0.02 + 0.13 * (1.0 - overallConfidence)).coerceIn(0.02, 0.15)
-        }
-
-        val rnd = ThreadLocalRandom.current()
-        if (rnd.nextDouble() < exploreProb) {
-            val topCandidates = sortedByBase.take(3).map { it.first }
-            if (topCandidates.isNotEmpty()) {
-                return topCandidates.random()
-            }
-        }
 
         val weightedList = mutableListOf<Pair<BypassStrategy, Double>>()
         var currentTotal = 0.0
         val currentDpi = ProxyStats.currentDpiType.value
+        val intensity = ProxyStats.censorshipIntensity.value
+        val netTypeVal = BypassConfig.currentNetworkType.value
+        val isPowerSave = BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20
         
         for ((strat, sRaw) in validStrategies) {
-            var s = sRaw.get().toDouble()
+            val catS = (catSuccessMap?.get(strat)?.get() ?: 0) + (DpiEngine.successHistory[strat]?.get() ?: 0)
+            val catF = (catFailureMap?.get(strat)?.get() ?: 0) + (DpiEngine.failureHistory[strat]?.get() ?: 0)
+
+            // Prior alpha & beta based on strategy baseline rating
+            val baseScore = sRaw.get().toDouble().coerceIn(10.0, 500.0)
+            val priorAlpha = (baseScore / 80.0).coerceIn(1.0, 6.0)
+            val priorBeta = 2.0
+
+            val alpha = priorAlpha + (catS * 0.8)
+            val beta = priorBeta + (catF * 1.2)
+
+            // Draw probability sample from posterior Beta distribution
+            val sampledWinRate = ThompsonSampler.sampleBeta(alpha, beta)
+
+            var s = sampledWinRate * 200.0
             
             val gPenalty = DpiEngine.globalPenalties[strat]?.get() ?: 0
             val gBoost = DpiEngine.globalBoosts[strat]?.get() ?: 0
-            s = (s - gPenalty + gBoost).coerceAtLeast(1.0)
+            s = (s - (gPenalty * 0.5) + (gBoost * 0.5)).coerceAtLeast(1.0)
 
             val globalScore = ProxyStats.getStrategyScore(strat).toDouble()
-            if (globalScore > 0) s += globalScore * 5
-            else if (globalScore < 0) s += globalScore * 10
+            if (globalScore > 0) s += globalScore * 3.0
+            else if (globalScore < 0) s += globalScore * 6.0
             
             s = s.coerceAtLeast(1.0)
-            s += (DpiEngine.strategyMaturity[strat]?.get() ?: 0) / 6.0
+            s += (DpiEngine.strategyMaturity[strat]?.get() ?: 0) / 8.0
             
             when (currentDpi) {
-                DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 2.0
-                DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 2.0
-                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 2.2
-                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.8
+                DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
+                DpiType.TCP_RESET -> if (strat.family == StrategyFamily.TCP || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
+                DpiType.UDP_BLOCK -> if (strat.family == StrategyFamily.UDP || strat.family == StrategyFamily.QUIC) s *= 2.0
+                DpiType.BLACKHOLE -> if (strat.group == StrategyGroup.EXTREME || strat.group == StrategyGroup.HEAVY) s *= 2.5
                 else -> {}
             }
 
             // Censorship Intensity Tier Weighting
-            val intensity = ProxyStats.censorshipIntensity.value
             when {
                 intensity > 90 -> {
                     if (strat.group == StrategyGroup.EXTREME) s *= 2.5
@@ -203,15 +187,14 @@ object DpiStrategySelector {
             }
 
             // Network Type Specific Weighting
-            val netTypeVal = BypassConfig.currentNetworkType.value
             if (netTypeVal == NetworkType.MOBILE || netTypeVal == NetworkType.MOBILE_LOW) {
                 if (strat == BypassStrategy.TCP_PULSE_FRAG || strat == BypassStrategy.TLS_SNI_EXT_MANGLE || strat == BypassStrategy.SNI_SPLIT) s *= 1.5
-                if (strat == BypassStrategy.TCP_COMBINED_NUCLEAR) s *= 0.85 // Heavy desync can drop on mobile towers
+                if (strat == BypassStrategy.TCP_COMBINED_NUCLEAR) s *= 0.85
             } else if (netTypeVal == NetworkType.WIFI || netTypeVal == NetworkType.ETHERNET) {
                 if (strat.group == StrategyGroup.EXTREME) s *= 1.3
             }
 
-            if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20) {
+            if (isPowerSave) {
                 when (strat.group) {
                     StrategyGroup.EXTREME -> s *= 0.2
                     StrategyGroup.HEAVY -> s *= 0.5
@@ -224,8 +207,8 @@ object DpiStrategySelector {
             }
             
             val latency = DpiEngine.strategyLatency[strat]?.get() ?: 200L
-            val latencyPenalty = (latency / 15.0).coerceAtMost(60.0)
-            val weight = (s - latencyPenalty).coerceAtLeast(5.0)
+            val latencyPenalty = (latency / 20.0).coerceAtMost(40.0)
+            val weight = (s - latencyPenalty).coerceAtLeast(1.0)
             
             weightedList.add(strat to weight)
             currentTotal += weight
