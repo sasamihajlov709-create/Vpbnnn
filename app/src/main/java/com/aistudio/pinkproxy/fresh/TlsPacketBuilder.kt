@@ -284,11 +284,12 @@ object TlsPacketBuilder {
 
     fun addTlsGreaseExtensions(data: ByteArray, length: Int): ByteArray {
         val rnd = ThreadLocalRandom.current()
+        val greaseTypes = intArrayOf(0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a, 0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa)
         var result = data.copyOf(length)
         repeat(rnd.nextInt(1, 3)) {
-            val type = (rnd.nextInt(16) shl 8) or 0x0A
-            val extData = ByteArray(rnd.nextInt(2, 10))
-            rnd.nextBytes(extData)
+            val type = greaseTypes[rnd.nextInt(greaseTypes.size)]
+            val extData = ByteArray(rnd.nextInt(0, 8))
+            if (extData.isNotEmpty()) rnd.nextBytes(extData)
             result = injectExtension(result, result.size, type, extData)
         }
         return result
@@ -338,6 +339,12 @@ object TlsPacketBuilder {
             val shufflable = extensions.filter { it.first != 0x0015 && it.first != 0x0029 }.toMutableList()
 
             val rnd = ThreadLocalRandom.current()
+            // Dynamically inject a standard TLS GREASE extension into shufflable extensions
+            val greaseTypes = intArrayOf(0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a, 0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa)
+            val greaseType = greaseTypes[rnd.nextInt(greaseTypes.size)]
+            val greasePayload = ByteArray(rnd.nextInt(0, 6)).also { if (it.isNotEmpty()) rnd.nextBytes(it) }
+            shufflable.add(Pair(greaseType, greasePayload))
+
             for (i in shufflable.size - 1 downTo 1) {
                 val j = rnd.nextInt(i + 1)
                 val tmp = shufflable[i]

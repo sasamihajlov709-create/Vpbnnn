@@ -81,15 +81,7 @@ object TcpTransportHandler {
             }
 
             val firstClientPacket = ByteArray(transportBufferSize)
-            clientSocket.soTimeout = 3000
-            var firstClientPacketLen = 0
-            try {
-                firstClientPacketLen = clientIn.read(firstClientPacket)
-            } catch (e: java.net.SocketTimeoutException) {
-                Log.v("TcpTransport", "Initial client read timed out (normal for some protocols)")
-            } catch (e: java.io.IOException) {
-                Log.v("TcpTransport", "Initial client read failed: ${e.message}")
-            }
+            val firstClientPacketLen = accumulateInitialPacket(clientSocket, clientIn, firstClientPacket, transportBufferSize, 3000)
 
             if (firstClientPacketLen <= 0) {
                 // If we can't read anything initially, it might be a server-first protocol or just slow client.
@@ -235,5 +227,57 @@ object TcpTransportHandler {
             ProxyStats.unregisterFlow(sessionId, sessionSuccess)
             ProxyStats.closeFlow(sessionId)
         }
+    }
+
+    private fun accumulateInitialPacket(
+        clientSocket: Socket,
+        clientIn: InputStream,
+        buffer: ByteArray,
+        maxBufferSize: Int,
+        timeoutMs: Int = 3000
+    ): Int {
+        clientSocket.soTimeout = timeoutMs
+        var totalRead = 0
+        try {
+            val first = clientIn.read(buffer, 0, buffer.size)
+            if (first <= 0) return 0
+            totalRead = first
+
+            // If payload is TLS Record Layer (0x16 0x03 0x00..0x04)
+            if (totalRead >= 5 && buffer[0] == 0x16.toByte() && (buffer[1].toInt() and 0xFF) == 3) {
+                val recordPayloadLen = ((buffer[3].toInt() and 0xFF) shl 8) or (buffer[4].toInt() and 0xFF)
+                val targetLen = minOf(5 + recordPayloadLen, maxBufferSize, 512.coerceAtLeast(5 + recordPayloadLen))
+
+                val startTime = System.currentTimeMillis()
+                clientSocket.soTimeout = 150
+                while (totalRead < targetLen && (System.currentTimeMillis() - startTime) < 500) {
+                    try {
+                        val read = clientIn.read(buffer, totalRead, targetLen - totalRead)
+                        if (read <= 0) break
+                        totalRead += read
+                    } catch (e: java.net.SocketTimeoutException) {
+                        break
+                    }
+                }
+            } else if (totalRead < 512) {
+                // General protocol accumulator: try to accumulate up to 512 bytes
+                val startTime = System.currentTimeMillis()
+                clientSocket.soTimeout = 100
+                while (totalRead < 512 && (System.currentTimeMillis() - startTime) < 250) {
+                    try {
+                        val read = clientIn.read(buffer, totalRead, 512 - totalRead)
+                        if (read <= 0) break
+                        totalRead += read
+                    } catch (e: java.net.SocketTimeoutException) {
+                        break
+                    }
+                }
+            }
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.v("TcpTransport", "Initial client read timed out (normal for some protocols)")
+        } catch (e: java.io.IOException) {
+            Log.v("TcpTransport", "Initial client read failed: ${e.message}")
+        }
+        return totalRead
     }
 }

@@ -16,12 +16,7 @@ object BypassApplier {
         }
 
         val rtt = BypassConfig.currentRttMs.value
-        val adaptiveDelay = when {
-            rtt < 40 -> rnd.nextLong(1, 2)
-            rtt < 120 -> rnd.nextLong(2, 4)
-            else -> rnd.nextLong(5, 12)
-        }
-        val effectiveDelay = if (config.delay1 > 0) config.delay1 else adaptiveDelay
+        val effectiveDelay = calculateRttAdaptiveDelay(rtt, config.delay1)
 
         if (length <= 5) {
             output.write(data, 0, length); output.flush(); return
@@ -119,5 +114,12 @@ object BypassApplier {
                 data[i+2] == '\r'.code.toByte() && data[i+3] == '\n'.code.toByte()) return i + 4
         }
         return -1
+    }
+
+    fun calculateRttAdaptiveDelay(rttMs: Long, customDelay: Long = 0L, minMs: Long = 2L, maxMs: Long = 80L): Long {
+        if (customDelay > 0) return customDelay
+        val proportional = (rttMs * 0.10).toLong()
+        val rndOffset = ThreadLocalRandom.current().nextLong(0, 3)
+        return (proportional + rndOffset).coerceIn(minMs, maxMs)
     }
 }
