@@ -8,7 +8,7 @@ import kotlinx.coroutines.delay
 
 object UdpStrategyHandler {
     suspend fun handleUdpStrategies(socket: DatagramSocket, address: InetAddress, port: Int, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
-        if (strategy == BypassStrategy.DIRECT) {
+        if (strategy == BypassStrategy.DIRECT || UdpTransportHandler.isStunPacket(data.copyOf(length))) {
             socket.send(DatagramPacket(data, length, address, port))
             return
         }

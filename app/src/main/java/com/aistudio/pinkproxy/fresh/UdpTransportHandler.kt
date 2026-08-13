@@ -134,7 +134,7 @@ object UdpTransportHandler {
                                 val payload = data.copyOfRange(offset + headerLen, offset + len)
                                 val sessionKey = "$host:$port"
                                 
-                                if (BypassConfig.blockQuic && isQuicPacket(port, payload)) {
+                                if (shouldBlockQuicForHost(host, port, payload)) {
                                     Log.d("UdpTransport", "QUIC packet blocked for $host:$port to force TCP fallback")
                                     continue
                                 }
@@ -250,6 +250,28 @@ object UdpTransportHandler {
 
     fun clearBuffers() {
         udpSessionCache.clear()
+    }
+
+    internal fun isStunPacket(payload: ByteArray): Boolean {
+        if (payload.size < 20) return false
+        val msgTypeHigh = payload[0].toInt() and 0xC0
+        if (msgTypeHigh != 0) return false
+        return payload[4] == 0x21.toByte() &&
+               payload[5] == 0x12.toByte() &&
+               payload[6] == 0xA4.toByte() &&
+               payload[7] == 0x42.toByte()
+    }
+
+    internal fun shouldBlockQuicForHost(host: String, port: Int, payload: ByteArray): Boolean {
+        if (!BypassConfig.blockQuic) return false
+        if (!isQuicPacket(port, payload)) return false
+        if (isStunPacket(payload)) return false
+        
+        val category = HostClassifier.classify(host)
+        if (category == HostCategory.MESSENGER || category == HostCategory.GAMING) {
+            return false
+        }
+        return true
     }
 
     internal fun isQuicPacket(port: Int, payload: ByteArray): Boolean {

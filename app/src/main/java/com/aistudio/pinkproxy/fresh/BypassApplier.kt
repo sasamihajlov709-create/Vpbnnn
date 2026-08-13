@@ -95,12 +95,12 @@ object BypassApplier {
         }
     }
 
-    private fun isProbableHttp(data: ByteArray, length: Int): Boolean {
+    fun isProbableHttp(data: ByteArray, length: Int): Boolean {
         if (length < 8) return false
         return HttpParser.isHttpRequest(data, length)
     }
 
-    private fun isProbableTls(data: ByteArray, length: Int): Boolean {
+    fun isProbableTls(data: ByteArray, length: Int): Boolean {
         if (length < 5) return false
         // TLS Record Layer: 0x16 (Handshake), 0x03 (Version major 3), version minor 0..4
         val major = data[1].toInt() and 0xFF

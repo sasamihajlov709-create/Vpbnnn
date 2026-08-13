@@ -114,7 +114,7 @@ object AdaptiveStrategyHandler {
         delay(rnd.nextLong(2, 8))
         
         // 3. Send original first part with normal TTL
-        TtlHelper.setTtl(socket, 64)
+        TtlHelper.setTtl(socket, BypassConfig.currentTtl)
         output.write(data, 0, splitPos)
         output.flush()
         delay(rnd.nextLong(3, 10))
@@ -141,7 +141,7 @@ object AdaptiveStrategyHandler {
                 delay(rnd.nextLong(1, 3))
 
                 // Send real payload chunk with normal TTL
-                TtlHelper.setTtl(socket, 64)
+                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
                 output.write(data, pos, chunk)
                 output.flush()
                 pos += chunk

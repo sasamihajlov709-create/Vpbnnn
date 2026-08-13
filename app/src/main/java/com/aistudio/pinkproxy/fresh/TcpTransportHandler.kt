@@ -172,19 +172,31 @@ object TcpTransportHandler {
                 }
 
                 try {
-                    // Send remaining data
+                    // Send remaining data & inspect subsequent packets in Keep-Alive connection
                     val buffer = ByteArray(transportBufferSize)
+                    var packetIndex = 0
                     while (isActive) {
                         val read = clientIn.read(buffer)
                         if (read == -1) break
                         lastActivity.set(System.currentTimeMillis())
+                        packetIndex++
+
                         if (intensity > 60 && ThreadLocalRandom.current().nextInt(100) < 3) {
                             TcpTransportManager.applyWindowPulse(finalRemoteSocket)
                         }
+
+                        // Inspect secondary payloads on Keep-Alive / Multiplexed streams
+                        val isSecondaryTlsOrHttp = packetIndex > 1 && (BypassApplier.isProbableTls(buffer, read) || BypassApplier.isProbableHttp(buffer, read))
+                        
                         writeMutex.lock()
                         try {
-                            finalRemoteOut.write(buffer, 0, read)
-                            finalRemoteOut.flush()
+                            if (isSecondaryTlsOrHttp && effectiveStrategy != BypassStrategy.DIRECT) {
+                                Log.v("TcpTransport", "Detected secondary TLS/HTTP payload in packet #$packetIndex for $targetHost - applying evasion")
+                                BypassApplier.applyBypass(finalRemoteSocket, finalRemoteOut, buffer, read, config, targetHost)
+                            } else {
+                                finalRemoteOut.write(buffer, 0, read)
+                                finalRemoteOut.flush()
+                            }
                         } finally {
                             writeMutex.unlock()
                         }

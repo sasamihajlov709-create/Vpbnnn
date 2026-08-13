@@ -192,9 +192,11 @@ object AutoTtlProber {
             val censorDistance = identifyCensorHop(target, port, serverDistance, vpnService)
             
             val finalTtl = if (censorDistance != -1) {
-                censorDistance 
+                (censorDistance - 2).coerceAtLeast(2)
+            } else if (serverDistance > 4) {
+                (serverDistance - 3).coerceAtLeast(2)
             } else {
-                (serverDistance - 4).coerceAtLeast(3).coerceAtMost(serverDistance - 1)
+                (serverDistance - 1).coerceAtLeast(2)
             }
             
             discoveredTtls[host] = finalTtl
