@@ -28,7 +28,8 @@ class VpnNetworkMonitor(
                 if (capabilities != null) {
                     networkCapabilitiesMap[network] = capabilities
                 }
-                Log.i("VpnNetworkMonitor", "Network available: $network (Type: $type)")
+                NetworkProfileManager.updateNetwork(context, network)
+                Log.i("VpnNetworkMonitor", "Network available: $network (Type: $type, Profile: ${NetworkProfileManager.currentProfile.value.displayName})")
                 val defaultNet = connectivityManager.activeNetwork
                 if (defaultNet == null || defaultNet == network) {
                     networkChangeCallback(network, type)
@@ -40,6 +41,7 @@ class VpnNetworkMonitor(
                 networkCapabilitiesMap.remove(network)
                 Log.i("VpnNetworkMonitor", "Network lost: $network")
                 val systemActiveNet = connectivityManager.activeNetwork
+                NetworkProfileManager.updateNetwork(context, systemActiveNet)
                 if (systemActiveNet != null && activeNetworks.containsKey(systemActiveNet)) {
                     networkChangeCallback(systemActiveNet, activeNetworks[systemActiveNet] ?: NetworkType.NONE)
                 } else {
@@ -55,6 +57,7 @@ class VpnNetworkMonitor(
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 val newType = getNetworkType(capabilities)
                 activeNetworks[network] = newType
+                NetworkProfileManager.updateNetwork(context, network)
                 val oldCaps = networkCapabilitiesMap[network]
                 if (oldCaps != null) {
                     val transportsChanged = !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && oldCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||

@@ -341,6 +341,9 @@ fun BypassTab(
                 Text("ENGINE DIAGNOSTICS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
                 Spacer(modifier = Modifier.height(8.dp))
                 
+                val currentProfile by NetworkProfileManager.currentProfile.collectAsStateWithLifecycle()
+                MetricRow(label = "Network Profile", value = currentProfile.displayName, color = Color(0xFF81C784))
+
                 val currentDpi by ProxyStats.currentDpiType.collectAsStateWithLifecycle()
                 MetricRow(label = "Detected Block Type", value = currentDpi.name, color = if (currentDpi != DpiType.NONE) Color(0xFFE57373) else GentleLightPink)
                 

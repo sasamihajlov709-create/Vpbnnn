@@ -66,12 +66,16 @@ object DpiStrategySelector {
             if ((DpiEngine.circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
         }
 
-        DpiEngine.networkStrategyMemory[netType]?.get(category)?.let { netMem ->
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        val netMem = DpiEngine.networkStrategyMemory[profileId]?.get(category)
+            ?: DpiEngine.networkStrategyMemory[netType]?.get(category)
+
+        netMem?.let { mem ->
             val nowMs = System.currentTimeMillis()
-            val ageMs = nowMs - netMem.timestamp
+            val ageMs = nowMs - mem.timestamp
             val maxAge = 6 * 3600 * 1000L // 6 hours TTL
-            if (ageMs < maxAge && netMem.confidence >= 0.3) {
-                val strat = netMem.strategy
+            if (ageMs < maxAge && mem.confidence >= 0.3) {
+                val strat = mem.strategy
                 if (isFamilyCompatible(strat.family, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                     val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
                     val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
@@ -318,10 +322,14 @@ object DpiStrategySelector {
                 DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, System.currentTimeMillis())
                 
                 val netType = BypassConfig.currentNetworkType.value.toString()
-                val netMemory = DpiEngine.networkStrategyMemory.getOrPut(netType) { java.util.concurrent.ConcurrentHashMap() }
+                val profileId = NetworkProfileManager.currentProfile.value.id
+                val profileNetMemory = DpiEngine.networkStrategyMemory.getOrPut(profileId) { java.util.concurrent.ConcurrentHashMap() }
+                val typeNetMemory = DpiEngine.networkStrategyMemory.getOrPut(netType) { java.util.concurrent.ConcurrentHashMap() }
                 if ((DpiEngine.strategyMaturity[strategy]?.get() ?: 0) > 3) {
-                    val prevConf = netMemory[category]?.confidence ?: 0.5
-                    netMemory[category] = DpiEngine.NetworkMemory(strategy, System.currentTimeMillis(), (prevConf + 0.15).coerceAtMost(1.0))
+                    val prevConf = profileNetMemory[category]?.confidence ?: typeNetMemory[category]?.confidence ?: 0.5
+                    val newMemory = DpiEngine.NetworkMemory(strategy, System.currentTimeMillis(), (prevConf + 0.15).coerceAtMost(1.0))
+                    profileNetMemory[category] = newMemory
+                    typeNetMemory[category] = newMemory
                 }
             }
 
@@ -368,15 +376,18 @@ object DpiStrategySelector {
             
             // Confidence decay for network strategy memory
             val netType = BypassConfig.currentNetworkType.value.toString()
-            DpiEngine.networkStrategyMemory[netType]?.get(category)?.let { netMem ->
-                if (netMem.strategy == strategy) {
-                    val decayedConf = netMem.confidence * 0.6
-                    val netMap = DpiEngine.networkStrategyMemory[netType]
-                    if (netMap != null) {
-                        if (decayedConf < 0.2) {
-                            netMap.remove(category)
-                        } else {
-                            netMap[category] = netMem.copy(confidence = decayedConf)
+            val profileId = NetworkProfileManager.currentProfile.value.id
+            listOf(profileId, netType).forEach { key ->
+                DpiEngine.networkStrategyMemory[key]?.get(category)?.let { netMem ->
+                    if (netMem.strategy == strategy) {
+                        val decayedConf = netMem.confidence * 0.6
+                        val netMap = DpiEngine.networkStrategyMemory[key]
+                        if (netMap != null) {
+                            if (decayedConf < 0.2) {
+                                netMap.remove(category)
+                            } else {
+                                netMap[category] = netMem.copy(confidence = decayedConf)
+                            }
                         }
                     }
                 }

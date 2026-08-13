@@ -14,26 +14,44 @@ object AutoTtlProber {
     private val discoveredTtls = ConcurrentHashMap<String, Int>()
     private val networkTtls = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
     private val networkMtus = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+    private val profileTtls = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+    private val profileMtus = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
     private val probingHosts = java.util.concurrent.ConcurrentSkipListSet<String>()
     private var probingJob: Job? = null
 
     fun resetOnNetworkChange() {
-        discoveredTtls.clear()
-        discoveredMtus.clear()
         probingHosts.clear()
-        Log.i("AutoTtlProber", "TTL/MTU cache reset on network interface switch")
+        Log.i("AutoTtlProber", "Active probe queue cleared for network switch")
+    }
+
+    fun switchNetworkProfile(newProfile: NetworkProfile) {
+        probingHosts.clear()
+        Log.i("AutoTtlProber", "Switched TTL/MTU discovery profile to ${newProfile.displayName} (${newProfile.id})")
     }
 
     fun getDiscoveredTtl(host: String): Int? {
+        val profileId = NetworkProfileManager.currentProfile.value.id
         val netType = BypassConfig.getNetworkType().toString()
-        return networkTtls[netType]?.get(host) ?: networkTtls[netType]?.get("global") ?: discoveredTtls[host] ?: discoveredTtls["global"]
+        return profileTtls[profileId]?.get(host)
+            ?: profileTtls[profileId]?.get("global")
+            ?: networkTtls[netType]?.get(host)
+            ?: networkTtls[netType]?.get("global")
+            ?: discoveredTtls[host]
+            ?: discoveredTtls["global"]
     }
 
     private val discoveredMtus = ConcurrentHashMap<String, Int>()
 
     fun getDiscoveredMtu(host: String): Int {
+        val profileId = NetworkProfileManager.currentProfile.value.id
         val netType = BypassConfig.getNetworkType().toString()
-        return networkMtus[netType]?.get(host) ?: networkMtus[netType]?.get("global") ?: discoveredMtus[host] ?: discoveredMtus["global"] ?: 1400
+        return profileMtus[profileId]?.get(host)
+            ?: profileMtus[profileId]?.get("global")
+            ?: networkMtus[netType]?.get(host)
+            ?: networkMtus[netType]?.get("global")
+            ?: discoveredMtus[host]
+            ?: discoveredMtus["global"]
+            ?: 1400
     }
 
     fun startProbing(scope: CoroutineScope, vpnService: VpnService?) {
@@ -110,8 +128,10 @@ object AutoTtlProber {
             val target = resolved.first()
             
             val commonMtus = intArrayOf(1500, 1492, 1480, 1450, 1420, 1400, 1360, 1280, 576)
+            val profileId = NetworkProfileManager.currentProfile.value.id
             for (mtu in commonMtus) {
                 if (tryMtu(target, port, mtu, vpnService, host)) {
+                    profileMtus.getOrPut(profileId) { ConcurrentHashMap() }[host] = mtu
                     discoveredMtus[host] = mtu
                     val currentGlobal = discoveredMtus["global"] ?: 1400
                     discoveredMtus["global"] = (currentGlobal * 0.8 + mtu * 0.2).toInt().coerceIn(576, 1500)
@@ -199,6 +219,8 @@ object AutoTtlProber {
                 (serverDistance - 1).coerceAtLeast(2)
             }
             
+            val profileId = NetworkProfileManager.currentProfile.value.id
+            profileTtls.getOrPut(profileId) { ConcurrentHashMap() }[host] = finalTtl
             discoveredTtls[host] = finalTtl
             updateGlobalConsensus(finalTtl)
             

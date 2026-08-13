@@ -1,13 +1,25 @@
 package com.aistudio.pinkproxy.fresh
 
 import android.content.Context
+import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 object DpiStorage {
 
     fun saveScores(context: Context, synchronous: Boolean = false) {
-        saveHostMemory(context, synchronous)
-        val prefs = context.getSharedPreferences("dpi_engine_scores", Context.MODE_PRIVATE)
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        saveProfileScores(context, profileId, synchronous)
+    }
+
+    fun loadScores(context: Context) {
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        loadProfileScores(context, profileId)
+    }
+
+    fun saveProfileScores(context: Context, profileId: String, synchronous: Boolean = false) {
+        saveHostMemoryForProfile(context, profileId, synchronous)
+        val prefs = context.getSharedPreferences("dpi_scores_$profileId", Context.MODE_PRIVATE)
         val editor = prefs.edit()
         editor.clear()
         DpiEngine.strategyScores.forEach { (cat, scores) ->
@@ -21,24 +33,33 @@ object DpiStorage {
             }
         }
         if (synchronous) editor.commit() else editor.apply()
+
+        // Also update registry of known profiles
+        updateProfileRegistry(context, profileId)
     }
 
-    fun loadScores(context: Context) {
-        loadHostMemory(context)
-        val prefs = context.getSharedPreferences("dpi_engine_scores", Context.MODE_PRIVATE)
+    fun loadProfileScores(context: Context, profileId: String) {
+        loadHostMemoryForProfile(context, profileId)
+        val prefs = context.getSharedPreferences("dpi_scores_$profileId", Context.MODE_PRIVATE)
+        
+        // If profile prefs are empty, fallback to legacy/default scores
+        val hasSavedScores = prefs.all.isNotEmpty()
+        val sourcePrefs = if (hasSavedScores) prefs else context.getSharedPreferences("dpi_engine_scores", Context.MODE_PRIVATE)
+
         DpiEngine.strategyScores.forEach { (cat, scores) ->
             scores.forEach { (strat, score) ->
-                val saved = prefs.getInt("${cat.name}_${strat.name}", -1)
-                if (saved != -1) score.set(saved)
+                val saved = sourcePrefs.getInt("${cat.name}_${strat.name}", -1)
+                if (saved != -1) score.set(saved) else score.set(100)
             }
         }
-        prefs.all.keys.filter { it.startsWith("netmem_") }.forEach { key ->
+
+        sourcePrefs.all.keys.filter { it.startsWith("netmem_") }.forEach { key ->
             val raw = key.removePrefix("netmem_")
             val parts = if (raw.contains("::")) raw.split("::", limit = 2) else raw.split("_", limit = 2)
             if (parts.size == 2) {
                 val netType = parts[0]
                 val catName = parts[1]
-                val valStr = prefs.getString(key, null)
+                val valStr = sourcePrefs.getString(key, null)
                 if (valStr != null) {
                     try {
                         val cat = HostCategory.valueOf(catName)
@@ -54,8 +75,8 @@ object DpiStorage {
         }
     }
 
-    private fun saveHostMemory(context: Context, isSynchronous: Boolean = false) {
-        val prefs = context.getSharedPreferences("dpi_engine_host_memory", Context.MODE_PRIVATE)
+    private fun saveHostMemoryForProfile(context: Context, profileId: String, isSynchronous: Boolean = false) {
+        val prefs = context.getSharedPreferences("dpi_host_mem_$profileId", Context.MODE_PRIVATE)
         val editor = prefs.edit()
         editor.clear()
         val now = System.currentTimeMillis()
@@ -67,7 +88,7 @@ object DpiStorage {
         }
         if (isSynchronous) editor.commit() else editor.apply()
 
-        val blPrefs = context.getSharedPreferences("dpi_engine_host_blacklist", Context.MODE_PRIVATE)
+        val blPrefs = context.getSharedPreferences("dpi_host_bl_$profileId", Context.MODE_PRIVATE)
         val blEditor = blPrefs.edit()
         blEditor.clear()
         DpiEngine.hostStrategyBlacklist.forEach { (host, map) ->
@@ -79,11 +100,16 @@ object DpiStorage {
         if (isSynchronous) blEditor.commit() else blEditor.apply()
     }
 
-    private fun loadHostMemory(context: Context) {
-        val prefs = context.getSharedPreferences("dpi_engine_host_memory", Context.MODE_PRIVATE)
+    private fun loadHostMemoryForProfile(context: Context, profileId: String) {
+        DpiEngine.hostSpecificMemory.clear()
+        DpiEngine.hostStrategyBlacklist.clear()
+
+        val prefs = context.getSharedPreferences("dpi_host_mem_$profileId", Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val expiry = 86400000L * 7
-        prefs.all.forEach { (host, value) ->
+        val sourcePrefs = if (prefs.all.isNotEmpty()) prefs else context.getSharedPreferences("dpi_engine_host_memory", Context.MODE_PRIVATE)
+
+        sourcePrefs.all.forEach { (host, value) ->
             if (value is String) {
                 val parts = value.split("|")
                 if (parts.size == 2) {
@@ -98,8 +124,10 @@ object DpiStorage {
             }
         }
 
-        val blPrefs = context.getSharedPreferences("dpi_engine_host_blacklist", Context.MODE_PRIVATE)
-        blPrefs.all.forEach { (host, value) ->
+        val blPrefs = context.getSharedPreferences("dpi_host_bl_$profileId", Context.MODE_PRIVATE)
+        val sourceBlPrefs = if (blPrefs.all.isNotEmpty()) blPrefs else context.getSharedPreferences("dpi_engine_host_blacklist", Context.MODE_PRIVATE)
+
+        sourceBlPrefs.all.forEach { (host, value) ->
             if (value is String) {
                 val map = DpiEngine.hostStrategyBlacklist.getOrPut(host) { ConcurrentHashMap() }
                 value.split(",").forEach { entry ->
@@ -117,4 +145,27 @@ object DpiStorage {
             }
         }
     }
+
+    private fun updateProfileRegistry(context: Context, profileId: String) {
+        try {
+            val registry = context.getSharedPreferences("dpi_profiles_registry", Context.MODE_PRIVATE)
+            val allProfiles = registry.getStringSet("registered_profiles", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+            if (!allProfiles.contains(profileId)) {
+                allProfiles.add(profileId)
+                if (allProfiles.size > 25) {
+                    val oldest = allProfiles.firstOrNull()
+                    if (oldest != null) {
+                        allProfiles.remove(oldest)
+                        context.getSharedPreferences("dpi_scores_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
+                        context.getSharedPreferences("dpi_host_mem_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
+                        context.getSharedPreferences("dpi_host_bl_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
+                    }
+                }
+                registry.edit().putStringSet("registered_profiles", allProfiles).apply()
+            }
+        } catch (e: Exception) {
+            Log.v("DpiStorage", "Profile registry update error: ${e.message}")
+        }
+    }
 }
+

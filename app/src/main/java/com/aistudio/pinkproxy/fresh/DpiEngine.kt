@@ -127,6 +127,34 @@ object DpiEngine {
         consecutiveFailuresByHost.clear()
     }
 
+    fun switchNetworkProfile(oldProfile: NetworkProfile, newProfile: NetworkProfile, context: Context?) {
+        val ctx = context ?: appContext
+        if (ctx != null && oldProfile.id.isNotBlank() && oldProfile != NetworkProfile.UNKNOWN) {
+            try {
+                DpiStorage.saveProfileScores(ctx, oldProfile.id, synchronous = true)
+            } catch (e: Exception) {
+                Log.w("DpiEngine", "Failed to save profile scores for ${oldProfile.id}: ${e.message}")
+            }
+        }
+
+        clearCircuitBreakers()
+        globalPenalties.clear()
+        globalBoosts.clear()
+        strategyLatency.clear()
+
+        if (ctx != null && newProfile.id.isNotBlank() && newProfile != NetworkProfile.UNKNOWN) {
+            try {
+                DpiStorage.loadProfileScores(ctx, newProfile.id)
+                Log.i("DpiEngine", "Loaded learned DPI scores for profile ${newProfile.displayName} (${newProfile.id})")
+            } catch (e: Exception) {
+                Log.e("DpiEngine", "Failed to load profile scores for ${newProfile.id}: ${e.message}")
+                resetStrategyScoresForNetworkChange()
+            }
+        } else {
+            resetStrategyScoresForNetworkChange()
+        }
+    }
+
     fun resetStrategyScoresForNetworkChange() {
         strategyScores.forEach { (_, scores) ->
             scores.forEach { (_, score) -> score.set(100) }

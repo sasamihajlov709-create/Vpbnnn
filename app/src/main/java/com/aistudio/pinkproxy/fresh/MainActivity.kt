@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
         }
         
         try {
+            NetworkProfileManager.updateNetwork(this, null)
             PinkVpnService.loadFilterSettings(this)
             BypassConfig.loadTuningSettings(this)
             RobustResolver.loadDnsSettings(this)

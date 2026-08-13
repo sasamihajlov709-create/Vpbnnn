@@ -144,8 +144,10 @@ class PinkVpnService : VpnService() {
                 }
 
                 if (network != null) {
-                    ProxyStats.logRecovery("Switching to $type network. Re-calibrating DPI engine.")
-                    DpiEngine.resetStrategyScoresForNetworkChange()
+                    val profile = NetworkProfileManager.currentProfile.value
+                    ProxyStats.logRecovery("Network connected: ${profile.displayName} ($type). Restoring profile knowledge.")
+                    DpiEngine.switchNetworkProfile(NetworkProfile.UNKNOWN, profile, this)
+                    AutoTtlProber.switchNetworkProfile(profile)
                     ProxyStats.resetMssFailureCount()
                     DnsCacheManager.onNetworkChanged()
                     RobustResolver.clearCache()

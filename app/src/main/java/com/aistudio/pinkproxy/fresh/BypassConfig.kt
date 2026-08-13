@@ -177,8 +177,6 @@ object BypassConfig {
             hostStrategyMemory.clear()
             ProxyStats.resetScores()
             DpiEngine.clearCircuitBreakers()
-            DpiEngine.resetStrategyScoresForNetworkChange()
-            AutoTtlProber.resetOnNetworkChange()
         }
     }
 
