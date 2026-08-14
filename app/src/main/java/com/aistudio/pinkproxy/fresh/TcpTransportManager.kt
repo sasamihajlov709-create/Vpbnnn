@@ -13,8 +13,15 @@ object TcpTransportManager {
         try {
             socket.tcpNoDelay = true
             socket.keepAlive = true
-            socket.receiveBufferSize = 65536
-            socket.sendBufferSize = 65536
+            val isMobile = NetworkProfileManager.currentProfile.value.id.startsWith("mobile")
+            if (isMobile) {
+                // Adaptive buffering for cellular connections: prevents ACK throttling & queue starvation
+                socket.receiveBufferSize = 128 * 1024
+                socket.sendBufferSize = 64 * 1024
+            } else {
+                socket.receiveBufferSize = 65536
+                socket.sendBufferSize = 65536
+            }
         } catch (e: Exception) {
             Log.v("TcpTransportManager", "Failed to configure socket: ${e.message}")
         } catch (e: Throwable) {

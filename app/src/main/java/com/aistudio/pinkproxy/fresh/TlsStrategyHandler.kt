@@ -17,15 +17,18 @@ object TlsStrategyHandler {
             BypassStrategy.SNI_SPLIT, BypassStrategy.TLS_SNI_SPLIT, BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT -> {
                 val sniPos = TlsParser.findSni(data, length)
                 if (sniPos != -1) {
+                    val hostname = TlsParser.extractHostname(data, length, sniPos)
                     val splitOffset = if (strategy == BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT) {
-                        val hostname = TlsParser.extractHostname(data, length, sniPos)
                         if (hostname != null && hostname.length > 2) sniPos + (hostname.length / 2) else sniPos + 1
+                    } else if (hostname != null && hostname.length >= 4) {
+                        // Entropy/Mid-Domain split (split 2-3 bytes inside the SNI to evade DPI single-byte glue buffers)
+                        sniPos + (hostname.length / 3).coerceIn(1, hostname.length - 1)
                     } else {
                         sniPos + 1
                     }
                     output.write(data, 0, splitOffset)
                     output.flush()
-                    delay(rnd.nextLong(1, 5))
+                    delay(rnd.nextLong(1, 4))
                     output.write(data, splitOffset, length - splitOffset)
                     output.flush()
                 } else {
