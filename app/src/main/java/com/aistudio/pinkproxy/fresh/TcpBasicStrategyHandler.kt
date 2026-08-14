@@ -153,7 +153,7 @@ object TcpBasicStrategyHandler {
                 output.flush()
                 return
             }
-            BypassStrategy.TCP_KEEP_ALIVE_FAKE -> {
+            BypassStrategy.TCP_KEEP_ALIVE_FAKE, BypassStrategy.TCP_KEEPALIVE_SKEW -> {
                 TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
                 output.write(ByteArray(0))
                 output.flush()

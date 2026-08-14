@@ -69,7 +69,7 @@ object TlsStrategyHandler {
                     output.flush()
                 }
             }
-            BypassStrategy.TLS_PAD, BypassStrategy.TLS_PADDING_RAND, BypassStrategy.TLS_RECORD_PADDING, BypassStrategy.TLS_CLIENT_HELLO_PAD -> {
+            BypassStrategy.TLS_PAD, BypassStrategy.TLS_PADDING_RAND, BypassStrategy.TLS_RECORD_PADDING, BypassStrategy.TLS_CLIENT_HELLO_PAD, BypassStrategy.TLS_HANDSHAKE_RANDOM_PADDING -> {
                 val padded = TlsParser.addPadding(data, length, rnd.nextInt(16, 128))
                 output.write(padded)
                 output.flush()
@@ -79,7 +79,7 @@ object TlsStrategyHandler {
                 output.write(padded)
                 output.flush()
             }
-            BypassStrategy.TLS_GREASE, BypassStrategy.TLS_EXTENSION_GREASE, BypassStrategy.TLS_GREASE_SKEW, BypassStrategy.ECH_GREASE -> {
+            BypassStrategy.TLS_GREASE, BypassStrategy.TLS_EXTENSION_GREASE, BypassStrategy.TLS_GREASE_SKEW, BypassStrategy.ECH_GREASE, BypassStrategy.TLS_CLIENT_HELLO_GREASE_RANDOM -> {
                 val greased = TlsParser.addGrease(data, length, rnd)
                 output.write(greased)
                 output.flush()
@@ -127,7 +127,7 @@ object TlsStrategyHandler {
                 output.write(data, 0, length)
                 output.flush()
             }
-            BypassStrategy.TLS_SESSION_TICKET_SKEW, BypassStrategy.TLS_SESSION_ID_MANGLE, BypassStrategy.TLS_SESSION_ID_RAND -> {
+            BypassStrategy.TLS_SESSION_TICKET_SKEW, BypassStrategy.TLS_SESSION_ID_MANGLE, BypassStrategy.TLS_SESSION_ID_RAND, BypassStrategy.TLS_COMPRESSION_FAKE -> {
                 val modified = TlsParser.mangleSessionId(data, length, rnd)
                 output.write(modified)
                 output.flush()

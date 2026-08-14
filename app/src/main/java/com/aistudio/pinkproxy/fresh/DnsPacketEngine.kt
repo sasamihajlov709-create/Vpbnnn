@@ -7,7 +7,13 @@ import java.io.ByteArrayInputStream
 
 object DnsPacketEngine {
 
-    fun buildDnsQuery(host: String, type: Int, id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000), mangleCase: Boolean = false): ByteArray {
+    fun buildDnsQuery(
+        host: String,
+        type: Int,
+        id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000),
+        mangleCase: Boolean = false,
+        includeEcs: Boolean = false
+    ): ByteArray {
         val buffer = ProxyStats.obtain8k()
         try {
             val bb = java.nio.ByteBuffer.wrap(buffer)
@@ -50,7 +56,9 @@ object DnsPacketEngine {
             bb.putShort((if (rnd.nextBoolean()) 0x8000 else 0).toShort()) // Z (flags)
             
             val ecsOptionStart = bb.position()
-            buildEcsOption(bb)
+            if (includeEcs) {
+                buildEcsOption(bb)
+            }
             val paddingSize = rnd.nextInt(64, 256)
             buildPaddingOption(bb, paddingSize)
             buildCookieOption(bb)
@@ -123,7 +131,7 @@ object DnsPacketEngine {
         return result
     }
 
-    fun parseDnsResponse(data: ByteArray, length: Int, expectedId: Int = -1): List<InetAddress> {
+    fun parseDnsResponse(data: ByteArray, length: Int, expectedId: Int = -1, expectedHost: String? = null): List<InetAddress> {
         if (length < 12) return emptyList()
         val ips = mutableListOf<InetAddress>()
         try {
@@ -146,10 +154,18 @@ object DnsPacketEngine {
             val bb = java.nio.ByteBuffer.wrap(data, 0, length)
             bb.position(12)
             
-            // Skip questions
+            // Parse/verify questions
             for (i in 0 until qCount) {
                 if (!bb.hasRemaining()) break
-                skipName(bb)
+                val qName = readDomainName(bb, data, length)
+                if (expectedHost != null && i == 0) {
+                    val cleanExpected = expectedHost.trimEnd('.').lowercase()
+                    val cleanQName = qName?.trimEnd('.')?.lowercase()
+                    if (cleanQName != null && cleanQName != cleanExpected) {
+                        android.util.Log.w("DnsPacketEngine", "DNS response QNAME mismatch: expected $cleanExpected, got $cleanQName")
+                        return emptyList()
+                    }
+                }
                 if (bb.remaining() >= 4) {
                     bb.position(bb.position() + 4) // Type and Class
                 } else {
@@ -164,14 +180,17 @@ object DnsPacketEngine {
                 if (bb.remaining() < 10) break
                 val type = bb.short.toInt() and 0xFFFF
                 bb.position(bb.position() + 2) // Class
-                bb.position(bb.position() + 4) // TTL
+                val ttl = bb.int.toLong() and 0xFFFFFFFFL
                 val rdLen = bb.short.toInt() and 0xFFFF
                 
                 if (bb.remaining() < rdLen) break
                 if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
                     val rData = ByteArray(rdLen)
                     bb.get(rData)
-                    ips.add(InetAddress.getByAddress(rData))
+                    val addr = InetAddress.getByAddress(rData)
+                    if (!isSuspicious(addr, expectedHost ?: "", ttl)) {
+                        ips.add(addr)
+                    }
                 } else {
                     bb.position(bb.position() + rdLen)
                 }
@@ -190,7 +209,7 @@ object DnsPacketEngine {
 
     data class DnsRecord(val address: InetAddress, val ttlSeconds: Long, val type: Int = 1)
 
-    fun parseDnsResponseDetailed(data: ByteArray, length: Int, expectedId: Int = -1): List<DnsRecord> {
+    fun parseDnsResponseDetailed(data: ByteArray, length: Int, expectedId: Int = -1, expectedHost: String? = null): List<DnsRecord> {
         if (length < 12) return emptyList()
         val records = mutableListOf<DnsRecord>()
         try {
@@ -204,7 +223,15 @@ object DnsPacketEngine {
             
             for (i in 0 until qCount) {
                 if (!bb.hasRemaining()) break
-                skipName(bb)
+                val qName = readDomainName(bb, data, length)
+                if (expectedHost != null && i == 0) {
+                    val cleanExpected = expectedHost.trimEnd('.').lowercase()
+                    val cleanQName = qName?.trimEnd('.')?.lowercase()
+                    if (cleanQName != null && cleanQName != cleanExpected) {
+                        android.util.Log.w("DnsPacketEngine", "DNS response QNAME mismatch: expected $cleanExpected, got $cleanQName")
+                        return emptyList()
+                    }
+                }
                 if (bb.remaining() >= 4) {
                     bb.position(bb.position() + 4)
                 }
@@ -224,7 +251,10 @@ object DnsPacketEngine {
                 if ((type == 1 && rdLen == 4) || (type == 28 && rdLen == 16)) {
                     val rData = ByteArray(rdLen)
                     bb.get(rData)
-                    records.add(DnsRecord(InetAddress.getByAddress(rData), ttl, type))
+                    val addr = InetAddress.getByAddress(rData)
+                    if (!isSuspicious(addr, expectedHost ?: "", ttl)) {
+                        records.add(DnsRecord(addr, ttl, type))
+                    }
                 } else if (type == 65) { // HTTPS Record
                     val startPos = bb.position()
                     try {
@@ -319,6 +349,46 @@ object DnsPacketEngine {
             return true
         }
         return false
+    }
+
+    private fun readDomainName(bb: java.nio.ByteBuffer, data: ByteArray, length: Int): String? {
+        val sb = StringBuilder()
+        var depth = 0
+        var pos = bb.position()
+        var jumped = false
+        var nextPosAfterPointer = -1
+
+        while (depth < 40 && pos < length) {
+            val len = data[pos].toInt() and 0xFF
+            if (len == 0) {
+                if (!jumped) pos++
+                break
+            }
+            if ((len and 0xC0) == 0xC0) {
+                if (pos + 1 >= length) break
+                val offset = ((len and 0x3F) shl 8) or (data[pos + 1].toInt() and 0xFF)
+                if (!jumped) {
+                    nextPosAfterPointer = pos + 2
+                    jumped = true
+                }
+                pos = offset
+            } else {
+                pos++
+                if (pos + len > length) break
+                if (sb.isNotEmpty()) sb.append('.')
+                sb.append(String(data, pos, len, java.nio.charset.StandardCharsets.UTF_8))
+                pos += len
+            }
+            depth++
+        }
+
+        if (jumped && nextPosAfterPointer != -1) {
+            bb.position(minOf(nextPosAfterPointer, length))
+        } else {
+            bb.position(minOf(pos, length))
+        }
+
+        return if (sb.isEmpty()) null else sb.toString()
     }
 
     private fun skipName(bb: java.nio.ByteBuffer) {

@@ -27,7 +27,7 @@ object DpiStrategySelector {
             val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
             if (hostFails == 0) {
                 val lastMem = DpiEngine.hostSpecificMemory[host]
-                if (lastMem != null && now - lastMem.timestamp < 24 * 3600 * 1000L) {
+                if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strat = lastMem.strategy
                     if (StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                         val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
@@ -114,16 +114,18 @@ object DpiStrategySelector {
         val isPowerSave = BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20
         
         for ((strat, sRaw) in validStrategies) {
-            val catS = (catSuccessMap?.get(strat)?.get() ?: 0) + (DpiEngine.successHistory[strat]?.get() ?: 0)
-            val catF = (catFailureMap?.get(strat)?.get() ?: 0) + (DpiEngine.failureHistory[strat]?.get() ?: 0)
+            val catS = catSuccessMap?.get(strat)?.get() ?: 0
+            val catF = catFailureMap?.get(strat)?.get() ?: 0
+            val globalS = DpiEngine.successHistory[strat]?.get() ?: 0
+            val globalF = DpiEngine.failureHistory[strat]?.get() ?: 0
 
-            // Prior alpha & beta based on strategy baseline rating
+            // Prior alpha & beta based on baseline score + gentle global prior (0.15 weight) without double-counting
             val baseScore = sRaw.get().toDouble().coerceIn(10.0, 500.0)
-            val priorAlpha = (baseScore / 80.0).coerceIn(1.0, 6.0)
-            val priorBeta = 2.0
+            val priorAlpha = (baseScore / 80.0).coerceIn(1.0, 6.0) + (globalS * 0.15)
+            val priorBeta = 2.0 + (globalF * 0.15)
 
-            val alpha = priorAlpha + (catS * 0.8)
-            val beta = priorBeta + (catF * 1.2)
+            val alpha = priorAlpha + (catS * 0.85)
+            val beta = priorBeta + (catF * 1.15)
 
             // Draw probability sample from posterior Beta distribution
             val sampledWinRate = ThompsonSampler.sampleBeta(alpha, beta)
@@ -311,7 +313,10 @@ object DpiStrategySelector {
             if (host != null) {
                 DpiEngine.hostStrategyBlacklist[host]?.remove(strategy)
                 DpiEngine.consecutiveFailuresByHost[host]?.set(0)
-                DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, System.currentTimeMillis())
+                
+                val currentMem = DpiEngine.hostSpecificMemory[host]
+                val newCount = if (currentMem?.strategy == strategy) currentMem.successCount + 1 else 1
+                DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, System.currentTimeMillis(), newCount)
                 
                 val netType = BypassConfig.currentNetworkType.value.toString()
                 val profileId = NetworkProfileManager.currentProfile.value.id

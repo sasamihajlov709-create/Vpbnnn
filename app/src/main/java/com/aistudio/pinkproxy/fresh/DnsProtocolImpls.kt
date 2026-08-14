@@ -27,7 +27,8 @@ object UdpDnsProtocols {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
             
-            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+            val query = DnsPacketEngine.buildDnsQuery(host, type, id = queryId)
             val packet = java.net.DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
             socket.send(packet)
             
@@ -35,7 +36,7 @@ object UdpDnsProtocols {
             val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
             socket.receive(responsePacket)
             
-            DnsPacketEngine.parseDnsResponseDetailed(responseBuf, responsePacket.length)
+            DnsPacketEngine.parseDnsResponseDetailed(responseBuf, responsePacket.length, expectedId = queryId, expectedHost = host)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -50,7 +51,8 @@ object UdpDnsProtocols {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
             
-            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+            val query = DnsPacketEngine.buildDnsQuery(host, type, id = queryId)
             val fake = DnsPacketEngine.buildDnsQuery("google.com", 1)
             val fakePacket = java.net.DatagramPacket(fake, fake.size, InetAddress.getByName(dnsIp), 53)
             socket.send(fakePacket)
@@ -63,7 +65,7 @@ object UdpDnsProtocols {
             val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
             socket.receive(responsePacket)
             
-            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
+            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length, expectedId = queryId, expectedHost = host)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -88,7 +90,7 @@ object UdpDnsProtocols {
             val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
             socket.receive(responsePacket)
             
-            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length, expectedId = queryId)
+            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length, expectedId = queryId, expectedHost = host)
         } catch (e: java.net.SocketTimeoutException) {
             emptyList()
         } catch (e: Exception) {
@@ -138,7 +140,8 @@ object UdpDnsProtocols {
             socket.send(shadowPacket)
             kotlinx.coroutines.delay(5)
 
-            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+            val query = DnsPacketEngine.buildDnsQuery(host, type, id = queryId)
             val packet = java.net.DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
             socket.send(packet)
             
@@ -146,7 +149,7 @@ object UdpDnsProtocols {
             val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
             socket.receive(responsePacket)
             
-            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
+            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length, expectedId = queryId, expectedHost = host)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -165,7 +168,8 @@ object TcpDnsProtocols {
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 4000)
             socket.soTimeout = 4000
             
-            val query = DnsPacketEngine.buildDnsQueryTcp(host, type)
+            val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+            val query = DnsPacketEngine.buildDnsQueryTcp(host, type, id = queryId)
             val os = socket.getOutputStream()
             // TCP fragmentation: Write length prefix separately to desync DPI inspection
             if (query.size > 2) {
@@ -191,7 +195,7 @@ object TcpDnsProtocols {
                 if (r == -1) break
                 read += r
             }
-            DnsPacketEngine.parseDnsResponse(response, read)
+            DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryId, expectedHost = host)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -235,7 +239,8 @@ object TcpDnsProtocols {
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 5000)
             socket.soTimeout = 5000
             
-            val query = DnsPacketEngine.buildDnsQueryTcp(host, type)
+            val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+            val query = DnsPacketEngine.buildDnsQueryTcp(host, type, id = queryId)
             val os = socket.getOutputStream()
             os.write(query)
             os.flush()
@@ -253,7 +258,7 @@ object TcpDnsProtocols {
                 if (r == -1) break
                 read += r
             }
-            DnsPacketEngine.parseDnsResponse(response, read)
+            DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryId, expectedHost = host)
         } catch (e: java.net.SocketTimeoutException) {
             emptyList()
         } catch (e: Exception) {

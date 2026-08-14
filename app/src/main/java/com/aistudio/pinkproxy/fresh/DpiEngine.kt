@@ -46,7 +46,7 @@ object DpiEngine {
     data class NetworkMemory(val strategy: BypassStrategy, val timestamp: Long = System.currentTimeMillis(), val confidence: Double = 1.0)
     val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
     
-    data class HostMemory(val strategy: BypassStrategy, val timestamp: Long)
+    data class HostMemory(val strategy: BypassStrategy, val timestamp: Long, val successCount: Int = 1)
     val hostSpecificMemory = ConcurrentHashMap<String, HostMemory>()
     val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
 
@@ -326,10 +326,27 @@ object DpiEngine {
                                 quality = ObservationQuality.TLS_RECORD_RECEIVED
                             )
                             return@withTimeoutOrNull true
+                        } else {
+                            DpiStrategySelector.recordResult(
+                                config.strategy,
+                                false,
+                                category,
+                                reason = FailureReason.CENSORSHIP_STALL,
+                                host = host,
+                                quality = ObservationQuality.CONNECT_ONLY
+                            )
                         }
                         false
                     } catch (e: Exception) {
                         Log.v("DpiEngine", "Probe $strat failed: ${e.message}")
+                        DpiStrategySelector.recordResult(
+                            strat,
+                            false,
+                            category,
+                            reason = FailureReason.TCP_RESET,
+                            host = host,
+                            quality = ObservationQuality.CONNECT_ONLY
+                        )
                         false 
                     } catch (e: Throwable) {
                         false

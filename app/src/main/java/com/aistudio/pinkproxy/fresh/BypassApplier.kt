@@ -57,20 +57,41 @@ object BypassApplier {
             }
         }
 
-        when (strategy.family) {
-            StrategyFamily.HTTP -> HttpStrategyHandler.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.TLS -> TlsStrategyHandler.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.TCP -> TcpBasicStrategyHandler.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            StrategyFamily.FRAGMENTATION -> FragmentationStrategyHandler.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config, effectiveDelay)
-            StrategyFamily.ADAPTIVE -> AdaptiveStrategyHandler.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
-            StrategyFamily.TIMING -> TimingStrategyHandler.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            else -> {
-                if (strategy == BypassStrategy.CHAOS) {
-                    val picked = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.TCP_WINDOW_SHRINK, BypassStrategy.FRAGMENT_MULTI).random()
-                    applyBypass(socket, output, data, length, config.copy(strategy = picked), host)
-                } else {
-                    output.write(finalData, 0, finalLen); output.flush()
-                }
+        val executorType = StrategyExecutionRegistry.getExecutorType(strategy) ?: when (strategy.family) {
+            StrategyFamily.HTTP -> StrategyExecutionRegistry.ExecutorType.HTTP_HANDLER
+            StrategyFamily.TLS -> StrategyExecutionRegistry.ExecutorType.TLS_HANDLER
+            StrategyFamily.TCP -> StrategyExecutionRegistry.ExecutorType.TCP_BASIC_HANDLER
+            StrategyFamily.FRAGMENTATION -> StrategyExecutionRegistry.ExecutorType.FRAGMENTATION_HANDLER
+            StrategyFamily.ADAPTIVE -> StrategyExecutionRegistry.ExecutorType.ADAPTIVE_HANDLER
+            StrategyFamily.TIMING -> StrategyExecutionRegistry.ExecutorType.TIMING_HANDLER
+            else -> StrategyExecutionRegistry.ExecutorType.DIRECT
+        }
+
+        when (executorType) {
+            StrategyExecutionRegistry.ExecutorType.HTTP_HANDLER -> {
+                HttpStrategyHandler.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            }
+            StrategyExecutionRegistry.ExecutorType.TLS_HANDLER -> {
+                TlsStrategyHandler.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            }
+            StrategyExecutionRegistry.ExecutorType.TCP_BASIC_HANDLER -> {
+                TcpBasicStrategyHandler.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            }
+            StrategyExecutionRegistry.ExecutorType.FRAGMENTATION_HANDLER -> {
+                FragmentationStrategyHandler.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config, effectiveDelay)
+            }
+            StrategyExecutionRegistry.ExecutorType.ADAPTIVE_HANDLER -> {
+                AdaptiveStrategyHandler.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
+            }
+            StrategyExecutionRegistry.ExecutorType.TIMING_HANDLER -> {
+                TimingStrategyHandler.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
+            }
+            StrategyExecutionRegistry.ExecutorType.DIRECT,
+            StrategyExecutionRegistry.ExecutorType.DNS_OVER_TCP,
+            StrategyExecutionRegistry.ExecutorType.DNS_OVER_QUIC,
+            StrategyExecutionRegistry.ExecutorType.UDP_HANDLER -> {
+                output.write(finalData, 0, finalLen)
+                output.flush()
             }
         }
     }

@@ -122,7 +122,15 @@ object UdpStrategyHandler {
                 }
             }
             BypassStrategy.UDP_IP_FRAG, BypassStrategy.UDP_IPv6_FRAG -> {
-                socket.send(DatagramPacket(data, length, address, port))
+                // Application-level fragmentation simulating MTU-split IP datagrams
+                if (length > 28) {
+                    val frag1 = (length / 2).coerceAtLeast(14)
+                    socket.send(DatagramPacket(data, 0, frag1, address, port))
+                    delay(rnd.nextLong(1, 3))
+                    socket.send(DatagramPacket(data, frag1, length - frag1, address, port))
+                } else {
+                    socket.send(DatagramPacket(data, length, address, port))
+                }
             }
             BypassStrategy.QUIC_MTU_PROBE, BypassStrategy.QUIC_INITIAL_PADDING_EXTREME -> {
                 val padded = data.copyOf(1200.coerceAtLeast(length))
@@ -167,6 +175,14 @@ object UdpStrategyHandler {
                 writeUdpWithFake(socket, address, port, ghost, DatagramPacket(data, length, address, port), rnd.nextLong(1, 2))
             }
             BypassStrategy.UDP_IP_ID_MANGLE -> {
+                // Prepend minimal 1-byte 0-TTL ping before packet to induce IP ID counter mismatch on middlebox state
+                val ghost = ByteArray(4)
+                rnd.nextBytes(ghost)
+                val fakePkt = DatagramPacket(ghost, ghost.size, address, port)
+                val isIpv6 = address is java.net.Inet6Address
+                TtlHelper.setUdpTtl(socket, 1, isIpv6)
+                try { socket.send(fakePkt) } catch (_: Throwable) {}
+                TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl, isIpv6)
                 socket.send(DatagramPacket(data, length, address, port))
             }
             BypassStrategy.UDP_OVERLAP_SKEW -> {

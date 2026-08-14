@@ -28,10 +28,24 @@ object FragmentationStrategyHandler {
             return
         }
 
+        if (strategy == BypassStrategy.TCP_PULSE_FRAG) {
+            // Pulse fragmentation: burst small chunk, micro-delay, burst medium chunk
+            var pos = 0
+            while (pos < length) {
+                val burst = rnd.nextInt(2, 8).coerceAtMost(length - pos)
+                output.write(data, pos, burst)
+                output.flush()
+                pos += burst
+                if (pos < length) delay(rnd.nextLong(2, 10))
+            }
+            return
+        }
+
         if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE || 
             strategy == BypassStrategy.TLS_SNI_FRAGMENT || strategy == BypassStrategy.TLS_SNI_SPLIT || 
             strategy == BypassStrategy.TLS_SNI_JITTER_SPLIT || strategy == BypassStrategy.TLS_RECORD_FRAGMENTATION || 
-            strategy == BypassStrategy.ECH_FRAG || strategy == BypassStrategy.FRAGMENT_MULTI) {
+            strategy == BypassStrategy.ECH_FRAG || strategy == BypassStrategy.FRAGMENT_MULTI ||
+            strategy == BypassStrategy.TLS_REC_SPLIT) {
             
             if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
                 val sniPos = TlsParser.findSni(data, length)

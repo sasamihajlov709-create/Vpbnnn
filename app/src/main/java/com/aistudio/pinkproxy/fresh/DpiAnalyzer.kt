@@ -88,14 +88,6 @@ object DpiAnalyzer {
     }
 
     fun analyzeAndAdjust() {
-        DpiEngine.strategyScores.values.forEach { catScores ->
-            catScores.values.forEach { score ->
-                val s = score.get()
-                if (s > 500) score.addAndGet(-(s - 500) / 100 - 1)
-                else if (s < 500) score.addAndGet((500 - s) / 100 + 1)
-            }
-        }
-
         if (DpiEngine.hostStrategyBlacklist.size > 500) {
             val now = System.currentTimeMillis()
             DpiEngine.hostStrategyBlacklist.entries.removeIf { map -> map.value.values.all { it < now } }
