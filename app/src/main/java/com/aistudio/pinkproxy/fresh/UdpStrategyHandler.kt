@@ -158,6 +158,50 @@ object UdpStrategyHandler {
                 val fake = FakePacketHelper.buildUdpNoise(length)
                 writeUdpWithFake(socket, address, port, fake, DatagramPacket(data, length, address, port), rnd.nextLong(1, 4))
             }
+            BypassStrategy.QUIC_RST_SKEW -> {
+                val fakeRst = ByteArray(20) { 0x00 }
+                writeUdpWithFake(socket, address, port, fakeRst, DatagramPacket(data, length, address, port), rnd.nextLong(1, 3))
+            }
+            BypassStrategy.UDP_GHOST_SKEW -> {
+                val ghost = FakePacketHelper.buildUdpNoise(rnd.nextInt(16, 48))
+                writeUdpWithFake(socket, address, port, ghost, DatagramPacket(data, length, address, port), rnd.nextLong(1, 2))
+            }
+            BypassStrategy.UDP_IP_ID_MANGLE -> {
+                socket.send(DatagramPacket(data, length, address, port))
+            }
+            BypassStrategy.UDP_OVERLAP_SKEW -> {
+                if (length > 30) {
+                    val overlap = 10
+                    val part1 = length / 2 + overlap
+                    socket.send(DatagramPacket(data, part1, address, port))
+                    delay(rnd.nextLong(1, 4))
+                    val part2 = length - (length / 2)
+                    socket.send(DatagramPacket(data, length / 2, part2, address, port))
+                } else {
+                    socket.send(DatagramPacket(data, length, address, port))
+                }
+            }
+            BypassStrategy.UDP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_NUCLEAR, BypassStrategy.UDP_QUIC_CHAOS, BypassStrategy.UDP_RACING -> {
+                val noise = FakePacketHelper.buildUdpNoise(rnd.nextInt(20, 60))
+                writeUdpWithFake(socket, address, port, noise, DatagramPacket(data, length, address, port), rnd.nextLong(1, 3))
+                if (length > 40) {
+                    val part = length / 2
+                    delay(rnd.nextLong(1, 2))
+                    socket.send(DatagramPacket(data, part, address, port))
+                    delay(rnd.nextLong(1, 3))
+                    socket.send(DatagramPacket(data, part, length - part, address, port))
+                }
+            }
+            BypassStrategy.ADAPTIVE_CHUNK, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.CHAOS -> {
+                if (length > 20) {
+                    val part = length / 2
+                    socket.send(DatagramPacket(data, part, address, port))
+                    delay(rnd.nextLong(1, 4))
+                    socket.send(DatagramPacket(data, part, length - part, address, port))
+                } else {
+                    socket.send(DatagramPacket(data, length, address, port))
+                }
+            }
             else -> {
                 socket.send(DatagramPacket(data, length, address, port))
             }

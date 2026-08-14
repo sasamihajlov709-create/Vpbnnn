@@ -12,6 +12,13 @@ object HostClassifier {
         return cache.getOrPut(host) {
             val h = host.lowercase().trimEnd('.')
             when {
+                // DIRECT / LOCAL
+                h == "localhost" || h == "127.0.0.1" || h == "::1" || 
+                h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".home.arpa") ||
+                h.startsWith("10.") || h.startsWith("192.168.") ||
+                (h.startsWith("172.") && h.split(".").getOrNull(1)?.toIntOrNull() in 16..31) ||
+                h == "connectivitycheck.gstatic.com" || h == "msftconnecttest.com" -> HostCategory.DIRECT
+
                 // STREAMING
                 h.contains("youtube") || h.contains("googlevideo") || h.contains("ytimg") || 
                 h.contains("ggpht") || h.contains("vimeo") || h.contains("twitch") || 

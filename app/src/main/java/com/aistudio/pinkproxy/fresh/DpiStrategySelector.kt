@@ -29,7 +29,7 @@ object DpiStrategySelector {
                 val lastMem = DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null && now - lastMem.timestamp < 24 * 3600 * 1000L) {
                     val strat = lastMem.strategy
-                    if (isFamilyCompatible(strat.family, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                    if (StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                         val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
                         if ((hostBlacklist?.get(strat) ?: 0L) < now) {
                             return strat
@@ -76,7 +76,7 @@ object DpiStrategySelector {
             val maxAge = 6 * 3600 * 1000L // 6 hours TTL
             if (ageMs < maxAge && mem.confidence >= 0.3) {
                 val strat = mem.strategy
-                if (isFamilyCompatible(strat.family, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                if (StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                     val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
                     val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
                     if (blacklistedUntil < now) {
@@ -90,7 +90,7 @@ object DpiStrategySelector {
         
         val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
         val validStrategies = catScores.entries.filter { (strat, _) ->
-            isFamilyCompatible(strat.family, transport) &&
+            StrategyExecutionRegistry.isExecutorSupported(strat, transport) &&
             (DpiEngine.circuitBreakers[strat] ?: 0L) < now && 
             (hostBlacklist?.get(strat) ?: 0L) < now &&
             (!BypassConfig.isStrictBypassMode || strat != BypassStrategy.DIRECT)
@@ -240,12 +240,12 @@ object DpiStrategySelector {
     fun getBestExtremeStrategy(host: String? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         val extreme = DpiEngine.strategyScores[cat]?.entries?.filter { 
-            it.key.group == StrategyGroup.EXTREME && isFamilyCompatible(it.key.family, transport)
+            it.key.group == StrategyGroup.EXTREME && StrategyExecutionRegistry.isExecutorSupported(it.key, transport)
         } ?: emptyList()
         val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.ZAPRET_EXTREME
         if (extreme.isEmpty()) {
             return BypassStrategy.entries.filter { 
-                it.group == StrategyGroup.EXTREME && isFamilyCompatible(it.family, transport)
+                it.group == StrategyGroup.EXTREME && StrategyExecutionRegistry.isExecutorSupported(it, transport)
             }.maxByOrNull { getAverageScore(it) } ?: defaultFallback
         }
         return extreme.maxByOrNull { it.value.get() }?.key ?: defaultFallback
@@ -278,13 +278,21 @@ object DpiStrategySelector {
         return preferred.random()
     }
 
-    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) {
+    fun recordResult(
+        strategy: BypassStrategy, 
+        success: Boolean, 
+        category: HostCategory = HostCategory.OTHER, 
+        reason: FailureReason? = null, 
+        latencyMs: Long = 0, 
+        host: String? = null,
+        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER
+    ) {
         if (success) {
             DpiEngine.successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.categorySuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.globalPenalties[strategy]?.updateAndGet { (it * 0.8).toInt() }
-            DpiEngine.globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(5)
+            DpiEngine.globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet((5 * quality.weight).toInt().coerceAtLeast(1))
 
             DpiEngine.strategyScores[category]?.get(strategy)?.let { score ->
                 var bonus = if (latencyMs in 1..300) 35 else 15
@@ -292,6 +300,7 @@ object DpiStrategySelector {
                 if (intensity > 50) {
                     bonus += (intensity / 10) * 5
                 }
+                bonus = (bonus * quality.weight).toInt().coerceAtLeast(5)
                 val currentScore = score.get()
                 val targetScore = (currentScore + bonus).coerceAtMost(3000)
                 // EWMA score update (alpha = 0.35)

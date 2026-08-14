@@ -7,14 +7,14 @@ object ProxyDispatcher {
     @Volatile var context: android.content.Context? = null
 
     private val cpuCores = Runtime.getRuntime().availableProcessors()
-    private val corePoolSize = Math.max(64, cpuCores * 8)
-    private val maxPoolSize = Math.max(512, cpuCores * 32)
+    private val corePoolSize = Math.max(16, cpuCores * 2)
+    private val maxPoolSize = Math.max(64, cpuCores * 8)
 
     val io = java.util.concurrent.ThreadPoolExecutor(
         corePoolSize,
         maxPoolSize,
         60L, java.util.concurrent.TimeUnit.SECONDS,
-        java.util.concurrent.LinkedBlockingQueue<Runnable>(2048),
+        java.util.concurrent.LinkedBlockingQueue<Runnable>(512),
         { r ->
             Thread(r, "PinkProxyWorker").apply { 
                 isDaemon = true

@@ -105,6 +105,7 @@ object DpiEngine {
         val now = System.currentTimeMillis()
         circuitBreakers.entries.removeIf { it.value < now }
         hostStrategyBlacklist.values.forEach { map -> map.entries.removeIf { it.value < now } }
+        DpiAnalyzer.decayEventHistory()
     }
 
     fun stop() {
@@ -227,11 +228,30 @@ object DpiEngine {
     }
 
     fun boostStrategyFamily(family: StrategyFamily, host: String?) {
-        val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+        if (!host.isNullOrBlank()) {
+            val category = HostClassifier.classify(host)
+            boostStrategyFamilyForCategory(family, category)
+        } else {
+            boostStrategyFamilyGlobally(family)
+        }
+    }
+
+    fun boostStrategyFamilyForCategory(family: StrategyFamily, category: HostCategory) {
         strategyScores[category]?.forEach { (strat, score) ->
             if (strat.family == family) {
                 val boost = if (strat.group == StrategyGroup.EXTREME) 60 else 30
                 score.addAndGet(boost)
+            }
+        }
+    }
+
+    fun boostStrategyFamilyGlobally(family: StrategyFamily) {
+        strategyScores.forEach { (_, scores) ->
+            scores.forEach { (strat, score) ->
+                if (strat.family == family) {
+                    val boost = if (strat.group == StrategyGroup.EXTREME) 60 else 30
+                    score.addAndGet(boost)
+                }
             }
         }
     }
@@ -267,7 +287,9 @@ object DpiEngine {
     }
 
     suspend fun triggerMicroProbe(host: String, category: HostCategory) {
-        val probes = BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }.shuffled().take(3)
+        val probes = BypassStrategy.entries.filter { 
+            it.group == StrategyGroup.EXTREME && StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP)
+        }.shuffled().take(3)
         val resolved = try { 
             RobustResolver.resolve(host) 
         } catch (e: java.net.UnknownHostException) {
@@ -294,9 +316,15 @@ object DpiEngine {
                         s.soTimeout = 1500
                         val headerBuf = ByteArray(5)
                         val readLen = s.getInputStream().read(headerBuf)
-                        val success = readLen >= 5 && headerBuf[0] == 0x16.toByte() && headerBuf[1] == 0x03.toByte()
-                        if (success) {
-                            DpiStrategySelector.recordResult(config.strategy, true, category, host = host)
+                        val isTlsServerHello = readLen >= 5 && headerBuf[0] == 0x16.toByte() && headerBuf[1] == 0x03.toByte()
+                        if (isTlsServerHello) {
+                            DpiStrategySelector.recordResult(
+                                config.strategy, 
+                                true, 
+                                category, 
+                                host = host,
+                                quality = ObservationQuality.TLS_RECORD_RECEIVED
+                            )
                             return@withTimeoutOrNull true
                         }
                         false
@@ -322,8 +350,15 @@ object DpiEngine {
     // Delegation methods for backward compatibility
     fun getBestStrategy(category: HostCategory, host: String? = null, transport: TransportType = TransportType.TCP) = DpiStrategySelector.getBestStrategy(category, host, transport)
     fun getBestExtremeStrategy(host: String? = null, transport: TransportType = TransportType.TCP) = DpiStrategySelector.getBestExtremeStrategy(host, transport)
-    fun recordResult(strategy: BypassStrategy, success: Boolean, category: HostCategory = HostCategory.OTHER, reason: FailureReason? = null, latencyMs: Long = 0, host: String? = null) = 
-        DpiStrategySelector.recordResult(strategy, success, category, reason, latencyMs, host)
+    fun recordResult(
+        strategy: BypassStrategy, 
+        success: Boolean, 
+        category: HostCategory = HostCategory.OTHER, 
+        reason: FailureReason? = null, 
+        latencyMs: Long = 0, 
+        host: String? = null,
+        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER
+    ) = DpiStrategySelector.recordResult(strategy, success, category, reason, latencyMs, host, quality)
     fun triggerRecalibration() {
         resetStrategyScoresForNetworkChange()
         lastGlobalReset = System.currentTimeMillis()

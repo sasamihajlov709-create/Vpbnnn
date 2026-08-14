@@ -130,6 +130,13 @@ object DnsPacketEngine {
             // Quick fingerprint check: must have QR=1 (response)
             if ((data[2].toInt() and 0x80) == 0) return emptyList()
             
+            // Check RCODE (bits 0-3 of byte 3) - 0 is NOERROR, 3 is NXDOMAIN, 2 is SERVFAIL, 5 is REFUSED
+            val rcode = data[3].toInt() and 0x0F
+            if (rcode != 0) {
+                // Non-zero RCODE indicates an error response
+                return emptyList()
+            }
+            
             val id = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
             if (expectedId != -1 && id != expectedId) return emptyList()
             

@@ -79,7 +79,8 @@ object UdpDnsProtocols {
             vpnService?.protect(socket)
             socket.soTimeout = 3000
             
-            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+            val query = DnsPacketEngine.buildDnsQuery(host, type, id = queryId)
             val packet = java.net.DatagramPacket(query, query.size, InetAddress.getByName(dnsIp), 53)
             socket.send(packet)
             
@@ -87,7 +88,7 @@ object UdpDnsProtocols {
             val responsePacket = java.net.DatagramPacket(responseBuf, responseBuf.size)
             socket.receive(responsePacket)
             
-            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
+            DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length, expectedId = queryId)
         } catch (e: java.net.SocketTimeoutException) {
             emptyList()
         } catch (e: Exception) {
@@ -147,6 +148,7 @@ object UdpDnsProtocols {
             
             DnsPacketEngine.parseDnsResponse(responseBuf, responsePacket.length)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             emptyList()
         } finally {
             socket?.close()
@@ -191,6 +193,7 @@ object TcpDnsProtocols {
             }
             DnsPacketEngine.parseDnsResponse(response, read)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             emptyList()
         } finally {
             try { socket?.close() } catch (_: Exception) {}
@@ -254,6 +257,7 @@ object TcpDnsProtocols {
         } catch (e: java.net.SocketTimeoutException) {
             emptyList()
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.v("TcpDnsProtocols", "TCP DNS query failed for $host via $dnsIp: ${e.message}")
             emptyList()
         } finally {
@@ -263,13 +267,6 @@ object TcpDnsProtocols {
 }
 
 object DohDnsProtocols {
-    private val racingUrls = listOf(
-        "https://dns.google/dns-query",
-        "https://1.1.1.1/dns-query",
-        "https://9.9.9.9/dns-query",
-        "https://dns.quad9.net/dns-query"
-    )
-
     suspend fun queryDohDetailed(host: String, dohUrl: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
             val client = DnsProtocols.getProtectedClient(vpnService)
@@ -286,6 +283,7 @@ object DohDnsProtocols {
                 return@withContext DnsPacketEngine.parseDnsResponseDetailed(body, body.size)
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.v("DohDnsProtocols", "DoH query failed for $host via $dohUrl: ${e.message}")
             emptyList()
         }
@@ -402,6 +400,7 @@ object DotDnsProtocols {
             }
             DnsPacketEngine.parseDnsResponse(response, read)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.v("DotDnsProtocols", "DoT query failed for $host via $dotIp: ${e.message}")
             emptyList()
         } finally {

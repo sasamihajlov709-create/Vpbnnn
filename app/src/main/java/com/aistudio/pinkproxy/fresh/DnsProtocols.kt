@@ -135,6 +135,10 @@ object DnsProtocols {
         DohDnsProtocols.queryDohSmuggling(host, vpnService, type)
 
     fun clearPool() {
+        synchronized(clientLock) {
+            cachedProtectedClient = null
+            lastVpnService = null
+        }
         DotDnsProtocols.clearPool()
         DnsCacheManager.clearAll()
     }

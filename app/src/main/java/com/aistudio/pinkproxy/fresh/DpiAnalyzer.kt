@@ -18,12 +18,6 @@ object DpiAnalyzer {
     fun getCensorshipFingerprint(): CensorshipFingerprint {
         val total = DpiEngine.eventHistory.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
         
-        if (total > 500) {
-            DpiEngine.eventHistory.forEach { (_, count) ->
-                count.updateAndGet { (it * 0.9).toInt() }
-            }
-        }
-        
         val allHistory = DpiEngine.rttHistory.values.flatMap { synchronized(it) { it.toList() } }
         val jitter = if (allHistory.size > 2) {
             val diffs = allHistory.zipWithNext { a, b -> Math.abs(a - b) }
@@ -39,6 +33,15 @@ object DpiAnalyzer {
             jitter = jitter,
             intensity = ProxyStats.censorshipIntensity.value
         )
+    }
+
+    fun decayEventHistory() {
+        val total = DpiEngine.eventHistory.values.sumOf { it.get() }
+        if (total > 500) {
+            DpiEngine.eventHistory.forEach { (_, count) ->
+                count.updateAndGet { (it * 0.9).toInt() }
+            }
+        }
     }
 
     fun recordSpoofedRst(host: String, rttMs: Long) {
@@ -171,6 +174,7 @@ object DpiAnalyzer {
         BypassConfig.delay1 = DpiEngine.getRecommendedDelay()
         
         DpiEngine.pruneStrategies()
+        decayEventHistory()
 
         if (totalSuccess + totalFailure > 1000) {
             DpiEngine.successHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toInt() } }

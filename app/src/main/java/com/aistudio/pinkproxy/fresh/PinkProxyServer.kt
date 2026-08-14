@@ -16,7 +16,8 @@ import java.io.*
 class PinkProxyServer(private val vpnService: VpnService, private val port: Int, val sessionSecret: String = "") {
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
-    private val activeConnectionSemaphore = Semaphore(800)
+    private val maxConnections = 256
+    private val activeConnectionSemaphore = Semaphore(maxConnections)
 
     companion object {
         private val SOCKS5_AUTH_SUCCESS = byteArrayOf(5, 0)
@@ -39,13 +40,13 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             while (isActive) {
                 val watchdogDelay = if (BypassConfig.isPowerSaveMode) 120000L else 60000L
                 delay(watchdogDelay)
-                val activeCount = 800 - activeConnectionSemaphore.availablePermits()
-                if (activeCount > 600) {
+                val activeCount = maxConnections - activeConnectionSemaphore.availablePermits()
+                if (activeCount > 200) {
                     Log.i("PinkProxy", "Watchdog: $activeCount active connections.")
                 }
                 
                 // Trim buffer pools on low connection load or low battery to free RAM smoothly
-                if (activeCount < 50 || BypassConfig.batteryLevel < 15) {
+                if (activeCount < 20 || BypassConfig.batteryLevel < 15) {
                     ProxyStats.releaseAllPools()
                 }
             }

@@ -172,20 +172,26 @@ object DpiStorage {
     private fun updateProfileRegistry(context: Context, profileId: String) {
         try {
             val registry = context.getSharedPreferences("dpi_profiles_registry", Context.MODE_PRIVATE)
+            val editor = registry.edit()
+            val now = System.currentTimeMillis()
+            editor.putLong("ts_$profileId", now)
+
             val allProfiles = registry.getStringSet("registered_profiles", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
-            if (!allProfiles.contains(profileId)) {
-                allProfiles.add(profileId)
-                if (allProfiles.size > 25) {
-                    val oldest = allProfiles.firstOrNull()
-                    if (oldest != null) {
-                        allProfiles.remove(oldest)
-                        context.getSharedPreferences("dpi_scores_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
-                        context.getSharedPreferences("dpi_host_mem_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
-                        context.getSharedPreferences("dpi_host_bl_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
-                    }
+            allProfiles.add(profileId)
+
+            if (allProfiles.size > 25) {
+                // Evict the least recently used profile using timestamp
+                val oldest = allProfiles.minByOrNull { id -> registry.getLong("ts_$id", 0L) }
+                if (oldest != null && oldest != profileId) {
+                    allProfiles.remove(oldest)
+                    editor.remove("ts_$oldest")
+                    context.getSharedPreferences("dpi_scores_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
+                    context.getSharedPreferences("dpi_host_mem_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
+                    context.getSharedPreferences("dpi_host_bl_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
                 }
-                registry.edit().putStringSet("registered_profiles", allProfiles).apply()
             }
+            editor.putStringSet("registered_profiles", allProfiles)
+            editor.apply()
         } catch (e: Exception) {
             Log.v("DpiStorage", "Profile registry update error: ${e.message}")
         }

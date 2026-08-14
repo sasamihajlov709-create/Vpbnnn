@@ -90,7 +90,15 @@ class VpnNetworkMonitor(
         if (capabilities == null) return NetworkType.NONE
         return when {
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkType.WIFI
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkType.MOBILE
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                // If downlink bandwidth is very constrained (< 1500 kbps) or unmetered is false with low link speed
+                val downKbps = capabilities.linkDownstreamBandwidthKbps
+                if (downKbps in 1..1500) {
+                    NetworkType.MOBILE_LOW
+                } else {
+                    NetworkType.MOBILE
+                }
+            }
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NetworkType.ETHERNET
             else -> NetworkType.OTHER
         }

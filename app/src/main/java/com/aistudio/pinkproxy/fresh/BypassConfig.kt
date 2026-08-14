@@ -256,7 +256,7 @@ object BypassConfig {
         val candidates = BypassStrategy.entries.filter { 
             it != BypassStrategy.DIRECT && 
             it != _strategy.value &&
-            DpiStrategySelector.isFamilyCompatible(it.family, transport) &&
+            StrategyExecutionRegistry.isExecutorSupported(it, transport) &&
             (DpiEngine.circuitBreakers[it] ?: 0L) < now
         }
         val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_HYBRID else BypassStrategy.SNI_SPLIT

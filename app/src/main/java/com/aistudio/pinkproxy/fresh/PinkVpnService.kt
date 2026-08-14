@@ -78,6 +78,7 @@ class PinkVpnService : VpnService() {
 
     private val serviceLock = Mutex()
     @Volatile private var isStopping = false
+    private var activeNetworkProfile: NetworkProfile = NetworkProfile.UNKNOWN
 
     override fun onCreate() {
         super.onCreate()
@@ -144,9 +145,11 @@ class PinkVpnService : VpnService() {
                 }
 
                 if (network != null) {
+                    val oldProfile = activeNetworkProfile
                     val profile = NetworkProfileManager.currentProfile.value
+                    activeNetworkProfile = profile
                     ProxyStats.logRecovery("Network connected: ${profile.displayName} ($type). Restoring profile knowledge.")
-                    DpiEngine.switchNetworkProfile(NetworkProfile.UNKNOWN, profile, this)
+                    DpiEngine.switchNetworkProfile(oldProfile, profile, this)
                     AutoTtlProber.switchNetworkProfile(profile)
                     ProxyStats.resetMssFailureCount()
                     DnsCacheManager.onNetworkChanged()
@@ -287,6 +290,7 @@ class PinkVpnService : VpnService() {
         try {
             ProxyStats.reset(false)
             ServiceChecker.proxyPort = PROXY_PORT
+            activeNetworkProfile = NetworkProfileManager.currentProfile.value
 
             // 1. Initialize DNS
             RobustResolver.initialize(engineScope)
