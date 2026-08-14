@@ -89,7 +89,7 @@ object RobustResolver {
         val cacheKey = if (type == 1) host.lowercase() else "${host.lowercase()}:$type"
         val scope = getScope()
         val deferred = pendingResolutions.computeIfAbsent(cacheKey) {
-            scope.async {
+            scope.async(NonCancellable) {
                 try {
                     performResolution(host, vpnService, type)
                 } finally {
@@ -116,17 +116,14 @@ object RobustResolver {
         }
     }
 
-    suspend fun resolveDual(host: String, vpnService: VpnService? = null): List<InetAddress> = coroutineScope {
-        if (!BypassConfig.includeIpv6) return@coroutineScope resolve(host, vpnService, 1)
+    suspend fun resolveDual(host: String, vpnService: VpnService? = null): List<InetAddress> {
+        if (!BypassConfig.includeIpv6) return resolve(host, vpnService, 1)
 
-        val deferredA = async { try { resolve(host, vpnService, 1) } catch (e: Exception) { if (e is CancellationException) throw e; emptyList() } }
-        val deferredAaaa = async { try { resolve(host, vpnService, 28) } catch (e: Exception) { if (e is CancellationException) throw e; emptyList() } }
+        val aResult = try { resolve(host, vpnService, 1) } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
+        val aaaaResult = try { resolve(host, vpnService, 28) } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
 
-        val a = deferredA.await()
-        val aaaa = deferredAaaa.await()
-        
         // Prefer AAAA if available, but return all for selection
-        (aaaa + a).distinct()
+        return (aaaaResult + aResult).distinct()
     }
 
     private suspend fun performResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {

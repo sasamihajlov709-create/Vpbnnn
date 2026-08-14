@@ -29,7 +29,7 @@ object DpiStrategySelector {
                 val lastMem = DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strat = lastMem.strategy
-                    if (StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                    if (isFamilyCompatible(strat.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                         val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
                         if ((hostBlacklist?.get(strat) ?: 0L) < now) {
                             return strat
@@ -76,7 +76,7 @@ object DpiStrategySelector {
             val maxAge = 6 * 3600 * 1000L // 6 hours TTL
             if (ageMs < maxAge && mem.confidence >= 0.3) {
                 val strat = mem.strategy
-                if (StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
+                if (isFamilyCompatible(strat.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
                     val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
                     val blacklistedUntil = hostBlacklist?.get(strat) ?: 0L
                     if (blacklistedUntil < now) {
@@ -90,6 +90,7 @@ object DpiStrategySelector {
         
         val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
         val validStrategies = catScores.entries.filter { (strat, _) ->
+            isFamilyCompatible(strat.family, transport) &&
             StrategyExecutionRegistry.isExecutorSupported(strat, transport) &&
             (DpiEngine.circuitBreakers[strat] ?: 0L) < now && 
             (hostBlacklist?.get(strat) ?: 0L) < now &&

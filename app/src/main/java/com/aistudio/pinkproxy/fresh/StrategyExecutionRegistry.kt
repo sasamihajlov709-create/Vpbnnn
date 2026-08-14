@@ -257,12 +257,12 @@ object StrategyExecutionRegistry {
         BypassStrategy.UDP_FRAGMENTATION to (ExecutorType.UDP_HANDLER to setOf(TransportType.UDP)),
 
         // DNS Handlers
-        BypassStrategy.DNS_OVER_TCP to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.TCP)),
-        BypassStrategy.DNS_NOISE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.TCP)),
-        BypassStrategy.DNS_CASE_MANGLE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.TCP)),
-        BypassStrategy.UDP_DNS_REORDER_HYBRID to (ExecutorType.UDP_HANDLER to setOf(TransportType.UDP)),
-        BypassStrategy.DNS_OVER_TCP_FORCE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.TCP)),
-        BypassStrategy.DNS_OVER_QUIC to (ExecutorType.DNS_OVER_QUIC to setOf(TransportType.UDP))
+        BypassStrategy.DNS_OVER_TCP to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
+        BypassStrategy.DNS_NOISE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
+        BypassStrategy.DNS_CASE_MANGLE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
+        BypassStrategy.UDP_DNS_REORDER_HYBRID to (ExecutorType.UDP_HANDLER to setOf(TransportType.DNS)),
+        BypassStrategy.DNS_OVER_TCP_FORCE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
+        BypassStrategy.DNS_OVER_QUIC to (ExecutorType.DNS_OVER_QUIC to setOf(TransportType.DNS))
     )
 
     fun isExecutorSupported(strategy: BypassStrategy, transport: TransportType): Boolean {

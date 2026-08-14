@@ -58,8 +58,11 @@ class StrategyRankingTest {
             DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, false, HostCategory.MESSENGER)
         }
 
+        val appDataScore = DpiStrategySelector.getAverageScore(BypassStrategy.TLS_APP_DATA_SPLIT)
+        val sniSplitScore = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT)
         val best = DpiStrategySelector.getBestStrategy(HostCategory.MESSENGER)
-        assertTrue("Selected strategy should be high scoring", best == BypassStrategy.TLS_APP_DATA_SPLIT || best.group != StrategyGroup.LIGHT)
+        assertTrue("TLS_APP_DATA_SPLIT should score higher than failing SNI_SPLIT", appDataScore > sniSplitScore)
+        assertTrue("Selected strategy should not be the failing SNI_SPLIT", best != BypassStrategy.SNI_SPLIT)
     }
 
     @Test

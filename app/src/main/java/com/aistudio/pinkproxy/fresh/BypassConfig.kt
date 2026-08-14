@@ -347,7 +347,7 @@ object BypassConfig {
     }
 
     fun getFallbackStrategy(current: BypassStrategy): BypassStrategy {
-        return when (current.family) {
+        return DpiStrategySelector.getFallbackStrategy(current) ?: when (current.family) {
             StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
             StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE
             StrategyFamily.TCP -> BypassStrategy.TCP_WINDOW_SHRINK
