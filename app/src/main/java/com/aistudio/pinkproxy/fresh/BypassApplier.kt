@@ -57,43 +57,19 @@ object BypassApplier {
             }
         }
 
-        val executorType = StrategyExecutionRegistry.getExecutorType(strategy) ?: when (strategy.family) {
-            StrategyFamily.HTTP -> StrategyExecutionRegistry.ExecutorType.HTTP_HANDLER
-            StrategyFamily.TLS -> StrategyExecutionRegistry.ExecutorType.TLS_HANDLER
-            StrategyFamily.TCP -> StrategyExecutionRegistry.ExecutorType.TCP_BASIC_HANDLER
-            StrategyFamily.FRAGMENTATION -> StrategyExecutionRegistry.ExecutorType.FRAGMENTATION_HANDLER
-            StrategyFamily.ADAPTIVE -> StrategyExecutionRegistry.ExecutorType.ADAPTIVE_HANDLER
-            StrategyFamily.TIMING -> StrategyExecutionRegistry.ExecutorType.TIMING_HANDLER
-            else -> StrategyExecutionRegistry.ExecutorType.DIRECT
-        }
-
-        when (executorType) {
-            StrategyExecutionRegistry.ExecutorType.HTTP_HANDLER -> {
-                HttpStrategyHandler.handleHttpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            }
-            StrategyExecutionRegistry.ExecutorType.TLS_HANDLER -> {
-                TlsStrategyHandler.handleTlsStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            }
-            StrategyExecutionRegistry.ExecutorType.TCP_BASIC_HANDLER -> {
-                TcpBasicStrategyHandler.handleTcpStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            }
-            StrategyExecutionRegistry.ExecutorType.FRAGMENTATION_HANDLER -> {
-                FragmentationStrategyHandler.handleFragmentationStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config, effectiveDelay)
-            }
-            StrategyExecutionRegistry.ExecutorType.ADAPTIVE_HANDLER -> {
-                AdaptiveStrategyHandler.handleAdaptiveStrategies(socket, output, finalData, finalLen, rnd, host, strategy, config)
-            }
-            StrategyExecutionRegistry.ExecutorType.TIMING_HANDLER -> {
-                TimingStrategyHandler.handleTimingStrategies(socket, output, finalData, finalLen, rnd, host, strategy)
-            }
-            StrategyExecutionRegistry.ExecutorType.DIRECT,
-            StrategyExecutionRegistry.ExecutorType.DNS_OVER_TCP,
-            StrategyExecutionRegistry.ExecutorType.DNS_OVER_QUIC,
-            StrategyExecutionRegistry.ExecutorType.UDP_HANDLER -> {
-                output.write(finalData, 0, finalLen)
-                output.flush()
-            }
-        }
+        val executor = StrategyExecutionRegistry.getExecutor(strategy)
+        val tcpContext = TcpExecutionContext(
+            socket = socket,
+            output = output,
+            data = finalData,
+            length = finalLen,
+            host = host,
+            strategy = strategy,
+            config = config,
+            effectiveDelayMs = effectiveDelay,
+            random = rnd
+        )
+        executor.executeTcp(tcpContext)
     }
 
     suspend fun applyUdpBypass(socket: DatagramSocket, packet: DatagramPacket, config: SessionConfig, host: String) {
@@ -103,9 +79,19 @@ object BypassApplier {
             socket.send(packet); return
         }
         val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
-        UdpStrategyHandler.handleUdpStrategies(
-            socket, packet.address, packet.port, data, packet.length, rnd, host, strategy
+        val executor = StrategyExecutionRegistry.getExecutor(strategy)
+        val udpContext = UdpExecutionContext(
+            socket = socket,
+            address = packet.address,
+            port = packet.port,
+            data = data,
+            length = packet.length,
+            host = host,
+            strategy = strategy,
+            config = config,
+            random = rnd
         )
+        executor.executeUdp(udpContext)
     }
 
     fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean, avgDuration: Long = 50L) {

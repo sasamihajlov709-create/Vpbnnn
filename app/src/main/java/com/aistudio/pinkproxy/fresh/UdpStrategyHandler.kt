@@ -6,7 +6,27 @@ import java.net.InetAddress
 import java.util.concurrent.ThreadLocalRandom
 import kotlinx.coroutines.delay
 
-object UdpStrategyHandler {
+object UdpStrategyHandler : StrategyExecutor {
+    override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.UDP_HANDLER
+    override val supportedTransports: Set<TransportType> = setOf(TransportType.UDP, TransportType.DNS)
+
+    override fun supportsStrategy(strategy: BypassStrategy): Boolean {
+        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+    }
+
+    override suspend fun executeUdp(context: UdpExecutionContext) {
+        handleUdpStrategies(
+            socket = context.socket,
+            address = context.address,
+            port = context.port,
+            data = context.data,
+            length = context.length,
+            rnd = context.random,
+            host = context.host,
+            strategy = context.strategy
+        )
+    }
+
     suspend fun handleUdpStrategies(socket: DatagramSocket, address: InetAddress, port: Int, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
         if (strategy == BypassStrategy.DIRECT || UdpTransportHandler.isStunPacket(data.copyOf(length))) {
             socket.send(DatagramPacket(data, length, address, port))

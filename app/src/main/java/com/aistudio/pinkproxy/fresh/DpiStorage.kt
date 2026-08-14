@@ -106,7 +106,7 @@ object DpiStorage {
         val expiry = 86400000L * 7
         DpiEngine.hostSpecificMemory.forEach { (host, mem) ->
             if (now - mem.timestamp < expiry) {
-                editor.putString(host, "${mem.strategy.name}|${mem.timestamp}")
+                editor.putString(host, "${mem.strategy.name}|${mem.timestamp}|${mem.successCount}")
             }
         }
         if (isSynchronous) editor.commit() else editor.apply()
@@ -135,12 +135,13 @@ object DpiStorage {
         sourcePrefs.all.forEach { (host, value) ->
             if (value is String) {
                 val parts = value.split("|")
-                if (parts.size == 2) {
+                if (parts.size >= 2) {
                     try {
                         val strat = BypassStrategy.valueOf(parts[0])
                         val ts = parts[1].toLong()
+                        val successCount = if (parts.size >= 3) parts[2].toIntOrNull() ?: 1 else 1
                         if (now - ts < expiry) {
-                            DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strat, ts)
+                            DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strat, ts, successCount)
                         }
                     } catch (e: Throwable) {}
                 }

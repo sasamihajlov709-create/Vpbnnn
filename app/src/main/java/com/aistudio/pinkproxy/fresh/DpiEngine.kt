@@ -194,9 +194,24 @@ object DpiEngine {
         BypassConfig.updateTestingStrategies(list)
     }
     
-    fun recordStrategyResult(host: String, strat: BypassStrategy, success: Boolean, latencyMs: Long = 0) {
+    fun recordStrategyResult(
+        host: String,
+        strat: BypassStrategy,
+        success: Boolean,
+        latencyMs: Long = 0,
+        reason: FailureReason? = null,
+        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER
+    ) {
         val category = HostClassifier.classify(host)
-        DpiStrategySelector.recordResult(strat, success, category, latencyMs = latencyMs, host = host)
+        DpiStrategySelector.recordResult(
+            strategy = strat,
+            success = success,
+            category = category,
+            reason = reason,
+            latencyMs = latencyMs,
+            host = host,
+            quality = quality
+        )
     }
 
     private fun initStrategyChains() {

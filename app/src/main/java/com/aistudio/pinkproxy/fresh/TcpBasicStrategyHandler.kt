@@ -6,7 +6,26 @@ import java.net.Socket
 import java.util.concurrent.ThreadLocalRandom
 import kotlinx.coroutines.delay
 
-object TcpBasicStrategyHandler {
+object TcpBasicStrategyHandler : StrategyExecutor {
+    override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.TCP_BASIC_HANDLER
+    override val supportedTransports: Set<TransportType> = setOf(TransportType.TCP)
+
+    override fun supportsStrategy(strategy: BypassStrategy): Boolean {
+        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+    }
+
+    override suspend fun executeTcp(context: TcpExecutionContext) {
+        handleTcpStrategies(
+            socket = context.socket,
+            output = context.output,
+            data = context.data,
+            length = context.length,
+            rnd = context.random,
+            host = context.host,
+            strategy = context.strategy
+        )
+    }
+
     suspend fun handleTcpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
         when (strategy) {
             BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT, BypassStrategy.PROTOCOL_CONFUSION_MEMCACHED, 

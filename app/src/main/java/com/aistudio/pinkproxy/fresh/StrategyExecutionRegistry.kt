@@ -257,13 +257,35 @@ object StrategyExecutionRegistry {
         BypassStrategy.UDP_FRAGMENTATION to (ExecutorType.UDP_HANDLER to setOf(TransportType.UDP)),
 
         // DNS Handlers
-        BypassStrategy.DNS_OVER_TCP to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
-        BypassStrategy.DNS_NOISE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
-        BypassStrategy.DNS_CASE_MANGLE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
-        BypassStrategy.UDP_DNS_REORDER_HYBRID to (ExecutorType.UDP_HANDLER to setOf(TransportType.DNS)),
-        BypassStrategy.DNS_OVER_TCP_FORCE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
-        BypassStrategy.DNS_OVER_QUIC to (ExecutorType.DNS_OVER_QUIC to setOf(TransportType.DNS))
+        BypassStrategy.DNS_OVER_TCP to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS, TransportType.TCP)),
+        BypassStrategy.DNS_NOISE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS, TransportType.TCP)),
+        BypassStrategy.DNS_CASE_MANGLE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS, TransportType.TCP)),
+        BypassStrategy.UDP_DNS_REORDER_HYBRID to (ExecutorType.UDP_HANDLER to setOf(TransportType.DNS, TransportType.UDP)),
+        BypassStrategy.DNS_OVER_TCP_FORCE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS, TransportType.TCP)),
+        BypassStrategy.DNS_OVER_QUIC to (ExecutorType.DNS_OVER_QUIC to setOf(TransportType.DNS, TransportType.UDP))
     )
+
+    private val executorsByType: Map<ExecutorType, StrategyExecutor> = mapOf(
+        ExecutorType.DIRECT to StrategyExecutorDirect,
+        ExecutorType.TLS_HANDLER to TlsStrategyHandler,
+        ExecutorType.HTTP_HANDLER to HttpStrategyHandler,
+        ExecutorType.TCP_BASIC_HANDLER to TcpBasicStrategyHandler,
+        ExecutorType.FRAGMENTATION_HANDLER to FragmentationStrategyHandler,
+        ExecutorType.ADAPTIVE_HANDLER to AdaptiveStrategyHandler,
+        ExecutorType.TIMING_HANDLER to TimingStrategyHandler,
+        ExecutorType.UDP_HANDLER to UdpStrategyHandler,
+        ExecutorType.DNS_OVER_TCP to StrategyExecutorDns,
+        ExecutorType.DNS_OVER_QUIC to StrategyExecutorDoq
+    )
+
+    fun getExecutor(strategy: BypassStrategy): StrategyExecutor {
+        val type = getExecutorType(strategy) ?: return StrategyExecutorDirect
+        return executorsByType[type] ?: StrategyExecutorDirect
+    }
+
+    fun getExecutorByType(type: ExecutorType): StrategyExecutor {
+        return executorsByType[type] ?: StrategyExecutorDirect
+    }
 
     fun isExecutorSupported(strategy: BypassStrategy, transport: TransportType): Boolean {
         val entry = strategyExecutorMap[strategy] ?: return false

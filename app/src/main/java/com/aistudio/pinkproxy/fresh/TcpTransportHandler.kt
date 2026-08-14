@@ -403,19 +403,29 @@ object TcpTransportHandler {
 
                 if (readBytes > 0) {
                     val latency = System.currentTimeMillis() - startTime
-                    DpiEngine.recordStrategyResult(targetHost, strategy, true, latency)
+                    val quality = if (BypassApplier.isProbableTls(responseBuf, readBytes) || BypassApplier.isProbableHttp(responseBuf, readBytes)) {
+                        ObservationQuality.HANDSHAKE_COMPLETE
+                    } else {
+                        ObservationQuality.TLS_RECORD_RECEIVED
+                    }
+                    DpiEngine.recordStrategyResult(targetHost, strategy, true, latency, quality = quality)
                     if (index > 0) {
                         ProxyStats.logRecovery("Fast rescue successful for $targetHost using $strategy (attempt #${index + 1})")
                     }
                     return RescueAttemptResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
                 } else {
                     // Silent drop or RST detected by TSPU
-                    DpiEngine.recordStrategyResult(targetHost, strategy, false, 0)
+                    DpiEngine.recordStrategyResult(targetHost, strategy, false, 0, reason = FailureReason.CENSORSHIP_STALL)
                     Log.w("TcpTransport", "Watchdog triggered for $targetHost with $strategy (attempt #${index + 1}). Fast failover to next strategy.")
                     try { rs.close() } catch (e: Exception) {}
                 }
             } catch (e: Exception) {
-                DpiEngine.recordStrategyResult(targetHost, strategy, false, 0)
+                val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
+                    FailureReason.TCP_RESET
+                } else {
+                    FailureReason.TIMEOUT
+                }
+                DpiEngine.recordStrategyResult(targetHost, strategy, false, 0, reason = reason)
                 Log.w("TcpTransport", "Connection error on strategy $strategy for $targetHost: ${e.message}. Rescuing with fallback.")
                 try { rs.close() } catch (ex: Exception) {}
             }

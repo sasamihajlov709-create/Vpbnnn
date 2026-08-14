@@ -11,7 +11,23 @@ object DpiStrategySelector {
         return when (transport) {
             TransportType.TCP -> family != StrategyFamily.UDP && family != StrategyFamily.QUIC && family != StrategyFamily.DNS
             TransportType.UDP -> family != StrategyFamily.TCP && family != StrategyFamily.TLS && family != StrategyFamily.HTTP && family != StrategyFamily.FRAGMENTATION && family != StrategyFamily.TIMING && family != StrategyFamily.DNS
-            TransportType.DNS -> family == StrategyFamily.DNS || family == StrategyFamily.UDP || family == StrategyFamily.TCP || family == StrategyFamily.ADAPTIVE || family == StrategyFamily.DIRECT || family == StrategyFamily.GENERIC
+            TransportType.DNS -> family == StrategyFamily.DNS || family == StrategyFamily.DIRECT
+        }
+    }
+
+    fun getDefaultFallback(transport: TransportType): BypassStrategy {
+        return when (transport) {
+            TransportType.TCP -> BypassStrategy.SNI_SPLIT
+            TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
+            TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
+        }
+    }
+
+    fun getDefaultExtremeFallback(transport: TransportType): BypassStrategy {
+        return when (transport) {
+            TransportType.TCP -> BypassStrategy.ZAPRET_EXTREME
+            TransportType.UDP -> BypassStrategy.UDP_COMBINED_NUCLEAR
+            TransportType.DNS -> BypassStrategy.DNS_OVER_TCP_FORCE
         }
     }
 
@@ -41,9 +57,9 @@ object DpiStrategySelector {
                 if (lastMem != null) {
                     var currentStep: BypassStrategy? = lastMem.strategy
                     for (i in 0 until (hostFails - 2)) {
-                        currentStep = currentStep?.let { getFallbackStrategy(it) }
+                        currentStep = currentStep?.let { getFallbackStrategy(it, transport) }
                     }
-                    if (currentStep != null && isFamilyCompatible(currentStep.family, transport) && (DpiEngine.circuitBreakers[currentStep] ?: 0L) < now) {
+                    if (currentStep != null && isFamilyCompatible(currentStep.family, transport) && StrategyExecutionRegistry.isExecutorSupported(currentStep, transport) && (DpiEngine.circuitBreakers[currentStep] ?: 0L) < now) {
                         val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
                         if ((hostBlacklist?.get(currentStep) ?: 0L) < now) {
                             return currentStep
@@ -55,14 +71,14 @@ object DpiStrategySelector {
         }
 
         if (ProxyStats.censorshipIntensity.value > 95) {
-            val nuclear = listOf(BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.UDP_COMBINED_NUCLEAR, BypassStrategy.UDP_RACING)
-                .filter { isFamilyCompatible(it.family, transport) }
-            val bestNuclear = nuclear.maxByOrNull { getAverageScore(it) } ?: if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.TCP_COMBINED_NUCLEAR
+            val nuclear = listOf(BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.UDP_COMBINED_NUCLEAR, BypassStrategy.UDP_RACING, BypassStrategy.DNS_OVER_TCP_FORCE)
+                .filter { isFamilyCompatible(it.family, transport) && StrategyExecutionRegistry.isExecutorSupported(it, transport) }
+            val bestNuclear = nuclear.maxByOrNull { getAverageScore(it) } ?: getDefaultExtremeFallback(transport)
             if ((DpiEngine.circuitBreakers[bestNuclear] ?: 0L) < now) return bestNuclear
         } else if (ProxyStats.censorshipIntensity.value > 85) {
-            val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID, BypassStrategy.TCP_PULSE_FRAG)
-                .filter { isFamilyCompatible(it.family, transport) }
-            val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_HYBRID else BypassStrategy.TCP_COMBINED_HYBRID
+            val hybrids = listOf(BypassStrategy.TCP_COMBINED_HYBRID, BypassStrategy.UDP_COMBINED_HYBRID, BypassStrategy.TCP_PULSE_FRAG, BypassStrategy.UDP_DNS_REORDER_HYBRID)
+                .filter { isFamilyCompatible(it.family, transport) && StrategyExecutionRegistry.isExecutorSupported(it, transport) }
+            val bestHybrid = hybrids.maxByOrNull { getAverageScore(it) } ?: getDefaultFallback(transport)
             if ((DpiEngine.circuitBreakers[bestHybrid] ?: 0L) < now) return bestHybrid
         }
 
@@ -86,7 +102,7 @@ object DpiStrategySelector {
             }
         }
 
-        val catScores = DpiEngine.strategyScores[category] ?: return if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_HYBRID else BypassStrategy.SNI_SPLIT
+        val catScores = DpiEngine.strategyScores[category] ?: return getDefaultFallback(transport)
         
         val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
         val validStrategies = catScores.entries.filter { (strat, _) ->
@@ -100,7 +116,11 @@ object DpiStrategySelector {
         if (validStrategies.isEmpty()) {
             if (host != null) DpiEngine.hostStrategyBlacklist.remove(host)
             DpiEngine.circuitBreakers.entries.removeIf { it.value < now }
-            return if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.CHAOS
+            return when (transport) {
+                TransportType.TCP -> BypassStrategy.CHAOS
+                TransportType.UDP -> BypassStrategy.UDP_COMBINED_NUCLEAR
+                TransportType.DNS -> BypassStrategy.DNS_OVER_TCP_FORCE
+            }
         }
 
         // Bayesian Thompson Sampling (Multi-Armed Bandit) integration
@@ -218,7 +238,7 @@ object DpiStrategySelector {
         }
 
         if (currentTotal <= 0 || weightedList.isEmpty()) {
-            return validStrategies.maxByOrNull { it.value.get() }?.key ?: BypassStrategy.SNI_SPLIT
+            return validStrategies.maxByOrNull { it.value.get() }?.key ?: getDefaultFallback(transport)
         }
 
         val bestByWeightPair = weightedList.maxByOrNull { it.second }
@@ -243,40 +263,54 @@ object DpiStrategySelector {
     fun getBestExtremeStrategy(host: String? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         val extreme = DpiEngine.strategyScores[cat]?.entries?.filter { 
-            it.key.group == StrategyGroup.EXTREME && StrategyExecutionRegistry.isExecutorSupported(it.key, transport)
+            it.key.group == StrategyGroup.EXTREME &&
+            isFamilyCompatible(it.key.family, transport) &&
+            StrategyExecutionRegistry.isExecutorSupported(it.key, transport)
         } ?: emptyList()
-        val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.ZAPRET_EXTREME
+        val defaultFallback = getDefaultExtremeFallback(transport)
         if (extreme.isEmpty()) {
             return BypassStrategy.entries.filter { 
-                it.group == StrategyGroup.EXTREME && StrategyExecutionRegistry.isExecutorSupported(it, transport)
+                it.group == StrategyGroup.EXTREME &&
+                isFamilyCompatible(it.family, transport) &&
+                StrategyExecutionRegistry.isExecutorSupported(it, transport)
             }.maxByOrNull { getAverageScore(it) } ?: defaultFallback
         }
         return extreme.maxByOrNull { it.value.get() }?.key ?: defaultFallback
     }
 
-    fun getFallbackStrategy(failedStrategy: BypassStrategy): BypassStrategy? {
-        return DpiEngine.strategyChains[failedStrategy]
+    fun getFallbackStrategy(failedStrategy: BypassStrategy, transport: TransportType = TransportType.TCP): BypassStrategy? {
+        val next = DpiEngine.strategyChains[failedStrategy] ?: return null
+        return if (isFamilyCompatible(next.family, transport) && StrategyExecutionRegistry.isExecutorSupported(next, transport)) {
+            next
+        } else {
+            null
+        }
     }
 
     fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
         val candidates = BypassStrategy.entries.filter { 
             (it.group == StrategyGroup.EXTREME || it.group == StrategyGroup.HEAVY) && 
             it != failed &&
-            isFamilyCompatible(it.family, transport)
+            isFamilyCompatible(it.family, transport) &&
+            StrategyExecutionRegistry.isExecutorSupported(it, transport)
         }
         
-        val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_NUCLEAR else BypassStrategy.ZAPRET_EXTREME
+        val defaultFallback = getDefaultExtremeFallback(transport)
         if (candidates.isEmpty()) return defaultFallback
 
         // Try to select a family that fits the category, or a different one than the failed one
         val preferred = when(category) {
             HostCategory.STREAMING, HostCategory.GAMING -> candidates.filter { 
                 if (transport == TransportType.UDP) (it.family == StrategyFamily.UDP || it.family == StrategyFamily.QUIC)
+                else if (transport == TransportType.DNS) it.family == StrategyFamily.DNS
                 else (it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TLS)
             }
-            HostCategory.AI, HostCategory.SOCIAL -> candidates.filter { it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TLS }
+            HostCategory.AI, HostCategory.SOCIAL -> candidates.filter { 
+                if (transport == TransportType.DNS) it.family == StrategyFamily.DNS
+                else it.family == StrategyFamily.FRAGMENTATION || it.family == StrategyFamily.TLS 
+            }
             else -> candidates.filter { failed == null || it.family != failed.family }
-        }.filter { isFamilyCompatible(it.family, transport) }.ifEmpty { candidates }
+        }.ifEmpty { candidates }
 
         return preferred.random()
     }
