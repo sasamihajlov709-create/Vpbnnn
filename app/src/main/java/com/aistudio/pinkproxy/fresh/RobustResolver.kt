@@ -88,26 +88,13 @@ object RobustResolver {
 
         val cacheKey = if (type == 1) host.lowercase() else "${host.lowercase()}:$type"
         val scope = getScope()
-        var newDeferred: Deferred<List<InetAddress>>? = null
-        val deferred = synchronized(pendingResolutions) {
-            val existing = pendingResolutions[cacheKey]
-            if (existing != null) {
-                existing
-            } else {
-                val created = scope.async {
-                    try {
-                        performResolution(host, vpnService, type)
-                    } finally {
-                        synchronized(pendingResolutions) {
-                            if (pendingResolutions[cacheKey] === newDeferred) {
-                                pendingResolutions.remove(cacheKey)
-                            }
-                        }
-                    }
+        val deferred = pendingResolutions.computeIfAbsent(cacheKey) {
+            scope.async {
+                try {
+                    performResolution(host, vpnService, type)
+                } finally {
+                    pendingResolutions.remove(cacheKey)
                 }
-                newDeferred = created
-                pendingResolutions[cacheKey] = created
-                created
             }
         }
 
@@ -117,14 +104,14 @@ object RobustResolver {
             }
         } catch (e: TimeoutCancellationException) {
             Log.v("RobustResolver", "Resolution timeout for $host")
-            synchronized(pendingResolutions) { pendingResolutions.remove(cacheKey, deferred) }
+            pendingResolutions.remove(cacheKey, deferred)
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         } catch (e: CancellationException) {
-            synchronized(pendingResolutions) { pendingResolutions.remove(cacheKey, deferred) }
+            pendingResolutions.remove(cacheKey, deferred)
             throw e
         } catch (e: Exception) {
             Log.v("RobustResolver", "Resolution error for $host: ${e.message}")
-            synchronized(pendingResolutions) { pendingResolutions.remove(cacheKey, deferred) }
+            pendingResolutions.remove(cacheKey, deferred)
             DnsCacheManager.getCachedOrStale(host, type) ?: emptyList()
         }
     }

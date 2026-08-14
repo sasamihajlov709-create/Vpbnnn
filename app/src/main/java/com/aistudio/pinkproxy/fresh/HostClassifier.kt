@@ -30,14 +30,16 @@ object HostClassifier {
                 // SOCIAL
                 h.contains("facebook") || h.contains("instagram") || h.contains("twitter") || 
                 h.contains("tiktok") || h.contains("linkedin") || h.contains("reddit") || 
-                h.contains("fbcdn") || h.contains("twimg") || h.contains("x.com") || 
+                h.contains("fbcdn") || h.contains("cdninstagram") || h.contains("twimg") || h.contains("x.com") || 
                 h.contains("vk.com") || h.contains("ok.ru") || h.contains("snapchat") || 
+                h.contains("threads.net") || h.contains("notion.so") || h.contains("medium.com") ||
                 h.contains("pinterest") || h.contains("tumblr") -> HostCategory.SOCIAL
 
                 // AI SERVICES
                 h.contains("openai") || h.contains("anthropic") || h.contains("mistral") || 
                 h.contains("perplexity") || h.contains("gemini") || h.contains("chatgpt") || 
                 h.contains("claude") || h.contains("deepseek") || h.contains("cohere") || 
+                h.contains("oaiusercontent") || h.contains("oaistatic") ||
                 h.contains("grok") || h.contains("llama") || h.contains("huggingface") || 
                 h.contains("poe.com") || h.contains("replicate") || h.contains("midjourney") -> HostCategory.AI
 

@@ -175,14 +175,22 @@ object TcpTransportHandler {
                     }
                 }
 
-                // Data pump jobs with BufferPool
+                // Data pump jobs with BufferPool for Zero-Allocation streaming
                 val isStreaming = HostClassifier.classify(targetHost) == HostCategory.STREAMING
                 val remoteToClientJob = launch {
-                    val buffer = if (isStreaming) BufferPool.obtain() else ByteArray(transportBufferSize)
+                    val buffer = if (isStreaming) BufferPool.obtain() else BufferPoolManager.obtain16k()
                     try {
                         while (isActive) {
                             val read = finalRemoteIn.read(buffer)
-                            if (read == -1) break
+                            if (read == -1) {
+                                // Graceful Half-Close: propagate EOF to client
+                                try {
+                                    if (!clientSocket.isClosed && !clientSocket.isOutputShutdown) {
+                                        clientSocket.shutdownOutput()
+                                    }
+                                } catch (ignored: Throwable) {}
+                                break
+                            }
                             lastActivity.set(System.currentTimeMillis())
                             if (intensity > 70 && ThreadLocalRandom.current().nextInt(100) < 5) {
                                 TcpTransportManager.oscillateWindowSize(clientSocket)
@@ -198,20 +206,28 @@ object TcpTransportHandler {
                     } catch (e: Exception) {
                         Log.v("TcpTransport", "Remote to client pump error: ${e.message}")
                     } finally {
-                        if (isStreaming) BufferPool.release(buffer)
+                        if (isStreaming) BufferPool.release(buffer) else BufferPoolManager.release16k(buffer)
                         try { clientSocket.close() } catch (e: java.io.IOException) {
                             Log.v("TcpTransport", "Failed to close client socket in pump: ${e.message}")
                         }
                     }
                 }
 
+                val clientBuffer = BufferPoolManager.obtain16k()
                 try {
                     // Send remaining data & inspect subsequent packets in Keep-Alive connection
-                    val buffer = ByteArray(transportBufferSize)
                     var packetIndex = 0
                     while (isActive) {
-                        val read = clientIn.read(buffer)
-                        if (read == -1) break
+                        val read = clientIn.read(clientBuffer)
+                        if (read == -1) {
+                            // Graceful Half-Close: client has finished sending
+                            try {
+                                if (!finalRemoteSocket.isClosed && !finalRemoteSocket.isOutputShutdown) {
+                                    finalRemoteSocket.shutdownOutput()
+                                }
+                            } catch (ignored: Throwable) {}
+                            break
+                        }
                         lastActivity.set(System.currentTimeMillis())
                         packetIndex++
 
@@ -220,15 +236,15 @@ object TcpTransportHandler {
                         }
 
                         // Inspect secondary payloads on Keep-Alive / Multiplexed streams
-                        val isSecondaryTlsOrHttp = packetIndex > 1 && (BypassApplier.isProbableTls(buffer, read) || BypassApplier.isProbableHttp(buffer, read))
+                        val isSecondaryTlsOrHttp = packetIndex > 1 && (BypassApplier.isProbableTls(clientBuffer, read) || BypassApplier.isProbableHttp(clientBuffer, read))
                         
                         writeMutex.lock()
                         try {
                             if (isSecondaryTlsOrHttp && effectiveStrategy != BypassStrategy.DIRECT) {
                                 Log.v("TcpTransport", "Detected secondary TLS/HTTP payload in packet #$packetIndex for $targetHost - applying evasion")
-                                BypassApplier.applyBypass(finalRemoteSocket, finalRemoteOut, buffer, read, config, targetHost)
+                                BypassApplier.applyBypass(finalRemoteSocket, finalRemoteOut, clientBuffer, read, config, targetHost)
                             } else {
-                                finalRemoteOut.write(buffer, 0, read)
+                                finalRemoteOut.write(clientBuffer, 0, read)
                                 finalRemoteOut.flush()
                             }
                         } finally {
@@ -244,6 +260,7 @@ object TcpTransportHandler {
                 } catch (e: Exception) {
                     Log.v("TcpTransport", "Client to remote pump error: ${e.message}")
                 } finally {
+                    BufferPoolManager.release16k(clientBuffer)
                     remoteToClientJob.cancel()
                 }
             }
