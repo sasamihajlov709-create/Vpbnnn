@@ -29,7 +29,8 @@ object TcpBasicStrategyHandler : StrategyExecutor {
     suspend fun handleTcpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
         when (strategy) {
             BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT, BypassStrategy.PROTOCOL_CONFUSION_MEMCACHED, 
-            BypassStrategy.PROTOCOL_CONFUSION_REDIS, BypassStrategy.PROTOCOL_CONFUSION_SSH -> {
+            BypassStrategy.PROTOCOL_CONFUSION_REDIS, BypassStrategy.PROTOCOL_CONFUSION_SSH,
+            BypassStrategy.PROTOCOL_CONFUSION_HTTP -> {
                 val protocol = strategy.name.substringAfter("PROTOCOL_CONFUSION_")
                 val fake = FakePacketHelper.buildProtocolConfusion(protocol)
                 TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))

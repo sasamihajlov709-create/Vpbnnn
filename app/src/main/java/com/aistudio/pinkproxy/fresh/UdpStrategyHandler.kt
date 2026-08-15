@@ -228,6 +228,18 @@ object UdpStrategyHandler : StrategyExecutor {
                     socket.send(DatagramPacket(data, part, length - part, address, port))
                 }
             }
+            BypassStrategy.UDP_DNS_REORDER_HYBRID -> {
+                // DNS reorder hybrid: send fake DNS decoy query with low TTL, then real DNS query
+                val fakeDns = byteArrayOf(
+                    rnd.nextInt(256).toByte(), rnd.nextInt(256).toByte(), // Random ID
+                    0x01, 0x00, // Standard query
+                    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x06, 'g'.code.toByte(), 'o'.code.toByte(), 'o'.code.toByte(), 'g'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte(),
+                    0x03, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0x00,
+                    0x00, 0x01, 0x00, 0x01
+                )
+                writeUdpWithFake(socket, address, port, fakeDns, DatagramPacket(data, length, address, port), rnd.nextLong(1, 4))
+            }
             BypassStrategy.ADAPTIVE_CHUNK, BypassStrategy.BYEBYEDPI_SIM, BypassStrategy.CHAOS -> {
                 if (length > 20) {
                     val part = length / 2

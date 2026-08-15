@@ -53,6 +53,18 @@ object AdaptiveStrategyHandler : StrategyExecutor {
                 handleByeByeDpiExtreme(socket, output, data, length, rnd, host, config)
                 return
             }
+            BypassStrategy.BYEBYEDPI_SIM -> {
+                handleByeByeDpiSim(socket, output, data, length, rnd, host, config)
+                return
+            }
+            BypassStrategy.ADAPTIVE_CHUNK -> {
+                handleAdaptiveChunk(socket, output, data, length, rnd, host, config)
+                return
+            }
+            BypassStrategy.CHAOS -> {
+                handleChaosStrategy(socket, output, data, length, rnd, host, config)
+                return
+            }
             BypassStrategy.ZAPRET_EXTREME -> {
                 CompositePipelineApplier.applyZapretTriplePipeline(socket, output, data, length, host, config, rnd)
                 return
@@ -182,6 +194,64 @@ object AdaptiveStrategyHandler : StrategyExecutor {
         } else {
             output.write(data, 0, length)
             output.flush()
+        }
+    }
+
+    private suspend fun handleByeByeDpiSim(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
+        val fakeTtl = StrategyUtils.getFakeTtl(host, rnd)
+        val fake = if (TlsParser.isClientHello(data, length)) FakePacketHelper.buildRealisticTlsHello(host) else FakePacketHelper.buildFakeHttpRequest(host)
+        
+        TtlHelper.setTtl(socket, fakeTtl)
+        output.write(fake)
+        output.flush()
+        delay(rnd.nextLong(1, 4))
+
+        TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+        val split = if (TlsParser.isClientHello(data, length)) {
+            val sni = TlsParser.findSni(data, length)
+            if (sni > 0) sni - 1 else (length / 2).coerceAtLeast(1)
+        } else {
+            (length / 2).coerceAtLeast(1)
+        }
+
+        output.write(data, 0, split)
+        output.flush()
+        delay(rnd.nextLong(2, 6))
+        output.write(data, split, length - split)
+        output.flush()
+    }
+
+    private suspend fun handleAdaptiveChunk(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
+        val avgRtt = TrafficShaper.getAvgRtt()
+        val targetChunkSize = if (avgRtt > 200L) 16 else 64
+        var pos = 0
+        while (pos < length) {
+            val sz = rnd.nextInt(targetChunkSize / 2, targetChunkSize).coerceIn(1, length - pos)
+            output.write(data, pos, sz)
+            output.flush()
+            pos += sz
+            if (pos < length) {
+                delay(if (avgRtt > 200L) rnd.nextLong(2, 6) else rnd.nextLong(1, 3))
+            }
+        }
+    }
+
+    private suspend fun handleChaosStrategy(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {
+        val fakeTtl = StrategyUtils.getFakeTtl(host, rnd)
+        val noise = FakePacketHelper.getSmallNoise(rnd.nextInt(16, 48))
+        TtlHelper.setTtl(socket, fakeTtl)
+        output.write(noise)
+        output.flush()
+        delay(rnd.nextLong(1, 4))
+
+        TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+        var pos = 0
+        while (pos < length) {
+            val sz = rnd.nextInt(1, 24).coerceAtMost(length - pos)
+            output.write(data, pos, sz)
+            output.flush()
+            pos += sz
+            if (pos < length) delay(rnd.nextLong(2, 12))
         }
     }
 }

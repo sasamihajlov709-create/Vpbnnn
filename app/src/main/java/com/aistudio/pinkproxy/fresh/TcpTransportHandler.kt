@@ -48,9 +48,10 @@ object TcpTransportHandler {
             }
             ProxyStats.addTraffic(targetHost)
             val requestedStrategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
-            val config = BypassConfig.getSessionConfig(targetHost, requestedStrategy, BypassConfig.currentRttMs.value, TransportType.TCP)
-            val effectiveStrategy = config.strategy
-            val reasoning = DpiStrategySelector.getSelectionReasoning(effectiveStrategy, targetHost)
+            var effectiveStrategy = requestedStrategy
+            var reasoning = DpiStrategySelector.getSelectionReasoning(effectiveStrategy, targetHost)
+            var config = BypassConfig.getSessionConfig(targetHost, effectiveStrategy, BypassConfig.currentRttMs.value, TransportType.TCP)
+            effectiveStrategy = config.strategy
             ProxyStats.registerFlow(sessionId, targetHost, "TCP", effectiveStrategy, reasoning)
             VpnRuntimeState.updateStrategy(effectiveStrategy.name, reasoning)
             
@@ -107,6 +108,13 @@ object TcpTransportHandler {
                         remoteOut = raceResult.output
                         firstResponseData = raceResult.firstResponse
                         firstResponseLen = raceResult.firstResponseLen
+                        if (raceResult.strategy != effectiveStrategy) {
+                            effectiveStrategy = raceResult.strategy
+                            reasoning = "Multi-strategy race winner"
+                            config = BypassConfig.getSessionConfig(targetHost, effectiveStrategy, BypassConfig.currentRttMs.value, TransportType.TCP)
+                            ProxyStats.updateFlowStrategy(sessionId, effectiveStrategy, reasoning)
+                            VpnRuntimeState.updateStrategy(effectiveStrategy.name, reasoning)
+                        }
                     }
                 }
 
@@ -128,6 +136,13 @@ object TcpTransportHandler {
                         remoteOut = attemptRes.output
                         firstResponseData = attemptRes.firstResponse
                         firstResponseLen = attemptRes.firstResponseLen
+                        if (attemptRes.usedStrategy != effectiveStrategy) {
+                            effectiveStrategy = attemptRes.usedStrategy
+                            reasoning = "Fast rescue failover winner"
+                            config = BypassConfig.getSessionConfig(targetHost, effectiveStrategy, BypassConfig.currentRttMs.value, TransportType.TCP)
+                            ProxyStats.updateFlowStrategy(sessionId, effectiveStrategy, reasoning)
+                            VpnRuntimeState.updateStrategy(effectiveStrategy.name, reasoning)
+                        }
                     }
                 }
             }
@@ -148,6 +163,9 @@ object TcpTransportHandler {
                 clientOut.flush()
                 ProxyStats.recordStats(sessionId, 0, firstResponseLen.toLong())
             }
+
+            clientSocket.soTimeout = 0
+            finalRemoteSocket.soTimeout = 0
 
             onConnectSuccess?.invoke()
             sessionSuccess = true

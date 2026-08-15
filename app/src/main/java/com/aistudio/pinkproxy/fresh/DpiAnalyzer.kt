@@ -111,54 +111,55 @@ object DpiAnalyzer {
 
         if (totalSuccess + totalFailure == 0) {
             ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 2).coerceAtLeast(0))
-            return
-        }
-
-        val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
-        val fingerprint = getCensorshipFingerprint()
-        val calculatedIntensity = (fingerprint.rstRate * 55 + fingerprint.sniBlockRate * 65 + fingerprint.timeoutRate * 25 + fingerprint.stallRate * 40 + fingerprint.udpBlockRate * 35).toInt().coerceIn(0, 100)
-
-        if (globalSuccessRate < 15 && calculatedIntensity > 40) {
-            DpiEngine.enterPanicMode()
-        }
-
-        val targetIntensity = if (calculatedIntensity > ProxyStats.censorshipIntensity.value) {
-            (ProxyStats.censorshipIntensity.value * 0.2 + calculatedIntensity * 0.8).toInt()
         } else {
-            if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05) {
-                (ProxyStats.censorshipIntensity.value * 0.7 + calculatedIntensity * 0.3).toInt()
-            } else {
-                (ProxyStats.censorshipIntensity.value * 0.9 + calculatedIntensity * 0.1).toInt()
-            }
-        }
-        
-        if (Math.abs(targetIntensity - ProxyStats.censorshipIntensity.value) >= 1) {
-            ProxyStats.updateCensorshipIntensity(targetIntensity)
-        }
+            val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
+            val fingerprint = getCensorshipFingerprint()
+            val calculatedIntensity = (fingerprint.rstRate * 55 + fingerprint.sniBlockRate * 65 + fingerprint.timeoutRate * 25 + fingerprint.stallRate * 40 + fingerprint.udpBlockRate * 35).toInt().coerceIn(0, 100)
 
-        val stability = (globalSuccessRate * 0.5 + (100 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100).coerceAtLeast(0.0) * 0.5).toInt().coerceIn(0, 100)
-        ProxyStats.updateStabilityScore(stability)
-        
-        if (fingerprint.timeoutRate > 0.35 || fingerprint.stallRate > 0.45) {
-             val mtu = BypassConfig.currentMtu.value
-             if (mtu > 1000) BypassConfig.setMtu(mtu - 32)
-             DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-             DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-        } else if (stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
-             BypassConfig.setMtu(BypassConfig.currentMtu.value + 16)
-        }
-        
-        if (fingerprint.jitter > 600) {
-            DpiEngine.boostStrategyFamily(StrategyFamily.ADAPTIVE, null)
-            DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
+            if (globalSuccessRate < 15 && calculatedIntensity > 40) {
+                DpiEngine.enterPanicMode()
+            }
+
+            val targetIntensity = if (calculatedIntensity > ProxyStats.censorshipIntensity.value) {
+                (ProxyStats.censorshipIntensity.value * 0.2 + calculatedIntensity * 0.8).toInt()
+            } else {
+                if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05) {
+                    (ProxyStats.censorshipIntensity.value * 0.7 + calculatedIntensity * 0.3).toInt()
+                } else {
+                    (ProxyStats.censorshipIntensity.value * 0.9 + calculatedIntensity * 0.1).toInt()
+                }
+            }
+            
+            if (Math.abs(targetIntensity - ProxyStats.censorshipIntensity.value) >= 1) {
+                ProxyStats.updateCensorshipIntensity(targetIntensity)
+            }
+
+            val stability = (globalSuccessRate * 0.5 + (100 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100).coerceAtLeast(0.0) * 0.5).toInt().coerceIn(0, 100)
+            ProxyStats.updateStabilityScore(stability)
+            
+            if (fingerprint.timeoutRate > 0.35 || fingerprint.stallRate > 0.45) {
+                 val mtu = BypassConfig.currentMtu.value
+                 if (mtu > 1000) BypassConfig.setMtu(mtu - 32)
+                 DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
+                 DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+            } else if (stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
+                 BypassConfig.setMtu(BypassConfig.currentMtu.value + 16)
+            }
+            
+            if (fingerprint.jitter > 600) {
+                DpiEngine.boostStrategyFamily(StrategyFamily.ADAPTIVE, null)
+                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
+            }
         }
 
         DpiEngine.strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
                 val s = score.get()
                 val decay = if (ProxyStats.censorshipIntensity.value / 100.0 > 0.8) 0.99 else 0.95
-                if (s > 100) score.set((s * decay + 100 * (1.0 - decay)).toInt())
-                else if (s < 100) score.set((s * 1.01 + 2).toInt().coerceAtMost(100))
+                if (s != 100) {
+                    val decayed = (s * decay + 100 * (1.0 - decay)).toInt()
+                    score.set(decayed)
+                }
             }
         }
         

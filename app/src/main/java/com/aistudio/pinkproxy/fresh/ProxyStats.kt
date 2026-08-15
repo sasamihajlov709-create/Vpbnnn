@@ -29,6 +29,18 @@ object ProxyStats {
         }
     }
 
+    fun updateFlowStrategy(id: String, strategy: BypassStrategy, reasoning: String = "") {
+        _activeFlows.update { current ->
+            current[id]?.let { flow ->
+                val updated = flow.copy(
+                    strategy = strategy,
+                    reasoning = if (reasoning.isNotEmpty()) reasoning else flow.reasoning
+                )
+                current + (id to updated)
+            } ?: current
+        }
+    }
+
     fun removeFlow(id: String) {
         _activeFlows.update { it - id }
     }

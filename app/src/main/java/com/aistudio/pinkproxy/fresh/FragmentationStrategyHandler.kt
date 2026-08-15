@@ -49,17 +49,57 @@ object FragmentationStrategyHandler : StrategyExecutor {
             return
         }
 
-        if (strategy == BypassStrategy.TCP_PULSE_FRAG) {
-            // Pulse fragmentation: burst small chunk, micro-delay, burst medium chunk
+        if (strategy == BypassStrategy.TCP_SMALL_CHUNKS) {
             var pos = 0
             while (pos < length) {
-                val burst = rnd.nextInt(2, 8).coerceAtMost(length - pos)
-                output.write(data, pos, burst)
+                val sz = rnd.nextInt(2, 16).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
                 output.flush()
-                pos += burst
-                if (pos < length) delay(rnd.nextLong(2, 10))
+                pos += sz
+                if (pos < length) delay(rnd.nextLong(1, 4))
             }
             return
+        }
+
+        if (strategy == BypassStrategy.TCP_REARRANGE_CHUNKS) {
+            if (length > 30) {
+                val split1 = length / 3
+                val split2 = (length * 2) / 3
+                // Send first chunk (header / start)
+                output.write(data, 0, split1)
+                output.flush()
+                delay(rnd.nextLong(2, 6))
+                
+                // Send middle chunk
+                output.write(data, split1, split2 - split1)
+                output.flush()
+                delay(rnd.nextLong(1, 4))
+                
+                // Send tail chunk
+                output.write(data, split2, length - split2)
+                output.flush()
+            } else {
+                val split = length / 2
+                output.write(data, 0, split)
+                output.flush()
+                delay(rnd.nextLong(1, 3))
+                output.write(data, split, length - split)
+                output.flush()
+            }
+            return
+        }
+
+        if (strategy == BypassStrategy.TLS_MULTI_FRAG) {
+            if (length > 44 && data[0] == 0x16.toByte()) {
+                val split = (length / 3).coerceIn(1, length - 6)
+                val records = EvasionPacketMangler.splitIntoTlsRecords(data, length, split)
+                for (rec in records) {
+                    output.write(rec)
+                    output.flush()
+                    delay(rnd.nextLong(1, 4))
+                }
+                return
+            }
         }
 
         if (strategy == BypassStrategy.SNI_SPLIT || strategy == BypassStrategy.SNI_TRIPLE || 

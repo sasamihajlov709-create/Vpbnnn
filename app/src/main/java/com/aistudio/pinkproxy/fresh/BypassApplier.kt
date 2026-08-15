@@ -57,6 +57,14 @@ object BypassApplier {
             }
         }
 
+        if (!StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.TCP)) {
+            android.util.Log.w("BypassApplier", "Strategy $strategy is not supported by executor on TCP. Falling back to direct write.")
+            ProxyStats.logRecovery("Strategy $strategy unsupported on TCP executor: fallback applied")
+            output.write(finalData, 0, finalLen)
+            output.flush()
+            return
+        }
+
         val executor = StrategyExecutionRegistry.getExecutor(strategy)
         val tcpContext = TcpExecutionContext(
             socket = socket,
@@ -77,6 +85,12 @@ object BypassApplier {
         val strategy = config.strategy
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(packet); return
+        }
+        if (!StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.UDP)) {
+            android.util.Log.w("BypassApplier", "Strategy $strategy is not supported by executor on UDP. Falling back to direct send.")
+            ProxyStats.logRecovery("Strategy $strategy unsupported on UDP executor: fallback applied")
+            socket.send(packet)
+            return
         }
         val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
         val executor = StrategyExecutionRegistry.getExecutor(strategy)

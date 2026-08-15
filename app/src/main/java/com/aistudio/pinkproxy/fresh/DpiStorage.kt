@@ -78,6 +78,7 @@ object DpiStorage {
             }
         }
 
+        DpiEngine.networkStrategyMemory.clear()
         sourcePrefs.all.keys.filter { it.startsWith("netmem_") }.forEach { key ->
             val raw = key.removePrefix("netmem_")
             val parts = if (raw.contains("::")) raw.split("::", limit = 2) else raw.split("_", limit = 2)

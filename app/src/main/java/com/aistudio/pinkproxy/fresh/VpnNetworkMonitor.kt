@@ -43,18 +43,18 @@ class VpnNetworkMonitor(
                 networkCapabilitiesMap.remove(network)
                 Log.i("VpnNetworkMonitor", "Network lost: $network")
                 val systemActiveNet = connectivityManager.activeNetwork
-                if (systemActiveNet != null && activeNetworks.containsKey(systemActiveNet)) {
-                    NetworkProfileManager.updateNetwork(context, systemActiveNet)
-                    networkChangeCallback(systemActiveNet, activeNetworks[systemActiveNet] ?: NetworkType.NONE)
-                } else {
-                    val active = activeNetworks.entries.firstOrNull()
-                    if (active != null) {
-                        NetworkProfileManager.updateNetwork(context, active.key)
-                        networkChangeCallback(active.key, active.value)
-                    } else {
-                        NetworkProfileManager.updateNetwork(context, null)
-                        networkChangeCallback(null, NetworkType.NONE)
+                if (systemActiveNet != null) {
+                    val type = activeNetworks[systemActiveNet] ?: run {
+                        val caps = connectivityManager.getNetworkCapabilities(systemActiveNet)
+                        val t = getNetworkType(caps)
+                        activeNetworks[systemActiveNet] = t
+                        t
                     }
+                    NetworkProfileManager.updateNetwork(context, systemActiveNet)
+                    networkChangeCallback(systemActiveNet, type)
+                } else {
+                    NetworkProfileManager.updateNetwork(context, null)
+                    networkChangeCallback(null, NetworkType.NONE)
                 }
             }
 

@@ -407,6 +407,8 @@ object AutoTtlProber {
             val prefs = context.getSharedPreferences("dpi_ttl_mtu_$profileId", android.content.Context.MODE_PRIVATE)
             val ttlMap = profileTtls.getOrPut(profileId) { ConcurrentHashMap() }
             val mtuMap = profileMtus.getOrPut(profileId) { ConcurrentHashMap() }
+            ttlMap.clear()
+            mtuMap.clear()
             
             prefs.all.forEach { (key, value) ->
                 if (value is Int) {

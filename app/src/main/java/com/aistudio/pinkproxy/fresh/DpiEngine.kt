@@ -57,6 +57,9 @@ object DpiEngine {
     private var optimizerJob: Job? = null
     private var microProbeJob: Job? = null
     private var appContext: Context? = null
+    private val profileChangeListener: (NetworkProfile, NetworkProfile) -> Unit = { oldProfile, newProfile ->
+        switchNetworkProfile(oldProfile, newProfile, appContext)
+    }
 
     fun start(context: Context) {
         stop()
@@ -64,6 +67,7 @@ object DpiEngine {
         appContext = ctx
         initStrategyChains()
         DpiStorage.loadScores(ctx)
+        NetworkProfileManager.addListener(profileChangeListener)
 
         microProbeJob?.cancel()
         microProbeJob = scope.launch {
@@ -109,6 +113,7 @@ object DpiEngine {
     }
 
     fun stop() {
+        NetworkProfileManager.removeListener(profileChangeListener)
         appContext?.let { ctx ->
             try {
                 DpiStorage.saveScores(ctx, synchronous = true)
