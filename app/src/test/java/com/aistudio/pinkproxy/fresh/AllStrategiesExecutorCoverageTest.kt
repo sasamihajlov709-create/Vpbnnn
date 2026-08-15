@@ -68,4 +68,45 @@ class AllStrategiesExecutorCoverageTest {
         assertTrue(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.UDP))
         assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.TCP))
     }
+
+    @Test
+    fun testDnsAndDoqExecutorsExecution() = kotlinx.coroutines.runBlocking {
+        val testQuery = byteArrayOf(0x00, 0x1D, 0x12, 0x34, 0x01, 0x00, 0x00, 0x01)
+        val baos = java.io.ByteArrayOutputStream()
+        val mockSocket = java.net.Socket()
+
+        val tcpCtx = TcpExecutionContext(
+            socket = mockSocket,
+            output = baos,
+            data = testQuery,
+            length = testQuery.size,
+            host = "example.com",
+            strategy = BypassStrategy.DNS_OVER_TCP,
+            config = SessionConfig(strategy = BypassStrategy.DNS_OVER_TCP, frag1 = 2, delay1 = 2L, fakeTtl = 0),
+            effectiveDelayMs = 2L
+        )
+
+        StrategyExecutorDns.executeTcp(tcpCtx)
+        val written = baos.toByteArray()
+        assertTrue("TCP DNS should frame and write data", written.isNotEmpty())
+        assertEquals(testQuery.size, written.size)
+
+        // Test DoQ execution
+        val mockUdpSocket = java.net.DatagramSocket()
+        val udpCtx = UdpExecutionContext(
+            socket = mockUdpSocket,
+            address = java.net.InetAddress.getByName("127.0.0.1"),
+            port = 8853,
+            data = testQuery,
+            length = testQuery.size,
+            host = "example.com",
+            strategy = BypassStrategy.DNS_OVER_QUIC,
+            config = SessionConfig(strategy = BypassStrategy.DNS_OVER_QUIC, frag1 = 2, delay1 = 2L, fakeTtl = 0)
+        )
+
+
+        StrategyExecutorDoq.executeUdp(udpCtx)
+        mockUdpSocket.close()
+    }
 }
+

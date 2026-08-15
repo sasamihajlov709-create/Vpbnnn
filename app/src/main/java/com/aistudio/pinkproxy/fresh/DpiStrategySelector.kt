@@ -447,7 +447,7 @@ object DpiStrategySelector {
                 .filter { it.key != targetCategory }
                 .map { it.value[strategy]?.get()?.toDouble() ?: 100.0 }
             val avgOther = if (otherScores.isNotEmpty()) otherScores.average() else catScore
-            return 0.75 * catScore + 0.25 * avgOther
+            return 0.85 * catScore + 0.15 * avgOther
         }
         val scores = DpiEngine.strategyScores.values.map { it[strategy]?.get()?.toDouble() ?: 100.0 }
         return if (scores.isNotEmpty()) scores.average() else 100.0

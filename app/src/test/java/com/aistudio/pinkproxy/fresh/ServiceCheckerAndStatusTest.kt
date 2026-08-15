@@ -52,4 +52,21 @@ class ServiceCheckerAndStatusTest {
         assertTrue(TrafficShaper.getAvgRtt() > 300L)
         assertEquals(1200, TrafficShaper.getRecommendedMss())
     }
+
+    @Test
+    fun testBenchmarkManagerInitialStateAndStop() {
+        assertFalse(BenchmarkManager.isRunning.value)
+        assertEquals(0f, BenchmarkManager.progress.value, 0.001f)
+        
+        BenchmarkManager.stopBenchmark()
+        assertFalse(BenchmarkManager.isRunning.value)
+        assertNull(BypassConfig.forcedBenchmarkStrategy)
+    }
+
+    @Test
+    fun testDiagnosticManagerLog() {
+        BypassConfig.isDiagnosticMode = true
+        DiagnosticManager.logDiagnostic("TEST", "Diagnostic test message")
+        assertTrue(ProxyStats.recoveryLog.value.any { it.contains("Diagnostic test message") })
+    }
 }

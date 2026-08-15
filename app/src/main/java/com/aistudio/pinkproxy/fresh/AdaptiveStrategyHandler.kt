@@ -9,11 +9,25 @@ object AdaptiveStrategyHandler : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.ADAPTIVE_HANDLER
     override val supportedTransports: Set<TransportType> = setOf(TransportType.TCP, TransportType.UDP)
 
+    val supportedStrategies: Set<BypassStrategy> = setOf(
+        BypassStrategy.ADAPTIVE_CHUNK,
+        BypassStrategy.BYEBYEDPI_SIM,
+        BypassStrategy.BYEBYEDPI_HYBRID,
+        BypassStrategy.BYEBYEDPI_EXTREME,
+        BypassStrategy.ZAPRET_EXTREME,
+        BypassStrategy.CHAOS,
+        BypassStrategy.TCP_COMBINED_HYBRID,
+        BypassStrategy.TCP_COMBINED_NUCLEAR
+    )
+
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {
-        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+        return strategy in supportedStrategies
     }
 
     override suspend fun executeTcp(context: TcpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         handleAdaptiveStrategies(
             socket = context.socket,
             output = context.output,
@@ -27,6 +41,9 @@ object AdaptiveStrategyHandler : StrategyExecutor {
     }
 
     override suspend fun executeUdp(context: UdpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         UdpStrategyHandler.handleUdpStrategies(
             socket = context.socket,
             address = context.address,

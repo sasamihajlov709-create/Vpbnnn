@@ -51,4 +51,22 @@ class VpnLifecycleTest {
         assertTrue(PinkVpnService.instance == service)
         assertNotNull(VpnRuntimeState.lifecycleState.value)
     }
+
+    @Test
+    fun testRecoveryManagerEventEscalationAndCooling() {
+        // Test DPI detection handling
+        ProxyStats.recordDpiEvent(DpiType.TCP_RESET)
+        RecoveryManager.handleEvent(RecoveryEvent.DPI_DETECTED, "Test TCP Reset")
+
+        // Blacklist host test
+        RecoveryManager.blacklistHost("badhost.com", 60000L)
+        assertTrue(RecoveryManager.isHostBlacklisted("badhost.com"))
+
+        // TrafficShaper RTT update
+        TrafficShaper.reset(50L)
+        TrafficShaper.updateRtt(400L)
+        assertTrue("MSS should adjust on high RTT", TrafficShaper.getRecommendedMss() in listOf(1200, 1440))
+        assertTrue("Avg RTT should be tracked", TrafficShaper.getAvgRtt() > 0)
+    }
 }
+

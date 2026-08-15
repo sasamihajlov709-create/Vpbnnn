@@ -37,6 +37,11 @@ data class UdpExecutionContext(
     val random: ThreadLocalRandom = ThreadLocalRandom.current()
 )
 
+class UnsupportedStrategyException(
+    val strategy: BypassStrategy,
+    val executorType: StrategyExecutionRegistry.ExecutorType
+) : RuntimeException("Strategy $strategy is not supported by executor $executorType")
+
 /**
  * Strict industrial interface for strategy executors in PinkProxy DPI bypass pipeline.
  */
@@ -52,19 +57,17 @@ interface StrategyExecutor {
     val supportedTransports: Set<TransportType>
 
     /**
-     * Executes TCP DPI bypass strategy. Default implementation passes through payload.
+     * Executes TCP DPI bypass strategy. Throws UnsupportedStrategyException if not implemented.
      */
     suspend fun executeTcp(context: TcpExecutionContext) {
-        context.output.write(context.data, 0, context.length)
-        context.output.flush()
+        throw UnsupportedStrategyException(context.strategy, executorType)
     }
 
     /**
-     * Executes UDP DPI bypass strategy. Default implementation passes through packet.
+     * Executes UDP DPI bypass strategy. Throws UnsupportedStrategyException if not implemented.
      */
     suspend fun executeUdp(context: UdpExecutionContext) {
-        val packet = DatagramPacket(context.data, context.length, context.address, context.port)
-        context.socket.send(packet)
+        throw UnsupportedStrategyException(context.strategy, executorType)
     }
 
     /**

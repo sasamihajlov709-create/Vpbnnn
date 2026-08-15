@@ -152,13 +152,28 @@ object DpiAnalyzer {
             }
         }
 
+        // Freshness decay of strategy bonuses without artificial inflation:
+        // High scores (>100) gradually decay back towards baseline 100 when not actively reinforced.
+        // Penalized scores (<100) are NOT artificially boosted without actual successful observations.
         DpiEngine.strategyScores.values.forEach { catScores ->
             catScores.values.forEach { score ->
                 val s = score.get()
-                val decay = if (ProxyStats.censorshipIntensity.value / 100.0 > 0.8) 0.99 else 0.95
-                if (s != 100) {
-                    val decayed = (s * decay + 100 * (1.0 - decay)).toInt()
+                if (s > 100) {
+                    val decay = if (ProxyStats.censorshipIntensity.value / 100.0 > 0.8) 0.99 else 0.95
+                    val decayed = (s * decay + 100 * (1.0 - decay)).toInt().coerceAtLeast(100)
                     score.set(decayed)
+                }
+            }
+        }
+        
+        // Decay stale network strategy memory confidence
+        val now = System.currentTimeMillis()
+        DpiEngine.networkStrategyMemory.values.forEach { catMap ->
+            catMap.entries.forEach { (cat, mem) ->
+                val ageMs = now - mem.timestamp
+                if (ageMs > 30 * 60 * 1000L && mem.confidence > 0.3) {
+                    val newConf = (mem.confidence * 0.95).coerceAtLeast(0.3)
+                    catMap[cat] = mem.copy(confidence = newConf)
                 }
             }
         }

@@ -7,6 +7,64 @@ import java.util.concurrent.atomic.AtomicInteger
 
 object DpiStorage {
 
+    fun captureProfileState(profileId: String): NetworkProfileState {
+        val scores = DpiEngine.strategyScores.mapValues { (_, map) ->
+            map.mapValues { (_, atomic) -> atomic.get() }
+        }
+        val catSuccess = DpiEngine.categorySuccessHistory.mapValues { (_, map) ->
+            map.mapValues { (_, atomic) -> atomic.get() }
+        }
+        val catFailure = DpiEngine.categoryFailureHistory.mapValues { (_, map) ->
+            map.mapValues { (_, atomic) -> atomic.get() }
+        }
+        val netMem = (DpiEngine.networkStrategyMemory[profileId] ?: emptyMap()).toMap()
+        val hostMem = DpiEngine.hostSpecificMemory.toMap()
+        val hostBl = DpiEngine.hostStrategyBlacklist.mapValues { (_, map) -> map.toMap() }
+
+        return NetworkProfileState(
+            profileId = profileId,
+            scores = scores,
+            categorySuccess = catSuccess,
+            categoryFailure = catFailure,
+            networkMemory = netMem,
+            hostMemory = hostMem,
+            hostBlacklist = hostBl,
+            lastUpdated = System.currentTimeMillis()
+        )
+    }
+
+    fun restoreProfileState(state: NetworkProfileState) {
+        DpiEngine.strategyScores.forEach { (cat, map) ->
+            val catScores = state.scores[cat]
+            map.forEach { (strat, atomic) ->
+                atomic.set(catScores?.get(strat) ?: 100)
+            }
+        }
+        DpiEngine.categorySuccessHistory.forEach { (cat, map) ->
+            val catMap = state.categorySuccess[cat]
+            map.forEach { (strat, atomic) ->
+                atomic.set(catMap?.get(strat) ?: 0)
+            }
+        }
+        DpiEngine.categoryFailureHistory.forEach { (cat, map) ->
+            val catMap = state.categoryFailure[cat]
+            map.forEach { (strat, atomic) ->
+                atomic.set(catMap?.get(strat) ?: 0)
+            }
+        }
+        DpiEngine.networkStrategyMemory.clear()
+        if (state.networkMemory.isNotEmpty()) {
+            val catMap = ConcurrentHashMap(state.networkMemory)
+            DpiEngine.networkStrategyMemory[state.profileId] = catMap
+        }
+        DpiEngine.hostSpecificMemory.clear()
+        DpiEngine.hostSpecificMemory.putAll(state.hostMemory)
+        DpiEngine.hostStrategyBlacklist.clear()
+        state.hostBlacklist.forEach { (host, map) ->
+            DpiEngine.hostStrategyBlacklist[host] = ConcurrentHashMap(map)
+        }
+    }
+
     fun saveScores(context: Context, synchronous: Boolean = false) {
         val profileId = NetworkProfileManager.currentProfile.value.id
         saveProfileScores(context, profileId, synchronous)
@@ -38,9 +96,17 @@ object DpiStorage {
                 editor.putInt("fail_${cat.name}_${strat.name}", cnt.get())
             }
         }
-        DpiEngine.networkStrategyMemory.forEach { (netType, catMap) ->
-            catMap.forEach { (cat, mem) ->
-                editor.putString("netmem_${netType}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
+        // Save network strategy memory strictly for this profile or matching netType
+        val profileMem = DpiEngine.networkStrategyMemory[profileId]
+        if (profileMem != null) {
+            profileMem.forEach { (cat, mem) ->
+                editor.putString("netmem_${profileId}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
+            }
+        } else {
+            DpiEngine.networkStrategyMemory.forEach { (key, catMap) ->
+                catMap.forEach { (cat, mem) ->
+                    editor.putString("netmem_${key}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
+                }
             }
         }
         if (synchronous) editor.commit() else editor.apply()

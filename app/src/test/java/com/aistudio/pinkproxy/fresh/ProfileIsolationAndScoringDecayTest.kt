@@ -71,17 +71,23 @@ class ProfileIsolationAndScoringDecayTest {
         // Run analysis and adjustment
         DpiAnalyzer.analyzeAndAdjust()
 
-        val decayedScore = DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.TCP_RST_FAKE)?.get() ?: 0
-        // Expected value: (40 * 0.95 + 100 * 0.05) = 38 + 5 = 43
-        assertEquals(43, decayedScore)
-        assertNotEquals("Score must not be arbitrary +2 jump (42)", 42, decayedScore)
+        val penalizedScore = DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.TCP_RST_FAKE)?.get() ?: 0
+        // Score must NOT be artificially boosted towards 100 without real network observations
+        assertEquals(40, penalizedScore)
 
-        // Given a high score > 100
+        // Given a high score > 100 (freshness decay towards 100)
         DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.set(300)
         DpiAnalyzer.analyzeAndAdjust()
         val decayedHighScore = DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.get() ?: 0
         // Expected value: (300 * 0.95 + 100 * 0.05) = 285 + 5 = 290
         assertEquals(290, decayedHighScore)
+
+        // Verify confidence decay on stale network memory
+        val staleMemory = DpiEngine.NetworkMemory(BypassStrategy.SNI_SPLIT, System.currentTimeMillis() - 40 * 60 * 1000L, 1.0)
+        DpiEngine.networkStrategyMemory.getOrPut("TEST_PROFILE") { java.util.concurrent.ConcurrentHashMap() }[HostCategory.OTHER] = staleMemory
+        DpiAnalyzer.analyzeAndAdjust()
+        val decayedConf = DpiEngine.networkStrategyMemory["TEST_PROFILE"]?.get(HostCategory.OTHER)?.confidence ?: 1.0
+        assertTrue("Confidence should decay for stale observations", decayedConf < 1.0)
     }
 
     @Test
@@ -96,5 +102,31 @@ class ProfileIsolationAndScoringDecayTest {
             val sampleBalanced = ThompsonSampler.sampleBeta(10.0, 10.0)
             assertTrue("Sample balanced should be between 0.0001 and 0.9999", sampleBalanced in 0.0001..0.9999)
         }
+    }
+
+    @Test
+    fun testCaptureAndRestoreProfileState() {
+        val profileId = "custom_test_profile_state"
+        DpiEngine.strategyScores[HostCategory.MESSENGER]?.get(BypassStrategy.TLS_PAD)?.set(777)
+        DpiEngine.hostSpecificMemory["telegram.org"] = DpiEngine.HostMemory(BypassStrategy.TLS_PAD, System.currentTimeMillis(), 12)
+        DpiEngine.networkStrategyMemory.getOrPut(profileId) { java.util.concurrent.ConcurrentHashMap() }[HostCategory.MESSENGER] =
+            DpiEngine.NetworkMemory(BypassStrategy.TLS_PAD, System.currentTimeMillis(), 0.95)
+
+        val state = DpiStorage.captureProfileState(profileId)
+        assertEquals(profileId, state.profileId)
+        assertEquals(777, state.scores[HostCategory.MESSENGER]?.get(BypassStrategy.TLS_PAD))
+        assertEquals(BypassStrategy.TLS_PAD, state.hostMemory["telegram.org"]?.strategy)
+        assertEquals(12, state.hostMemory["telegram.org"]?.successCount)
+
+        // Clear everything
+        DpiEngine.resetStrategyScoresForNetworkChange()
+        assertEquals(100, DpiEngine.strategyScores[HostCategory.MESSENGER]?.get(BypassStrategy.TLS_PAD)?.get())
+        assertFalse(DpiEngine.hostSpecificMemory.containsKey("telegram.org"))
+
+        // Restore
+        DpiStorage.restoreProfileState(state)
+        assertEquals(777, DpiEngine.strategyScores[HostCategory.MESSENGER]?.get(BypassStrategy.TLS_PAD)?.get())
+        assertEquals(BypassStrategy.TLS_PAD, DpiEngine.hostSpecificMemory["telegram.org"]?.strategy)
+        assertEquals(12, DpiEngine.hostSpecificMemory["telegram.org"]?.successCount)
     }
 }

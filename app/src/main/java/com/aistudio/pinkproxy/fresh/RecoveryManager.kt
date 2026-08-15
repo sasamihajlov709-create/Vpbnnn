@@ -192,7 +192,10 @@ object RecoveryManager {
                 // Schedule an active probe to find better strategy soon
                 PinkVpnService.instance?.getServiceScope()?.launch {
                     delay(3000)
-                    ServiceChecker.runActiveProbing(PinkVpnService.instance ?: ProxyDispatcher.context!!)
+                    val ctx = PinkVpnService.instance ?: ProxyDispatcher.context
+                    if (ctx != null) {
+                        ServiceChecker.runActiveProbing(ctx)
+                    }
                 }
             }
             RecoveryEvent.DNS_FAILURE, RecoveryEvent.DNS_POISONED -> {
@@ -266,7 +269,10 @@ object RecoveryManager {
                     // Force immediate re-evaluation via active probing
                     PinkVpnService.instance?.getServiceScope()?.launch {
                         delay(2000)
-                        ServiceChecker.runActiveProbing(PinkVpnService.instance ?: ProxyDispatcher.context!!)
+                        val ctx = PinkVpnService.instance ?: ProxyDispatcher.context
+                        if (ctx != null) {
+                            ServiceChecker.runActiveProbing(ctx)
+                        }
                     }
                 } else {
                     triggerPanic("Critical stall detected ($event)")
@@ -309,7 +315,10 @@ object RecoveryManager {
         
         // Trigger active probing to find a working strategy ASAP
         PinkVpnService.instance?.getServiceScope()?.launch {
-            ServiceChecker.runActiveProbing(PinkVpnService.instance ?: ProxyDispatcher.context!!)
+            val ctx = PinkVpnService.instance ?: ProxyDispatcher.context
+            if (ctx != null) {
+                ServiceChecker.runActiveProbing(ctx)
+            }
         }
     }
 

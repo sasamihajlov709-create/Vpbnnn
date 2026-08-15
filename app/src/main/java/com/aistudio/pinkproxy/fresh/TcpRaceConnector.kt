@@ -120,14 +120,25 @@ object TcpRaceConnector {
             
             if (readBytes > 0) {
                 val latency = System.currentTimeMillis() - startTime
-                DpiEngine.recordStrategyResult(host, strategy, true, latency)
+                val quality = if (BypassApplier.isProbableTls(responseBuf, readBytes) || BypassApplier.isProbableHttp(responseBuf, readBytes)) {
+                    ObservationQuality.HANDSHAKE_COMPLETE
+                } else {
+                    ObservationQuality.TLS_RECORD_RECEIVED
+                }
+                DpiEngine.recordStrategyResult(host, strategy, true, latency, quality = quality)
                 return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
             } else {
-                DpiEngine.recordStrategyResult(host, strategy, false, 0)
+                DpiEngine.recordStrategyResult(host, strategy, false, 0, reason = FailureReason.CENSORSHIP_STALL)
                 try { rs.close() } catch (e: Throwable) {}
                 return null
             }
         } catch (e: Throwable) {
+            val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
+                FailureReason.TCP_RESET
+            } else {
+                FailureReason.TIMEOUT
+            }
+            DpiEngine.recordStrategyResult(host, strategy, false, 0, reason = reason)
             try { rs.close() } catch (ex: Throwable) {}
             return null
         }

@@ -10,11 +10,88 @@ object TcpBasicStrategyHandler : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.TCP_BASIC_HANDLER
     override val supportedTransports: Set<TransportType> = setOf(TransportType.TCP)
 
+    val supportedStrategies: Set<BypassStrategy> = setOf(
+        BypassStrategy.FAKE_PACKET,
+        BypassStrategy.TCP_OOB_DESYNC,
+        BypassStrategy.OOB_DESYNC,
+        BypassStrategy.GHOST_PACKETS,
+        BypassStrategy.WINDOW_SIZE_MANGLE,
+        BypassStrategy.TCP_ZERO_WINDOW_STALL,
+        BypassStrategy.TCP_MSS_CLAMP,
+        BypassStrategy.TCP_FAST_RETRANSMIT_SIM,
+        BypassStrategy.TCP_REORDER_SIM,
+        BypassStrategy.TCP_FAST_OPEN_FAKE,
+        BypassStrategy.TCP_RST_FAKE,
+        BypassStrategy.TCP_TIMESTAMP_MANGLE,
+        BypassStrategy.TCP_URGENT_RANDOM,
+        BypassStrategy.TCP_REORDER_CHAOS,
+        BypassStrategy.TCP_KEEP_ALIVE_FAKE,
+        BypassStrategy.TCP_WINDOW_RESTRICT,
+        BypassStrategy.TCP_WINDOW_SCAN,
+        BypassStrategy.TCP_REORDER_DESYNC,
+        BypassStrategy.TCP_URGENT_SKEW,
+        BypassStrategy.TCP_WINDOW_SIZE_SKEW,
+        BypassStrategy.TCP_DATA_REPETITION,
+        BypassStrategy.TCP_WINDOW_CLAMPING,
+        BypassStrategy.TCP_GHOST_SKEW,
+        BypassStrategy.PROTOCOL_CONFUSION_HTTP,
+        BypassStrategy.TCP_RANDOM_PADDING,
+        BypassStrategy.TCP_MSS_CLUMPING,
+        BypassStrategy.TCP_HANDSHAKE_CHAOS,
+        BypassStrategy.TCP_MSS_CLAMPER,
+        BypassStrategy.TCP_TOS_MANGLE,
+        BypassStrategy.PROTOCOL_CONFUSION_SSH,
+        BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT,
+        BypassStrategy.PROTOCOL_CONFUSION_REDIS,
+        BypassStrategy.PROTOCOL_CONFUSION_MEMCACHED,
+        BypassStrategy.SSH_HANDSHAKE_FAKE,
+        BypassStrategy.TCP_DATA_OOB_SKEW,
+        BypassStrategy.TCP_SACK_FAKE,
+        BypassStrategy.TCP_SEGMENT_DESYNC,
+        BypassStrategy.TCP_ACK_SKEW,
+        BypassStrategy.TCP_ZERO_WINDOW_DESYNC,
+        BypassStrategy.TCP_WINDOW_SIZE_CHAOS,
+        BypassStrategy.TCP_OOB_SEGMENTATION,
+        BypassStrategy.TCP_OVERLAP,
+        BypassStrategy.TCP_WINDOW_SHAKE,
+        BypassStrategy.TCP_OVERLAP_SKEW,
+        BypassStrategy.TCP_WINDOW_RESIZE_PACING,
+        BypassStrategy.TCP_KEEPALIVE_SKEW,
+        BypassStrategy.TCP_URGENT_DESYNC,
+        BypassStrategy.TCP_SYN_FLOOD_FAKE,
+        BypassStrategy.TCP_DATA_DESYNC,
+        BypassStrategy.TCP_ACK_SKEW_ADVANCED,
+        BypassStrategy.TCP_FOOL_DPI,
+        BypassStrategy.TCP_REVERSE_FRAG,
+        BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
+        BypassStrategy.TCP_FRAGMENT_REORDER,
+        BypassStrategy.TCP_RETRANS_FAKE,
+        BypassStrategy.TCP_WINDOW_SIZE_JITTER,
+        BypassStrategy.TCP_TLS_SESSION_DESYNC,
+        BypassStrategy.TCP_WINDOW_SIZE_OSCILLATION,
+        BypassStrategy.TCP_SACK_PANIC,
+        BypassStrategy.TCP_SACK_SKEW,
+        BypassStrategy.TCP_TRIPLE_DESYNC,
+        BypassStrategy.TCP_FAKE_FIN,
+        BypassStrategy.TCP_WINDOW_SHRINK,
+        BypassStrategy.TCP_WINDOW_STALL,
+        BypassStrategy.TCP_ZERO_WINDOW_OOB,
+        BypassStrategy.TCP_TIMING_CHAOS,
+        BypassStrategy.TCP_TLS_HELLO_FRAGMENT,
+        BypassStrategy.TCP_TLS_SNI_CASE_MOD,
+        BypassStrategy.TCP_REORDER,
+        BypassStrategy.TCP_SEGMENT_OVERLAP,
+        BypassStrategy.TCP_SEGMENT_REVERSE
+    )
+
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {
-        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+        return strategy in supportedStrategies
     }
 
     override suspend fun executeTcp(context: TcpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         handleTcpStrategies(
             socket = context.socket,
             output = context.output,

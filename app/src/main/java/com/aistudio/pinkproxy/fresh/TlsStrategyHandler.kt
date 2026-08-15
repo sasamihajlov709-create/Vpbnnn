@@ -9,11 +9,68 @@ object TlsStrategyHandler : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.TLS_HANDLER
     override val supportedTransports: Set<TransportType> = setOf(TransportType.TCP)
 
+    val supportedStrategies: Set<BypassStrategy> = setOf(
+        BypassStrategy.SNI_MANGLE,
+        BypassStrategy.TLS_DIRTY,
+        BypassStrategy.TLS_PAD,
+        BypassStrategy.TLS_GREASE,
+        BypassStrategy.TLS_EXT_SKEW,
+        BypassStrategy.TLS_REC_MANGLE,
+        BypassStrategy.TLS_PADDING_RAND,
+        BypassStrategy.TLS_REHANDSHAKE_FAKE,
+        BypassStrategy.TLS_SNI_SKEW,
+        BypassStrategy.TLS_CIPHER_SHUFFLE,
+        BypassStrategy.TLS_ALPN_SKEW,
+        BypassStrategy.TLS_EXTENSION_GREASE,
+        BypassStrategy.TLS_HELLO_JUNK,
+        BypassStrategy.TLS_LEGACY_HELLOS,
+        BypassStrategy.TLS_SESSION_TICKET_SKEW,
+        BypassStrategy.TLS_SESSION_ID_MANGLE,
+        BypassStrategy.TLS_MULTI_SNI,
+        BypassStrategy.TLS_COMPRESSION_FAKE,
+        BypassStrategy.TLS_CHROME_HELLO_FAKE,
+        BypassStrategy.TLS_FIREFOX_HELLO_FAKE,
+        BypassStrategy.TLS_13_HELLO_FAKE,
+        BypassStrategy.TLS_SESSION_ID_RAND,
+        BypassStrategy.TLS_MIXED_CASE_SNI,
+        BypassStrategy.TLS_SNI_SPLIT,
+        BypassStrategy.TLS_CLIENT_HELLO_CHOP,
+        BypassStrategy.TLS_APP_DATA_SPLIT,
+        BypassStrategy.TLS_CLIENT_HELLO_SHUFFLE,
+        BypassStrategy.TLS_RECORD_FRAGMENTATION,
+        BypassStrategy.TLS_RECORD_PADDING,
+        BypassStrategy.TLS_CLIENT_HELLO_GREASE_RANDOM,
+        BypassStrategy.TLS_SNI_NULL_EXT,
+        BypassStrategy.TLS_CLIENT_HELLO_PAD_EXTREME,
+        BypassStrategy.TLS_EXTENSION_SHUFFLE,
+        BypassStrategy.ECH_FRAG,
+        BypassStrategy.TLS_SNI_SYMMETRIC_SPLIT,
+        BypassStrategy.TLS_HANDSHAKE_RANDOM_PADDING,
+        BypassStrategy.TLS_GREASE_SKEW,
+        BypassStrategy.TLS_CLIENT_HELLO_PAD,
+        BypassStrategy.TLS_0RTT_FAKE,
+        BypassStrategy.TLS_CLIENT_HELLO_REORDER,
+        BypassStrategy.TLS_ECH_FAKE,
+        BypassStrategy.TLS_REC_CHOP,
+        BypassStrategy.TLS_SNI_GREASE,
+        BypassStrategy.TLS_SNI_REVERSE,
+        BypassStrategy.TLS_SNI_OVERLAP_SKEW,
+        BypassStrategy.TLS_CLIENT_HELLO_MULTI_PAD,
+        BypassStrategy.TLS_SNI_JITTER_SPLIT,
+        BypassStrategy.TLS_SNI_EXT_MANGLE,
+        BypassStrategy.TLS_SNI_SKEW_ADVANCED,
+        BypassStrategy.TLS_EXT_CHAOS,
+        BypassStrategy.ECH_GREASE
+    )
+
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {
-        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+        return strategy in supportedStrategies
     }
 
     override suspend fun executeTcp(context: TcpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         handleTlsStrategies(
             socket = context.socket,
             output = context.output,

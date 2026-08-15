@@ -9,11 +9,45 @@ object HttpStrategyHandler : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.HTTP_HANDLER
     override val supportedTransports: Set<TransportType> = setOf(TransportType.TCP)
 
+    val supportedStrategies: Set<BypassStrategy> = setOf(
+        BypassStrategy.HTTP_HOST_SPACE,
+        BypassStrategy.HTTP_RANGE_SKEW,
+        BypassStrategy.HTTP_VERSION_SKEW,
+        BypassStrategy.HTTP_USER_AGENT_SKEW,
+        BypassStrategy.HTTP_AUTH_RANDOM,
+        BypassStrategy.HTTP_HEADER_FUZZING,
+        BypassStrategy.HTTP_METHOD_FAKE,
+        BypassStrategy.HTTP_HOST_CASE_MANGLE,
+        BypassStrategy.HTTP_CHUNKED_FAKE,
+        BypassStrategy.HTTP_PIPELINE_FAKE,
+        BypassStrategy.HTTP_HOST_MANGLE,
+        BypassStrategy.HTTP_FRAGMENT,
+        BypassStrategy.HTTP_HOST_SMUGGLE,
+        BypassStrategy.HTTP_HOST_TAB_MANGLE,
+        BypassStrategy.HTTP_CONNECTION_CLOSE_SKEW,
+        BypassStrategy.HTTP_MULTI_LINE_MANGLE,
+        BypassStrategy.HTTP_HOST_FOLDING,
+        BypassStrategy.WS_HANDSHAKE_FAKE,
+        BypassStrategy.HTTP2_PREAMBLE_FAKE,
+        BypassStrategy.HTTP_HOST_REORDER,
+        BypassStrategy.HTTP_KEEP_ALIVE_FAKE,
+        BypassStrategy.HTTP_HEADER_CASE_CHAOS,
+        BypassStrategy.HTTP_HEADER_MANGLE,
+        BypassStrategy.HTTP_METHOD_CASE_MANGLE,
+        BypassStrategy.HTTP_METHOD_SPACE_MANGLE,
+        BypassStrategy.HTTP_HOST_DOT_MANGLE,
+        BypassStrategy.HTTP_HOST_REVERSE,
+        BypassStrategy.HTTP_LINE_SPLIT
+    )
+
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {
-        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+        return strategy in supportedStrategies
     }
 
     override suspend fun executeTcp(context: TcpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         handleHttpStrategies(
             socket = context.socket,
             output = context.output,

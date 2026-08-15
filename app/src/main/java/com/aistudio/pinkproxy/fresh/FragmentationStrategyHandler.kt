@@ -9,11 +9,27 @@ object FragmentationStrategyHandler : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.FRAGMENTATION_HANDLER
     override val supportedTransports: Set<TransportType> = setOf(TransportType.TCP)
 
+    val supportedStrategies: Set<BypassStrategy> = setOf(
+        BypassStrategy.SNI_SPLIT,
+        BypassStrategy.SNI_TRIPLE,
+        BypassStrategy.FRAGMENT_MULTI,
+        BypassStrategy.TLS_REC_SPLIT,
+        BypassStrategy.TLS_MULTI_FRAG,
+        BypassStrategy.TCP_SMALL_CHUNKS,
+        BypassStrategy.TCP_REARRANGE_CHUNKS,
+        BypassStrategy.TCP_BYTE_FRAG,
+        BypassStrategy.TLS_SNI_FRAGMENT,
+        BypassStrategy.TCP_PULSE_FRAG
+    )
+
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {
-        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+        return strategy in supportedStrategies
     }
 
     override suspend fun executeTcp(context: TcpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         handleFragmentationStrategies(
             socket = context.socket,
             output = context.output,
@@ -38,6 +54,23 @@ object FragmentationStrategyHandler : StrategyExecutor {
         config: SessionConfig,
         effectiveDelay: Long
     ) {
+        if (strategy == BypassStrategy.TCP_PULSE_FRAG) {
+            var pos = 0
+            var pulseIndex = 0
+            while (pos < length) {
+                val sz = if (pulseIndex % 2 == 0) rnd.nextInt(1, 4).coerceAtMost(length - pos) else rnd.nextInt(16, 64).coerceAtMost(length - pos)
+                output.write(data, pos, sz)
+                output.flush()
+                pos += sz
+                pulseIndex++
+                if (pos < length) {
+                    val pulseDelay = if (pulseIndex % 2 == 0) rnd.nextLong(15, 35) else rnd.nextLong(2, 8)
+                    delay(pulseDelay)
+                }
+            }
+            return
+        }
+
         if (strategy == BypassStrategy.TCP_BYTE_FRAG) {
             var pos = 0
             while (pos < length) {

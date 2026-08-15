@@ -9,11 +9,19 @@ object TimingStrategyHandler : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.TIMING_HANDLER
     override val supportedTransports: Set<TransportType> = setOf(TransportType.TCP)
 
+    val supportedStrategies: Set<BypassStrategy> = setOf(
+        BypassStrategy.SLOW_SEND,
+        BypassStrategy.TCP_ACK_DELAY
+    )
+
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {
-        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+        return strategy in supportedStrategies
     }
 
     override suspend fun executeTcp(context: TcpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         handleTimingStrategies(
             socket = context.socket,
             output = context.output,
@@ -54,16 +62,6 @@ object TimingStrategyHandler : StrategyExecutor {
             output.write(data, part, length - part)
             output.flush()
             return
-        }
-
-        // Generic timing jitter
-        var pos = 0
-        while (pos < length) {
-            val sz = rnd.nextInt(8, 32).coerceAtMost(length - pos)
-            output.write(data, pos, sz)
-            output.flush()
-            pos += sz
-            if (pos < length) delay(rnd.nextLong(5, 20))
         }
     }
 }

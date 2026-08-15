@@ -10,11 +10,67 @@ object UdpStrategyHandler : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.UDP_HANDLER
     override val supportedTransports: Set<TransportType> = setOf(TransportType.UDP, TransportType.DNS)
 
+    val supportedStrategies: Set<BypassStrategy> = setOf(
+        BypassStrategy.QUIC_RST_SKEW,
+        BypassStrategy.QUIC_MTU_PROBE,
+        BypassStrategy.UDP_STUN_FAKE,
+        BypassStrategy.UDP_FAKE_DTLS,
+        BypassStrategy.UDP_FAKE_SESSION,
+        BypassStrategy.UDP_NOISE_PAD,
+        BypassStrategy.QUIC_INITIAL_FAKE,
+        BypassStrategy.UDP_WIREGUARD_FAKE,
+        BypassStrategy.UDP_IKE_FAKE,
+        BypassStrategy.UDP_DHCP_FAKE,
+        BypassStrategy.PROTOCOL_CONFUSION_QUIC,
+        BypassStrategy.PROTOCOL_CONFUSION_DTLS,
+        BypassStrategy.UDP_TELEGRAM_FAKE,
+        BypassStrategy.UDP_DISCORD_FAKE,
+        BypassStrategy.UDP_HIGH_VOL_PACING,
+        BypassStrategy.UDP_ZERO_LEN_SKEW,
+        BypassStrategy.UDP_NOISE_CHAOS,
+        BypassStrategy.UDP_QUIC_SKEW,
+        BypassStrategy.UDP_DATA_FRAG,
+        BypassStrategy.UDP_FAKE_TRAFFIC,
+        BypassStrategy.UDP_IP_FRAG,
+        BypassStrategy.QUIC_INITIAL_PADDING_EXTREME,
+        BypassStrategy.QUIC_INITIAL_FRAGMENTATION,
+        BypassStrategy.UDP_IPv6_FRAG,
+        BypassStrategy.QUIC_FORCE_FRAG,
+        BypassStrategy.UDP_FRAGMENT_SKEW,
+        BypassStrategy.UDP_GHOST_SKEW,
+        BypassStrategy.UDP_QUIC_PAD,
+        BypassStrategy.QUIC_VERSION_SKEW,
+        BypassStrategy.UDP_HEARTBEAT,
+        BypassStrategy.QUIC_INITIAL_FRAGMENT,
+        BypassStrategy.QUIC_HANDSHAKE_SKEW,
+        BypassStrategy.UDP_QUIC_SMART_SHADOW,
+        BypassStrategy.UDP_REORDER,
+        BypassStrategy.UDP_SKEW_ADVANCED,
+        BypassStrategy.UDP_IP_ID_MANGLE,
+        BypassStrategy.UDP_SKEW_REVERSE,
+        BypassStrategy.UDP_QUIC_JITTER_PAD,
+        BypassStrategy.UDP_BURST_CHAOS,
+        BypassStrategy.UDP_REPLICATION,
+        BypassStrategy.UDP_STUTTER,
+        BypassStrategy.UDP_PADDING_CHAOS,
+        BypassStrategy.UDP_OVERLAP_SKEW,
+        BypassStrategy.UDP_QUIC_CHAOS,
+        BypassStrategy.UDP_RACING,
+        BypassStrategy.UDP_FAKE_PACKET,
+        BypassStrategy.UDP_FRAGMENTATION,
+        BypassStrategy.UDP_COMBINED_HYBRID,
+        BypassStrategy.UDP_COMBINED_NUCLEAR,
+        BypassStrategy.UDP_DNS_REORDER_HYBRID
+    )
+
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {
-        return StrategyExecutionRegistry.getExecutorType(strategy) == executorType
+        return strategy in supportedStrategies
     }
 
     override suspend fun executeUdp(context: UdpExecutionContext) {
+        if (context.strategy !in supportedStrategies) {
+            throw UnsupportedStrategyException(context.strategy, executorType)
+        }
         handleUdpStrategies(
             socket = context.socket,
             address = context.address,
