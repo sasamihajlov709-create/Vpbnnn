@@ -40,7 +40,27 @@ object AutoTtlProber {
             ?: discoveredTtls["global"]
     }
 
+    fun setDiscoveredTtl(host: String, ttl: Int, profileId: String = NetworkProfileManager.currentProfile.value.id) {
+        if (ttl <= 0) {
+            profileTtls[profileId]?.remove(host)
+            discoveredTtls.remove(host)
+        } else {
+            profileTtls.getOrPut(profileId) { ConcurrentHashMap() }[host] = ttl
+            discoveredTtls[host] = ttl
+        }
+    }
+
     private val discoveredMtus = ConcurrentHashMap<String, Int>()
+
+    fun setDiscoveredMtu(host: String, mtu: Int, profileId: String = NetworkProfileManager.currentProfile.value.id) {
+        if (mtu <= 0) {
+            profileMtus[profileId]?.remove(host)
+            discoveredMtus.remove(host)
+        } else {
+            profileMtus.getOrPut(profileId) { ConcurrentHashMap() }[host] = mtu
+            discoveredMtus[host] = mtu
+        }
+    }
 
     fun getDiscoveredMtu(host: String): Int {
         val profileId = NetworkProfileManager.currentProfile.value.id
@@ -361,6 +381,48 @@ object AutoTtlProber {
             }.awaitAll()
             
             fineResults.filter { it != -1 }.minOrNull() ?: upperBound
+        }
+    }
+
+    fun saveTtlMtuState(context: android.content.Context, profileId: String) {
+        try {
+            val prefs = context.getSharedPreferences("dpi_ttl_mtu_$profileId", android.content.Context.MODE_PRIVATE)
+            val editor = prefs.edit()
+            editor.clear()
+            
+            profileTtls[profileId]?.forEach { (host, ttl) ->
+                editor.putInt("ttl_$host", ttl)
+            }
+            profileMtus[profileId]?.forEach { (host, mtu) ->
+                editor.putInt("mtu_$host", mtu)
+            }
+            editor.apply()
+        } catch (e: Throwable) {
+            Log.v("AutoTtlProber", "saveTtlMtuState error: ${e.message}")
+        }
+    }
+
+    fun loadTtlMtuState(context: android.content.Context, profileId: String) {
+        try {
+            val prefs = context.getSharedPreferences("dpi_ttl_mtu_$profileId", android.content.Context.MODE_PRIVATE)
+            val ttlMap = profileTtls.getOrPut(profileId) { ConcurrentHashMap() }
+            val mtuMap = profileMtus.getOrPut(profileId) { ConcurrentHashMap() }
+            
+            prefs.all.forEach { (key, value) ->
+                if (value is Int) {
+                    if (key.startsWith("ttl_")) {
+                        val host = key.removePrefix("ttl_")
+                        ttlMap[host] = value
+                        discoveredTtls[host] = value
+                    } else if (key.startsWith("mtu_")) {
+                        val host = key.removePrefix("mtu_")
+                        mtuMap[host] = value
+                        discoveredMtus[host] = value
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            Log.v("AutoTtlProber", "loadTtlMtuState error: ${e.message}")
         }
     }
 

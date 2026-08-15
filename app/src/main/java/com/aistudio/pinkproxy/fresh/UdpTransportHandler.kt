@@ -157,6 +157,8 @@ object UdpTransportHandler {
                                     // Use BypassApplier for all UDP evasion
                                     launch {
                                         try {
+                                            ProxyStats.recordStats("udp_$sessionKey", payload.size.toLong(), 0)
+                                            ProxyStats.addTraffic(host)
                                             BypassApplier.applyUdpBypass(outSockets[workerIdx], outPacket, config, host)
                                         } catch (e: java.io.IOException) {
                                             Log.v("UdpTransport", "UDP Bypass IOException: ${e.message}")

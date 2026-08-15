@@ -19,6 +19,7 @@ object DpiStorage {
 
     fun saveProfileScores(context: Context, profileId: String, synchronous: Boolean = false) {
         saveHostMemoryForProfile(context, profileId, synchronous)
+        AutoTtlProber.saveTtlMtuState(context, profileId)
         val prefs = context.getSharedPreferences("dpi_scores_$profileId", Context.MODE_PRIVATE)
         val editor = prefs.edit()
         editor.clear()
@@ -50,6 +51,7 @@ object DpiStorage {
 
     fun loadProfileScores(context: Context, profileId: String) {
         loadHostMemoryForProfile(context, profileId)
+        AutoTtlProber.loadTtlMtuState(context, profileId)
         val prefs = context.getSharedPreferences("dpi_scores_$profileId", Context.MODE_PRIVATE)
         
         // If profile prefs are empty, fallback to legacy/default scores

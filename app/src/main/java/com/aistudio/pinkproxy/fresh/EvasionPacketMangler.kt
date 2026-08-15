@@ -100,7 +100,9 @@ object EvasionPacketMangler {
         noiseRecord[2] = 0x03.toByte()
         noiseRecord[3] = ((noiseLen shr 8) and 0xFF).toByte()
         noiseRecord[4] = (noiseLen and 0xFF).toByte()
-        rnd.nextBytes(noiseRecord.sliceArray(5 until 5 + noiseLen))
+        val randomBytes = ByteArray(noiseLen)
+        rnd.nextBytes(randomBytes)
+        System.arraycopy(randomBytes, 0, noiseRecord, 5, noiseLen)
         return noiseRecord
     }
 

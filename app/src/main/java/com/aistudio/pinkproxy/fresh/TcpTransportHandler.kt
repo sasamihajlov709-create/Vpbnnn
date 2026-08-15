@@ -367,7 +367,7 @@ object TcpTransportHandler {
         attempts.add(primaryStrategy)
         
         val fallback1 = BypassConfig.getFallbackStrategy(primaryStrategy)
-        if (fallback1 != null && !attempts.contains(fallback1)) {
+        if (!attempts.contains(fallback1)) {
             attempts.add(fallback1)
         }
         val diverseFallback = DpiStrategySelector.getDiverseFallback(primaryStrategy, HostClassifier.classify(targetHost), TransportType.TCP)

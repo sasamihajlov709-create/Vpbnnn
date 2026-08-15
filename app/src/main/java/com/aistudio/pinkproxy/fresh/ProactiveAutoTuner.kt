@@ -98,7 +98,7 @@ object ProactiveAutoTuner {
         strategy: BypassStrategy,
         payload: ByteArray,
         vpnService: VpnService?
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(ProxyDispatcher.io) {
         val rtt = BypassConfig.currentRttMs.value
         val config = BypassConfig.getSessionConfig(host, strategy, rtt, TransportType.TCP)
         val socket = Socket()

@@ -16,4 +16,10 @@ object TrafficShaper {
         val rtt = avgRtt.get()
         return if (rtt > 300) 1200 else 1440
     }
+
+    fun getAvgRtt(): Long = avgRtt.get()
+
+    fun reset(initialRtt: Long = 50L) {
+        avgRtt.set(initialRtt)
+    }
 }

@@ -201,7 +201,7 @@ object DpiStrategySelector {
                     if (strat.family == StrategyFamily.TIMING) s *= 0.65 // Avoid heavy timing delays for real-time streams
                 }
                 HostCategory.SOCIAL, HostCategory.MESSENGER, HostCategory.NEWS -> {
-                    if (strat == BypassStrategy.HTTP_MULTI_LINE_MANGLE || strat == BypassStrategy.BYEBYEDPI_HYBRID || strat == BypassStrategy.TCP_COMBINED_HYBRID || strat == BypassStrategy.TLS_SNI_EXT_MANGLE || strat == BypassStrategy.TLS_ECH_FAKE) s *= 1.95
+                    if (strat == BypassStrategy.HTTP_MULTI_LINE_MANGLE || strat == BypassStrategy.BYEBYEDPI_HYBRID || strat == BypassStrategy.TCP_COMBINED_HYBRID || strat == BypassStrategy.TLS_SNI_EXT_MANGLE || strat == BypassStrategy.TLS_ECH_FAKE || strat == BypassStrategy.TLS_APP_DATA_SPLIT) s *= 1.95
                 }
                 HostCategory.AI, HostCategory.FINANCE -> {
                     if (strat.family == StrategyFamily.FRAGMENTATION || strat == BypassStrategy.TLS_SNI_JITTER_SPLIT || strat == BypassStrategy.TCP_PULSE_FRAG || strat == BypassStrategy.ECH_GREASE) s *= 1.75
