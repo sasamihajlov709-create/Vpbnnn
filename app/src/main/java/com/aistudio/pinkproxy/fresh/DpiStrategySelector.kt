@@ -135,17 +135,17 @@ object DpiStrategySelector {
         val isPowerSave = BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20
         
         for ((strat, sRaw) in validStrategies) {
-            val catS = catSuccessMap?.get(strat)?.get() ?: 0
+            val catWeightedS = (DpiEngine.categoryWeightedSuccessHistory[category]?.get(strat)?.get() ?: 0L) / 1000.0
+            val globalWeightedS = (DpiEngine.weightedSuccessHistory[strat]?.get() ?: 0L) / 1000.0
             val catF = catFailureMap?.get(strat)?.get() ?: 0
-            val globalS = DpiEngine.successHistory[strat]?.get() ?: 0
             val globalF = DpiEngine.failureHistory[strat]?.get() ?: 0
 
             // Prior alpha & beta based on baseline score + gentle global prior (0.15 weight) without double-counting
             val baseScore = sRaw.get().toDouble().coerceIn(10.0, 500.0)
-            val priorAlpha = (baseScore / 80.0).coerceIn(1.0, 6.0) + (globalS * 0.15)
+            val priorAlpha = (baseScore / 80.0).coerceIn(1.0, 6.0) + (globalWeightedS * 0.15)
             val priorBeta = 2.0 + (globalF * 0.15)
 
-            val alpha = priorAlpha + (catS * 0.85)
+            val alpha = priorAlpha + (catWeightedS * 0.85)
             val beta = priorBeta + (catF * 1.15)
 
             // Draw probability sample from posterior Beta distribution
@@ -327,6 +327,10 @@ object DpiStrategySelector {
         if (success) {
             DpiEngine.successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.categorySuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            val weightedDelta = (quality.weight * 1000).toLong().coerceAtLeast(100L)
+            DpiEngine.weightedSuccessHistory.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)
+            DpiEngine.categoryWeightedSuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)
+            
             DpiEngine.strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.globalPenalties[strategy]?.updateAndGet { (it * 0.8).toInt() }
             DpiEngine.globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet((5 * quality.weight).toInt().coerceAtLeast(1))
@@ -349,19 +353,22 @@ object DpiStrategySelector {
                 DpiEngine.hostStrategyBlacklist[host]?.remove(strategy)
                 DpiEngine.consecutiveFailuresByHost[host]?.set(0)
                 
-                val currentMem = DpiEngine.hostSpecificMemory[host]
-                val newCount = if (currentMem?.strategy == strategy) currentMem.successCount + 1 else 1
-                DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, System.currentTimeMillis(), newCount)
-                
-                val netType = BypassConfig.currentNetworkType.value.toString()
-                val profileId = NetworkProfileManager.currentProfile.value.id
-                val profileNetMemory = DpiEngine.networkStrategyMemory.getOrPut(profileId) { java.util.concurrent.ConcurrentHashMap() }
-                val typeNetMemory = DpiEngine.networkStrategyMemory.getOrPut(netType) { java.util.concurrent.ConcurrentHashMap() }
-                if ((DpiEngine.strategyMaturity[strategy]?.get() ?: 0) > 3) {
-                    val prevConf = profileNetMemory[category]?.confidence ?: typeNetMemory[category]?.confidence ?: 0.5
-                    val newMemory = DpiEngine.NetworkMemory(strategy, System.currentTimeMillis(), (prevConf + 0.15).coerceAtMost(1.0))
-                    profileNetMemory[category] = newMemory
-                    typeNetMemory[category] = newMemory
+                // Only lock in persistent host memory on verified responses (exclude raw CONNECT_ONLY)
+                if (quality != ObservationQuality.CONNECT_ONLY) {
+                    val currentMem = DpiEngine.hostSpecificMemory[host]
+                    val newCount = if (currentMem?.strategy == strategy) currentMem.successCount + 1 else 1
+                    DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, System.currentTimeMillis(), newCount)
+                    
+                    val netType = BypassConfig.currentNetworkType.value.toString()
+                    val profileId = NetworkProfileManager.currentProfile.value.id
+                    val profileNetMemory = DpiEngine.networkStrategyMemory.getOrPut(profileId) { java.util.concurrent.ConcurrentHashMap() }
+                    val typeNetMemory = DpiEngine.networkStrategyMemory.getOrPut(netType) { java.util.concurrent.ConcurrentHashMap() }
+                    if ((DpiEngine.strategyMaturity[strategy]?.get() ?: 0) > 3) {
+                        val prevConf = profileNetMemory[category]?.confidence ?: typeNetMemory[category]?.confidence ?: 0.5
+                        val newMemory = DpiEngine.NetworkMemory(strategy, System.currentTimeMillis(), (prevConf + 0.15 * quality.weight).coerceAtMost(1.0))
+                        profileNetMemory[category] = newMemory
+                        typeNetMemory[category] = newMemory
+                    }
                 }
             }
 

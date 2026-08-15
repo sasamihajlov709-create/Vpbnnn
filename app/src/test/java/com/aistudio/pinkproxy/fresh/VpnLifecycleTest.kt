@@ -68,5 +68,22 @@ class VpnLifecycleTest {
         assertTrue("MSS should adjust on high RTT", TrafficShaper.getRecommendedMss() in listOf(1200, 1440))
         assertTrue("Avg RTT should be tracked", TrafficShaper.getAvgRtt() > 0)
     }
+
+    @Test
+    fun testVpnRecoveryCoordinatorIntents() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val coordinator = VpnRecoveryCoordinator(context)
+        
+        coordinator.triggerRestart()
+        val shadowApp = shadowOf(ApplicationProvider.getApplicationContext<android.app.Application>())
+        val restartIntent = shadowApp.nextStartedService
+        assertNotNull(restartIntent)
+        org.junit.Assert.assertEquals("RESTART", restartIntent.action)
+
+        coordinator.triggerStop()
+        val stopIntent = shadowApp.nextStartedService
+        assertNotNull(stopIntent)
+        org.junit.Assert.assertEquals("STOP", stopIntent.action)
+    }
 }
 

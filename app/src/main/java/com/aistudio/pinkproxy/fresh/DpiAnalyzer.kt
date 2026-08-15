@@ -187,6 +187,10 @@ object DpiAnalyzer {
         if (totalSuccess + totalFailure > 1000) {
             DpiEngine.successHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toInt() } }
             DpiEngine.failureHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toInt() } }
+            DpiEngine.weightedSuccessHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toLong() } }
+            DpiEngine.categoryWeightedSuccessHistory.values.forEach { catMap ->
+                catMap.values.forEach { count -> count.updateAndGet { (it * 0.5).toLong() } }
+            }
         }
     }
 
@@ -212,5 +216,9 @@ object DpiAnalyzer {
         DpiEngine.consecutiveFailures.clear()
         DpiEngine.successHistory.clear()
         DpiEngine.failureHistory.clear()
+        DpiEngine.weightedSuccessHistory.clear()
+        DpiEngine.categorySuccessHistory.clear()
+        DpiEngine.categoryFailureHistory.clear()
+        DpiEngine.categoryWeightedSuccessHistory.clear()
     }
 }

@@ -374,10 +374,9 @@ class PinkVpnService : VpnService() {
                 Log.e("PinkVpnService", "Failed to acquire wakeLock: ${e.message}")
             }
 
-            _isRunning.value = true
-
-            // 5. Start tun2socks engine
+            // 5. Start tun2socks engine (transactional - only set _isRunning after success)
             startTun2Socks(pfd, PROXY_PORT)
+            _isRunning.value = true
 
             // 6. Now that proxy & tun2socks are fully running, start health checkers & monitors
             ServiceChecker.startChecking(engineScope, this@PinkVpnService)
@@ -391,6 +390,7 @@ class PinkVpnService : VpnService() {
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e("PinkVpnService", "Error starting VPN", e)
+            _isRunning.value = false
             VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Critical startup error: ${e.localizedMessage}")
             stopVpn()
         }
@@ -410,13 +410,15 @@ class PinkVpnService : VpnService() {
     }
 
     private fun startTun2Socks(vpnInterface: ParcelFileDescriptor, proxyPort: Int) {
+        var dupFd: ParcelFileDescriptor? = null
+        var rawFd = -1
         try {
             engine.Engine.touch()
             val key = engine.Key()
             key.setProxy("socks5://$proxySecret:$proxySecret@127.0.0.1:$proxyPort")
-            val dupFd = vpnInterface.dup()
-            val fd = dupFd.detachFd()
-            key.setDevice("fd://$fd")
+            dupFd = vpnInterface.dup()
+            rawFd = dupFd.detachFd()
+            key.setDevice("fd://$rawFd")
             key.setLogLevel("info")
             engine.Engine.insert(key)
             engineScope.launch {
@@ -430,11 +432,19 @@ class PinkVpnService : VpnService() {
                     VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Transport engine error: ${e.localizedMessage}")
                 }
             }
-            Log.i("PinkVpnService", "tun2socks started on fd $fd")
+            Log.i("PinkVpnService", "tun2socks started on fd $rawFd")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.e("PinkVpnService", "Failed to start tun2socks", e)
+            if (rawFd >= 0) {
+                try {
+                    ParcelFileDescriptor.adoptFd(rawFd).close()
+                } catch (closeEx: Exception) {
+                    Log.v("PinkVpnService", "FD adoption close error: ${closeEx.message}")
+                }
+            }
+            dupFd?.close()
             VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Transport engine init failed: ${e.localizedMessage}")
             throw e
         }

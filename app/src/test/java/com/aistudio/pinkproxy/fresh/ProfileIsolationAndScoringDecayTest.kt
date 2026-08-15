@@ -20,17 +20,19 @@ class ProfileIsolationAndScoringDecayTest {
         // Set specific scores for Profile A
         DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.set(500)
         DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.TCP_PULSE_FRAG)?.set(40)
+        DpiEngine.categoryWeightedSuccessHistory.getOrPut(HostCategory.OTHER) { java.util.concurrent.ConcurrentHashMap() }.getOrPut(BypassStrategy.SNI_SPLIT) { java.util.concurrent.atomic.AtomicLong(0L) }.set(5000L)
         DpiEngine.hostSpecificMemory["host-a.com"] = DpiEngine.HostMemory(BypassStrategy.SNI_SPLIT, System.currentTimeMillis(), 5)
         AutoTtlProber.setDiscoveredTtl("host-a.com", 12, profileA)
         AutoTtlProber.setDiscoveredMtu("host-a.com", 1320, profileA)
 
         // Save Profile A
         DpiStorage.saveProfileScores(context, profileA, synchronous = true)
-        DpiStorage.saveProfileScores(context, profileA, synchronous = true)
 
         // Reset in-memory states and set for Profile B
         DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.set(100)
         DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.TCP_PULSE_FRAG)?.set(850)
+        DpiEngine.categoryWeightedSuccessHistory.getOrPut(HostCategory.OTHER) { java.util.concurrent.ConcurrentHashMap() }.getOrPut(BypassStrategy.SNI_SPLIT) { java.util.concurrent.atomic.AtomicLong(0L) }.set(0L)
+        DpiEngine.categoryWeightedSuccessHistory.getOrPut(HostCategory.OTHER) { java.util.concurrent.ConcurrentHashMap() }.getOrPut(BypassStrategy.TCP_PULSE_FRAG) { java.util.concurrent.atomic.AtomicLong(0L) }.set(8000L)
         DpiEngine.hostSpecificMemory.clear()
         DpiEngine.hostSpecificMemory["host-b.com"] = DpiEngine.HostMemory(BypassStrategy.TCP_PULSE_FRAG, System.currentTimeMillis(), 3)
         AutoTtlProber.setDiscoveredTtl("host-b.com", 18, profileB)
@@ -45,6 +47,7 @@ class ProfileIsolationAndScoringDecayTest {
 
         assertEquals(500, DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.get())
         assertEquals(40, DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.TCP_PULSE_FRAG)?.get())
+        assertEquals(5000L, DpiEngine.categoryWeightedSuccessHistory[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.get())
         assertTrue(DpiEngine.hostSpecificMemory.containsKey("host-a.com"))
         assertFalse(DpiEngine.hostSpecificMemory.containsKey("host-b.com"))
         assertEquals(12, AutoTtlProber.getDiscoveredTtl("host-a.com"))
@@ -56,6 +59,7 @@ class ProfileIsolationAndScoringDecayTest {
 
         assertEquals(100, DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.get())
         assertEquals(850, DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.TCP_PULSE_FRAG)?.get())
+        assertEquals(8000L, DpiEngine.categoryWeightedSuccessHistory[HostCategory.OTHER]?.get(BypassStrategy.TCP_PULSE_FRAG)?.get())
         assertTrue(DpiEngine.hostSpecificMemory.containsKey("host-b.com"))
         assertFalse(DpiEngine.hostSpecificMemory.containsKey("host-a.com"))
         assertEquals(18, AutoTtlProber.getDiscoveredTtl("host-b.com"))

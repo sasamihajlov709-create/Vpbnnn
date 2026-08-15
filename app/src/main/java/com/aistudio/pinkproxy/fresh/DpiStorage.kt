@@ -17,6 +17,10 @@ object DpiStorage {
         val catFailure = DpiEngine.categoryFailureHistory.mapValues { (_, map) ->
             map.mapValues { (_, atomic) -> atomic.get() }
         }
+        val catWeightedSuccess = DpiEngine.categoryWeightedSuccessHistory.mapValues { (_, map) ->
+            map.mapValues { (_, atomic) -> atomic.get() }
+        }
+        val weightedSuccess = DpiEngine.weightedSuccessHistory.mapValues { (_, atomic) -> atomic.get() }
         val netMem = (DpiEngine.networkStrategyMemory[profileId] ?: emptyMap()).toMap()
         val hostMem = DpiEngine.hostSpecificMemory.toMap()
         val hostBl = DpiEngine.hostStrategyBlacklist.mapValues { (_, map) -> map.toMap() }
@@ -26,6 +30,8 @@ object DpiStorage {
             scores = scores,
             categorySuccess = catSuccess,
             categoryFailure = catFailure,
+            categoryWeightedSuccess = catWeightedSuccess,
+            weightedSuccess = weightedSuccess,
             networkMemory = netMem,
             hostMemory = hostMem,
             hostBlacklist = hostBl,
@@ -51,6 +57,15 @@ object DpiStorage {
             map.forEach { (strat, atomic) ->
                 atomic.set(catMap?.get(strat) ?: 0)
             }
+        }
+        DpiEngine.categoryWeightedSuccessHistory.forEach { (cat, map) ->
+            val catMap = state.categoryWeightedSuccess[cat]
+            map.forEach { (strat, atomic) ->
+                atomic.set(catMap?.get(strat) ?: 0L)
+            }
+        }
+        DpiEngine.weightedSuccessHistory.forEach { (strat, atomic) ->
+            atomic.set(state.weightedSuccess[strat] ?: 0L)
         }
         DpiEngine.networkStrategyMemory.clear()
         if (state.networkMemory.isNotEmpty()) {
@@ -96,17 +111,19 @@ object DpiStorage {
                 editor.putInt("fail_${cat.name}_${strat.name}", cnt.get())
             }
         }
-        // Save network strategy memory strictly for this profile or matching netType
+        DpiEngine.categoryWeightedSuccessHistory.forEach { (cat, map) ->
+            map.forEach { (strat, cnt) ->
+                editor.putLong("wsucc_${cat.name}_${strat.name}", cnt.get())
+            }
+        }
+        DpiEngine.weightedSuccessHistory.forEach { (strat, cnt) ->
+            editor.putLong("wsucc_global_${strat.name}", cnt.get())
+        }
+        // Save network strategy memory strictly for this profile
         val profileMem = DpiEngine.networkStrategyMemory[profileId]
         if (profileMem != null) {
             profileMem.forEach { (cat, mem) ->
                 editor.putString("netmem_${profileId}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
-            }
-        } else {
-            DpiEngine.networkStrategyMemory.forEach { (key, catMap) ->
-                catMap.forEach { (cat, mem) ->
-                    editor.putString("netmem_${key}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
-                }
             }
         }
         if (synchronous) editor.commit() else editor.apply()
@@ -142,6 +159,17 @@ object DpiStorage {
                 val saved = sourcePrefs.getInt("fail_${cat.name}_${strat.name}", 0)
                 cnt.set(saved)
             }
+        }
+
+        DpiEngine.categoryWeightedSuccessHistory.forEach { (cat, map) ->
+            map.forEach { (strat, cnt) ->
+                val saved = sourcePrefs.getLong("wsucc_${cat.name}_${strat.name}", 0L)
+                cnt.set(saved)
+            }
+        }
+        DpiEngine.weightedSuccessHistory.forEach { (strat, cnt) ->
+            val saved = sourcePrefs.getLong("wsucc_global_${strat.name}", 0L)
+            cnt.set(saved)
         }
 
         DpiEngine.networkStrategyMemory.clear()

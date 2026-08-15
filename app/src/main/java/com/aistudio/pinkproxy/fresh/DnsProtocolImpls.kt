@@ -275,17 +275,17 @@ object DohDnsProtocols {
     suspend fun queryDohDetailed(host: String, dohUrl: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
             val client = DnsProtocols.getProtectedClient(vpnService)
-            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val queryCtx = DnsPacketEngine.buildQueryContext(host, type)
             val request = Request.Builder()
                 .url(dohUrl)
-                .post(query.toRequestBody("application/dns-message".toMediaTypeOrNull()))
+                .post(queryCtx.rawBytes.toRequestBody("application/dns-message".toMediaTypeOrNull()))
                 .header("Accept", "application/dns-message")
                 .build()
             
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext emptyList<DnsPacketEngine.DnsRecord>()
                 val body = response.body?.bytes() ?: return@withContext emptyList<DnsPacketEngine.DnsRecord>()
-                return@withContext DnsPacketEngine.parseDnsResponseDetailed(body, body.size)
+                return@withContext DnsPacketEngine.parseDnsResponseDetailed(body, body.size, expectedId = queryCtx.id, expectedHost = queryCtx.host)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -351,10 +351,10 @@ object DohDnsProtocols {
     suspend fun queryDohSmuggling(host: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         try {
             val client = DnsProtocols.getProtectedClient(vpnService)
-            val query = DnsPacketEngine.buildDnsQuery(host, type)
+            val queryCtx = DnsPacketEngine.buildQueryContext(host, type)
             val request = Request.Builder()
                 .url(DnsOptimizer.bestDohUrl)
-                .post(query.toRequestBody("application/dns-message".toMediaTypeOrNull()))
+                .post(queryCtx.rawBytes.toRequestBody("application/dns-message".toMediaTypeOrNull()))
                 .header("Accept", "application/dns-message")
                 .header("X-Forwarded-For", "127.0.0.1")
                 .header("Cache-Control", "no-cache, no-transform")
@@ -363,7 +363,7 @@ object DohDnsProtocols {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext queryDohRacing(host, vpnService, type)
                 val body = response.body?.bytes() ?: return@withContext emptyList()
-                return@withContext DnsPacketEngine.parseDnsResponse(body, body.size)
+                return@withContext DnsPacketEngine.parseDnsResponse(body, body.size, expectedId = queryCtx.id, expectedHost = queryCtx.host)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -385,9 +385,9 @@ object DotDnsProtocols {
             socket = socketFactory.createSocket(plainSocket, dotIp, 853, true)
             socket.soTimeout = 4000
             
-            val query = DnsPacketEngine.buildDnsQueryTcp(host, type)
+            val queryCtx = DnsPacketEngine.buildQueryContextTcp(host, type)
             val os = socket.getOutputStream()
-            os.write(query)
+            os.write(queryCtx.rawBytes)
             os.flush()
             
             val isInput = socket.getInputStream()
@@ -403,7 +403,7 @@ object DotDnsProtocols {
                 if (r == -1) break
                 read += r
             }
-            DnsPacketEngine.parseDnsResponse(response, read)
+            DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryCtx.id, expectedHost = queryCtx.host)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.v("DotDnsProtocols", "DoT query failed for $host via $dotIp: ${e.message}")

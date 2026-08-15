@@ -88,5 +88,40 @@ class TtlMtuPersistenceAndTrafficTest {
         assertEquals(1024L, flow.bytesSent)
         assertEquals("ACTIVE", flow.status)
     }
+
+    @Test
+    fun testNoiseGeneratorSizesAndEntropy() {
+        val smallNoise = NoiseGenerator.getSmallNoise(64)
+        assertEquals(64, smallNoise.size)
+        
+        val zeroNoise = NoiseGenerator.getSmallNoise(0)
+        assertEquals(0, zeroNoise.size)
+
+        val udpNoise = NoiseGenerator.buildUdpNoise(128)
+        assertEquals(128, udpNoise.size)
+        
+        // Verify buffer is not all zeros
+        assertTrue(udpNoise.any { it != 0.toByte() })
+    }
+
+    @Test
+    fun testProxyStatsMssAdaptationAndFormatBytes() {
+        ProxyStats.updateMaxMss(1460)
+        ProxyStats.resetMssFailureCount()
+        assertEquals(1460, ProxyStats.maxMss.value)
+        assertEquals(0, ProxyStats.mssFailureCount.value)
+
+        // Increment 3 times to trigger MSS backoff
+        ProxyStats.recordMssFailure()
+        ProxyStats.recordMssFailure()
+        ProxyStats.recordMssFailure()
+        assertEquals(1332, ProxyStats.maxMss.value)
+
+        // Verify formatBytes
+        assertEquals("0 B", ProxyStats.formatBytes(0))
+        assertEquals("512 B", ProxyStats.formatBytes(512))
+        assertEquals("1.0 KB", ProxyStats.formatBytes(1024))
+        assertEquals("1.0 MB", ProxyStats.formatBytes(1024 * 1024))
+    }
 }
 

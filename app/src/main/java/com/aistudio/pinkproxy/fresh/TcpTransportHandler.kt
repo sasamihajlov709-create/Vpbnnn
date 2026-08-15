@@ -169,6 +169,7 @@ object TcpTransportHandler {
 
             onConnectSuccess?.invoke()
             sessionSuccess = true
+            val recordedFullTransfer = java.util.concurrent.atomic.AtomicBoolean(false)
 
             coroutineScope {
                 // Keep-alive pulse
@@ -210,6 +211,9 @@ object TcpTransportHandler {
                                 break
                             }
                             lastActivity.set(System.currentTimeMillis())
+                            if (read > 0 && !recordedFullTransfer.getAndSet(true)) {
+                                DpiEngine.recordStrategyResult(targetHost, effectiveStrategy, true, quality = ObservationQuality.FULL_DATA_TRANSFER)
+                            }
                             if (intensity > 70 && ThreadLocalRandom.current().nextInt(100) < 5) {
                                 TcpTransportManager.oscillateWindowSize(clientSocket)
                             }

@@ -18,8 +18,10 @@ object DpiEngine {
     
     val successHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     val failureHistory = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
+    val weightedSuccessHistory = ConcurrentHashMap<BypassStrategy, AtomicLong>()
     val categorySuccessHistory = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
     val categoryFailureHistory = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicInteger>>()
+    val categoryWeightedSuccessHistory = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, AtomicLong>>()
     val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
     
     private val _currentDpiLevel = MutableStateFlow(0)
@@ -170,6 +172,10 @@ object DpiEngine {
         strategyLatency.clear()
         successHistory.clear()
         failureHistory.clear()
+        weightedSuccessHistory.clear()
+        categorySuccessHistory.clear()
+        categoryFailureHistory.clear()
+        categoryWeightedSuccessHistory.clear()
         eventHistory.clear()
         strategyMaturity.clear()
         circuitBreakers.clear()

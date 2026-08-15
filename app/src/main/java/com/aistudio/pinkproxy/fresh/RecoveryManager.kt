@@ -335,19 +335,8 @@ object RecoveryManager {
         Log.e("RecoveryManager", "Requesting Service Restart: $reason")
         recoveryEscalation.set(0)
         
-        val context = PinkVpnService.instance ?: return
-        val intent = android.content.Intent(context, PinkVpnService::class.java).apply {
-            action = "RESTART"
-        }
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-        } catch (e: Throwable) {
-            Log.e("RecoveryManager", "Failed to restart service: ${e.message}")
-        }
+        val context = PinkVpnService.instance ?: ProxyDispatcher.context ?: return
+        VpnRecoveryCoordinator(context).triggerRestart()
     }
 
     private fun triggerPanic(reason: String) {

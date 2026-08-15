@@ -69,4 +69,36 @@ class ServiceCheckerAndStatusTest {
         DiagnosticManager.logDiagnostic("TEST", "Diagnostic test message")
         assertTrue(ProxyStats.recoveryLog.value.any { it.contains("Diagnostic test message") })
     }
+
+    @Test
+    fun testStabilityAnalyzerMetricsCalculation() {
+        StabilityAnalyzer.reset()
+        assertEquals(100, StabilityAnalyzer.stabilityScore.value)
+        assertEquals(100, StabilityAnalyzer.successRate.value)
+        assertEquals(0, StabilityAnalyzer.censorshipIntensity.value)
+
+        // Record failure
+        StabilityAnalyzer.recordEvent(isFailure = true)
+        assertTrue(StabilityAnalyzer.successRate.value < 100)
+        assertTrue(StabilityAnalyzer.censorshipIntensity.value > 0)
+        assertTrue(StabilityAnalyzer.stabilityScore.value < 100)
+
+        // Record success with RTT
+        StabilityAnalyzer.recordEvent(isFailure = false, rtt = 120L)
+        assertEquals(120L, StabilityAnalyzer.lastLatency.value)
+
+        // Test signal quality update
+        StabilityAnalyzer.updateSignalQuality(
+            successRate = 90,
+            stabilityScore = 80,
+            censorshipIntensity = 10,
+            isPanicMode = false
+        )
+        assertTrue(StabilityAnalyzer.signalQuality.value in 50..100)
+
+        // Record DPI event
+        StabilityAnalyzer.recordDpi(DpiType.TCP_RESET)
+        assertEquals(DpiType.TCP_RESET, StabilityAnalyzer.currentDpiType.value)
+        assertEquals(1, StabilityAnalyzer.dpiEventHistory.value.size)
+    }
 }

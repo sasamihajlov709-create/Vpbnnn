@@ -7,6 +7,49 @@ import java.io.ByteArrayInputStream
 
 object DnsPacketEngine {
 
+    data class DnsQueryContext(
+        val id: Int,
+        val host: String,
+        val type: Int,
+        val rawBytes: ByteArray
+    )
+
+    fun normalizeAndValidateDnsName(host: String): String {
+        val trimmed = host.trim().trimEnd('.')
+        if (trimmed.isEmpty()) return "localhost"
+        if (trimmed.length > 253) return trimmed.take(253)
+        val labels = trimmed.split(".")
+        val validLabels = labels.map { label ->
+            if (label.isEmpty()) "x"
+            else if (label.length > 63) label.take(63)
+            else label
+        }
+        return validLabels.joinToString(".")
+    }
+
+    fun buildQueryContext(
+        host: String,
+        type: Int,
+        id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000),
+        mangleCase: Boolean = false,
+        includeEcs: Boolean = false
+    ): DnsQueryContext {
+        val cleanHost = normalizeAndValidateDnsName(host)
+        val bytes = buildDnsQuery(cleanHost, type, id, mangleCase, includeEcs)
+        return DnsQueryContext(id, cleanHost, type, bytes)
+    }
+
+    fun buildQueryContextTcp(
+        host: String,
+        type: Int,
+        id: Int = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000),
+        mangleCase: Boolean = false
+    ): DnsQueryContext {
+        val cleanHost = normalizeAndValidateDnsName(host)
+        val bytes = buildDnsQueryTcp(cleanHost, type, id, mangleCase)
+        return DnsQueryContext(id, cleanHost, type, bytes)
+    }
+
     fun buildDnsQuery(
         host: String,
         type: Int,
@@ -14,6 +57,7 @@ object DnsPacketEngine {
         mangleCase: Boolean = false,
         includeEcs: Boolean = false
     ): ByteArray {
+        val cleanHost = normalizeAndValidateDnsName(host)
         val buffer = ProxyStats.obtain8k()
         try {
             val bb = java.nio.ByteBuffer.wrap(buffer)
@@ -26,7 +70,7 @@ object DnsPacketEngine {
             bb.putShort(0.toShort()) // Authority RRs
             bb.putShort(1.toShort()) // Additional RRs (EDNS0)
             
-            val labels = host.split(".")
+            val labels = cleanHost.split(".")
             for (label in labels) {
                 var labelToUse = label
                 if (mangleCase) {
