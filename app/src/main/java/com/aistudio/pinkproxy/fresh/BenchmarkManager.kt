@@ -90,6 +90,7 @@ object BenchmarkManager {
 
     fun stopBenchmark() {
         benchmarkJob?.cancel()
+        BypassConfig.forcedBenchmarkStrategy = null
         _isRunning.value = false
     }
 }
