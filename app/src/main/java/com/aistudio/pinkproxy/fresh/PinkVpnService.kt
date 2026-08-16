@@ -379,6 +379,7 @@ class PinkVpnService : VpnService() {
             _isRunning.value = true
 
             // 6. Now that proxy & tun2socks are fully running, start health checkers & monitors
+            RecoveryStateMachine.start(engineScope)
             ServiceChecker.startChecking(engineScope, this@PinkVpnService)
             RecoveryManager.startHealthCheck(engineScope)
             healthMonitor?.start(engineScope)
@@ -501,6 +502,7 @@ class PinkVpnService : VpnService() {
             AutoTtlProber.stopProbing()
             DnsProtocols.clearPool()
             UdpTransportHandler.clearBuffers()
+            RecoveryStateMachine.stop()
             RecoveryManager.stopHealthCheck()
             DeviceMonitor.stopDeviceMonitoring(this@PinkVpnService)
 

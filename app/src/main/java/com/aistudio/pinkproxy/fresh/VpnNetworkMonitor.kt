@@ -54,6 +54,7 @@ class VpnNetworkMonitor(
                     networkChangeCallback(systemActiveNet, type)
                 } else {
                     NetworkProfileManager.updateNetwork(context, null)
+                    RecoveryStateMachine.postSignal(RecoverySignal.NetworkLost("none"))
                     networkChangeCallback(null, NetworkType.NONE)
                 }
             }

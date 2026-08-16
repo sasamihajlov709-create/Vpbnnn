@@ -133,217 +133,25 @@ object RecoveryManager {
 
 
     fun handleEvent(event: RecoveryEvent, details: String = "") {
-        Log.w("RecoveryManager", "Handling event: $event ($details)")
-        ProxyStats.logRecovery("Event: $event ($details)")
-        
-        when (event) {
-            RecoveryEvent.DPI_DETECTED -> {
-                val type = ProxyStats.currentDpiType.value
-                when (type) {
-                    DpiType.TCP_RESET -> {
-                        val candidates = listOf(
-                            BypassStrategy.TCP_COMBINED_NUCLEAR,
-                            BypassStrategy.TCP_COMBINED_HYBRID,
-                            BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
-                            BypassStrategy.OOB_DESYNC
-                        )
-                        BypassConfig.setGlobalStrategy(candidates.random())
-                        triggerPanic("Active TCP Reset DPI detected")
-                    }
-                    DpiType.TLS_SNI_BLOCK -> {
-                        val candidates = listOf(
-                            BypassStrategy.TCP_COMBINED_NUCLEAR,
-                            BypassStrategy.BYEBYEDPI_EXTREME,
-                            BypassStrategy.ZAPRET_EXTREME,
-                            BypassStrategy.SNI_SPLIT,
-                            BypassStrategy.TLS_CLIENT_HELLO_CHOP
-                        )
-                        BypassConfig.setGlobalStrategy(candidates.random())
-                    }
-                    DpiType.HTTP_BLOCK -> {
-                        val candidates = listOf(
-                            BypassStrategy.HTTP_HOST_SPACE, 
-                            BypassStrategy.HTTP_HOST_CASE_MANGLE, 
-                            BypassStrategy.HTTP_HOST_TAB_MANGLE,
-                            BypassStrategy.HTTP_METHOD_CASE_MANGLE,
-                            BypassStrategy.HTTP_HOST_REORDER
-                        )
-                        BypassConfig.setGlobalStrategy(candidates.random())
-                    }
-                    DpiType.CONNECTION_TIMEOUT -> {
-                        val candidates = listOf(BypassStrategy.TLS_REC_SPLIT, BypassStrategy.TCP_ACK_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS)
-                        BypassConfig.setGlobalStrategy(candidates.random())
-                        if (recoveryEscalation.get() >= 2) triggerPanic("DPI Timeout Escalation")
-                    }
-                    DpiType.UDP_BLOCK -> {
-                        val candidates = listOf(
-                            BypassStrategy.UDP_COMBINED_NUCLEAR,
-                            BypassStrategy.UDP_COMBINED_HYBRID,
-                            BypassStrategy.UDP_QUIC_SMART_SHADOW,
-                            BypassStrategy.QUIC_INITIAL_FRAGMENTATION
-                        )
-                        BypassConfig.setGlobalStrategy(candidates.random())
-                    }
-                    else -> {
-                        BypassConfig.rotateGlobalStrategy()
-                    }
-                }
-                recoveryEscalation.set((recoveryEscalation.get() + 1).coerceAtMost(3))
-                // Schedule an active probe to find better strategy soon
-                PinkVpnService.instance?.getServiceScope()?.launch {
-                    delay(3000)
-                    val ctx = PinkVpnService.instance ?: ProxyDispatcher.context
-                    if (ctx != null) {
-                        ServiceChecker.runActiveProbing(ctx)
-                    }
-                }
-            }
-            RecoveryEvent.DNS_FAILURE, RecoveryEvent.DNS_POISONED -> {
-                Log.e("RecoveryManager", "Critical DNS issue detected: $event. Escalation: ${recoveryEscalation.get()}")
-                RobustResolver.clearCache()
-                DnsCacheManager.clearAll()
-                DnsOptimizer.forceRefresh()
-                
-                if (event == RecoveryEvent.DNS_POISONED) {
-                    // Force the app to use nuclear/smuggling DoH immediately
-                    BypassConfig.setPanicMode(true)
-                    // Force the app to use nuclear/smuggling DoH immediately
-                    RobustResolver.dnsMode = "Smart DoH"
-                }
-
-                if (recoveryEscalation.get() < 2) {
-                    recoveryEscalation.incrementAndGet()
-                } else {
-                    triggerPanic("Repeated DNS issues")
-                    requestServiceRestart("Persistent DNS failures or poisoning")
-                }
-            }
-            RecoveryEvent.PROXY_UNREACHABLE -> {
-                val currentEsc = recoveryEscalation.get()
-                if (currentEsc < 2) {
-                    recoveryEscalation.incrementAndGet()
-                    Log.w("RecoveryManager", "Proxy unresponsive, attempting proxy server restart (escalation ${currentEsc + 1})")
-                    PinkVpnService.instance?.restartProxyServer()
-                } else {
-                    recoveryEscalation.set(3)
-                    triggerPanic("Proxy unreachable")
-                    requestServiceRestart("Proxy crash or unreachable")
-                }
-            }
-            RecoveryEvent.TUNNEL_STALL, RecoveryEvent.TCP_STALL, RecoveryEvent.SSL_STALL, RecoveryEvent.CENSORSHIP_STALL -> {
-                val currentEsc = recoveryEscalation.get()
-                if (currentEsc < 3) {
-                    BypassConfig.rotateGlobalStrategy()
-                    if (currentEsc > 0) {
-                        val currentMtu = BypassConfig.currentMtu.value
-                        if (currentMtu > 1100) {
-                            val reduction = if (event == RecoveryEvent.SSL_STALL || event == RecoveryEvent.CENSORSHIP_STALL) 150 else 80
-                            BypassConfig.setMtu(currentMtu - reduction)
-                            ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to $event")
-                        }
-                        
-                        // Dynamic TTL shifting for fake desync packets
-                        val currentTtl = BypassConfig.currentTtl
-                        val newTtl = when (currentTtl) {
-                            3 -> 5
-                            5 -> 8
-                            8 -> 10
-                            else -> 3
-                        }
-                        BypassConfig.setTtl(newTtl)
-                        ProxyStats.logRecovery("Watchdog: Shifting Fake TTL to $newTtl due to $event")
-                    }
-                    recoveryEscalation.incrementAndGet()
-                    
-                    // Specific boost for SSL or Censorship stalling
-                    if (event == RecoveryEvent.SSL_STALL || event == RecoveryEvent.CENSORSHIP_STALL) {
-                        BypassConfig.setGlobalStrategy(listOf(
-                            BypassStrategy.TLS_REC_SPLIT,
-                            BypassStrategy.TLS_CLIENT_HELLO_CHOP,
-                            BypassStrategy.BYEBYEDPI_EXTREME,
-                            BypassStrategy.TCP_WINDOW_SHRINK,
-                            BypassStrategy.TCP_TLS_SESSION_DESYNC
-                        ).random())
-                    }
-                    
-                    // Force immediate re-evaluation via active probing
-                    PinkVpnService.instance?.getServiceScope()?.launch {
-                        delay(2000)
-                        val ctx = PinkVpnService.instance ?: ProxyDispatcher.context
-                        if (ctx != null) {
-                            ServiceChecker.runActiveProbing(ctx)
-                        }
-                    }
-                } else {
-                    triggerPanic("Critical stall detected ($event)")
-                    requestServiceRestart("Persistent stalling")
-                }
-            }
-            RecoveryEvent.MTU_EXCEEDED -> {
-                val currentMtu = BypassConfig.currentMtu.value
-                if (currentMtu > 1200) {
-                    BypassConfig.setMtu(currentMtu - 100)
-                }
-            }
-            RecoveryEvent.HIGH_RTT, RecoveryEvent.HANDSHAKE_FAILURE -> {
-                BypassConfig.rotateGlobalStrategy()
-                recoveryEscalation.set((recoveryEscalation.get() + 1).coerceAtMost(2))
-            }
+        Log.w("RecoveryManager", "Reporting event to RecoveryStateMachine: $event ($details)")
+        val signal: RecoverySignal = when (event) {
+            RecoveryEvent.DPI_DETECTED -> RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value)
+            RecoveryEvent.TUNNEL_STALL -> RecoverySignal.TunnelStall(15000L, ProxyStats.activeConnections.value)
+            RecoveryEvent.TCP_STALL -> RecoverySignal.TcpStall("", BypassConfig.strategy.value)
+            RecoveryEvent.SSL_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value)
+            RecoveryEvent.DNS_FAILURE -> RecoverySignal.DnsFailure("", isPoisoned = false)
+            RecoveryEvent.DNS_POISONED -> RecoverySignal.DnsFailure("", isPoisoned = true)
+            RecoveryEvent.PROXY_UNREACHABLE -> RecoverySignal.ProxyUnresponsive(details)
+            RecoveryEvent.MTU_EXCEEDED -> RecoverySignal.TunnelStall(5000L, 1)
+            RecoveryEvent.HIGH_RTT -> RecoverySignal.ExtremeLatency(ProxyStats.lastLatency.value)
+            RecoveryEvent.HANDSHAKE_FAILURE -> RecoverySignal.HealthDegraded("Handshake failure: $details")
+            RecoveryEvent.CENSORSHIP_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value)
         }
+        RecoveryStateMachine.postSignal(signal)
     }
 
     fun recalibrateEverything() {
-        Log.w("RecoveryManager", "RECALIBRATING EVERYTHING")
-        ProxyStats.logRecovery("Recalibrating system...")
-        
-        // Reset scores and histories
-        DpiEngine.resetStrategyScoresForNetworkChange()
-        DpiEngine.clearCircuitBreakers()
-        DpiEngine.successHistory.clear()
-        DpiEngine.failureHistory.clear()
-        DpiEngine.eventHistory.clear()
-        
-        // Clear DNS caches
-        DnsCacheManager.clearAll()
-        RobustResolver.clearCache()
-        DnsOptimizer.forceRefresh()
-        
-        // Reset escalation
-        recoveryEscalation.set(0)
-        BypassConfig.setPanicMode(false)
-        BypassConfig.setMtu(1400) // Reset to standard
-        
-        // Trigger active probing to find a working strategy ASAP
-        PinkVpnService.instance?.getServiceScope()?.launch {
-            val ctx = PinkVpnService.instance ?: ProxyDispatcher.context
-            if (ctx != null) {
-                ServiceChecker.runActiveProbing(ctx)
-            }
-        }
-    }
-
-    private fun requestServiceRestart(reason: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastRestartTime < restartCooldown) {
-            Log.w("RecoveryManager", "Skipping restart: cooldown active ($reason)")
-            return
-        }
-        
-        lastRestartTime = now
-        restartCooldown = (restartCooldown * 1.5).toLong().coerceAtMost(300000L)
-        
-        Log.e("RecoveryManager", "Requesting Service Restart: $reason")
-        recoveryEscalation.set(0)
-        
-        val context = PinkVpnService.instance ?: ProxyDispatcher.context ?: return
-        VpnRecoveryCoordinator(context).triggerRestart()
-    }
-
-    private fun triggerPanic(reason: String) {
-        if (!BypassConfig.isPanicMode) {
-            Log.w("RecoveryManager", "Triggering Panic Mode: $reason")
-            ProxyStats.clearCensorshipHistory()
-            BypassConfig.panicOptimize()
-        }
+        Log.w("RecoveryManager", "Requesting full recalibration via RecoveryStateMachine")
+        RecoveryStateMachine.postSignal(RecoverySignal.ManualReset)
     }
 }

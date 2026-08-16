@@ -86,8 +86,8 @@ class VpnHealthMonitor(
                                 }
                             }
                         } catch (e: java.io.IOException) {
-                            ProxyStats.logRecovery("Watchdog: Proxy server unresponsive (${e.message}). Restarting...")
-                            restartProxyServer()
+                            ProxyStats.logRecovery("Watchdog: Proxy server unresponsive (${e.message}). Reporting signal...")
+                            RecoveryStateMachine.postSignal(RecoverySignal.ProxyUnresponsive(e.message ?: "io_error"))
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -98,8 +98,8 @@ class VpnHealthMonitor(
                     }
 
                     if (dnsFailures > lastDnsFailures + 10) {
-                        ProxyStats.logRecovery("Watchdog: High DNS failure rate ($dnsFailures). Clearing resolver cache...")
-                        RobustResolver.clearCache()
+                        ProxyStats.logRecovery("Watchdog: High DNS failure rate ($dnsFailures). Reporting DNS failure signal...")
+                        RecoveryStateMachine.postSignal(RecoverySignal.DnsFailure("bulk_failures", isPoisoned = false))
                     }
 
                     lastDnsFailures = dnsFailures
@@ -126,10 +126,9 @@ class VpnHealthMonitor(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        Log.e("VpnHealthMonitor", "Engine health check failed: ${e.message}. Triggering session recovery...")
+                        Log.e("VpnHealthMonitor", "Engine health check failed: ${e.message}. Reporting signal...")
                         ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
-                        VpnRuntimeState.updateState(VpnLifecycleState.RECOVERING, "Engine health check failed. Restarting VPN...")
-                        restartVpnSession()
+                        RecoveryStateMachine.postSignal(RecoverySignal.ProxyUnresponsive("engine_connect_timeout: ${e.message}"))
                     }
                 }
             }
@@ -146,17 +145,8 @@ class VpnHealthMonitor(
                 val percent = (usedMB.toDouble() / maxMB * 100).toInt()
 
                 if (percent > 85) {
-                    Log.w("VpnHealthMonitor", "CRITICAL MEMORY: $percent% ($usedMB MB / $maxMB MB). Triggering cleanup.")
-                    ProxyStats.logRecovery("System: High memory pressure ($percent%). Clearing caches.")
-                    DnsCacheManager.clearAll()
-                    UdpTransportHandler.clearBuffers()
-                    ProxyStats.releaseAllPools()
-
-                    if (percent > 92 && isVpnRunning()) {
-                        Log.e("VpnHealthMonitor", "MEMORY EXHAUSTED ($percent%). Emergency session restart.")
-                        ProxyStats.logRecovery("System: Memory exhausted. Emergency restart.")
-                        restartVpnSession()
-                    }
+                    Log.w("VpnHealthMonitor", "CRITICAL MEMORY: $percent% ($usedMB MB / $maxMB MB). Reporting to RecoveryStateMachine.")
+                    RecoveryStateMachine.postSignal(RecoverySignal.MemoryPressure(percent))
                 }
             }
         }

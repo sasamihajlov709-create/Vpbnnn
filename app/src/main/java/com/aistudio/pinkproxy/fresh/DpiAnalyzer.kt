@@ -48,43 +48,13 @@ object DpiAnalyzer {
         Log.w("DpiAnalyzer", "SPOOFED TCP RST DETECTED for $host (RTT=${rttMs}ms). Active DPI middlebox injected packet.")
         DpiEngine.eventHistory.getOrPut(DpiType.TCP_RESET) { AtomicInteger(0) }.incrementAndGet()
         
-        // Boost TCP Out-of-order, Zero Window, and TTL Skew desynchronization strategies immediately
-        DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-        DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-        DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+        // Delegate DPI event policy response to Policy Engine
+        DpiPolicyEngine.onDpiEventDiagnosed(DpiType.TCP_RESET)
     }
 
     fun recordEvent(type: DpiType) {
         DpiEngine.eventHistory.getOrPut(type) { AtomicInteger(0) }.incrementAndGet()
-        
-        when (type) {
-            DpiType.TLS_SNI_BLOCK -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TLS, null)
-            }
-            DpiType.UDP_BLOCK -> DpiEngine.boostStrategyFamily(StrategyFamily.UDP, null)
-            DpiType.TCP_RESET -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-            }
-            DpiType.DNS_POISONING -> DpiEngine.boostStrategyFamily(StrategyFamily.DNS, null)
-            DpiType.HTTP_BLOCK -> DpiEngine.boostStrategyFamily(StrategyFamily.HTTP, null)
-            DpiType.TLS_HANDSHAKE_TIMEOUT -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.TLS, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-            }
-            DpiType.CONNECTION_TIMEOUT -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-            }
-            DpiType.TCP_STALL, DpiType.SSL_STALL -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-            }
-            else -> {}
-        }
+        DpiPolicyEngine.onDpiEventDiagnosed(type)
     }
 
     fun analyzeAndAdjust() {
@@ -112,44 +82,10 @@ object DpiAnalyzer {
         if (totalSuccess + totalFailure == 0) {
             ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 2).coerceAtLeast(0))
         } else {
-            val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100).toInt()
+            val globalSuccessRate = (totalSuccess.toDouble() / (totalSuccess + totalFailure) * 100)
             val fingerprint = getCensorshipFingerprint()
-            val calculatedIntensity = (fingerprint.rstRate * 55 + fingerprint.sniBlockRate * 65 + fingerprint.timeoutRate * 25 + fingerprint.stallRate * 40 + fingerprint.udpBlockRate * 35).toInt().coerceIn(0, 100)
-
-            if (globalSuccessRate < 15 && calculatedIntensity > 40) {
-                DpiEngine.enterPanicMode()
-            }
-
-            val targetIntensity = if (calculatedIntensity > ProxyStats.censorshipIntensity.value) {
-                (ProxyStats.censorshipIntensity.value * 0.2 + calculatedIntensity * 0.8).toInt()
-            } else {
-                if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05) {
-                    (ProxyStats.censorshipIntensity.value * 0.7 + calculatedIntensity * 0.3).toInt()
-                } else {
-                    (ProxyStats.censorshipIntensity.value * 0.9 + calculatedIntensity * 0.1).toInt()
-                }
-            }
-            
-            if (Math.abs(targetIntensity - ProxyStats.censorshipIntensity.value) >= 1) {
-                ProxyStats.updateCensorshipIntensity(targetIntensity)
-            }
-
-            val stability = (globalSuccessRate * 0.5 + (100 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100).coerceAtLeast(0.0) * 0.5).toInt().coerceIn(0, 100)
-            ProxyStats.updateStabilityScore(stability)
-            
-            if (fingerprint.timeoutRate > 0.35 || fingerprint.stallRate > 0.45) {
-                 val mtu = BypassConfig.currentMtu.value
-                 if (mtu > 1000) BypassConfig.setMtu(mtu - 32)
-                 DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-                 DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-            } else if (stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
-                 BypassConfig.setMtu(BypassConfig.currentMtu.value + 16)
-            }
-            
-            if (fingerprint.jitter > 600) {
-                DpiEngine.boostStrategyFamily(StrategyFamily.ADAPTIVE, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-            }
+            val decision = DpiPolicyEngine.evaluatePolicy(fingerprint, globalSuccessRate, totalSuccess + totalFailure)
+            DpiPolicyEngine.applyPolicyDecision(decision)
         }
 
         // Freshness decay of strategy bonuses without artificial inflation:
@@ -195,30 +131,16 @@ object DpiAnalyzer {
     }
 
     fun checkGlobalStall() {
-        val total = DpiEngine.successHistory.values.sumOf { it.get() } + DpiEngine.failureHistory.values.sumOf { it.get() }
+        val totalSuccess = DpiEngine.successHistory.values.sumOf { it.get() }
+        val totalFailure = DpiEngine.failureHistory.values.sumOf { it.get() }
+        val total = totalSuccess + totalFailure
         if (total > 20) {
-            val rate = (DpiEngine.successHistory.values.sumOf { it.get() }.toDouble() / total * 100)
+            val rate = (totalSuccess.toDouble() / total * 100)
             val fingerprint = getCensorshipFingerprint()
-            
-            if ((rate < 15 || fingerprint.timeoutRate > 0.8)) {
-                DpiEngine.enterPanicMode()
-                BypassConfig.rotateGlobalStrategy()
-                if (rate < 5) resetEverything()
+            val decision = DpiPolicyEngine.evaluatePolicy(fingerprint, rate, total)
+            if (decision.shouldEnterPanic || decision.shouldReset) {
+                DpiPolicyEngine.applyPolicyDecision(decision)
             }
         }
-    }
-
-    private fun resetEverything() {
-        DpiEngine.strategyScores.values.forEach { catScores ->
-            catScores.values.forEach { it.set(100) }
-        }
-        DpiEngine.circuitBreakers.clear()
-        DpiEngine.consecutiveFailures.clear()
-        DpiEngine.successHistory.clear()
-        DpiEngine.failureHistory.clear()
-        DpiEngine.weightedSuccessHistory.clear()
-        DpiEngine.categorySuccessHistory.clear()
-        DpiEngine.categoryFailureHistory.clear()
-        DpiEngine.categoryWeightedSuccessHistory.clear()
     }
 }
