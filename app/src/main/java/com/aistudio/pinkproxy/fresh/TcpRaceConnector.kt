@@ -29,13 +29,14 @@ object TcpRaceConnector {
         strat2: BypassStrategy,
         firstPacket: ByteArray,
         firstPacketLen: Int,
-        bufferSize: Int
+        bufferSize: Int,
+        requestedStrategy: BypassStrategy = strat1
     ): RaceResult? = coroutineScope {
         val resultChannel = Channel<RaceResult>(2)
         
         val job1 = launch(ProxyDispatcher.io) {
             try {
-                val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize)
+                val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize, requestedStrategy = requestedStrategy, effectiveStrategy = strat1)
                 if (res != null) resultChannel.send(res)
             } catch (e: Exception) {
                 Log.v("TcpRaceConnector", "Attempt 1 failed for $host with $strat1: ${e.message}")
@@ -45,7 +46,7 @@ object TcpRaceConnector {
         val job2 = launch(ProxyDispatcher.io) {
             try {
                 delay(200) // Priority delay
-                val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize)
+                val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize, requestedStrategy = requestedStrategy, effectiveStrategy = strat2)
                 if (res != null) resultChannel.send(res)
             } catch (e: Exception) {
                 Log.v("TcpRaceConnector", "Attempt 2 failed for $host with $strat2: ${e.message}")
@@ -92,9 +93,11 @@ object TcpRaceConnector {
         strategy: BypassStrategy,
         firstPacket: ByteArray,
         firstPacketLen: Int,
-        bufferSize: Int
+        bufferSize: Int,
+        requestedStrategy: BypassStrategy = strategy,
+        effectiveStrategy: BypassStrategy = strategy
     ): RaceResult? {
-        val config = BypassConfig.getSessionConfig(host, strategy, BypassConfig.currentRttMs.value)
+        val config = BypassConfig.getSessionConfig(host, strategy, BypassConfig.currentRttMs.value, TransportType.TCP)
         val rs = TcpTransportManager.connectToBestIp(ips, port, vpnService, config, host) ?: return null
         
         try {
@@ -125,10 +128,26 @@ object TcpRaceConnector {
                 } else {
                     ObservationQuality.TLS_RECORD_RECEIVED
                 }
-                DpiEngine.recordStrategyResult(host, strategy, true, latency, quality = quality)
+                DpiEngine.recordStrategyResult(
+                    host = host,
+                    strat = strategy,
+                    success = true,
+                    latencyMs = latency,
+                    quality = quality,
+                    requestedStrategy = requestedStrategy,
+                    effectiveStrategy = effectiveStrategy
+                )
                 return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
             } else {
-                DpiEngine.recordStrategyResult(host, strategy, false, 0, reason = FailureReason.CENSORSHIP_STALL)
+                DpiEngine.recordStrategyResult(
+                    host = host,
+                    strat = strategy,
+                    success = false,
+                    latencyMs = 0,
+                    reason = FailureReason.CENSORSHIP_STALL,
+                    requestedStrategy = requestedStrategy,
+                    effectiveStrategy = effectiveStrategy
+                )
                 try { rs.close() } catch (e: Throwable) {}
                 return null
             }
@@ -138,7 +157,15 @@ object TcpRaceConnector {
             } else {
                 FailureReason.TIMEOUT
             }
-            DpiEngine.recordStrategyResult(host, strategy, false, 0, reason = reason)
+            DpiEngine.recordStrategyResult(
+                host = host,
+                strat = strategy,
+                success = false,
+                latencyMs = 0,
+                reason = reason,
+                requestedStrategy = requestedStrategy,
+                effectiveStrategy = effectiveStrategy
+            )
             try { rs.close() } catch (ex: Throwable) {}
             return null
         }

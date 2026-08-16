@@ -211,7 +211,9 @@ object DpiEngine {
         success: Boolean,
         latencyMs: Long = 0,
         reason: FailureReason? = null,
-        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER
+        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
+        requestedStrategy: BypassStrategy? = null,
+        effectiveStrategy: BypassStrategy? = null
     ) {
         val category = HostClassifier.classify(host)
         DpiStrategySelector.recordResult(
@@ -221,7 +223,9 @@ object DpiEngine {
             reason = reason,
             latencyMs = latencyMs,
             host = host,
-            quality = quality
+            quality = quality,
+            requestedStrategy = requestedStrategy,
+            effectiveStrategy = effectiveStrategy
         )
     }
 
@@ -332,12 +336,14 @@ object DpiEngine {
             try {
                 val ok = withTimeoutOrNull(3000) {
                     val s = java.net.Socket()
+                    var executedStrategy = strat
                     try {
                         BypassConfig.activeVpnService?.protect(s)
                         s.connect(java.net.InetSocketAddress(addr, 443), 1500)
                         val out = s.getOutputStream()
                         val fake = FakePacketHelper.buildRealisticTlsHello(host)
-                        val config = BypassConfig.getSessionConfig(host, strat, 50)
+                        val config = BypassConfig.getSessionConfig(host, strat, 50, TransportType.TCP)
+                        executedStrategy = config.strategy
                         BypassConfig.applyBypass(s, out, fake, fake.size, config, host)
                         s.soTimeout = 1500
                         val headerBuf = ByteArray(5)
@@ -345,7 +351,7 @@ object DpiEngine {
                         val isTlsServerHello = readLen >= 5 && headerBuf[0] == 0x16.toByte() && headerBuf[1] == 0x03.toByte()
                         if (isTlsServerHello) {
                             DpiStrategySelector.recordResult(
-                                config.strategy, 
+                                executedStrategy, 
                                 true, 
                                 category, 
                                 host = host,
@@ -354,7 +360,7 @@ object DpiEngine {
                             return@withTimeoutOrNull true
                         } else {
                             DpiStrategySelector.recordResult(
-                                config.strategy,
+                                executedStrategy,
                                 false,
                                 category,
                                 reason = FailureReason.CENSORSHIP_STALL,
@@ -364,9 +370,9 @@ object DpiEngine {
                         }
                         false
                     } catch (e: Exception) {
-                        Log.v("DpiEngine", "Probe $strat failed: ${e.message}")
+                        Log.v("DpiEngine", "Probe $executedStrategy failed: ${e.message}")
                         DpiStrategySelector.recordResult(
-                            strat,
+                            executedStrategy,
                             false,
                             category,
                             reason = FailureReason.TCP_RESET,
@@ -400,8 +406,20 @@ object DpiEngine {
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER
-    ) = DpiStrategySelector.recordResult(strategy, success, category, reason, latencyMs, host, quality)
+        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
+        requestedStrategy: BypassStrategy? = null,
+        effectiveStrategy: BypassStrategy? = null
+    ) = DpiStrategySelector.recordResult(
+        strategy = strategy,
+        success = success,
+        category = category,
+        reason = reason,
+        latencyMs = latencyMs,
+        host = host,
+        quality = quality,
+        requestedStrategy = requestedStrategy,
+        effectiveStrategy = effectiveStrategy
+    )
     fun triggerRecalibration() {
         resetStrategyScoresForNetworkChange()
         lastGlobalReset = System.currentTimeMillis()

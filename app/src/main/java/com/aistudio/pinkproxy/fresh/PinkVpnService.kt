@@ -293,15 +293,18 @@ class PinkVpnService : VpnService() {
             activeNetworkProfile = NetworkProfileManager.currentProfile.value
 
             // 1. Initialize DNS
+            VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Initializing DNS resolver...")
             RobustResolver.initialize(engineScope)
             RobustResolver.startDnsOptimizer(engineScope, this@PinkVpnService)
 
             // 2. Start Proxy Server
+            VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Starting SOCKS5/HTTP core proxy...")
             proxyServer?.stop()
             proxyServer = null
             delay(150)
-            proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
-            proxyServer?.start()
+            val newProxy = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
+            newProxy.start()
+            proxyServer = newProxy
 
             // 3. Start DPI Engine & Censorship Expert
             DpiEngine.start(this@PinkVpnService)
@@ -333,6 +336,7 @@ class PinkVpnService : VpnService() {
             }
 
             // 4. Establish TUN interface
+            VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Configuring TUN interface...")
             val pfd = try {
                 vpnTunnelManager?.establish(
                     sessionName = "PinkProxy VPN",
@@ -346,7 +350,7 @@ class PinkVpnService : VpnService() {
                     appPackageName = packageName,
                     allowBypass = !BypassConfig.isKillSwitchEnabled.value,
                     isBlocking = BypassConfig.isKillSwitchEnabled.value
-                ) ?: throw java.io.IOException("Failed to establish tunnel")
+                ) ?: throw java.io.IOException("Failed to establish tunnel interface")
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.w("PinkVpnService", "Emergency fallback TUN activated! Reason: ${e.message}. Reconfiguring: IPv4-only, MTU 1400, Default DNS 8.8.8.8")
@@ -374,7 +378,8 @@ class PinkVpnService : VpnService() {
                 Log.e("PinkVpnService", "Failed to acquire wakeLock: ${e.message}")
             }
 
-            // 5. Start tun2socks engine (transactional - only set _isRunning after success)
+            // 5. Start tun2socks engine (transactional - only set _isRunning after verified launch)
+            VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Binding transport engine to TUN...")
             startTun2Socks(pfd, PROXY_PORT)
             _isRunning.value = true
 
@@ -393,7 +398,7 @@ class PinkVpnService : VpnService() {
             Log.e("PinkVpnService", "Error starting VPN", e)
             _isRunning.value = false
             VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Critical startup error: ${e.localizedMessage}")
-            stopVpn()
+            stopVpnInternal()
         }
     }
 
@@ -410,7 +415,7 @@ class PinkVpnService : VpnService() {
         return ipRegex.findAll(url).map { it.value }.toList()
     }
 
-    private fun startTun2Socks(vpnInterface: ParcelFileDescriptor, proxyPort: Int) {
+    private suspend fun startTun2Socks(vpnInterface: ParcelFileDescriptor, proxyPort: Int) {
         var dupFd: ParcelFileDescriptor? = null
         var rawFd = -1
         try {
@@ -422,18 +427,32 @@ class PinkVpnService : VpnService() {
             key.setDevice("fd://$rawFd")
             key.setLogLevel("info")
             engine.Engine.insert(key)
+            
+            val startAck = CompletableDeferred<Unit>()
             engineScope.launch {
                 try {
+                    startAck.complete(Unit)
                     engine.Engine.start()
                     Log.i("PinkVpnService", "tun2socks stopped naturally")
                 } catch (e: CancellationException) {
+                    if (!startAck.isCompleted) startAck.completeExceptionally(e)
                     throw e
                 } catch (e: Exception) {
-                    Log.e("PinkVpnService", "tun2socks run-time error", e)
-                    VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Transport engine error: ${e.localizedMessage}")
+                    if (!startAck.isCompleted) {
+                        startAck.completeExceptionally(e)
+                    } else {
+                        Log.e("PinkVpnService", "tun2socks run-time error", e)
+                        VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Transport engine error: ${e.localizedMessage}")
+                        recoveryCoordinator.triggerRestart()
+                    }
                 }
             }
-            Log.i("PinkVpnService", "tun2socks started on fd $rawFd")
+
+            // Wait up to 1500ms to guarantee coroutine started and engine initialized
+            withTimeout(1500L) {
+                startAck.await()
+            }
+            Log.i("PinkVpnService", "tun2socks started and verified on fd $rawFd")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -445,7 +464,9 @@ class PinkVpnService : VpnService() {
                     Log.v("PinkVpnService", "FD adoption close error: ${closeEx.message}")
                 }
             }
-            dupFd?.close()
+            try {
+                dupFd?.close()
+            } catch (_: Exception) {}
             VpnRuntimeState.updateState(VpnLifecycleState.FAILED, "Transport engine init failed: ${e.localizedMessage}")
             throw e
         }

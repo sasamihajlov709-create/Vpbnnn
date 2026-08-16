@@ -322,8 +322,20 @@ object DpiStrategySelector {
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER
+        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
+        requestedStrategy: BypassStrategy? = null,
+        effectiveStrategy: BypassStrategy? = null
     ) {
+        if (requestedStrategy != null && requestedStrategy != strategy) {
+            DpiPolicyEngine.recordStrategySubstitution(
+                requested = requestedStrategy,
+                effective = effectiveStrategy ?: strategy,
+                executed = strategy,
+                host = host,
+                success = success
+            )
+        }
+
         if (success) {
             DpiEngine.successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.categorySuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()

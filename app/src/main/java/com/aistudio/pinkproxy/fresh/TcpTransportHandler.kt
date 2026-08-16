@@ -47,7 +47,7 @@ object TcpTransportHandler {
                 return
             }
             ProxyStats.addTraffic(targetHost)
-            val requestedStrategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost)
+            val requestedStrategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(targetHost, TransportType.TCP)
             var effectiveStrategy = requestedStrategy
             var reasoning = DpiStrategySelector.getSelectionReasoning(effectiveStrategy, targetHost)
             var config = BypassConfig.getSessionConfig(targetHost, effectiveStrategy, BypassConfig.currentRttMs.value, TransportType.TCP)
@@ -95,11 +95,18 @@ object TcpTransportHandler {
                 val useRace = censorship > 40 || DpiEngine.isBlacklisted(effectiveStrategy, targetHost) || (ProxyStats.censorshipIntensity.value > 50)
                 
                 if (useRace) {
-                    val fallback = BypassConfig.getFallbackStrategy(effectiveStrategy)
+                    val fallback = BypassConfig.getFallbackStrategy(effectiveStrategy, TransportType.TCP)
                     val raceResult = TcpRaceConnector.racingConnect(
-                        resolved, targetPort, vpnService, targetHost, 
-                        effectiveStrategy, fallback,
-                        firstClientPacket, firstClientPacketLen, transportBufferSize
+                        ips = resolved,
+                        port = targetPort,
+                        vpnService = vpnService,
+                        host = targetHost, 
+                        strat1 = effectiveStrategy,
+                        strat2 = fallback,
+                        firstPacket = firstClientPacket,
+                        firstPacketLen = firstClientPacketLen,
+                        bufferSize = transportBufferSize,
+                        requestedStrategy = requestedStrategy
                     )
                     
                     if (raceResult != null) {
@@ -125,6 +132,7 @@ object TcpTransportHandler {
                         port = targetPort,
                         vpnService = vpnService,
                         targetHost = targetHost,
+                        requestedStrategy = requestedStrategy,
                         primaryStrategy = effectiveStrategy,
                         firstPacket = firstClientPacket,
                         packetLen = firstClientPacketLen,
@@ -212,7 +220,14 @@ object TcpTransportHandler {
                             }
                             lastActivity.set(System.currentTimeMillis())
                             if (read > 0 && !recordedFullTransfer.getAndSet(true)) {
-                                DpiEngine.recordStrategyResult(targetHost, effectiveStrategy, true, quality = ObservationQuality.FULL_DATA_TRANSFER)
+                                DpiEngine.recordStrategyResult(
+                                    host = targetHost,
+                                    strat = effectiveStrategy,
+                                    success = true,
+                                    quality = ObservationQuality.FULL_DATA_TRANSFER,
+                                    requestedStrategy = requestedStrategy,
+                                    effectiveStrategy = effectiveStrategy
+                                )
                             }
                             if (intensity > 70 && ThreadLocalRandom.current().nextInt(100) < 5) {
                                 TcpTransportManager.oscillateWindowSize(clientSocket)
@@ -380,6 +395,7 @@ object TcpTransportHandler {
         port: Int,
         vpnService: VpnService?,
         targetHost: String,
+        requestedStrategy: BypassStrategy,
         primaryStrategy: BypassStrategy,
         firstPacket: ByteArray,
         packetLen: Int,
@@ -388,7 +404,7 @@ object TcpTransportHandler {
         val attempts = mutableListOf<BypassStrategy>()
         attempts.add(primaryStrategy)
         
-        val fallback1 = BypassConfig.getFallbackStrategy(primaryStrategy)
+        val fallback1 = BypassConfig.getFallbackStrategy(primaryStrategy, TransportType.TCP)
         if (!attempts.contains(fallback1)) {
             attempts.add(fallback1)
         }
@@ -430,14 +446,30 @@ object TcpTransportHandler {
                     } else {
                         ObservationQuality.TLS_RECORD_RECEIVED
                     }
-                    DpiEngine.recordStrategyResult(targetHost, strategy, true, latency, quality = quality)
+                    DpiEngine.recordStrategyResult(
+                        host = targetHost,
+                        strat = strategy,
+                        success = true,
+                        latencyMs = latency,
+                        quality = quality,
+                        requestedStrategy = requestedStrategy,
+                        effectiveStrategy = primaryStrategy
+                    )
                     if (index > 0) {
                         ProxyStats.logRecovery("Fast rescue successful for $targetHost using $strategy (attempt #${index + 1})")
                     }
                     return RescueAttemptResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
                 } else {
                     // Silent drop or RST detected by TSPU
-                    DpiEngine.recordStrategyResult(targetHost, strategy, false, 0, reason = FailureReason.CENSORSHIP_STALL)
+                    DpiEngine.recordStrategyResult(
+                        host = targetHost,
+                        strat = strategy,
+                        success = false,
+                        latencyMs = 0,
+                        reason = FailureReason.CENSORSHIP_STALL,
+                        requestedStrategy = requestedStrategy,
+                        effectiveStrategy = primaryStrategy
+                    )
                     Log.w("TcpTransport", "Watchdog triggered for $targetHost with $strategy (attempt #${index + 1}). Fast failover to next strategy.")
                     try { rs.close() } catch (e: Exception) {}
                 }
@@ -447,7 +479,15 @@ object TcpTransportHandler {
                 } else {
                     FailureReason.TIMEOUT
                 }
-                DpiEngine.recordStrategyResult(targetHost, strategy, false, 0, reason = reason)
+                DpiEngine.recordStrategyResult(
+                    host = targetHost,
+                    strat = strategy,
+                    success = false,
+                    latencyMs = 0,
+                    reason = reason,
+                    requestedStrategy = requestedStrategy,
+                    effectiveStrategy = primaryStrategy
+                )
                 Log.w("TcpTransport", "Connection error on strategy $strategy for $targetHost: ${e.message}. Rescuing with fallback.")
                 try { rs.close() } catch (ex: Exception) {}
             }

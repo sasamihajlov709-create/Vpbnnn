@@ -224,24 +224,41 @@ object BypassConfig {
     }
 
     fun getBestStrategyForHost(host: String, transport: TransportType = TransportType.TCP): BypassStrategy {
+        val now = System.currentTimeMillis()
         forcedBenchmarkStrategy?.let {
-            if (DpiStrategySelector.isFamilyCompatible(it.family, transport)) return it
+            if (DpiStrategySelector.isFamilyCompatible(it.family, transport) &&
+                StrategyExecutionRegistry.isExecutorSupported(it, transport)) {
+                return it
+            }
         }
         if (!isAutoTuning) {
             val base = _strategy.value
-            if (DpiStrategySelector.isFamilyCompatible(base.family, transport)) {
-                return if (isStrictBypassMode && base == BypassStrategy.DIRECT) BypassStrategy.SNI_SPLIT else base
+            if (DpiStrategySelector.isFamilyCompatible(base.family, transport) &&
+                StrategyExecutionRegistry.isExecutorSupported(base, transport) &&
+                (DpiEngine.circuitBreakers[base] ?: 0L) < now) {
+                return if (isStrictBypassMode && base == BypassStrategy.DIRECT) {
+                    DpiStrategySelector.getDefaultFallback(transport)
+                } else {
+                    base
+                }
             }
         }
-        val now = System.currentTimeMillis()
         hostStrategyMemory[host]?.let { (remembered, expiry) ->
-            if (now < expiry && DpiStrategySelector.isFamilyCompatible(remembered.family, transport)) {
-                return if (isStrictBypassMode && remembered == BypassStrategy.DIRECT) BypassStrategy.SNI_SPLIT else remembered
+            if (now < expiry &&
+                DpiStrategySelector.isFamilyCompatible(remembered.family, transport) &&
+                StrategyExecutionRegistry.isExecutorSupported(remembered, transport) &&
+                (DpiEngine.circuitBreakers[remembered] ?: 0L) < now &&
+                (DpiEngine.hostStrategyBlacklist[host]?.get(remembered) ?: 0L) < now) {
+                return if (isStrictBypassMode && remembered == BypassStrategy.DIRECT) {
+                    DpiStrategySelector.getDefaultFallback(transport)
+                } else {
+                    remembered
+                }
             }
         }
         var best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host, transport)
         if (isStrictBypassMode && best == BypassStrategy.DIRECT) {
-            best = BypassStrategy.SNI_SPLIT
+            best = DpiStrategySelector.getDefaultFallback(transport)
         }
         hostStrategyMemory[host] = best to (now + SESSION_TTL)
         
@@ -267,11 +284,25 @@ object BypassConfig {
         ProxyStats.logRecovery("Strategy rotated to highest-scoring alternative: ${best.name}")
     }
 
-    fun recordSuccess(strat: BypassStrategy, rtt: Long, host: String?) {
+    fun recordSuccess(
+        strat: BypassStrategy,
+        rtt: Long,
+        host: String?,
+        requestedStrategy: BypassStrategy? = null,
+        effectiveStrategy: BypassStrategy? = null
+    ) {
         ProxyStats.recordGlobalSuccess(rtt)
         ProxyStats.reportStrategyResult(strat, true)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        DpiEngine.recordResult(strat, true, cat, latencyMs = rtt, host = host)
+        DpiEngine.recordResult(
+            strategy = strat,
+            success = true,
+            category = cat,
+            latencyMs = rtt,
+            host = host,
+            requestedStrategy = requestedStrategy,
+            effectiveStrategy = effectiveStrategy
+        )
         if (rtt > 0) {
             TrafficShaper.updateRtt(rtt)
             _currentRttMs.value = (_currentRttMs.value * 7 + rtt) / 8
@@ -283,11 +314,25 @@ object BypassConfig {
         }
     }
 
-    fun recordFailure(strat: BypassStrategy, host: String?, reason: FailureReason = FailureReason.UNKNOWN) {
+    fun recordFailure(
+        strat: BypassStrategy,
+        host: String?,
+        reason: FailureReason = FailureReason.UNKNOWN,
+        requestedStrategy: BypassStrategy? = null,
+        effectiveStrategy: BypassStrategy? = null
+    ) {
         ProxyStats.recordCensorshipEvent(true)
         ProxyStats.reportStrategyResult(strat, false)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        DpiEngine.recordResult(strat, false, cat, reason, host = host)
+        DpiEngine.recordResult(
+            strategy = strat,
+            success = false,
+            category = cat,
+            reason = reason,
+            host = host,
+            requestedStrategy = requestedStrategy,
+            effectiveStrategy = effectiveStrategy
+        )
         if (host != null) {
             val count = censorHeuristic.getOrDefault(host, 0) + 1
             censorHeuristic[host] = count
@@ -301,8 +346,14 @@ object BypassConfig {
         val rnd = ThreadLocalRandom.current()
         val intensity = ProxyStats.censorshipIntensity.value
         var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) DpiEngine.getBestExtremeStrategy(host, transport) else strategy
+        
+        if (!DpiStrategySelector.isFamilyCompatible(effectiveStrategy.family, transport) ||
+            !StrategyExecutionRegistry.isExecutorSupported(effectiveStrategy, transport)) {
+            effectiveStrategy = DpiStrategySelector.getDefaultFallback(transport)
+        }
+
         if (isStrictBypassMode && effectiveStrategy == BypassStrategy.DIRECT) {
-            effectiveStrategy = BypassStrategy.SNI_SPLIT
+            effectiveStrategy = DpiStrategySelector.getDefaultFallback(transport)
         }
         val f1 = if (frag1 > 0) frag1 else DpiEngine.getRecommendedFragSize()
         val f2 = if (frag2 > 0) frag2 else (f1 + rnd.nextInt(1, 4))
@@ -346,13 +397,17 @@ object BypassConfig {
         resetScores()
     }
 
-    fun getFallbackStrategy(current: BypassStrategy): BypassStrategy {
-        return DpiStrategySelector.getFallbackStrategy(current) ?: when (current.family) {
-            StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
-            StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE
-            StrategyFamily.TCP -> BypassStrategy.TCP_WINDOW_SHRINK
-            StrategyFamily.FRAGMENTATION -> BypassStrategy.FRAGMENT_MULTI
-            else -> BypassStrategy.DIRECT
+    fun getFallbackStrategy(current: BypassStrategy, transport: TransportType = TransportType.TCP): BypassStrategy {
+        return DpiStrategySelector.getFallbackStrategy(current, transport) ?: when (transport) {
+            TransportType.TCP -> when (current.family) {
+                StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
+                StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE
+                StrategyFamily.TCP -> BypassStrategy.TCP_WINDOW_SHRINK
+                StrategyFamily.FRAGMENTATION -> BypassStrategy.FRAGMENT_MULTI
+                else -> BypassStrategy.SNI_SPLIT
+            }
+            TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
+            TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
         }
     }
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) = 

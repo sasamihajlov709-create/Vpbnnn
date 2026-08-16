@@ -70,7 +70,7 @@ object RecoveryStateMachine {
      * Dispatch an event to the state machine asynchronously.
      */
     fun postSignal(signal: RecoverySignal) {
-        val scope = machineScope ?: PinkVpnService.instance?.getServiceScope() ?: GlobalScope
+        val scope = machineScope ?: PinkVpnService.instance?.getServiceScope() ?: ProxyDispatcher.mainScope
         scope.launch(ProxyDispatcher.io) {
             handleSignal(signal)
         }
@@ -307,7 +307,7 @@ object RecoveryStateMachine {
     }
 
     private fun triggerActiveProbeAsync(delayMs: Long) {
-        val scope = machineScope ?: PinkVpnService.instance?.getServiceScope() ?: GlobalScope
+        val scope = machineScope ?: PinkVpnService.instance?.getServiceScope() ?: ProxyDispatcher.mainScope
         scope.launch(ProxyDispatcher.io) {
             delay(delayMs)
             val ctx = PinkVpnService.instance ?: ProxyDispatcher.context

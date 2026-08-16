@@ -22,16 +22,92 @@ class BypassConfigAndLifecycleIntegrationTest {
         BypassConfig.setStrategy(BypassStrategy.DIRECT)
 
         try {
-            val selected = BypassConfig.getBestStrategyForHost("example.com")
-            assertNotEquals(BypassStrategy.DIRECT, selected)
-            assertEquals(BypassStrategy.SNI_SPLIT, selected)
+            // TCP
+            val selectedTcp = BypassConfig.getBestStrategyForHost("example.com", TransportType.TCP)
+            assertNotEquals(BypassStrategy.DIRECT, selectedTcp)
+            assertTrue(StrategyExecutionRegistry.isExecutorSupported(selectedTcp, TransportType.TCP))
+            assertEquals(BypassStrategy.SNI_SPLIT, selectedTcp)
 
-            val config = BypassConfig.getSessionConfig("example.com", BypassStrategy.DIRECT, 50L)
-            assertNotEquals(BypassStrategy.DIRECT, config.strategy)
-            assertEquals(BypassStrategy.SNI_SPLIT, config.strategy)
+            val configTcp = BypassConfig.getSessionConfig("example.com", BypassStrategy.DIRECT, 50L, TransportType.TCP)
+            assertNotEquals(BypassStrategy.DIRECT, configTcp.strategy)
+            assertTrue(StrategyExecutionRegistry.isExecutorSupported(configTcp.strategy, TransportType.TCP))
+
+            // UDP
+            val selectedUdp = BypassConfig.getBestStrategyForHost("example.com", TransportType.UDP)
+            assertNotEquals(BypassStrategy.DIRECT, selectedUdp)
+            assertTrue(StrategyExecutionRegistry.isExecutorSupported(selectedUdp, TransportType.UDP))
+            assertEquals(BypassStrategy.UDP_COMBINED_HYBRID, selectedUdp)
+
+            val configUdp = BypassConfig.getSessionConfig("example.com", BypassStrategy.DIRECT, 50L, TransportType.UDP)
+            assertNotEquals(BypassStrategy.DIRECT, configUdp.strategy)
+            assertTrue(StrategyExecutionRegistry.isExecutorSupported(configUdp.strategy, TransportType.UDP))
+
+            // DNS
+            val selectedDns = BypassConfig.getBestStrategyForHost("example.com", TransportType.DNS)
+            assertNotEquals(BypassStrategy.DIRECT, selectedDns)
+            assertTrue(StrategyExecutionRegistry.isExecutorSupported(selectedDns, TransportType.DNS))
+            assertEquals(BypassStrategy.DNS_OVER_TCP, selectedDns)
+
+            val configDns = BypassConfig.getSessionConfig("example.com", BypassStrategy.DIRECT, 50L, TransportType.DNS)
+            assertNotEquals(BypassStrategy.DIRECT, configDns.strategy)
+            assertTrue(StrategyExecutionRegistry.isExecutorSupported(configDns.strategy, TransportType.DNS))
         } finally {
             BypassConfig.isStrictBypassMode = false
             BypassConfig.isAutoTuning = true
+        }
+    }
+
+    @Test
+    fun testForcedBenchmarkStrategyTransportValidation() {
+        try {
+            // Force a UDP strategy
+            BypassConfig.forcedBenchmarkStrategy = BypassStrategy.UDP_COMBINED_HYBRID
+            val selectedForTcp = BypassConfig.getBestStrategyForHost("example.com", TransportType.TCP)
+            assertTrue(
+                "Forced UDP strategy must not be returned for TCP transport",
+                selectedForTcp != BypassStrategy.UDP_COMBINED_HYBRID
+            )
+            assertTrue(
+                "Selected strategy must be supported for TCP",
+                StrategyExecutionRegistry.isExecutorSupported(selectedForTcp, TransportType.TCP)
+            )
+
+            // Force a TCP strategy
+            BypassConfig.forcedBenchmarkStrategy = BypassStrategy.SNI_SPLIT
+            val selectedForUdp = BypassConfig.getBestStrategyForHost("example.com", TransportType.UDP)
+            assertTrue(
+                "Forced TCP strategy must not be returned for UDP transport",
+                selectedForUdp != BypassStrategy.SNI_SPLIT
+            )
+            assertTrue(
+                "Selected strategy must be supported for UDP",
+                StrategyExecutionRegistry.isExecutorSupported(selectedForUdp, TransportType.UDP)
+            )
+        } finally {
+            BypassConfig.forcedBenchmarkStrategy = null
+        }
+    }
+
+    @Test
+    fun testManualModeIncompatibleStrategySafety() {
+        try {
+            BypassConfig.isAutoTuning = false
+            BypassConfig.setStrategy(BypassStrategy.UDP_COMBINED_NUCLEAR)
+
+            val selectedForTcp = BypassConfig.getBestStrategyForHost("example.com", TransportType.TCP)
+            assertTrue(
+                "Manual UDP strategy must not be used directly for TCP if unsupported",
+                StrategyExecutionRegistry.isExecutorSupported(selectedForTcp, TransportType.TCP)
+            )
+
+            val configForTcp = BypassConfig.getSessionConfig("example.com", BypassStrategy.UDP_COMBINED_NUCLEAR, 50L, TransportType.TCP)
+            assertTrue(
+                "SessionConfig for TCP must produce a valid TCP strategy",
+                StrategyExecutionRegistry.isExecutorSupported(configForTcp.strategy, TransportType.TCP)
+            )
+        } finally {
+            BypassConfig.isAutoTuning = true
+            BypassConfig.setStrategy(BypassStrategy.SNI_SPLIT)
         }
     }
 

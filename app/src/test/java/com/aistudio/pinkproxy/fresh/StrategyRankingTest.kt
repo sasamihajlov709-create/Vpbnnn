@@ -191,4 +191,48 @@ class StrategyRankingTest {
         val afterAvg = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT)
         assertEquals(100.0, afterAvg, 1.0)
     }
+
+    @Test
+    fun testStrategySubstitutionTrackingAndPenalty() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        BypassConfig.clearScores(context)
+        DpiEngine.resetStrategyScoresForNetworkChange()
+
+        val testHost = "substituted-target.org"
+        val requested = BypassStrategy.TCP_MSS_CLAMP
+        val executed = BypassStrategy.SNI_SPLIT
+
+        // Test failed execution with substitution
+        DpiStrategySelector.recordResult(
+            strategy = executed,
+            success = false,
+            category = HostCategory.OTHER,
+            reason = FailureReason.TIMEOUT,
+            host = testHost,
+            requestedStrategy = requested,
+            effectiveStrategy = requested
+        )
+
+        // Requested strategy should have received substitution penalty
+        val penalty = DpiEngine.globalPenalties[requested]?.get() ?: 0
+        assertTrue("Requested strategy should receive penalty on failure", penalty > 0)
+
+        // Executed strategy should have recorded failure
+        val failCount = DpiEngine.failureHistory[executed]?.get() ?: 0
+        assertEquals(1, failCount)
+
+        // Test successful execution with substitution
+        DpiStrategySelector.recordResult(
+            strategy = executed,
+            success = true,
+            category = HostCategory.OTHER,
+            latencyMs = 50,
+            host = testHost,
+            requestedStrategy = requested,
+            effectiveStrategy = requested
+        )
+
+        val successCount = DpiEngine.successHistory[executed]?.get() ?: 0
+        assertEquals(1, successCount)
+    }
 }

@@ -169,4 +169,23 @@ object DpiPolicyEngine {
         DpiEngine.categoryFailureHistory.clear()
         DpiEngine.categoryWeightedSuccessHistory.clear()
     }
+
+    /**
+     * Records strategy substitution and degradation feedback when requested strategy differs from executed strategy.
+     */
+    fun recordStrategySubstitution(
+        requested: BypassStrategy,
+        effective: BypassStrategy,
+        executed: BypassStrategy,
+        host: String?,
+        success: Boolean
+    ) {
+        if (requested != executed) {
+            Log.d("DpiPolicyEngine", "Strategy substitution tracked: requested=$requested, effective=$effective, executed=$executed for host=$host (success=$success)")
+            if (!success) {
+                // Apply soft penalty to requested strategy to reduce repeat selection overhead
+                DpiEngine.globalPenalties.getOrPut(requested) { java.util.concurrent.atomic.AtomicInteger(0) }.addAndGet(25)
+            }
+        }
+    }
 }
