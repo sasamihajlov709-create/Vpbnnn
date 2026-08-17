@@ -317,7 +317,7 @@ object CensorshipExpert {
         
         // If everything is failing, rotate to a "Chaos" or "Combined" strategy
         if (successRate < 20 && ProxyStats.activeConnections.value > 5) {
-            BypassConfig.rotateGlobalStrategy()
+            BypassConfig.rotateGlobalStrategy(TransportType.TCP)
         }
     }
 

@@ -36,6 +36,8 @@ class CanonicalObservationQualityTest {
         )
         DpiStrategySelector.recordObservation(obsWeak)
         assertNull("CONNECT_ONLY must not populate hostSpecificMemory", DpiEngine.hostSpecificMemory[testHost])
+        assertEquals("CONNECT_ONLY must not increment verifiedSuccessHistory", 0, DpiEngine.verifiedSuccessHistory[testStrat]?.get() ?: 0)
+        assertEquals("CONNECT_ONLY increments raw successHistory", 1, DpiEngine.successHistory[testStrat]?.get() ?: 0)
 
         // 2. Weak signal (TLS_RECORD_RECEIVED) should still not lock in persistent host memory
         val obsTlsRecord = StrategyObservation(

@@ -26,15 +26,15 @@ enum class RecoveryState {
  * Strongly-typed event signals published by health monitors and network observers.
  */
 sealed class RecoverySignal {
-    data class DpiDetected(val type: DpiType, val host: String? = null) : RecoverySignal()
-    data class TunnelStall(val durationMs: Long, val activeConnections: Int) : RecoverySignal()
-    data class TcpStall(val host: String, val strategy: BypassStrategy) : RecoverySignal()
-    data class SslStall(val host: String, val strategy: BypassStrategy) : RecoverySignal()
-    data class DnsFailure(val domain: String, val isPoisoned: Boolean) : RecoverySignal()
-    data class ProxyUnresponsive(val reason: String) : RecoverySignal()
+    data class DpiDetected(val type: DpiType, val host: String? = null, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class TunnelStall(val durationMs: Long, val activeConnections: Int, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class TcpStall(val host: String, val strategy: BypassStrategy, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class SslStall(val host: String, val strategy: BypassStrategy, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class DnsFailure(val domain: String, val isPoisoned: Boolean, val transport: TransportType = TransportType.DNS) : RecoverySignal()
+    data class ProxyUnresponsive(val reason: String, val transport: TransportType = TransportType.TCP) : RecoverySignal()
     data class MemoryPressure(val usedPercent: Int) : RecoverySignal()
-    data class ExtremeLatency(val latencyMs: Long) : RecoverySignal()
-    data class HealthDegraded(val details: String) : RecoverySignal()
+    data class ExtremeLatency(val latencyMs: Long, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class HealthDegraded(val details: String, val transport: TransportType = TransportType.TCP) : RecoverySignal()
     data class NetworkLost(val networkType: String) : RecoverySignal()
     object ManualReset : RecoverySignal()
 }
@@ -85,13 +85,13 @@ object RecoveryStateMachine {
 
         when (signal) {
             is RecoverySignal.DpiDetected -> processDpiSignal(signal)
-            is RecoverySignal.TunnelStall -> processTunnelStall(signal.durationMs, signal.activeConnections)
+            is RecoverySignal.TunnelStall -> processTunnelStall(signal.durationMs, signal.activeConnections, signal.transport)
             is RecoverySignal.TcpStall, is RecoverySignal.SslStall -> processSocketStall(signal)
             is RecoverySignal.DnsFailure -> processDnsFailure(signal)
-            is RecoverySignal.ProxyUnresponsive -> processProxyUnresponsive(signal.reason)
+            is RecoverySignal.ProxyUnresponsive -> processProxyUnresponsive(signal.reason, signal.transport)
             is RecoverySignal.MemoryPressure -> processMemoryPressure(signal.usedPercent)
-            is RecoverySignal.ExtremeLatency -> processExtremeLatency(signal.latencyMs)
-            is RecoverySignal.HealthDegraded -> processHealthDegraded(signal.details)
+            is RecoverySignal.ExtremeLatency -> processExtremeLatency(signal.latencyMs, signal.transport)
+            is RecoverySignal.HealthDegraded -> processHealthDegraded(signal.details, signal.transport)
             is RecoverySignal.NetworkLost -> processNetworkLost(signal.networkType)
             is RecoverySignal.ManualReset -> processManualReset()
         }
@@ -101,6 +101,7 @@ object RecoveryStateMachine {
         _currentState.value = RecoveryState.DEGRADED
         val type = signal.type
         val targetHost = signal.host
+        val transport = signal.transport
         when (type) {
             DpiType.TCP_RESET -> {
                 val candidates = listOf(
@@ -158,11 +159,11 @@ object RecoveryStateMachine {
                     BypassStrategy.TLS_REC_SPLIT, 
                     BypassStrategy.TCP_ACK_SKEW, 
                     BypassStrategy.TCP_WINDOW_SIZE_CHAOS
-                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, transport) }
                 val selected = candidates.maxWithOrNull(
                     compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
                         .thenBy { it.name.hashCode() }
-                ) ?: BypassStrategy.TLS_REC_SPLIT
+                ) ?: DpiStrategySelector.getDefaultFallback(transport)
                 BypassConfig.setGlobalStrategy(selected)
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
@@ -186,7 +187,7 @@ object RecoveryStateMachine {
                 }
             }
             else -> {
-                BypassConfig.rotateGlobalStrategy()
+                BypassConfig.rotateGlobalStrategy(transport)
             }
         }
 
@@ -194,11 +195,11 @@ object RecoveryStateMachine {
         triggerActiveProbeAsync(3000L)
     }
 
-    private fun processTunnelStall(durationMs: Long, activeConns: Int) {
+    private fun processTunnelStall(durationMs: Long, activeConns: Int, transport: TransportType) {
         val currentEsc = escalationLevel.get()
         if (currentEsc < 3) {
             _currentState.value = RecoveryState.RECONFIGURING_MTU
-            BypassConfig.rotateGlobalStrategy()
+            BypassConfig.rotateGlobalStrategy(transport)
 
             if (currentEsc > 0) {
                 val currentMtu = BypassConfig.currentMtu.value
@@ -227,17 +228,22 @@ object RecoveryStateMachine {
 
     private fun processSocketStall(signal: RecoverySignal) {
         _currentState.value = RecoveryState.DEGRADED
+        val transport = when (signal) {
+            is RecoverySignal.TcpStall -> signal.transport
+            is RecoverySignal.SslStall -> signal.transport
+            else -> TransportType.TCP
+        }
         val candidates = listOf(
             BypassStrategy.TLS_REC_SPLIT,
             BypassStrategy.TLS_CLIENT_HELLO_CHOP,
             BypassStrategy.BYEBYEDPI_EXTREME,
             BypassStrategy.TCP_WINDOW_SHRINK,
             BypassStrategy.TCP_TLS_SESSION_DESYNC
-        ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+        ).filter { StrategyExecutionRegistry.isExecutorSupported(it, transport) }
         val selected = candidates.maxWithOrNull(
             compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
                 .thenBy { it.name.hashCode() }
-        ) ?: BypassStrategy.TLS_REC_SPLIT
+        ) ?: DpiStrategySelector.getDefaultFallback(transport)
         BypassConfig.setGlobalStrategy(selected)
 
         val currentMtu = BypassConfig.currentMtu.value
@@ -268,7 +274,7 @@ object RecoveryStateMachine {
         }
     }
 
-    private fun processProxyUnresponsive(reason: String) {
+    private fun processProxyUnresponsive(reason: String, transport: TransportType) {
         val currentEsc = escalationLevel.get()
         if (currentEsc < 2) {
             _currentState.value = RecoveryState.RESTARTING_PROXY
@@ -294,15 +300,15 @@ object RecoveryStateMachine {
         }
     }
 
-    private fun processExtremeLatency(latencyMs: Long) {
+    private fun processExtremeLatency(latencyMs: Long, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
-        BypassConfig.rotateGlobalStrategy()
+        BypassConfig.rotateGlobalStrategy(transport)
         escalationLevel.set((escalationLevel.get() + 1).coerceAtMost(2))
     }
 
-    private fun processHealthDegraded(details: String) {
+    private fun processHealthDegraded(details: String, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
-        BypassConfig.rotateGlobalStrategy()
+        BypassConfig.rotateGlobalStrategy(transport)
     }
 
     private fun processNetworkLost(networkType: String) {

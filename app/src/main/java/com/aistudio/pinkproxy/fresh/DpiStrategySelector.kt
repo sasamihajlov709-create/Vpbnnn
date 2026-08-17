@@ -413,6 +413,13 @@ object DpiStrategySelector {
         if (success) {
             DpiEngine.successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.categorySuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            
+            val isVerified = quality >= ObservationQuality.HANDSHAKE_COMPLETE
+            if (isVerified) {
+                DpiEngine.verifiedSuccessHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+                DpiEngine.categoryVerifiedSuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            }
+
             val weightedDelta = (quality.weight * 1000).toLong().coerceAtLeast(50L)
             DpiEngine.weightedSuccessHistory.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)
             DpiEngine.categoryWeightedSuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)

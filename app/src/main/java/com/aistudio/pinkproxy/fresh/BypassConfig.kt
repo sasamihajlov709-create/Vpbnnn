@@ -93,8 +93,6 @@ object BypassConfig {
         _testingStrategies.value = list
     }
 
-    private val hostStrategyMemory = ConcurrentHashMap<Pair<String, TransportType>, Pair<BypassStrategy, Long>>()
-
     private val SESSION_TTL = 30 * 60 * 1000L 
     private val censorHeuristic = ConcurrentHashMap<String, Int>()
     private val hostLockTime = ConcurrentHashMap<String, Long>()
@@ -176,7 +174,6 @@ object BypassConfig {
     fun updateNetworkType(type: NetworkType) {
         if (_currentNetworkType.value != type) {
             _currentNetworkType.value = type
-            hostStrategyMemory.clear()
             ProxyStats.resetScores()
             DpiEngine.clearCircuitBreakers()
         }
@@ -243,25 +240,11 @@ object BypassConfig {
                 }
             }
         }
-        val memoryKey = host to transport
-        hostStrategyMemory[memoryKey]?.let { (remembered, expiry) ->
-            if (now < expiry &&
-                DpiStrategySelector.isFamilyCompatible(remembered.family, transport) &&
-                StrategyExecutionRegistry.isExecutorSupported(remembered, transport) &&
-                (DpiEngine.circuitBreakers[remembered] ?: 0L) < now &&
-                (DpiEngine.hostStrategyBlacklist[host]?.get(remembered) ?: 0L) < now) {
-                return if (isStrictBypassMode && remembered == BypassStrategy.DIRECT) {
-                    DpiStrategySelector.getDefaultFallback(transport)
-                } else {
-                    remembered
-                }
-            }
-        }
+        
         var best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host, transport)
         if (isStrictBypassMode && best == BypassStrategy.DIRECT) {
             best = DpiStrategySelector.getDefaultFallback(transport)
         }
-        hostStrategyMemory[memoryKey] = best to (now + SESSION_TTL)
         
         VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best, host))
         
@@ -317,8 +300,6 @@ object BypassConfig {
         if (host != null) {
             censorHeuristic.remove(host)
             hostLockTime.remove(host)
-            val resolvedTransport = if (strat.family == StrategyFamily.UDP) TransportType.UDP else transport
-            hostStrategyMemory[host to resolvedTransport] = strat to (System.currentTimeMillis() + SESSION_TTL)
         }
     }
 
@@ -347,9 +328,6 @@ object BypassConfig {
             val count = censorHeuristic.getOrDefault(host, 0) + 1
             censorHeuristic[host] = count
             if (count >= 5) hostLockTime[host] = System.currentTimeMillis()
-            // If failed, remove from host memory to allow re-selection
-            val resolvedTransport = if (strat.family == StrategyFamily.UDP) TransportType.UDP else transport
-            hostStrategyMemory.remove(host to resolvedTransport)
         }
     }
 

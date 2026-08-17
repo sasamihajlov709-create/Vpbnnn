@@ -95,4 +95,18 @@ class RecoveryStateMachineTest {
         RecoveryStateMachine.coolDownEscalation(2)
         // Should cool down safely
     }
+
+    @Test
+    fun testUdpRecoverySignalRotatesUdpStrategy() = runTest {
+        RecoveryStateMachine.start(this)
+
+        // Post UDP extreme latency signal
+        RecoveryStateMachine.handleSignal(RecoverySignal.ExtremeLatency(latencyMs = 2500, transport = TransportType.UDP))
+        assertEquals(RecoveryState.DEGRADED, RecoveryStateMachine.currentState.value)
+        val rotatedStrategy = BypassConfig.strategy.value
+        assertTrue(
+            "Rotated strategy for UDP signal must be UDP compatible",
+            DpiStrategySelector.isFamilyCompatible(rotatedStrategy.family, TransportType.UDP)
+        )
+    }
 }

@@ -11,6 +11,7 @@ data class StrategyState(
     val score: AtomicInteger = AtomicInteger(100),
     val sampleCount: AtomicInteger = AtomicInteger(0),
     val successCount: AtomicInteger = AtomicInteger(0),
+    val verifiedSuccessCount: AtomicInteger = AtomicInteger(0),
     val failureCount: AtomicInteger = AtomicInteger(0),
     val weightedSuccess: AtomicLong = AtomicLong(0L),
     val totalLatencyMs: AtomicLong = AtomicLong(0L),
@@ -22,6 +23,9 @@ data class StrategyState(
 
         if (obs.success) {
             successCount.incrementAndGet()
+            if (obs.quality >= ObservationQuality.HANDSHAKE_COMPLETE) {
+                verifiedSuccessCount.incrementAndGet()
+            }
             val delta = (obs.quality.weight * 1000).toLong().coerceAtLeast(50L)
             weightedSuccess.addAndGet(delta)
             if (obs.latencyMs > 0) {

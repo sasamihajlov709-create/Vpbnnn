@@ -104,7 +104,7 @@ object DpiPolicyEngine {
 
         if (decision.shouldEnterPanic) {
             DpiEngine.enterPanicMode()
-            BypassConfig.rotateGlobalStrategy()
+            BypassConfig.rotateGlobalStrategy(TransportType.TCP)
         }
 
         if (decision.shouldReset) {
