@@ -100,6 +100,7 @@ object RecoveryStateMachine {
     private fun processDpiSignal(signal: RecoverySignal.DpiDetected) {
         _currentState.value = RecoveryState.DEGRADED
         val type = signal.type
+        val targetHost = signal.host
         when (type) {
             DpiType.TCP_RESET -> {
                 val candidates = listOf(
@@ -108,7 +109,11 @@ object RecoveryStateMachine {
                     BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
                     BypassStrategy.OOB_DESYNC
                 )
-                BypassConfig.setGlobalStrategy(candidates.random())
+                val selected = candidates.random()
+                BypassConfig.setGlobalStrategy(selected)
+                if (targetHost != null) {
+                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TCP_RESET)
+                }
                 enterPanic("Active TCP Reset DPI detected")
             }
             DpiType.TLS_SNI_BLOCK -> {
@@ -119,7 +124,11 @@ object RecoveryStateMachine {
                     BypassStrategy.SNI_SPLIT,
                     BypassStrategy.TLS_CLIENT_HELLO_CHOP
                 )
-                BypassConfig.setGlobalStrategy(candidates.random())
+                val selected = candidates.random()
+                BypassConfig.setGlobalStrategy(selected)
+                if (targetHost != null) {
+                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.CENSORSHIP_STALL)
+                }
             }
             DpiType.HTTP_BLOCK -> {
                 val candidates = listOf(
@@ -129,11 +138,19 @@ object RecoveryStateMachine {
                     BypassStrategy.HTTP_METHOD_CASE_MANGLE,
                     BypassStrategy.HTTP_HOST_REORDER
                 )
-                BypassConfig.setGlobalStrategy(candidates.random())
+                val selected = candidates.random()
+                BypassConfig.setGlobalStrategy(selected)
+                if (targetHost != null) {
+                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.CENSORSHIP_STALL)
+                }
             }
             DpiType.CONNECTION_TIMEOUT -> {
                 val candidates = listOf(BypassStrategy.TLS_REC_SPLIT, BypassStrategy.TCP_ACK_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS)
-                BypassConfig.setGlobalStrategy(candidates.random())
+                val selected = candidates.random()
+                BypassConfig.setGlobalStrategy(selected)
+                if (targetHost != null) {
+                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
+                }
                 if (escalationLevel.get() >= 2) enterPanic("DPI Timeout Escalation")
             }
             DpiType.UDP_BLOCK -> {
@@ -143,7 +160,11 @@ object RecoveryStateMachine {
                     BypassStrategy.UDP_QUIC_SMART_SHADOW,
                     BypassStrategy.QUIC_INITIAL_FRAGMENTATION
                 )
-                BypassConfig.setGlobalStrategy(candidates.random())
+                val selected = candidates.random()
+                BypassConfig.setGlobalStrategy(selected)
+                if (targetHost != null) {
+                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
+                }
             }
             else -> {
                 BypassConfig.rotateGlobalStrategy()

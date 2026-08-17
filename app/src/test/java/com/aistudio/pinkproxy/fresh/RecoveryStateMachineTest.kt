@@ -31,11 +31,12 @@ class RecoveryStateMachineTest {
     fun testDpiDetectedSignalTransitionsToDegradedAndSelectsStrategy() = runTest {
         RecoveryStateMachine.start(this)
 
-        RecoveryStateMachine.handleSignal(RecoverySignal.DpiDetected(DpiType.TCP_RESET))
+        val host = "video.googlevideo.com"
+        RecoveryStateMachine.handleSignal(RecoverySignal.DpiDetected(DpiType.TCP_RESET, host))
         assertEquals(RecoveryState.PANIC_MODE, RecoveryStateMachine.currentState.value)
         assertTrue(BypassConfig.isPanicMode)
 
-        RecoveryStateMachine.handleSignal(RecoverySignal.DpiDetected(DpiType.TLS_SNI_BLOCK))
+        RecoveryStateMachine.handleSignal(RecoverySignal.DpiDetected(DpiType.TLS_SNI_BLOCK, host))
         assertNotNull(BypassConfig.strategy.value)
     }
 

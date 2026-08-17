@@ -59,6 +59,23 @@ object BenchmarkManager {
                         attemptResults.filter { it.isUp }.map { it.latencyMs }.average().toLong()
                     } else 0L
 
+                    // Feed confirmed benchmark results into DpiEngine learning memory
+                    if (successCount > 0) {
+                        testHosts.forEach { (name, url) ->
+                            val host = try { java.net.URL(url).host } catch (e: Exception) { name.lowercase() }
+                            DpiEngine.recordStrategyResult(
+                                host = host,
+                                strat = strategy,
+                                success = true,
+                                latencyMs = avgLatency,
+                                quality = ObservationQuality.FULL_DATA_TRANSFER,
+                                requestedStrategy = strategy,
+                                effectiveStrategy = strategy,
+                                transport = TransportType.TCP
+                            )
+                        }
+                    }
+
                     val newResult = BenchmarkResult(
                         strategy = strategy,
                         isTested = true,

@@ -93,7 +93,7 @@ object BypassConfig {
         _testingStrategies.value = list
     }
 
-    private val hostStrategyMemory = ConcurrentHashMap<String, Pair<BypassStrategy, Long>>()
+    private val hostStrategyMemory = ConcurrentHashMap<Pair<String, TransportType>, Pair<BypassStrategy, Long>>()
 
     private val SESSION_TTL = 30 * 60 * 1000L 
     private val censorHeuristic = ConcurrentHashMap<String, Int>()
@@ -243,7 +243,8 @@ object BypassConfig {
                 }
             }
         }
-        hostStrategyMemory[host]?.let { (remembered, expiry) ->
+        val memoryKey = host to transport
+        hostStrategyMemory[memoryKey]?.let { (remembered, expiry) ->
             if (now < expiry &&
                 DpiStrategySelector.isFamilyCompatible(remembered.family, transport) &&
                 StrategyExecutionRegistry.isExecutorSupported(remembered, transport) &&
@@ -260,7 +261,7 @@ object BypassConfig {
         if (isStrictBypassMode && best == BypassStrategy.DIRECT) {
             best = DpiStrategySelector.getDefaultFallback(transport)
         }
-        hostStrategyMemory[host] = best to (now + SESSION_TTL)
+        hostStrategyMemory[memoryKey] = best to (now + SESSION_TTL)
         
         VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best, host))
         
@@ -289,19 +290,21 @@ object BypassConfig {
         rtt: Long,
         host: String?,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null
+        effectiveStrategy: BypassStrategy? = null,
+        transport: TransportType = TransportType.TCP
     ) {
         ProxyStats.recordGlobalSuccess(rtt)
         ProxyStats.reportStrategyResult(strat, true)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        DpiEngine.recordResult(
+        DpiStrategySelector.recordResult(
             strategy = strat,
             success = true,
             category = cat,
             latencyMs = rtt,
             host = host,
             requestedStrategy = requestedStrategy,
-            effectiveStrategy = effectiveStrategy
+            effectiveStrategy = effectiveStrategy,
+            transport = transport
         )
         if (rtt > 0) {
             TrafficShaper.updateRtt(rtt)
@@ -310,7 +313,8 @@ object BypassConfig {
         if (host != null) {
             censorHeuristic.remove(host)
             hostLockTime.remove(host)
-            hostStrategyMemory[host] = strat to (System.currentTimeMillis() + SESSION_TTL)
+            val resolvedTransport = if (strat.family == StrategyFamily.UDP) TransportType.UDP else transport
+            hostStrategyMemory[host to resolvedTransport] = strat to (System.currentTimeMillis() + SESSION_TTL)
         }
     }
 
@@ -319,26 +323,29 @@ object BypassConfig {
         host: String?,
         reason: FailureReason = FailureReason.UNKNOWN,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null
+        effectiveStrategy: BypassStrategy? = null,
+        transport: TransportType = TransportType.TCP
     ) {
         ProxyStats.recordCensorshipEvent(true)
         ProxyStats.reportStrategyResult(strat, false)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        DpiEngine.recordResult(
+        DpiStrategySelector.recordResult(
             strategy = strat,
             success = false,
             category = cat,
             reason = reason,
             host = host,
             requestedStrategy = requestedStrategy,
-            effectiveStrategy = effectiveStrategy
+            effectiveStrategy = effectiveStrategy,
+            transport = transport
         )
         if (host != null) {
             val count = censorHeuristic.getOrDefault(host, 0) + 1
             censorHeuristic[host] = count
             if (count >= 5) hostLockTime[host] = System.currentTimeMillis()
             // If failed, remove from host memory to allow re-selection
-            hostStrategyMemory.remove(host)
+            val resolvedTransport = if (strat.family == StrategyFamily.UDP) TransportType.UDP else transport
+            hostStrategyMemory.remove(host to resolvedTransport)
         }
     }
 

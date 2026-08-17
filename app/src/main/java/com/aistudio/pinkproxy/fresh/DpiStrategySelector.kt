@@ -296,6 +296,38 @@ object DpiStrategySelector {
         )
     }
 
+    fun escalateHostStrategy(
+        host: String,
+        failedStrategy: BypassStrategy,
+        reason: FailureReason = FailureReason.UNKNOWN,
+        transport: TransportType = TransportType.TCP
+    ): BypassStrategy {
+        val category = HostClassifier.classify(host)
+        val nextStrategy = getFallbackStrategy(
+            failedStrategy = failedStrategy,
+            transport = transport,
+            reason = reason,
+            host = host,
+            category = category
+        ) ?: getBestExtremeStrategy(host, transport)
+
+        // Record failure against current strategy for host memory
+        recordResult(
+            strategy = failedStrategy,
+            success = false,
+            category = category,
+            reason = reason,
+            latencyMs = 0L,
+            host = host,
+            quality = ObservationQuality.CONNECT_ONLY,
+            requestedStrategy = failedStrategy,
+            effectiveStrategy = failedStrategy,
+            transport = transport
+        )
+
+        return nextStrategy
+    }
+
     fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
         val candidates = BypassStrategy.entries.filter { 
             (it.group == StrategyGroup.EXTREME || it.group == StrategyGroup.HEAVY) && 

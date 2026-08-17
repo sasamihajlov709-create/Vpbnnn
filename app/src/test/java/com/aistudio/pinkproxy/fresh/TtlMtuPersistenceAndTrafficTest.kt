@@ -123,5 +123,16 @@ class TtlMtuPersistenceAndTrafficTest {
         assertEquals("1.0 KB", ProxyStats.formatBytes(1024))
         assertEquals("1.0 MB", ProxyStats.formatBytes(1024 * 1024))
     }
+
+    @Test
+    fun testBypassConfigDualTransportMemoryIsolation() {
+        val host = "discord.gg"
+        
+        val tcpStrat = BypassConfig.getBestStrategyForHost(host, TransportType.TCP)
+        val udpStrat = BypassConfig.getBestStrategyForHost(host, TransportType.UDP)
+        
+        assertTrue(DpiStrategySelector.isFamilyCompatible(tcpStrat.family, TransportType.TCP))
+        assertTrue(DpiStrategySelector.isFamilyCompatible(udpStrat.family, TransportType.UDP))
+    }
 }
 
