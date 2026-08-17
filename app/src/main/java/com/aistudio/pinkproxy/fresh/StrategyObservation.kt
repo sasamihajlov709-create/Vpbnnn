@@ -2,12 +2,13 @@ package com.aistudio.pinkproxy.fresh
 
 /**
  * Unified canonical observation record capturing the complete telemetry context of a strategy execution.
+ * The transport parameter is strictly mandatory to prevent incorrect inference or protocol leaks.
  */
 data class StrategyObservation(
     val executedStrategy: BypassStrategy,
+    val transport: TransportType,
     val requestedStrategy: BypassStrategy = executedStrategy,
     val effectiveStrategy: BypassStrategy = executedStrategy,
-    val transport: TransportType = TransportType.TCP,
     val category: HostCategory = HostCategory.OTHER,
     val host: String? = null,
     val profileId: String = "default",

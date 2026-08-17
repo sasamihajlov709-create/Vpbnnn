@@ -31,19 +31,22 @@ enum class DnsType {
 enum class TransportType {
     TCP,
     UDP,
-    DNS
+    DNS;
+
+    val isL4: Boolean get() = this == TCP || this == UDP
+    val isDns: Boolean get() = this == DNS
 }
 
 /**
  * Resolver transport layer used exclusively by the DNS pipeline.
  * Separates Application Transport (L4 TCP/UDP) from underlying DNS protocol carrier.
  */
-enum class DnsResolverTransport {
-    PLAIN_UDP,
-    PLAIN_TCP,
-    DOH,
-    DOT,
-    DOQ
+enum class DnsResolverTransport(val defaultPort: Int, val isSecure: Boolean) {
+    PLAIN_UDP(53, false),
+    PLAIN_TCP(53, false),
+    DOH(443, true),
+    DOT(853, true),
+    DOQ(853, true)
 }
 
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())

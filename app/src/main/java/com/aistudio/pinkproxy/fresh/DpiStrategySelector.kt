@@ -125,7 +125,23 @@ object DpiStrategySelector {
             }
         }
 
-        // Bayesian Thompson Sampling (Multi-Armed Bandit) integration
+        // Auto-Tuner 2.0: Fast Tournament Pre-Filtering (reduce candidate space to top-k promising candidates + exploration slot)
+        val candidatePool = if (validStrategies.size > 20) {
+            val sortedByPrior = validStrategies.sortedByDescending { (strat, score) ->
+                val base = score.get().toDouble()
+                val weightedS = (DpiEngine.categoryWeightedSuccessHistory[category]?.get(strat)?.get() ?: 0L) / 1000.0
+                val failures = DpiEngine.categoryFailureHistory[category]?.get(strat)?.get() ?: 0
+                base + (weightedS * 15.0) - (failures * 20.0)
+            }
+            // Take Top-16 best performers + 4 random exploration slots from valid pool
+            val topPerformers = sortedByPrior.take(16)
+            val explorationSlots = sortedByPrior.drop(16).shuffled().take(4)
+            (topPerformers + explorationSlots).distinctBy { it.key }
+        } else {
+            validStrategies
+        }
+
+        // Bayesian Thompson Sampling (Multi-Armed Bandit) integration across the optimized candidate pool
         val catSuccessMap = DpiEngine.categorySuccessHistory[category]
         val catFailureMap = DpiEngine.categoryFailureHistory[category]
 
@@ -136,7 +152,7 @@ object DpiStrategySelector {
         val netTypeVal = BypassConfig.currentNetworkType.value
         val isPowerSave = BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20
         
-        for ((strat, sRaw) in validStrategies) {
+        for ((strat, sRaw) in candidatePool) {
             val catWeightedS = (DpiEngine.categoryWeightedSuccessHistory[category]?.get(strat)?.get() ?: 0L) / 1000.0
             val globalWeightedS = (DpiEngine.weightedSuccessHistory[strat]?.get() ?: 0L) / 1000.0
             val catF = catFailureMap?.get(strat)?.get() ?: 0
@@ -381,15 +397,11 @@ object DpiStrategySelector {
             )
         }
 
-        val resolvedTransport = if (strategy.family == StrategyFamily.DNS) TransportType.DNS
-            else if (strategy.family == StrategyFamily.UDP && transport == TransportType.TCP) TransportType.UDP
-            else transport
-
         val obs = StrategyObservation(
             executedStrategy = strategy,
+            transport = transport,
             requestedStrategy = requestedStrategy ?: strategy,
             effectiveStrategy = effectiveStrategy ?: strategy,
-            transport = resolvedTransport,
             category = category,
             host = host,
             profileId = NetworkProfileManager.currentProfile.value.id,

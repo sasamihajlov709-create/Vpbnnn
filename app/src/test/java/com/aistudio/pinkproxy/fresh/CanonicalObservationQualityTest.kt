@@ -28,6 +28,7 @@ class CanonicalObservationQualityTest {
         // 1. Weak signal (CONNECT_ONLY) should not lock in persistent host memory
         val obsWeak = StrategyObservation(
             executedStrategy = testStrat,
+            transport = TransportType.TCP,
             category = HostCategory.OTHER,
             host = testHost,
             success = true,
@@ -42,6 +43,7 @@ class CanonicalObservationQualityTest {
         // 2. Weak signal (TLS_RECORD_RECEIVED) should still not lock in persistent host memory
         val obsTlsRecord = StrategyObservation(
             executedStrategy = testStrat,
+            transport = TransportType.TCP,
             category = HostCategory.OTHER,
             host = testHost,
             success = true,
@@ -54,6 +56,7 @@ class CanonicalObservationQualityTest {
         // 3. Application level signal (APPLICATION_DATA_EXCHANGED) confirms bypass and locks memory
         val obsApp = StrategyObservation(
             executedStrategy = testStrat,
+            transport = TransportType.TCP,
             category = HostCategory.OTHER,
             host = testHost,
             success = true,
@@ -75,6 +78,7 @@ class CanonicalObservationQualityTest {
             state.recordObservation(
                 StrategyObservation(
                     executedStrategy = BypassStrategy.SNI_SPLIT,
+                    transport = TransportType.TCP,
                     success = true,
                     quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
                     latencyMs = 30
