@@ -397,8 +397,20 @@ object BypassConfig {
         resetScores()
     }
 
-    fun getFallbackStrategy(current: BypassStrategy, transport: TransportType = TransportType.TCP): BypassStrategy {
-        return DpiStrategySelector.getFallbackStrategy(current, transport) ?: when (transport) {
+    fun getFallbackStrategy(
+        current: BypassStrategy,
+        transport: TransportType = TransportType.TCP,
+        reason: FailureReason? = null,
+        host: String? = null,
+        category: HostCategory? = null
+    ): BypassStrategy {
+        return DpiStrategySelector.getFallbackStrategy(
+            failedStrategy = current,
+            transport = transport,
+            reason = reason,
+            host = host,
+            category = category
+        ) ?: when (transport) {
             TransportType.TCP -> when (current.family) {
                 StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
                 StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE

@@ -233,7 +233,8 @@ object DpiEngine {
         reason: FailureReason? = null,
         quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null
+        effectiveStrategy: BypassStrategy? = null,
+        transport: TransportType? = null
     ) {
         val category = HostClassifier.classify(host)
         DpiStrategySelector.recordResult(
@@ -245,7 +246,8 @@ object DpiEngine {
             host = host,
             quality = quality,
             requestedStrategy = requestedStrategy,
-            effectiveStrategy = effectiveStrategy
+            effectiveStrategy = effectiveStrategy,
+            transport = transport
         )
     }
 

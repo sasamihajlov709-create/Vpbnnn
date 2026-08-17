@@ -333,7 +333,8 @@ object DpiStrategySelector {
         host: String? = null,
         quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null
+        effectiveStrategy: BypassStrategy? = null,
+        transport: TransportType? = null
     ) {
         if (requestedStrategy != null && requestedStrategy != strategy) {
             DpiPolicyEngine.recordStrategySubstitution(
@@ -345,11 +346,13 @@ object DpiStrategySelector {
             )
         }
 
+        val resolvedTransport = transport ?: if (strategy.family == StrategyFamily.UDP) TransportType.UDP else TransportType.TCP
+
         val obs = StrategyObservation(
             executedStrategy = strategy,
             requestedStrategy = requestedStrategy ?: strategy,
             effectiveStrategy = effectiveStrategy ?: strategy,
-            transport = TransportType.TCP,
+            transport = resolvedTransport,
             category = category,
             host = host,
             profileId = NetworkProfileManager.currentProfile.value.id,

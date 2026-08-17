@@ -124,14 +124,48 @@ object ProactiveAutoTuner {
                 // Check if response is valid TLS ServerHello (0x16, 0x03)
                 val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
                 if (isTlsServerHello) {
-                    DpiEngine.recordStrategyResult(host, strategy, true, latency)
+                    DpiEngine.recordStrategyResult(
+                        host = host,
+                        strat = strategy,
+                        success = true,
+                        latencyMs = latency,
+                        quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                        requestedStrategy = strategy,
+                        effectiveStrategy = strategy,
+                        transport = TransportType.TCP
+                    )
                     return@withContext true
                 }
             }
-            DpiEngine.recordStrategyResult(host, strategy, false, 0)
+            DpiEngine.recordStrategyResult(
+                host = host,
+                strat = strategy,
+                success = false,
+                latencyMs = 0,
+                reason = FailureReason.CENSORSHIP_STALL,
+                quality = ObservationQuality.CONNECT_ONLY,
+                requestedStrategy = strategy,
+                effectiveStrategy = strategy,
+                transport = TransportType.TCP
+            )
             false
         } catch (e: Exception) {
-            DpiEngine.recordStrategyResult(host, strategy, false, 0)
+            val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
+                FailureReason.TCP_RESET
+            } else {
+                FailureReason.TIMEOUT
+            }
+            DpiEngine.recordStrategyResult(
+                host = host,
+                strat = strategy,
+                success = false,
+                latencyMs = 0,
+                reason = reason,
+                quality = ObservationQuality.CONNECT_ONLY,
+                requestedStrategy = strategy,
+                effectiveStrategy = strategy,
+                transport = TransportType.TCP
+            )
             false
         } finally {
             try { socket.close() } catch (e: Exception) {}

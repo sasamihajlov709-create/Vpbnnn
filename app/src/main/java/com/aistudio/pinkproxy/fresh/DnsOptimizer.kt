@@ -139,6 +139,42 @@ object DnsOptimizer {
         }
     }
 
+    fun recordDotSuccess(server: String) {
+        providerFailures[server] = ((providerFailures[server] ?: 1) - 1).coerceAtLeast(0)
+        DnsCacheManager.reportResolverResult(server, true)
+    }
+
+    fun recordDotFailure(server: String) {
+        val f = (providerFailures[server] ?: 0) + 1
+        providerFailures[server] = f
+        if (f > 5) {
+            providerBlacklist[server] = System.currentTimeMillis() + 600000L
+        }
+        DnsCacheManager.reportResolverResult(server, false)
+        if (server == bestDotServer && f > 3) {
+            forceRefresh()
+        }
+    }
+
+    fun recordDoqSuccess(server: String) {
+        val key = if (server.startsWith("doq://")) server else "doq://$server"
+        providerFailures[key] = ((providerFailures[key] ?: 1) - 1).coerceAtLeast(0)
+        DnsCacheManager.reportResolverResult(key, true)
+    }
+
+    fun recordDoqFailure(server: String) {
+        val key = if (server.startsWith("doq://")) server else "doq://$server"
+        val f = (providerFailures[key] ?: 0) + 1
+        providerFailures[key] = f
+        if (f > 5) {
+            providerBlacklist[key] = System.currentTimeMillis() + 600000L
+        }
+        DnsCacheManager.reportResolverResult(key, false)
+        if ((server == bestDoqServer || key == "doq://$bestDoqServer") && f > 3) {
+            forceRefresh()
+        }
+    }
+
     fun forceRefresh() {
         if (System.currentTimeMillis() - lastProbeTime < 30000) return
         optimizerScope.launch {

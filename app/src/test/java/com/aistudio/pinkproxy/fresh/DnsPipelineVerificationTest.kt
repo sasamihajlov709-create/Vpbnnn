@@ -87,4 +87,24 @@ class DnsPipelineVerificationTest {
         // Low TTL spoofing detection
         assertTrue("TTL <= 1 must be marked as suspicious spoofing", DnsPacketEngine.isSuspicious(normalIp, "google.com", 1))
     }
+
+    @Test
+    fun testDnsOptimizerFeedbackAndBlacklisting() {
+        val testUrl = "https://test-failing-doh.com/dns-query"
+        assertFalse(DnsOptimizer.isUrlBlacklisted(testUrl))
+
+        repeat(6) {
+            DnsOptimizer.recordDohFailure(testUrl)
+        }
+        assertTrue("Resolver should be blacklisted after 6 consecutive failures", DnsOptimizer.isUrlBlacklisted(testUrl))
+
+        val testDot = "192.0.2.53"
+        DnsOptimizer.recordDotSuccess(testDot)
+        assertTrue(DnsCacheManager.isResolverOk(testDot))
+
+        repeat(6) {
+            DnsOptimizer.recordDotFailure(testDot)
+        }
+        assertFalse(DnsCacheManager.isResolverOk(testDot))
+    }
 }

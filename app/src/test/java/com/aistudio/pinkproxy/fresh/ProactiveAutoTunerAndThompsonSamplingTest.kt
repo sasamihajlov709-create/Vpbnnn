@@ -37,4 +37,25 @@ class ProactiveAutoTunerAndThompsonSamplingTest {
         val s2 = ThompsonSampler.sampleBeta(-5.0, 10.0)
         assertTrue(s2 in 0.0001..0.9999)
     }
+
+    @Test
+    fun testProactiveObservationPersistence() {
+        val targetHost = "rr1---sn-axq7sn76.googlevideo.com"
+        val strat = BypassStrategy.BYEBYEDPI_HYBRID
+        
+        DpiEngine.recordStrategyResult(
+            host = targetHost,
+            strat = strat,
+            success = true,
+            latencyMs = 35L,
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+            transport = TransportType.TCP
+        )
+
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        val mem = DpiEngine.contextualHostMemory[HostContextKey(targetHost, TransportType.TCP, profileId)]
+        assertNotNull(mem)
+        assertEquals(strat, mem?.strategy)
+        assertEquals(TransportType.TCP, mem?.transport)
+    }
 }

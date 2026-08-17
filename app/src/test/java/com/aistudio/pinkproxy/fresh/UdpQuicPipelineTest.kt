@@ -49,4 +49,27 @@ class UdpQuicPipelineTest {
             UdpTransportHandler.shouldBlockQuicForHost("rr1---sn-4g5ednss.googlevideo.com", 443, nonStunPayload)
         )
     }
+
+    @Test
+    fun testUdpObservationRecordingAndContextualMemory() {
+        val host = "game-server.riotgames.com"
+        val strat = BypassStrategy.UDP_NOISE_CHAOS
+        
+        DpiEngine.recordStrategyResult(
+            host = host,
+            strat = strat,
+            success = true,
+            latencyMs = 28L,
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+            transport = TransportType.UDP
+        )
+
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        val ctxKey = HostContextKey(host, TransportType.UDP, profileId)
+        val mem = DpiEngine.contextualHostMemory[ctxKey]
+        
+        org.junit.Assert.assertNotNull(mem)
+        org.junit.Assert.assertEquals(strat, mem?.strategy)
+        org.junit.Assert.assertEquals(TransportType.UDP, mem?.transport)
+    }
 }

@@ -60,6 +60,7 @@ object StrategyEscalationMatrix {
 
     // 5. UDP / QUIC Disruption Escalation Chain
     val udpDisruptionChain: List<BypassStrategy> = listOf(
+        BypassStrategy.UDP_FRAGMENT_SKEW,
         BypassStrategy.UDP_NOISE_PAD,
         BypassStrategy.UDP_DATA_FRAG,
         BypassStrategy.UDP_NOISE_CHAOS,

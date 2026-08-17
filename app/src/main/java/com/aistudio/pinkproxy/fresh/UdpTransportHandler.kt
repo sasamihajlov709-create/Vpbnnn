@@ -37,9 +37,39 @@ object UdpTransportHandler {
             var clientUdpPort = 0
             
             val activeSessions = ConcurrentHashMap<String, Long>()
+            data class UdpPendingProbe(val host: String, val strategy: BypassStrategy, val sentTime: Long)
+            val pendingUdpProbes = ConcurrentHashMap<String, UdpPendingProbe>()
             
             coroutineScope {
                 val jobs = mutableListOf<Job>()
+                
+                // Cleanup and timeout inspector for UDP flows
+                jobs += launch(ProxyDispatcher.io) {
+                    while (isActive) {
+                        delay(10000)
+                        val now = System.currentTimeMillis()
+                        
+                        // Age out unacknowledged UDP packets (> 3500ms) and score degraded observation
+                        pendingUdpProbes.entries.removeIf { (endpoint, probe) ->
+                            if (now - probe.sentTime > 3500) {
+                                DpiEngine.recordStrategyResult(
+                                    host = probe.host,
+                                    strat = probe.strategy,
+                                    success = false,
+                                    latencyMs = 0,
+                                    reason = FailureReason.TIMEOUT,
+                                    quality = ObservationQuality.CONNECT_ONLY,
+                                    requestedStrategy = probe.strategy,
+                                    effectiveStrategy = probe.strategy,
+                                    transport = TransportType.UDP
+                                )
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    }
+                }
                 
                 repeat(8) { i ->
                     val outSocket = outSockets[i]
@@ -153,7 +183,12 @@ object UdpTransportHandler {
                                     val outPacket = DatagramPacket(payload, payload.size, targetInet, port)
                                     val workerIdx = (host.hashCode() and 0x7FFFFFFF) % 8
                                     
-                                    val config = BypassConfig.getSessionConfig(host, BypassConfig.getBestStrategyForHost(host, TransportType.UDP), BypassConfig.currentRttMs.value, TransportType.UDP)
+                                    val activeUdpStrat = BypassConfig.getBestStrategyForHost(host, TransportType.UDP)
+                                    val config = BypassConfig.getSessionConfig(host, activeUdpStrat, BypassConfig.currentRttMs.value, TransportType.UDP)
+                                    
+                                    val endpointKey = "${targetInet.hostAddress}:$port"
+                                    pendingUdpProbes[endpointKey] = UdpPendingProbe(host, activeUdpStrat, System.currentTimeMillis())
+                                    
                                     // Use BypassApplier for all UDP evasion
                                     launch {
                                         try {
@@ -216,6 +251,22 @@ object UdpTransportHandler {
                                 
                                 udpSocket.send(DatagramPacket(fullResp, fullResp.size, targetAddr, targetPort))
                                 ProxyStats.recordStats("udp_inbound", 0, inPacket.length.toLong())
+                                
+                                val endpointKey = "${inPacket.address.hostAddress}:$remotePort"
+                                val matchedProbe = pendingUdpProbes.remove(endpointKey)
+                                if (matchedProbe != null) {
+                                    val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
+                                    DpiEngine.recordStrategyResult(
+                                        host = matchedProbe.host,
+                                        strat = matchedProbe.strategy,
+                                        success = true,
+                                        latencyMs = latency,
+                                        quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                                        requestedStrategy = matchedProbe.strategy,
+                                        effectiveStrategy = matchedProbe.strategy,
+                                        transport = TransportType.UDP
+                                    )
+                                }
                             } catch (e: java.net.SocketException) {
                                 if (e !is CancellationException) Log.v("UdpTransport", "Inbound UDP SocketException: ${e.message}")
                             } catch (e: java.io.IOException) {

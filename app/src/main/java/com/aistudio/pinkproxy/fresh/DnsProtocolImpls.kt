@@ -283,12 +283,26 @@ object DohDnsProtocols {
                 .build()
             
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext emptyList<DnsPacketEngine.DnsRecord>()
-                val body = response.body?.bytes() ?: return@withContext emptyList<DnsPacketEngine.DnsRecord>()
-                return@withContext DnsPacketEngine.parseDnsResponseDetailed(body, body.size, expectedId = queryCtx.id, expectedHost = queryCtx.host)
+                if (!response.isSuccessful) {
+                    DnsOptimizer.recordDohFailure(dohUrl)
+                    return@withContext emptyList<DnsPacketEngine.DnsRecord>()
+                }
+                val body = response.body?.bytes()
+                if (body == null) {
+                    DnsOptimizer.recordDohFailure(dohUrl)
+                    return@withContext emptyList<DnsPacketEngine.DnsRecord>()
+                }
+                val records = DnsPacketEngine.parseDnsResponseDetailed(body, body.size, expectedId = queryCtx.id, expectedHost = queryCtx.host)
+                if (records.isNotEmpty()) {
+                    DnsOptimizer.recordDohSuccess(dohUrl)
+                } else {
+                    DnsOptimizer.recordDohFailure(dohUrl)
+                }
+                return@withContext records
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            DnsOptimizer.recordDohFailure(dohUrl)
             Log.v("DohDnsProtocols", "DoH query failed for $host via $dohUrl: ${e.message}")
             emptyList()
         }
@@ -403,9 +417,16 @@ object DotDnsProtocols {
                 if (r == -1) break
                 read += r
             }
-            DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryCtx.id, expectedHost = queryCtx.host)
+            val result = DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryCtx.id, expectedHost = queryCtx.host)
+            if (result.isNotEmpty()) {
+                DnsOptimizer.recordDotSuccess(dotIp)
+            } else {
+                DnsOptimizer.recordDotFailure(dotIp)
+            }
+            result
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            DnsOptimizer.recordDotFailure(dotIp)
             Log.v("DotDnsProtocols", "DoT query failed for $host via $dotIp: ${e.message}")
             emptyList()
         } finally {
