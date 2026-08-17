@@ -43,8 +43,9 @@ object DpiStrategySelector {
             val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
             val profile = NetworkProfileManager.currentProfile.value.id
             val ctxKey = HostContextKey(host, transport, profile)
+            val lastMem = DpiEngine.contextualHostMemory[ctxKey] 
+                ?: DpiEngine.hostSpecificMemory[host]?.takeIf { it.transport == transport && (it.profileId == profile || it.profileId == "default") }
             if (hostFails == 0) {
-                val lastMem = DpiEngine.contextualHostMemory[ctxKey] ?: DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strat = lastMem.strategy
                     if (isFamilyCompatible(strat.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
@@ -55,7 +56,6 @@ object DpiStrategySelector {
                     }
                 }
             } else if (hostFails > 2) {
-                val lastMem = DpiEngine.contextualHostMemory[ctxKey] ?: DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null) {
                     var currentStep: BypassStrategy? = lastMem.strategy
                     for (i in 0 until (hostFails - 2)) {
@@ -339,7 +339,7 @@ object DpiStrategySelector {
         val defaultFallback = getDefaultExtremeFallback(transport)
         if (candidates.isEmpty()) return defaultFallback
 
-        // Try to select a family that fits the category, or a different one than the failed one
+        // Deterministic ranking: score + confidence - penalty with hash-based tie-break
         val preferred = when(category) {
             HostCategory.STREAMING, HostCategory.GAMING -> candidates.filter { 
                 if (transport == TransportType.UDP) (it.family == StrategyFamily.UDP || it.family == StrategyFamily.QUIC)
@@ -353,7 +353,10 @@ object DpiStrategySelector {
             else -> candidates.filter { failed == null || it.family != failed.family }
         }.ifEmpty { candidates }
 
-        return preferred.random()
+        return preferred.maxWithOrNull(
+            compareBy<BypassStrategy> { getWeightedScore(it, category ?: HostCategory.OTHER) }
+                .thenBy { it.name.hashCode() }
+        ) ?: defaultFallback
     }
 
     fun recordResult(
@@ -366,7 +369,7 @@ object DpiStrategySelector {
         quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null,
-        transport: TransportType? = null
+        transport: TransportType = TransportType.TCP
     ) {
         if (requestedStrategy != null && requestedStrategy != strategy) {
             DpiPolicyEngine.recordStrategySubstitution(
@@ -378,7 +381,9 @@ object DpiStrategySelector {
             )
         }
 
-        val resolvedTransport = transport ?: if (strategy.family == StrategyFamily.UDP) TransportType.UDP else TransportType.TCP
+        val resolvedTransport = if (strategy.family == StrategyFamily.DNS) TransportType.DNS
+            else if (strategy.family == StrategyFamily.UDP && transport == TransportType.TCP) TransportType.UDP
+            else transport
 
         val obs = StrategyObservation(
             executedStrategy = strategy,
@@ -412,7 +417,16 @@ object DpiStrategySelector {
             DpiEngine.weightedSuccessHistory.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)
             DpiEngine.categoryWeightedSuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)
             
-            DpiEngine.strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
+            val maturityDelta = when (quality) {
+                ObservationQuality.CONNECT_ONLY -> 0
+                ObservationQuality.TLS_RECORD_RECEIVED -> 0 // Weak signal, no maturity gain
+                ObservationQuality.HANDSHAKE_COMPLETE -> 1
+                ObservationQuality.APPLICATION_DATA_EXCHANGED -> 2
+                ObservationQuality.SUSTAINED_DATA_TRANSFER -> 3
+            }
+            if (maturityDelta > 0) {
+                DpiEngine.strategyMaturity.getOrPut(strategy) { AtomicInteger(0) }.addAndGet(maturityDelta)
+            }
             DpiEngine.globalPenalties[strategy]?.updateAndGet { (it * 0.8).toInt() }
             DpiEngine.globalBoosts.getOrPut(strategy) { AtomicInteger(0) }.addAndGet((5 * quality.weight).toInt().coerceAtLeast(1))
 

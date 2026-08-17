@@ -117,10 +117,8 @@ object CensorshipExpert {
             BypassStrategy.TCP_ZERO_WINDOW_DESYNC,
             BypassStrategy.TCP_DATA_DESYNC,
             BypassStrategy.TCP_COMBINED_NUCLEAR,
-            BypassStrategy.UDP_FRAGMENT_SKEW,
-            BypassStrategy.UDP_NOISE_CHAOS,
             BypassStrategy.TCP_WINDOW_SIZE_SKEW
-        )
+        ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
         
         coroutineScope {
             probeTargets.forEach { (testHost, category) ->
@@ -132,7 +130,7 @@ object CensorshipExpert {
                             val ips = RobustResolver.resolve(testHost)
                             if (ips.isNotEmpty()) {
                                 val targetAddr = ips.random()
-                                val config = BypassConfig.getSessionConfig(testHost, strat, 100)
+                                val config = BypassConfig.getSessionConfig(testHost, strat, 100, transport = TransportType.TCP)
                                 val hello = FakePacketHelper.buildRealisticTlsHello(testHost)
                                 
                                 probeSocket = Socket()
@@ -140,6 +138,7 @@ object CensorshipExpert {
                                 probeSocket.soTimeout = 3500
                                 probeSocket.connect(InetSocketAddress(targetAddr, 443), 2500)
                                 
+                                val executedStrategy = config.strategy
                                 BypassConfig.applyBypass(probeSocket, probeSocket.getOutputStream(), hello, hello.size, config, testHost)
                                 
                                 // Real TLS Handshake Verification: Read first byte from server.
@@ -158,22 +157,31 @@ object CensorshipExpert {
                                 val rtt = System.currentTimeMillis() - start
                                 val success = probeSocket.isConnected && readSuccess
                                 
-                                DpiEngine.recordResult(strat, success, category, latencyMs = if (success) rtt else 0)
+                                DpiEngine.recordStrategyResult(
+                                    host = testHost,
+                                    strat = executedStrategy,
+                                    success = success,
+                                    latencyMs = if (success) rtt else 0,
+                                    quality = if (success) ObservationQuality.HANDSHAKE_COMPLETE else ObservationQuality.CONNECT_ONLY,
+                                    requestedStrategy = strat,
+                                    effectiveStrategy = executedStrategy,
+                                    transport = TransportType.TCP
+                                )
                                 if (success) {
-                                    Log.d("CensorshipExpert", "Probe SUCCESS: $strat on $testHost ($category) RTT=${rtt}ms")
+                                    Log.d("CensorshipExpert", "Probe SUCCESS: $executedStrategy on $testHost ($category) RTT=${rtt}ms")
                                 } else {
-                                    Log.v("CensorshipExpert", "Probe FAIL: $strat on $testHost ($category) readBytes=$readBytes")
+                                    Log.v("CensorshipExpert", "Probe FAIL: $executedStrategy on $testHost ($category) readBytes=$readBytes")
                                 }
                             }
                         } catch (e: java.net.ConnectException) {
                             Log.v("CensorshipExpert", "Probe $strat connect failed on $testHost: ${e.message}")
-                            DpiEngine.recordResult(strat, false, category)
+                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, reason = FailureReason.CONNECTION_REFUSED, transport = TransportType.TCP)
                         } catch (e: java.net.SocketTimeoutException) {
                             Log.v("CensorshipExpert", "Probe $strat timed out on $testHost")
-                            DpiEngine.recordResult(strat, false, category)
+                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, reason = FailureReason.TIMEOUT, transport = TransportType.TCP)
                         } catch (e: Exception) {
                             Log.v("CensorshipExpert", "Probe $strat unexpected error on $testHost: ${e.message}")
-                            DpiEngine.recordResult(strat, false, category)
+                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, reason = FailureReason.UNKNOWN, transport = TransportType.TCP)
                         } finally {
                             try { probeSocket?.close() } catch (e: java.io.IOException) {}
                         }

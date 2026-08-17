@@ -108,8 +108,11 @@ object RecoveryStateMachine {
                     BypassStrategy.TCP_COMBINED_HYBRID,
                     BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
                     BypassStrategy.OOB_DESYNC
-                )
-                val selected = candidates.random()
+                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+                val selected = candidates.maxWithOrNull(
+                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                        .thenBy { it.name.hashCode() }
+                ) ?: BypassStrategy.TCP_COMBINED_NUCLEAR
                 BypassConfig.setGlobalStrategy(selected)
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TCP_RESET)
@@ -123,8 +126,11 @@ object RecoveryStateMachine {
                     BypassStrategy.ZAPRET_EXTREME,
                     BypassStrategy.SNI_SPLIT,
                     BypassStrategy.TLS_CLIENT_HELLO_CHOP
-                )
-                val selected = candidates.random()
+                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+                val selected = candidates.maxWithOrNull(
+                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                        .thenBy { it.name.hashCode() }
+                ) ?: BypassStrategy.SNI_SPLIT
                 BypassConfig.setGlobalStrategy(selected)
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.CENSORSHIP_STALL)
@@ -137,16 +143,26 @@ object RecoveryStateMachine {
                     BypassStrategy.HTTP_HOST_TAB_MANGLE,
                     BypassStrategy.HTTP_METHOD_CASE_MANGLE,
                     BypassStrategy.HTTP_HOST_REORDER
-                )
-                val selected = candidates.random()
+                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+                val selected = candidates.maxWithOrNull(
+                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                        .thenBy { it.name.hashCode() }
+                ) ?: BypassStrategy.HTTP_HOST_SPACE
                 BypassConfig.setGlobalStrategy(selected)
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.CENSORSHIP_STALL)
                 }
             }
             DpiType.CONNECTION_TIMEOUT -> {
-                val candidates = listOf(BypassStrategy.TLS_REC_SPLIT, BypassStrategy.TCP_ACK_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS)
-                val selected = candidates.random()
+                val candidates = listOf(
+                    BypassStrategy.TLS_REC_SPLIT, 
+                    BypassStrategy.TCP_ACK_SKEW, 
+                    BypassStrategy.TCP_WINDOW_SIZE_CHAOS
+                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+                val selected = candidates.maxWithOrNull(
+                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                        .thenBy { it.name.hashCode() }
+                ) ?: BypassStrategy.TLS_REC_SPLIT
                 BypassConfig.setGlobalStrategy(selected)
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
@@ -159,8 +175,11 @@ object RecoveryStateMachine {
                     BypassStrategy.UDP_COMBINED_HYBRID,
                     BypassStrategy.UDP_QUIC_SMART_SHADOW,
                     BypassStrategy.QUIC_INITIAL_FRAGMENTATION
-                )
-                val selected = candidates.random()
+                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.UDP) }
+                val selected = candidates.maxWithOrNull(
+                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                        .thenBy { it.name.hashCode() }
+                ) ?: BypassStrategy.UDP_COMBINED_NUCLEAR
                 BypassConfig.setGlobalStrategy(selected)
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
@@ -208,13 +227,18 @@ object RecoveryStateMachine {
 
     private fun processSocketStall(signal: RecoverySignal) {
         _currentState.value = RecoveryState.DEGRADED
-        BypassConfig.setGlobalStrategy(listOf(
+        val candidates = listOf(
             BypassStrategy.TLS_REC_SPLIT,
             BypassStrategy.TLS_CLIENT_HELLO_CHOP,
             BypassStrategy.BYEBYEDPI_EXTREME,
             BypassStrategy.TCP_WINDOW_SHRINK,
             BypassStrategy.TCP_TLS_SESSION_DESYNC
-        ).random())
+        ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+        val selected = candidates.maxWithOrNull(
+            compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                .thenBy { it.name.hashCode() }
+        ) ?: BypassStrategy.TLS_REC_SPLIT
+        BypassConfig.setGlobalStrategy(selected)
 
         val currentMtu = BypassConfig.currentMtu.value
         if (currentMtu > 1100) {

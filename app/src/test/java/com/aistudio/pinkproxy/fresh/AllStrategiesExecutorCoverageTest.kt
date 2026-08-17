@@ -63,10 +63,10 @@ class AllStrategiesExecutorCoverageTest {
         assertTrue(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.UDP_STUN_FAKE, TransportType.UDP))
         assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.UDP_STUN_FAKE, TransportType.TCP))
 
-        // DNS_OVER_QUIC supports DNS and UDP
+        // DNS_OVER_QUIC supports DNS pipeline
         assertTrue(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.DNS))
-        assertTrue(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.UDP))
         assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.TCP))
+        assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.UDP))
     }
 
     @Test

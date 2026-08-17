@@ -34,4 +34,16 @@ enum class TransportType {
     DNS
 }
 
+/**
+ * Resolver transport layer used exclusively by the DNS pipeline.
+ * Separates Application Transport (L4 TCP/UDP) from underlying DNS protocol carrier.
+ */
+enum class DnsResolverTransport {
+    PLAIN_UDP,
+    PLAIN_TCP,
+    DOH,
+    DOT,
+    DOQ
+}
+
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())

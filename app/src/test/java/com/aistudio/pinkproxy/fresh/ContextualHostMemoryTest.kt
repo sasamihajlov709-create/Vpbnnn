@@ -105,4 +105,38 @@ class ContextualHostMemoryTest {
         assertEquals(wifiStrat, DpiEngine.contextualHostMemory[wifiKey]?.strategy)
         assertEquals(lteStrat, DpiEngine.contextualHostMemory[lteKey]?.strategy)
     }
+
+    @Test
+    fun testContextualHostMemorySelectorIntegration() {
+        val host = "chat.openai.com"
+        val strategy = BypassStrategy.TLS_SNI_EXT_MANGLE
+
+        // Record high confidence host memory for profile
+        DpiStrategySelector.recordObservation(
+            StrategyObservation(
+                executedStrategy = strategy,
+                transport = TransportType.TCP,
+                category = HostCategory.AI,
+                host = host,
+                profileId = NetworkProfileManager.currentProfile.value.id,
+                success = true,
+                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
+            )
+        )
+        // Record 2nd success to satisfy successCount >= 2 condition
+        DpiStrategySelector.recordObservation(
+            StrategyObservation(
+                executedStrategy = strategy,
+                transport = TransportType.TCP,
+                category = HostCategory.AI,
+                host = host,
+                profileId = NetworkProfileManager.currentProfile.value.id,
+                success = true,
+                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
+            )
+        )
+
+        val selected = DpiStrategySelector.getBestStrategy(HostCategory.AI, host, TransportType.TCP)
+        assertEquals(strategy, selected)
+    }
 }

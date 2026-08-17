@@ -277,7 +277,11 @@ object BypassConfig {
             StrategyExecutionRegistry.isExecutorSupported(it, transport) &&
             (DpiEngine.circuitBreakers[it] ?: 0L) < now
         }
-        val defaultFallback = if (transport == TransportType.UDP) BypassStrategy.UDP_COMBINED_HYBRID else BypassStrategy.SNI_SPLIT
+        val defaultFallback = when (transport) {
+            TransportType.TCP -> BypassStrategy.SNI_SPLIT
+            TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
+            TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
+        }
         val best = candidates.maxByOrNull { DpiStrategySelector.getWeightedScore(it, category) } 
             ?: defaultFallback
         _strategy.value = best

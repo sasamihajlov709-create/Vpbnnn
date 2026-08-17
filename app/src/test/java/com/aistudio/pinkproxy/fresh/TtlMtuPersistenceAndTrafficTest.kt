@@ -134,5 +134,36 @@ class TtlMtuPersistenceAndTrafficTest {
         assertTrue(DpiStrategySelector.isFamilyCompatible(tcpStrat.family, TransportType.TCP))
         assertTrue(DpiStrategySelector.isFamilyCompatible(udpStrat.family, TransportType.UDP))
     }
+
+    @Test
+    fun testObservationQualityMaturityWeightsAndDeterministicFallback() {
+        val strategy = BypassStrategy.SNI_SPLIT
+        DpiEngine.strategyMaturity[strategy]?.set(0)
+
+        // Weak signal (CONNECT_ONLY) should not advance maturity
+        val weakObs = StrategyObservation(
+            executedStrategy = strategy,
+            transport = TransportType.TCP,
+            success = true,
+            quality = ObservationQuality.CONNECT_ONLY
+        )
+        DpiStrategySelector.recordObservation(weakObs)
+        assertEquals(0, DpiEngine.strategyMaturity[strategy]?.get() ?: 0)
+
+        // Strong signal (APPLICATION_DATA_EXCHANGED) should advance maturity
+        val strongObs = StrategyObservation(
+            executedStrategy = strategy,
+            transport = TransportType.TCP,
+            success = true,
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
+        )
+        DpiStrategySelector.recordObservation(strongObs)
+        assertEquals(2, DpiEngine.strategyMaturity[strategy]?.get())
+
+        // Test deterministic diverse fallback repeatability
+        val fb1 = DpiStrategySelector.getDiverseFallback(failed = BypassStrategy.DIRECT, transport = TransportType.TCP)
+        val fb2 = DpiStrategySelector.getDiverseFallback(failed = BypassStrategy.DIRECT, transport = TransportType.TCP)
+        assertEquals(fb1, fb2)
+    }
 }
 

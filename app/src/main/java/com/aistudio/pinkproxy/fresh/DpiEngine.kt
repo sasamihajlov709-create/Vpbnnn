@@ -234,7 +234,7 @@ object DpiEngine {
         quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null,
-        transport: TransportType? = null
+        transport: TransportType = TransportType.TCP
     ) {
         val category = HostClassifier.classify(host)
         DpiStrategySelector.recordResult(

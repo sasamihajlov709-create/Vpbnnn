@@ -40,29 +40,32 @@ class EveryStrategyExecutionCoverageTest {
         for (strategy in allStrategies) {
             val tcpSupported = StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.TCP)
             val udpSupported = StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.UDP)
-            if (!tcpSupported && !udpSupported) {
+            val dnsSupported = StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.DNS)
+            if (!tcpSupported && !udpSupported && !dnsSupported) {
                 untransportable.add(strategy)
             }
         }
 
         assertTrue(
-            "The following strategies do not declare support for TCP or UDP in StrategyExecutionRegistry: $untransportable",
+            "The following strategies do not declare support for TCP, UDP, or DNS in StrategyExecutionRegistry: $untransportable",
             untransportable.isEmpty()
         )
     }
 
     @Test
-    fun `verify supported strategies query returns non-empty collections for TCP and UDP`() {
+    fun `verify supported strategies query returns non-empty collections for TCP, UDP and DNS`() {
         val tcpStrategies = StrategyExecutionRegistry.getSupportedStrategiesForTransport(TransportType.TCP)
         val udpStrategies = StrategyExecutionRegistry.getSupportedStrategiesForTransport(TransportType.UDP)
+        val dnsStrategies = StrategyExecutionRegistry.getSupportedStrategiesForTransport(TransportType.DNS)
 
         assertTrue("TCP strategies count should be substantial (> 100)", tcpStrategies.size > 100)
         assertTrue("UDP strategies count should be substantial (> 30)", udpStrategies.size > 30)
+        assertTrue("DNS strategies count should be non-empty (>= 6)", dnsStrategies.size >= 6)
 
-        // Ensure total unique strategies covered equals total enum values
-        val combined = (tcpStrategies + udpStrategies).toSet()
+        // Ensure total unique strategies covered across all 3 transports equals total enum values
+        val combined = (tcpStrategies + udpStrategies + dnsStrategies).toSet()
         assertEquals(
-            "Every strategy in BypassStrategy must appear in either TCP or UDP supported sets",
+            "Every strategy in BypassStrategy must appear in either TCP, UDP, or DNS supported sets",
             BypassStrategy.entries.size,
             combined.size
         )
