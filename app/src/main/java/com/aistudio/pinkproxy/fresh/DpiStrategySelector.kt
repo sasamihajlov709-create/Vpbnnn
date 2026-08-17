@@ -41,8 +41,10 @@ object DpiStrategySelector {
 
         if (host != null) {
             val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
+            val profile = NetworkProfileManager.currentProfile.value.id
+            val ctxKey = HostContextKey(host, transport, profile)
             if (hostFails == 0) {
-                val lastMem = DpiEngine.hostSpecificMemory[host]
+                val lastMem = DpiEngine.contextualHostMemory[ctxKey] ?: DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strat = lastMem.strategy
                     if (isFamilyCompatible(strat.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strat, transport) && (DpiEngine.circuitBreakers[strat] ?: 0L) < now) {
@@ -53,7 +55,7 @@ object DpiStrategySelector {
                     }
                 }
             } else if (hostFails > 2) {
-                val lastMem = DpiEngine.hostSpecificMemory[host]
+                val lastMem = DpiEngine.contextualHostMemory[ctxKey] ?: DpiEngine.hostSpecificMemory[host]
                 if (lastMem != null) {
                     var currentStep: BypassStrategy? = lastMem.strategy
                     for (i in 0 until (hostFails - 2)) {
@@ -278,13 +280,20 @@ object DpiStrategySelector {
         return extreme.maxByOrNull { it.value.get() }?.key ?: defaultFallback
     }
 
-    fun getFallbackStrategy(failedStrategy: BypassStrategy, transport: TransportType = TransportType.TCP): BypassStrategy? {
-        val next = DpiEngine.strategyChains[failedStrategy] ?: return null
-        return if (isFamilyCompatible(next.family, transport) && StrategyExecutionRegistry.isExecutorSupported(next, transport)) {
-            next
-        } else {
-            null
-        }
+    fun getFallbackStrategy(
+        failedStrategy: BypassStrategy,
+        transport: TransportType = TransportType.TCP,
+        reason: FailureReason? = null,
+        host: String? = null,
+        category: HostCategory? = null
+    ): BypassStrategy? {
+        return StrategyEscalationMatrix.getEscalatedStrategy(
+            failedStrategy = failedStrategy,
+            reason = reason,
+            transport = transport,
+            host = host,
+            category = category
+        )
     }
 
     fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
@@ -336,10 +345,35 @@ object DpiStrategySelector {
             )
         }
 
+        val obs = StrategyObservation(
+            executedStrategy = strategy,
+            requestedStrategy = requestedStrategy ?: strategy,
+            effectiveStrategy = effectiveStrategy ?: strategy,
+            transport = TransportType.TCP,
+            category = category,
+            host = host,
+            profileId = NetworkProfileManager.currentProfile.value.id,
+            success = success,
+            quality = quality,
+            latencyMs = latencyMs,
+            failureReason = reason
+        )
+        recordObservation(obs)
+    }
+
+    fun recordObservation(obs: StrategyObservation) {
+        val strategy = obs.executedStrategy
+        val category = obs.category
+        val success = obs.success
+        val quality = obs.quality
+        val latencyMs = obs.latencyMs
+        val host = obs.host
+        val reason = obs.failureReason
+
         if (success) {
             DpiEngine.successHistory.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
             DpiEngine.categorySuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { AtomicInteger(0) }.incrementAndGet()
-            val weightedDelta = (quality.weight * 1000).toLong().coerceAtLeast(100L)
+            val weightedDelta = (quality.weight * 1000).toLong().coerceAtLeast(50L)
             DpiEngine.weightedSuccessHistory.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)
             DpiEngine.categoryWeightedSuccessHistory.getOrPut(category) { ConcurrentHashMap() }.getOrPut(strategy) { java.util.concurrent.atomic.AtomicLong(0L) }.addAndGet(weightedDelta)
             
@@ -365,14 +399,25 @@ object DpiStrategySelector {
                 DpiEngine.hostStrategyBlacklist[host]?.remove(strategy)
                 DpiEngine.consecutiveFailuresByHost[host]?.set(0)
                 
-                // Only lock in persistent host memory on verified responses (exclude raw CONNECT_ONLY)
-                if (quality != ObservationQuality.CONNECT_ONLY) {
-                    val currentMem = DpiEngine.hostSpecificMemory[host]
+                // Only lock in persistent host memory on verified application-level responses (exclude handshake/syn-ack only)
+                if (quality.minLevelForHostMemory) {
+                    val profileId = obs.profileId.ifEmpty { NetworkProfileManager.currentProfile.value.id }
+                    val ctxKey = HostContextKey(host, obs.transport, profileId)
+                    val currentMem = DpiEngine.contextualHostMemory[ctxKey]
                     val newCount = if (currentMem?.strategy == strategy) currentMem.successCount + 1 else 1
-                    DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, System.currentTimeMillis(), newCount)
+                    val conf = (0.5 + (newCount * 0.15) * quality.weight).coerceAtMost(1.0)
+                    val mem = DpiEngine.HostMemory(
+                        strategy = strategy,
+                        timestamp = System.currentTimeMillis(),
+                        successCount = newCount,
+                        transport = obs.transport,
+                        profileId = profileId,
+                        confidence = conf
+                    )
+                    DpiEngine.contextualHostMemory[ctxKey] = mem
+                    DpiEngine.hostSpecificMemory[host] = mem
                     
                     val netType = BypassConfig.currentNetworkType.value.toString()
-                    val profileId = NetworkProfileManager.currentProfile.value.id
                     val profileNetMemory = DpiEngine.networkStrategyMemory.getOrPut(profileId) { java.util.concurrent.ConcurrentHashMap() }
                     val typeNetMemory = DpiEngine.networkStrategyMemory.getOrPut(netType) { java.util.concurrent.ConcurrentHashMap() }
                     if ((DpiEngine.strategyMaturity[strategy]?.get() ?: 0) > 3) {

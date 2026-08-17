@@ -38,6 +38,7 @@ data class StrategyProfileState(
     val globalWeightedSuccess: Map<BypassStrategy, Long> = emptyMap(),
     val networkMemory: Map<HostCategory, DpiEngine.NetworkMemory> = emptyMap(),
     val hostMemory: Map<String, DpiEngine.HostMemory> = emptyMap(),
+    val contextualHostMemory: Map<HostContextKey, DpiEngine.HostMemory> = emptyMap(),
     val hostBlacklist: Map<String, Map<BypassStrategy, Long>> = emptyMap()
 ) {
     fun toJson(): String {
@@ -75,13 +76,29 @@ data class StrategyProfileState(
         }
         root.put("networkMemory", netMemJson)
 
-        // hostMemory
+        // contextualHostMemory & hostMemory
+        val ctxHostMemJson = JSONObject()
+        contextualHostMemory.forEach { (ctxKey, mem) ->
+            val memObj = JSONObject()
+            memObj.put("strategy", mem.strategy.name)
+            memObj.put("timestamp", mem.timestamp)
+            memObj.put("successCount", mem.successCount)
+            memObj.put("transport", mem.transport.name)
+            memObj.put("profileId", mem.profileId)
+            memObj.put("confidence", mem.confidence)
+            ctxHostMemJson.put(ctxKey.toStorageString(), memObj)
+        }
+        root.put("contextualHostMemory", ctxHostMemJson)
+
         val hostMemJson = JSONObject()
         hostMemory.forEach { (host, mem) ->
             val memObj = JSONObject()
             memObj.put("strategy", mem.strategy.name)
             memObj.put("timestamp", mem.timestamp)
             memObj.put("successCount", mem.successCount)
+            memObj.put("transport", mem.transport.name)
+            memObj.put("profileId", mem.profileId)
+            memObj.put("confidence", mem.confidence)
             hostMemJson.put(host, memObj)
         }
         root.put("hostMemory", hostMemJson)
@@ -169,8 +186,36 @@ data class StrategyProfileState(
                 }
 
                 val hostMem = mutableMapOf<String, DpiEngine.HostMemory>()
+                val ctxHostMem = mutableMapOf<HostContextKey, DpiEngine.HostMemory>()
+                val ctxHostMemJson = root.optJSONObject("contextualHostMemory")
+                if (ctxHostMemJson != null && ctxHostMemJson.length() > 0) {
+                    val keys = ctxHostMemJson.keys()
+                    while (keys.hasNext()) {
+                        val keyStr = keys.next()
+                        val memObj = ctxHostMemJson.optJSONObject(keyStr)
+                        if (memObj != null) {
+                            val strat = try { BypassStrategy.valueOf(memObj.optString("strategy")) } catch (e: Exception) { null }
+                            if (strat != null) {
+                                val ctxKey = HostContextKey.fromStorageString(keyStr)
+                                val trans = try { TransportType.valueOf(memObj.optString("transport", ctxKey.transport.name)) } catch (e: Exception) { ctxKey.transport }
+                                val prof = memObj.optString("profileId", ctxKey.profileId)
+                                val mem = DpiEngine.HostMemory(
+                                    strategy = strat,
+                                    timestamp = memObj.optLong("timestamp", System.currentTimeMillis()),
+                                    successCount = memObj.optInt("successCount", 1),
+                                    transport = trans,
+                                    profileId = prof,
+                                    confidence = memObj.optDouble("confidence", 1.0)
+                                )
+                                ctxHostMem[ctxKey] = mem
+                                hostMem[ctxKey.host] = mem
+                            }
+                        }
+                    }
+                }
+                
                 val hostMemJson = root.optJSONObject("hostMemory")
-                if (hostMemJson != null) {
+                if (hostMemJson != null && hostMemJson.length() > 0) {
                     val keys = hostMemJson.keys()
                     while (keys.hasNext()) {
                         val host = keys.next()
@@ -178,11 +223,23 @@ data class StrategyProfileState(
                         if (memObj != null) {
                             val strat = try { BypassStrategy.valueOf(memObj.optString("strategy")) } catch (e: Exception) { null }
                             if (strat != null) {
-                                hostMem[host] = DpiEngine.HostMemory(
+                                val trans = try { TransportType.valueOf(memObj.optString("transport", TransportType.TCP.name)) } catch (e: Exception) { TransportType.TCP }
+                                val prof = memObj.optString("profileId", profileId)
+                                val mem = DpiEngine.HostMemory(
                                     strategy = strat,
                                     timestamp = memObj.optLong("timestamp", System.currentTimeMillis()),
-                                    successCount = memObj.optInt("successCount", 1)
+                                    successCount = memObj.optInt("successCount", 1),
+                                    transport = trans,
+                                    profileId = prof,
+                                    confidence = memObj.optDouble("confidence", 1.0)
                                 )
+                                val ctxKey = HostContextKey(host, trans, prof)
+                                if (!ctxHostMem.containsKey(ctxKey)) {
+                                    ctxHostMem[ctxKey] = mem
+                                }
+                                if (!hostMem.containsKey(host)) {
+                                    hostMem[host] = mem
+                                }
                             }
                         }
                     }
@@ -220,6 +277,7 @@ data class StrategyProfileState(
                     globalWeightedSuccess = globalWeighted,
                     networkMemory = netMem,
                     hostMemory = hostMem,
+                    contextualHostMemory = ctxHostMem,
                     hostBlacklist = hostBl
                 )
             } catch (e: Exception) {

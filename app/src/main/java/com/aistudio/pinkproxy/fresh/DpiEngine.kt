@@ -48,9 +48,21 @@ object DpiEngine {
     data class NetworkMemory(val strategy: BypassStrategy, val timestamp: Long = System.currentTimeMillis(), val confidence: Double = 1.0)
     val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
     
-    data class HostMemory(val strategy: BypassStrategy, val timestamp: Long, val successCount: Int = 1)
+    data class HostMemory(
+        val strategy: BypassStrategy,
+        val timestamp: Long,
+        val successCount: Int = 1,
+        val transport: TransportType = TransportType.TCP,
+        val profileId: String = "default",
+        val confidence: Double = 1.0
+    )
+    val contextualHostMemory = ConcurrentHashMap<HostContextKey, HostMemory>()
     val hostSpecificMemory = ConcurrentHashMap<String, HostMemory>()
     val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
+
+    init {
+        initStrategyChains()
+    }
 
     private var lastGlobalReset = System.currentTimeMillis()
     private var lastPanicTime = 0L
@@ -182,6 +194,7 @@ object DpiEngine {
         consecutiveFailures.clear()
         consecutiveFailuresByHost.clear()
         hostSpecificMemory.clear()
+        contextualHostMemory.clear()
         hostStrategyBlacklist.clear()
     }
     
@@ -198,7 +211,14 @@ object DpiEngine {
     fun selectStrategy(host: String? = null, category: HostCategory = HostCategory.OTHER, transport: TransportType = TransportType.TCP): BypassStrategy =
         DpiStrategySelector.getBestStrategy(category, host, transport)
 
-    fun getFallbackStrategy(strat: BypassStrategy): BypassStrategy? = DpiStrategySelector.getFallbackStrategy(strat)
+    fun getFallbackStrategy(
+        strat: BypassStrategy,
+        reason: FailureReason? = null,
+        transport: TransportType = TransportType.TCP,
+        host: String? = null,
+        category: HostCategory? = null
+    ): BypassStrategy? = DpiStrategySelector.getFallbackStrategy(strat, transport, reason, host, category)
+
     fun getDiverseFallback(failed: BypassStrategy? = null, category: HostCategory? = null, transport: TransportType = TransportType.TCP): BypassStrategy = DpiStrategySelector.getDiverseFallback(failed, category, transport)
     
     fun updateTestingStrategies(list: List<BypassStrategy>) {
@@ -230,21 +250,7 @@ object DpiEngine {
     }
 
     private fun initStrategyChains() {
-        strategyChains[BypassStrategy.SNI_SPLIT] = BypassStrategy.TLS_SNI_FRAGMENT
-        strategyChains[BypassStrategy.TLS_SNI_FRAGMENT] = BypassStrategy.TLS_APP_DATA_SPLIT
-        strategyChains[BypassStrategy.TLS_APP_DATA_SPLIT] = BypassStrategy.BYEBYEDPI_HYBRID
-        strategyChains[BypassStrategy.BYEBYEDPI_HYBRID] = BypassStrategy.TCP_SEGMENT_OVERLAP
-        strategyChains[BypassStrategy.TCP_SEGMENT_OVERLAP] = BypassStrategy.TCP_REARRANGE_CHUNKS
-        strategyChains[BypassStrategy.TCP_REARRANGE_CHUNKS] = BypassStrategy.TCP_DATA_DESYNC_OVERLAP
-        strategyChains[BypassStrategy.TCP_DATA_DESYNC_OVERLAP] = BypassStrategy.TCP_TRIPLE_DESYNC
-        strategyChains[BypassStrategy.TCP_TRIPLE_DESYNC] = BypassStrategy.TCP_FAKE_FIN
-        strategyChains[BypassStrategy.TCP_FAKE_FIN] = BypassStrategy.TCP_COMBINED_NUCLEAR
-        
-        strategyChains[BypassStrategy.TCP_FOOL_DPI] = BypassStrategy.ZAPRET_EXTREME
-        strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
-        
-        strategyChains[BypassStrategy.UDP_NOISE_CHAOS] = BypassStrategy.UDP_BURST_CHAOS
-        strategyChains[BypassStrategy.UDP_BURST_CHAOS] = BypassStrategy.UDP_COMBINED_NUCLEAR
+        StrategyEscalationMatrix.initializeChains(strategyChains)
     }
 
     fun enterPanicMode() {

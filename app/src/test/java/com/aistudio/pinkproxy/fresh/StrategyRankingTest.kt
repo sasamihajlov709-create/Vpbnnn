@@ -148,14 +148,14 @@ class StrategyRankingTest {
         DpiEngine.consecutiveFailuresByHost.clear()
         DpiEngine.hostSpecificMemory.clear()
 
-        // 1st success
+        // 1st success (HANDSHAKE_COMPLETE qualifies for host memory)
         DpiStrategySelector.recordResult(
             BypassStrategy.TLS_SNI_JITTER_SPLIT,
             true,
             HostCategory.AI,
             latencyMs = 50,
             host = testHost,
-            quality = ObservationQuality.TLS_RECORD_RECEIVED
+            quality = ObservationQuality.HANDSHAKE_COMPLETE
         )
         val mem1 = DpiEngine.hostSpecificMemory[testHost]
         assertNotNull(mem1)

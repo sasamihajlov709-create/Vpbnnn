@@ -40,7 +40,18 @@ object DpiStorage {
         val globalWeighted = DpiEngine.weightedSuccessHistory.mapValues { (_, atomic) -> atomic.get() }
             .filter { it.value > 0L }
         val netMem = (DpiEngine.networkStrategyMemory[profileId] ?: emptyMap()).toMap()
-        val hostMem = DpiEngine.hostSpecificMemory.toMap()
+        val hostMem = if (DpiEngine.hostSpecificMemory.isNotEmpty()) {
+            DpiEngine.hostSpecificMemory.toMap()
+        } else {
+            DpiEngine.contextualHostMemory.mapKeys { it.key.host }.toMap()
+        }
+        val ctxHostMem = if (DpiEngine.contextualHostMemory.isNotEmpty()) {
+            DpiEngine.contextualHostMemory.toMap()
+        } else {
+            DpiEngine.hostSpecificMemory.mapKeys { (host, mem) ->
+                HostContextKey(host, mem.transport, mem.profileId)
+            }
+        }
         val hostBl = DpiEngine.hostStrategyBlacklist.mapValues { (_, map) -> map.toMap() }
 
         return StrategyProfileState(
@@ -51,6 +62,7 @@ object DpiStorage {
             globalWeightedSuccess = globalWeighted,
             networkMemory = netMem,
             hostMemory = hostMem,
+            contextualHostMemory = ctxHostMem,
             hostBlacklist = hostBl
         )
     }
@@ -79,8 +91,25 @@ object DpiStorage {
             val catMap = ConcurrentHashMap(state.networkMemory)
             DpiEngine.networkStrategyMemory[state.profileId] = catMap
         }
+        DpiEngine.contextualHostMemory.clear()
         DpiEngine.hostSpecificMemory.clear()
-        DpiEngine.hostSpecificMemory.putAll(state.hostMemory)
+        if (state.contextualHostMemory.isNotEmpty()) {
+            DpiEngine.contextualHostMemory.putAll(state.contextualHostMemory)
+            state.contextualHostMemory.forEach { (ctxKey, mem) ->
+                DpiEngine.hostSpecificMemory[ctxKey.host] = mem
+            }
+        }
+        if (state.hostMemory.isNotEmpty()) {
+            state.hostMemory.forEach { (host, mem) ->
+                if (!DpiEngine.hostSpecificMemory.containsKey(host)) {
+                    DpiEngine.hostSpecificMemory[host] = mem
+                }
+                val ctxKey = HostContextKey(host, mem.transport, mem.profileId)
+                if (!DpiEngine.contextualHostMemory.containsKey(ctxKey)) {
+                    DpiEngine.contextualHostMemory[ctxKey] = mem
+                }
+            }
+        }
         DpiEngine.hostStrategyBlacklist.clear()
         state.hostBlacklist.forEach { (host, map) ->
             DpiEngine.hostStrategyBlacklist[host] = ConcurrentHashMap(map)
@@ -324,7 +353,7 @@ object DpiStorage {
         val prefs = context.getSharedPreferences("dpi_host_mem_$profileId", Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val expiry = 86400000L * 7
-        val sourcePrefs = if (prefs.all.isNotEmpty()) prefs else context.getSharedPreferences("dpi_engine_host_memory", Context.MODE_PRIVATE)
+        val sourcePrefs = if (prefs.all.isNotEmpty()) prefs else if (profileId == "default") context.getSharedPreferences("dpi_engine_host_memory", Context.MODE_PRIVATE) else prefs
 
         sourcePrefs.all.forEach { (host, value) ->
             if (value is String) {
