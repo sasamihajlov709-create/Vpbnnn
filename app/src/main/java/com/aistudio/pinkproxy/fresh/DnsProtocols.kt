@@ -2,6 +2,7 @@ package com.aistudio.pinkproxy.fresh
 
 import android.net.VpnService
 import android.util.Log
+import java.lang.ref.WeakReference
 import java.net.InetAddress
 import javax.net.ssl.SSLContext
 import okhttp3.*
@@ -40,18 +41,20 @@ object DnsProtocols {
     }
 
     private var cachedProtectedClient: OkHttpClient? = null
-    private var lastVpnService: VpnService? = null
+    private var lastVpnServiceRef: WeakReference<VpnService>? = null
     private val clientLock = Any()
 
     fun getProtectedClient(vpnService: VpnService?): OkHttpClient {
         val cached = cachedProtectedClient
-        if (cached != null && lastVpnService == vpnService) {
+        val lastService = lastVpnServiceRef?.get()
+        if (cached != null && lastService != null && lastService == vpnService) {
             return cached
         }
         
         return synchronized(clientLock) {
             val existing = cachedProtectedClient
-            if (existing != null && lastVpnService == vpnService) {
+            val currentService = lastVpnServiceRef?.get()
+            if (existing != null && currentService != null && currentService == vpnService) {
                 existing
             } else {
                 val builder = baseOkHttpClient.newBuilder()
@@ -77,7 +80,7 @@ object DnsProtocols {
                 
                 val client = builder.build()
                 cachedProtectedClient = client
-                lastVpnService = vpnService
+                lastVpnServiceRef = if (vpnService != null) WeakReference(vpnService) else null
                 client
             }
         }
@@ -137,7 +140,7 @@ object DnsProtocols {
     fun clearPool() {
         synchronized(clientLock) {
             cachedProtectedClient = null
-            lastVpnService = null
+            lastVpnServiceRef = null
         }
         DotDnsProtocols.clearPool()
         DnsCacheManager.clearAll()

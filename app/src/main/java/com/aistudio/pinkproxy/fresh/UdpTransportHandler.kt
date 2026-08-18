@@ -7,9 +7,8 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
-import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.ConcurrentHashMap
-import java.util.Collections
+import java.util.concurrent.ThreadLocalRandom
 
 object UdpTransportHandler {
 
@@ -33,10 +32,8 @@ object UdpTransportHandler {
             output.write(resp)
             output.flush()
             
-            var clientUdpAddress: InetAddress? = null
-            var clientUdpPort = 0
-            
-            val activeSessions = ConcurrentHashMap<String, Long>()
+            // Client association address & port pair mapping
+            val clientEndpoints = ConcurrentHashMap<String, Pair<InetAddress, Int>>()
             data class UdpPendingProbe(val host: String, val strategy: BypassStrategy, val sentTime: Long)
             val pendingUdpProbes = ConcurrentHashMap<String, UdpPendingProbe>()
             
@@ -44,7 +41,7 @@ object UdpTransportHandler {
                 val jobs = mutableListOf<Job>()
                 
                 // Cleanup and timeout inspector for UDP flows
-                jobs += launch(ProxyDispatcher.io) {
+                jobs += launch(ProxyDispatcher.scheduler) {
                     while (isActive) {
                         delay(10000)
                         val now = System.currentTimeMillis()
@@ -68,31 +65,24 @@ object UdpTransportHandler {
                                 false
                             }
                         }
+
+                        // Age out idle sessions in association table
+                        UdpAssociationTable.cleanupExpiredSessions()
                     }
                 }
                 
                 repeat(8) { i ->
                     val outSocket = outSockets[i]
-                    jobs += launch(ProxyDispatcher.io) {
+                    jobs += launch(ProxyDispatcher.scheduler) {
                         val rnd = ThreadLocalRandom.current()
                         try {
                             while (isActive) {
                                 delay(rnd.nextLong(30000, 60000))
-                                val now = System.currentTimeMillis()
-                                activeSessions.entries.removeIf { entry ->
-                                    if (now - entry.value > 90000) {
-                                        ProxyStats.closeFlow("udp_${entry.key}")
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                
-                                for (session in activeSessions.keys) {
-                                    val lastColon = session.lastIndexOf(':')
-                                    if (lastColon > 0 && lastColon < session.length - 1) {
-                                        val rawHost = session.substring(0, lastColon).removePrefix("[").removeSuffix("]")
-                                        val portInt = session.substring(lastColon + 1).toIntOrNull()
+                                for ((sessionKey, _) in clientEndpoints) {
+                                    val lastColon = sessionKey.lastIndexOf(':')
+                                    if (lastColon > 0 && lastColon < sessionKey.length - 1) {
+                                        val rawHost = sessionKey.substring(0, lastColon).removePrefix("[").removeSuffix("]")
+                                        val portInt = sessionKey.substring(lastColon + 1).toIntOrNull()
                                         if (rawHost.isNotEmpty() && portInt != null) {
                                             UdpTransportManager.sendUdpHeartbeat(outSocket, rawHost, portInt)
                                         }
@@ -111,17 +101,16 @@ object UdpTransportHandler {
                     }
                 }
 
-                jobs += launch(ProxyDispatcher.io) {
+                jobs += launch(ProxyDispatcher.udpRelay) {
                     val buffer = ByteArray(4096)
                     while (isActive) {
                         try {
                             val packet = DatagramPacket(buffer, buffer.size)
                             udpSocket.receive(packet)
                             
-                            if (clientUdpAddress == null) {
-                                clientUdpAddress = packet.address
-                                clientUdpPort = packet.port
-                            }
+                            val clientAddr = packet.address
+                            val clientPort = packet.port
+                            val clientPairKey = "${clientAddr.hostAddress}:$clientPort"
                             
                             val data = packet.data
                             val offset = packet.offset
@@ -164,18 +153,25 @@ object UdpTransportHandler {
                                 val payload = data.copyOfRange(offset + headerLen, offset + len)
                                 val sessionKey = "$host:$port"
                                 
+                                clientEndpoints[sessionKey] = Pair(clientAddr, clientPort)
+
                                 if (shouldBlockQuicForHost(host, port, payload)) {
                                     Log.d("UdpTransport", "QUIC packet blocked for $host:$port to force TCP fallback")
                                     continue
                                 }
 
-                                if (!activeSessions.containsKey(sessionKey)) {
-                                    val udpStrat = BypassConfig.getBestStrategyForHost(host, TransportType.UDP)
-                                    val reasoning = DpiStrategySelector.getSelectionReasoning(udpStrat, host)
-                                    ProxyStats.registerFlow("udp_$sessionKey", host, "UDP", udpStrat, reasoning)
-                                    VpnRuntimeState.updateStrategy(udpStrat.name, reasoning)
-                                    activeSessions[sessionKey] = System.currentTimeMillis()
-                                }
+                                val udpStrat = BypassConfig.getBestStrategyForHost(host, TransportType.UDP)
+                                val sessionEntry = UdpAssociationTable.getOrCreateSession(
+                                    clientAddress = clientAddr,
+                                    clientPort = clientPort,
+                                    destinationHost = host,
+                                    destinationPort = port,
+                                    strategy = udpStrat
+                                )
+
+                                val reasoning = DpiStrategySelector.getSelectionReasoning(udpStrat, host)
+                                ProxyStats.registerFlow("udp_$sessionKey", host, "UDP", udpStrat, reasoning)
+                                VpnRuntimeState.updateStrategy(udpStrat.name, reasoning)
                                 
                                 val resolved = RobustResolver.resolveDual(host, vpnService)
                                 if (resolved.isNotEmpty()) {
@@ -183,15 +179,16 @@ object UdpTransportHandler {
                                     val outPacket = DatagramPacket(payload, payload.size, targetInet, port)
                                     val workerIdx = (host.hashCode() and 0x7FFFFFFF) % 8
                                     
-                                    val activeUdpStrat = BypassConfig.getBestStrategyForHost(host, TransportType.UDP)
-                                    val config = BypassConfig.getSessionConfig(host, activeUdpStrat, BypassConfig.currentRttMs.value, TransportType.UDP)
+                                    val config = BypassConfig.getSessionConfig(host, udpStrat, BypassConfig.currentRttMs.value, TransportType.UDP)
                                     
                                     val endpointKey = "${targetInet.hostAddress}:$port"
-                                    pendingUdpProbes[endpointKey] = UdpPendingProbe(host, activeUdpStrat, System.currentTimeMillis())
-                                    
+                                    pendingUdpProbes[endpointKey] = UdpPendingProbe(host, udpStrat, System.currentTimeMillis())
+                                    UdpAssociationTable.bindEndpoint(endpointKey, sessionEntry.key)
+
                                     // Use BypassApplier for all UDP evasion
-                                    launch {
+                                    launch(ProxyDispatcher.udpRelay) {
                                         try {
+                                            UdpAssociationTable.touchSession(sessionEntry.key, sentBytes = payload.size.toLong())
                                             ProxyStats.recordStats("udp_$sessionKey", payload.size.toLong(), 0)
                                             ProxyStats.addTraffic(host)
                                             BypassApplier.applyUdpBypass(outSockets[workerIdx], outPacket, config, host)
@@ -215,7 +212,7 @@ object UdpTransportHandler {
 
                 // Inbound return loop (Remote -> Local UDP -> Client)
                 repeat(8) { i ->
-                    jobs += launch(ProxyDispatcher.io) {
+                    jobs += launch(ProxyDispatcher.udpRelay) {
                         val inBuffer = ByteArray(4096)
                         val inSocket = outSockets[i]
                         while (isActive) {
@@ -223,8 +220,15 @@ object UdpTransportHandler {
                                 val inPacket = DatagramPacket(inBuffer, inBuffer.size)
                                 inSocket.receive(inPacket)
                                 
-                                val targetAddr = clientUdpAddress ?: continue
-                                val targetPort = clientUdpPort
+                                val endpointKey = "${inPacket.address.hostAddress}:${inPacket.port}"
+                                val sessionKey = UdpAssociationTable.findClientForKey(endpointKey)
+                                
+                                val (targetAddr, targetPort) = if (sessionKey != null) {
+                                    Pair(sessionKey.clientAddress, sessionKey.clientPort)
+                                } else {
+                                    // Fallback to latest registered client endpoint
+                                    clientEndpoints.values.firstOrNull() ?: continue
+                                }
                                 
                                 // Re-wrap into SOCKS5 UDP response
                                 val remoteAddr = inPacket.address.address
@@ -252,7 +256,10 @@ object UdpTransportHandler {
                                 udpSocket.send(DatagramPacket(fullResp, fullResp.size, targetAddr, targetPort))
                                 ProxyStats.recordStats("udp_inbound", 0, inPacket.length.toLong())
                                 
-                                val endpointKey = "${inPacket.address.hostAddress}:$remotePort"
+                                if (sessionKey != null) {
+                                    UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())
+                                }
+
                                 val matchedProbe = pendingUdpProbes.remove(endpointKey)
                                 if (matchedProbe != null) {
                                     val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
@@ -299,10 +306,8 @@ object UdpTransportHandler {
         }
     }
 
-    private val udpSessionCache = ConcurrentHashMap<String, Long>()
-
     fun clearBuffers() {
-        udpSessionCache.clear()
+        UdpAssociationTable.clear()
     }
 
     internal fun isStunPacket(payload: ByteArray): Boolean {

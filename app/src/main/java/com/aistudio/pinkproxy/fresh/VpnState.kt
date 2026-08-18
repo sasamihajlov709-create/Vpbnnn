@@ -8,6 +8,7 @@ enum class VpnLifecycleState {
     IDLE,
     PERMISSION_PENDING,
     STARTING,
+    PROBING,
     RUNNING,
     STOPPING,
     FAILED,

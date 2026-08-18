@@ -16,14 +16,15 @@ object DeviceMonitor {
     fun startDeviceMonitoring(context: Context) {
         if (isMonitoringStarted) return
         isMonitoringStarted = true
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val appContext = context.applicationContext
+        val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
         
         BypassConfig.isPowerSaveMode = powerManager.isPowerSaveMode
         BypassConfig.isScreenOn = powerManager.isInteractive
 
         val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { filter ->
             try {
-                context.registerReceiver(null, filter)
+                appContext.registerReceiver(null, filter)
             } catch (e: Exception) { null }
         }
         
@@ -87,7 +88,7 @@ object DeviceMonitor {
         }
         batteryReceiver = receiver
         try {
-            context.registerReceiver(receiver, filter)
+            appContext.registerReceiver(receiver, filter)
         } catch (e: Exception) {
             Log.e("DeviceMonitor", "Failed to register battery receiver: ${e.message}")
         }
@@ -95,9 +96,10 @@ object DeviceMonitor {
 
     fun stopDeviceMonitoring(context: Context) {
         if (!isMonitoringStarted) return
+        val appContext = context.applicationContext
         batteryReceiver?.let {
             try {
-                context.unregisterReceiver(it)
+                appContext.unregisterReceiver(it)
             } catch (e: Exception) {
                 Log.w("DeviceMonitor", "Unregister battery receiver error: ${e.message}")
             }

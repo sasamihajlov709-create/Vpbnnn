@@ -93,7 +93,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     }
                                 
                     ProxyStats.updateConnections(1)
-                    val clientJob = scope.launch {
+                    val clientJob = scope.launch(ProxyDispatcher.tcpEgress) {
                         try {
                             TtlHelper.tuneSocket(client)
                             handleClient(client, this)
