@@ -135,6 +135,10 @@ object NetworkProfileManager {
         )
     }
 
+    fun setProfileForTesting(profile: NetworkProfile) {
+        setCurrentProfile(profile)
+    }
+
     private fun setCurrentProfile(newProfile: NetworkProfile) {
         val oldProfile = _currentProfile.value
         if (oldProfile.id != newProfile.id) {
