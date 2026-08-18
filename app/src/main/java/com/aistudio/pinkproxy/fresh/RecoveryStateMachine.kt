@@ -69,9 +69,9 @@ object RecoveryStateMachine {
     /**
      * Dispatch an event to the state machine asynchronously.
      */
-    fun postSignal(signal: RecoverySignal) {
+    fun postSignal(signal: RecoverySignal): Job {
         val scope = machineScope ?: PinkVpnService.instance?.getServiceScope() ?: ProxyDispatcher.mainScope
-        scope.launch(ProxyDispatcher.io) {
+        return scope.launch(ProxyDispatcher.io) {
             handleSignal(signal)
         }
     }
@@ -164,7 +164,7 @@ object RecoveryStateMachine {
                     compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
                         .thenBy { it.name.hashCode() }
                 ) ?: DpiStrategySelector.getDefaultFallback(transport)
-                BypassConfig.setGlobalStrategy(selected)
+                BypassConfig.setGlobalStrategy(selected, transport, "DPI Timeout Escalation")
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
                 }
@@ -181,7 +181,7 @@ object RecoveryStateMachine {
                     compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.UDP_COMBINED_NUCLEAR
-                BypassConfig.setGlobalStrategy(selected)
+                BypassConfig.setGlobalStrategy(selected, TransportType.UDP, "UDP Block Detected")
                 if (targetHost != null) {
                     DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
                 }
@@ -244,7 +244,7 @@ object RecoveryStateMachine {
             compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
                 .thenBy { it.name.hashCode() }
         ) ?: DpiStrategySelector.getDefaultFallback(transport)
-        BypassConfig.setGlobalStrategy(selected)
+        BypassConfig.setGlobalStrategy(selected, transport, "Socket Stall Recovery")
 
         val currentMtu = BypassConfig.currentMtu.value
         if (currentMtu > 1100) {

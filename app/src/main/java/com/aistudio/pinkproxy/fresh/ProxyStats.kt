@@ -13,8 +13,19 @@ object ProxyStats {
         .stateIn(ProxyDispatcher.mainScope, SharingStarted.Eagerly, emptyList())
 
     fun registerFlow(id: String, host: String, type: String, strategy: BypassStrategy, reasoning: String = "") {
-        _activeFlows.update { it + (id to ActiveFlow(id, host, type, strategy, reasoning = reasoning)) }
+        val transport = when (type.uppercase()) {
+            "UDP" -> TransportType.UDP
+            "DNS" -> TransportType.DNS
+            else -> TransportType.TCP
+        }
+        _activeFlows.update { it + (id to ActiveFlow(id, host, transport, strategy, reasoning = reasoning)) }
     }
+
+    fun registerFlow(context: FlowContext, id: String = context.sessionId, reasoning: String = "") {
+        _activeFlows.update { it + (id to ActiveFlow.fromContext(context, id, reasoning)) }
+    }
+
+    fun getFlow(id: String): ActiveFlow? = _activeFlows.value[id]
 
     fun updateFlow(id: String, sent: Long = 0, received: Long = 0, status: String? = null) {
         _activeFlows.update { current ->

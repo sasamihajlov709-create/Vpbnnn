@@ -318,7 +318,7 @@ fun BypassTab(
             currentStrategy = currentStrategy,
             metrics = metrics,
             onSelect = { 
-                BypassConfig.setStrategy(it)
+                BypassConfig.setStrategy(it, TransportType.TCP, "UI Bypass Tab Selection")
                 BypassConfig.saveBypassSettings(context)
                 onRestart()
             }
@@ -436,7 +436,7 @@ fun FlowItem(flow: ActiveFlow) {
                 modifier = Modifier
                     .size(8.dp)
                     .background(
-                        if (flow.status == "OPEN") Color(0xFF81C784) else Color(0xFFE57373),
+                        if (flow.status == "OPEN" || flow.status == "ACTIVE") Color(0xFF81C784) else Color(0xFFE57373),
                         CircleShape
                     )
             )

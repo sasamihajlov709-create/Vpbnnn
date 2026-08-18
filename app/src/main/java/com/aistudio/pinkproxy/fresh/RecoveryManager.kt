@@ -27,7 +27,6 @@ object RecoveryManager {
 
     private var lastRestartTime = 0L
     private var restartCooldown = 60000L
-    private val recoveryEscalation = java.util.concurrent.atomic.AtomicInteger(0)
     private var healthCheckJob: Job? = null
     private var stallMonitorJob: Job? = null
 
@@ -67,13 +66,10 @@ object RecoveryManager {
                     // Strategy Cooling: Periodically try to reduce escalation if things are stable
                     if (now - lastCoolDown > 600000) { // Every 10 minutes
                         val rate = ProxyStats.successRate.value
-                        val currentEsc = recoveryEscalation.get()
-                        if (currentEsc > 0 && rate > 80) {
+                        if (rate > 80) {
                             val reduction = if (rate > 95) 2 else 1
-                            val newVal = (currentEsc - reduction).coerceAtLeast(0)
-                            recoveryEscalation.set(newVal)
-                            Log.i("RecoveryManager", "Strategy cooling: Escalation reduced by $reduction to $newVal")
-                            if (newVal == 0) BypassConfig.setPanicMode(false)
+                            RecoveryStateMachine.coolDownEscalation(reduction)
+                            Log.i("RecoveryManager", "Strategy cooling: RecoveryStateMachine escalation reduced by $reduction")
                         }
                         lastCoolDown = now
                     }
@@ -132,7 +128,7 @@ object RecoveryManager {
     }
 
 
-    fun handleEvent(event: RecoveryEvent, details: String = "") {
+    fun handleEvent(event: RecoveryEvent, details: String = ""): Job {
         Log.w("RecoveryManager", "Reporting event to RecoveryStateMachine: $event ($details)")
         val signal: RecoverySignal = when (event) {
             RecoveryEvent.DPI_DETECTED -> RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value)
@@ -147,11 +143,11 @@ object RecoveryManager {
             RecoveryEvent.HANDSHAKE_FAILURE -> RecoverySignal.HealthDegraded("Handshake failure: $details")
             RecoveryEvent.CENSORSHIP_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value)
         }
-        RecoveryStateMachine.postSignal(signal)
+        return RecoveryStateMachine.postSignal(signal)
     }
 
-    fun recalibrateEverything() {
+    fun recalibrateEverything(): Job {
         Log.w("RecoveryManager", "Requesting full recalibration via RecoveryStateMachine")
-        RecoveryStateMachine.postSignal(RecoverySignal.ManualReset)
+        return RecoveryStateMachine.postSignal(RecoverySignal.ManualReset)
     }
 }

@@ -11,8 +11,8 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * Unified Control Plane Coordinator.
- * Acts as the single coordinator for bypass runtime state changes, strategy transitions,
- * network profile switches, and recovery state synchronization.
+ * Acts as the single coordinator and owner for bypass runtime state changes, strategy transitions,
+ * transport validation, network profile switches, and recovery state synchronization.
  */
 object RuntimeCoordinator {
     private const val TAG = "RuntimeCoordinator"
@@ -42,16 +42,57 @@ object RuntimeCoordinator {
     }
 
     /**
-     * Centralized transition to a new global bypass strategy with strict transport context.
+     * Centralized transition to a new global bypass strategy with strict transport context and registry validation.
      */
     fun transitionGlobalStrategy(newStrategy: BypassStrategy, transport: TransportType, reason: String) {
         coordinatorScope.launch {
-            stateMutex.withLock {
-                Log.i(TAG, "Transitioning global strategy to $newStrategy for $transport. Reason: $reason")
-                BypassConfig.setStrategy(newStrategy)
-                VpnRuntimeState.updateStrategy(newStrategy.name, reason)
-            }
+            applyStrategyTransition(newStrategy, transport, reason)
         }
+    }
+
+    /**
+     * Synchronous suspension version of strategy transition for internal engine workflows under mutex.
+     */
+    suspend fun applyStrategyTransition(newStrategy: BypassStrategy, transport: TransportType, reason: String): Boolean = stateMutex.withLock {
+        // Validate transport and registry executor compatibility
+        val isFamilyValid = DpiStrategySelector.isFamilyCompatible(newStrategy.family, transport)
+        val isExecutorValid = StrategyExecutionRegistry.isExecutorSupported(newStrategy, transport)
+
+        val targetStrategy = if (isFamilyValid && isExecutorValid) {
+            newStrategy
+        } else {
+            val fallback = DpiStrategySelector.getDefaultFallback(transport)
+            Log.w(TAG, "Requested strategy $newStrategy is incompatible with $transport (family: $isFamilyValid, executor: $isExecutorValid). Falling back to $fallback")
+            fallback
+        }
+
+        Log.i(TAG, "Applying global strategy transition to $targetStrategy for $transport. Reason: $reason")
+        BypassConfig.applyInternalStrategy(targetStrategy)
+        VpnRuntimeState.updateStrategy(targetStrategy.name, reason)
+        true
+    }
+
+    /**
+     * Centralized rotation to the best alternative strategy for a specific transport.
+     */
+    suspend fun rotateGlobalStrategy(transport: TransportType, reason: String = "Automated Rotation"): BypassStrategy = stateMutex.withLock {
+        val current = BypassConfig.strategy.value
+        val now = System.currentTimeMillis()
+        val candidates = BypassStrategy.entries.filter { 
+            it != BypassStrategy.DIRECT && 
+            it != current &&
+            DpiStrategySelector.isFamilyCompatible(it.family, transport) &&
+            StrategyExecutionRegistry.isExecutorSupported(it, transport) &&
+            (DpiEngine.circuitBreakers[it] ?: 0L) < now
+        }
+        val fallback = DpiStrategySelector.getDefaultFallback(transport)
+        val best = candidates.maxByOrNull { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) } ?: fallback
+
+        Log.i(TAG, "Rotating strategy for $transport to $best. Reason: $reason")
+        BypassConfig.applyInternalStrategy(best)
+        VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
+        ProxyStats.logRecovery("Strategy rotated for $transport: ${best.name} ($reason)")
+        best
     }
 
     /**
@@ -61,3 +102,4 @@ object RuntimeCoordinator {
         RecoveryStateMachine.postSignal(signal)
     }
 }
+

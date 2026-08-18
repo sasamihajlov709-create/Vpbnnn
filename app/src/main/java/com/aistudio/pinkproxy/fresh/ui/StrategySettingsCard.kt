@@ -18,6 +18,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aistudio.pinkproxy.fresh.BypassConfig
 import com.aistudio.pinkproxy.fresh.BypassStrategy
+import com.aistudio.pinkproxy.fresh.RuntimeCoordinator
+import com.aistudio.pinkproxy.fresh.TransportType
 import com.aistudio.pinkproxy.fresh.R
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleLightPink
@@ -89,7 +91,7 @@ fun StrategySettingsCard(context: Context, onSettingsChanged: () -> Unit) {
             currentStrategy = strategy,
             onDismiss = { showDialog = false },
             onSelect = { newStrategy ->
-                BypassConfig.setStrategy(newStrategy)
+                RuntimeCoordinator.transitionGlobalStrategy(newStrategy, com.aistudio.pinkproxy.fresh.TransportType.TCP, "UI User Selection")
                 BypassConfig.saveBypassSettings(context)
                 onSettingsChanged()
             }

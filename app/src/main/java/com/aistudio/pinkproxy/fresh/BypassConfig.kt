@@ -17,9 +17,23 @@ object BypassConfig {
     private val _strategy = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
     
-    fun setStrategy(new: BypassStrategy) {
+    /**
+     * Public API for UI / settings changes: delegates to RuntimeCoordinator for safe validation.
+     */
+    fun setStrategy(new: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "User Selection") {
+        val isFamilyValid = DpiStrategySelector.isFamilyCompatible(new.family, transport)
+        val isExecutorValid = StrategyExecutionRegistry.isExecutorSupported(new, transport)
+        val target = if (isFamilyValid && isExecutorValid) new else DpiStrategySelector.getDefaultFallback(transport)
+        _strategy.value = target
+        VpnRuntimeState.updateStrategy(target.name, reason)
+        RuntimeCoordinator.transitionGlobalStrategy(new, transport, reason)
+    }
+
+    /**
+     * Internal mutation called solely by RuntimeCoordinator after validation.
+     */
+    internal fun applyInternalStrategy(new: BypassStrategy) {
         _strategy.value = new
-        VpnRuntimeState.updateStrategy(new.name, DpiStrategySelector.getSelectionReasoning(new))
     }
     
     private val _testingStrategies = MutableStateFlow<List<BypassStrategy>>(
@@ -245,6 +259,8 @@ object BypassConfig {
                 } else {
                     base
                 }
+            } else {
+                return DpiStrategySelector.getDefaultFallback(transport)
             }
         }
         
@@ -370,7 +386,9 @@ object BypassConfig {
         )
     }
 
-    fun setGlobalStrategy(strat: BypassStrategy) { _strategy.value = strat }
+    fun setGlobalStrategy(strat: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "Recovery State Machine") {
+        setStrategy(strat, transport, reason)
+    }
     fun getStrategyMetrics(): List<StrategyMetric> = DpiStrategySelector.getStrategyMetrics()
 
     val strategyMetrics: kotlinx.coroutines.flow.Flow<List<StrategyMetric>> = flow {
