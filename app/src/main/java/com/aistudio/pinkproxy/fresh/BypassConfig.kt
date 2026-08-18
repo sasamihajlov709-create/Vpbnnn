@@ -76,6 +76,13 @@ object BypassConfig {
     @Volatile var delay2 = 0L
     @Volatile var fakeTtl = 0
     @Volatile var blockQuic = false
+    private val _quicBypassMode = MutableStateFlow(QuicBypassMode.AUTO)
+    val quicBypassMode: StateFlow<QuicBypassMode> = _quicBypassMode.asStateFlow()
+    
+    fun setQuicBypassMode(mode: QuicBypassMode) {
+        _quicBypassMode.value = mode
+        blockQuic = (mode == QuicBypassMode.FORCE_BLOCK)
+    }
     @Volatile var filterEch = true
     @Volatile var preferIpv6 = false
     @Volatile var includeIpv6 = true

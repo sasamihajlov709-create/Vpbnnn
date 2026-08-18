@@ -16,6 +16,27 @@ object TcpTransportHandler {
     @OptIn(DelicateCoroutinesApi::class)
     suspend fun handleTcpSession(
         clientSocket: Socket,
+        flowContext: FlowContext,
+        vpnService: VpnService?,
+        scope: CoroutineScope,
+        onConnectSuccess: (suspend () -> Unit)? = null,
+        onConnectFailure: (suspend (reason: String) -> Unit)? = null
+    ) {
+        handleTcpSession(
+            clientSocket = clientSocket,
+            targetHost = flowContext.host,
+            targetPort = flowContext.port,
+            vpnService = vpnService,
+            scope = scope,
+            forcedStrategy = flowContext.strategy,
+            onConnectSuccess = onConnectSuccess,
+            onConnectFailure = onConnectFailure
+        )
+    }
+
+    @OptIn(DelicateCoroutinesApi::class)
+    suspend fun handleTcpSession(
+        clientSocket: Socket,
         targetHost: String,
         targetPort: Int,
         vpnService: VpnService?,

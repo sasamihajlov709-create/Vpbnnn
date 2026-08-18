@@ -384,9 +384,15 @@ class PinkVpnService : VpnService() {
 
             // 6. Execute End-to-End Transport Probe before marking RUNNING
             VpnRuntimeState.updateState(VpnLifecycleState.PROBING, "Verifying end-to-end transport routing...")
-            val probeSuccess = performE2EHealthProbe(PROXY_PORT)
+            val probeSuccess = performE2EHealthProbe(PROXY_PORT, proxySecret)
             if (!probeSuccess) {
-                Log.w("PinkVpnService", "E2E health probe completed with warnings, proceeding with defensive fallback")
+                Log.w("PinkVpnService", "Local proxy health probe failed! Triggering restart recovery")
+                VpnRuntimeState.updateState(VpnLifecycleState.DEGRADED, "Local proxy probe failed, attempting recovery...")
+                restartProxyServer()
+                val retrySuccess = performE2EHealthProbe(PROXY_PORT, proxySecret)
+                if (!retrySuccess) {
+                    throw java.io.IOException("Critical: Core proxy failed health verification on port $PROXY_PORT")
+                }
             }
 
             _isRunning.value = true
@@ -411,22 +417,45 @@ class PinkVpnService : VpnService() {
         }
     }
 
-    private suspend fun performE2EHealthProbe(proxyPort: Int): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun performE2EHealthProbe(proxyPort: Int, secret: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            // Verify local proxy listener accepts and responds to connection attempts
+            // Verify local proxy listener accepts and responds with strict authentication
             java.net.Socket().use { probeSocket ->
-                probeSocket.soTimeout = 800
-                probeSocket.connect(java.net.InetSocketAddress("127.0.0.1", proxyPort), 800)
-                // Send SOCKS5 handshake greeting: [VER=5, NMETHODS=1, METHOD=0 (NO_AUTH) or 2 (USER/PASS)]
-                probeSocket.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x02))
-                probeSocket.getOutputStream().flush()
-                val resp = ByteArray(2)
-                val read = probeSocket.getInputStream().read(resp)
-                read >= 2 && resp[0] == 0x05.toByte()
+                probeSocket.soTimeout = 1200
+                probeSocket.connect(java.net.InetSocketAddress("127.0.0.1", proxyPort), 1200)
+                
+                val out = probeSocket.getOutputStream()
+                val input = probeSocket.getInputStream()
+                
+                // Send SOCKS5 method negotiation: [VER=5, NMETHODS=1, METHOD=2 (USER/PASS)]
+                out.write(byteArrayOf(0x05, 0x01, 0x02))
+                out.flush()
+                
+                val methodResp = ByteArray(2)
+                val readMethod = input.read(methodResp)
+                if (readMethod < 2 || methodResp[0] != 0x05.toByte() || methodResp[1] != 0x02.toByte()) {
+                    return@withContext false
+                }
+                
+                // Send subnegotiation username/password: [VER=1, ULEN, USER, PLEN, PASS]
+                val secBytes = secret.toByteArray(java.nio.charset.StandardCharsets.UTF_8)
+                val authReq = ByteArray(3 + secBytes.size * 2)
+                authReq[0] = 0x01
+                authReq[1] = secBytes.size.toByte()
+                System.arraycopy(secBytes, 0, authReq, 2, secBytes.size)
+                authReq[2 + secBytes.size] = secBytes.size.toByte()
+                System.arraycopy(secBytes, 0, authReq, 3 + secBytes.size, secBytes.size)
+                
+                out.write(authReq)
+                out.flush()
+                
+                val authResp = ByteArray(2)
+                val readAuth = input.read(authResp)
+                readAuth >= 2 && authResp[0] == 0x01.toByte() && authResp[1] == 0x00.toByte()
             }
         } catch (e: Exception) {
-            Log.v("PinkVpnService", "E2E probe socket verification note: ${e.message}")
-            true // Non-blocking soft check to allow mock / unit-test environments to proceed gracefully
+            Log.w("PinkVpnService", "E2E probe socket verification failed: ${e.message}")
+            false
         }
     }
 
@@ -631,26 +660,35 @@ class PinkVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        val appContext = applicationContext
         PrefetchManager.stop()
-        DnsCacheManager.save(this)
         healthMonitor?.stop()
-
-        runBlocking {
-            try {
-                withTimeout(2000) {
-                    stopVpnInternal()
-                }
-            } catch (e: Exception) {
-                Log.e("PinkVpnService", "Shutdown timed out or failed: ${e.message}", e)
-            }
-        }
-
         vpnNetworkMonitor?.stop()
         vpnNetworkMonitor = null
 
-        engineScope.cancel()
-        instance = null
-        BypassConfig.activeVpnService = null
-        ProxyDispatcher.context = null
+        // Non-blocking asynchronous coordinated shutdown prevents Main-Thread stalling and ANR
+        VpnShutdownCoordinator.shutdownAsync(
+            context = appContext,
+            onBeforeAsync = {
+                stopTun2Socks()
+                vpnTunnelManager?.close()
+                try {
+                    if (wakeLock?.isHeld == true) wakeLock?.release()
+                    if (wifiLock?.isHeld == true) wifiLock?.release()
+                } catch (e: Exception) {
+                    Log.v("PinkVpnService", "Lock release note: ${e.message}")
+                }
+                notificationController.stopNotification()
+                updateTile(appContext)
+                VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
+            },
+            timeoutMs = 2000L,
+            onComplete = {
+                engineScope.cancel()
+                instance = null
+                BypassConfig.activeVpnService = null
+                ProxyDispatcher.context = null
+            }
+        )
     }
 }

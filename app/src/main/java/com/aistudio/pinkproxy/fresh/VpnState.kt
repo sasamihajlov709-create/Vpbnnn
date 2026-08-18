@@ -10,6 +10,7 @@ enum class VpnLifecycleState {
     STARTING,
     PROBING,
     RUNNING,
+    DEGRADED,
     STOPPING,
     FAILED,
     RECOVERING,

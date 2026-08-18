@@ -217,11 +217,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             try { client.close() } catch (ex: Exception) {
                 Log.v("PinkProxy", "Failed to close client after HTTP proxy error: ${ex.message}")
             }
-        } catch (e: Throwable) {
-            Log.e("PinkProxy", "Critical HTTP Proxy error", e)
-            try { client.close() } catch (ex: Exception) {
-                Log.v("PinkProxy", "Failed to close client after critical HTTP proxy error: ${ex.message}")
-            }
         }
     }
 
@@ -242,8 +237,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 throw e
             } catch (e: Exception) {
                 Log.v("PinkProxy", "UID check exception: ${e.message}")
-            } catch (e: Throwable) {
-                Log.v("PinkProxy", "Critical UID check error")
             }
         }
 
@@ -274,7 +267,16 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             val supportsNoAuth = methods.contains(0.toByte())
             val supportsUserPass = methods.contains(2.toByte())
 
-            if (supportsUserPass && sessionSecret.isNotEmpty()) {
+            if (sessionSecret.isNotEmpty()) {
+                // In production, when sessionSecret is configured, NO_AUTH is strictly rejected
+                // to prevent unauthorized local processes from hijacking the VPN proxy egress.
+                if (!supportsUserPass) {
+                    output.write(SOCKS5_AUTH_NO_ACCEPTABLE)
+                    output.flush()
+                    client.close()
+                    return
+                }
+
                 output.write(SOCKS5_AUTH_USER_PASS)
                 output.flush()
 
@@ -364,13 +366,21 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             val activeHost = host ?: ""
             val forcedStrategy = if (com.aistudio.pinkproxy.fresh.BypassConfig.isHostDirect(activeHost)) com.aistudio.pinkproxy.fresh.BypassStrategy.DIRECT else null
             
+            val flowContext = FlowContext(
+                host = activeHost,
+                port = targetPort,
+                transport = TransportType.TCP,
+                strategy = forcedStrategy ?: BypassConfig.getBestStrategyForHost(activeHost, TransportType.TCP),
+                networkProfile = NetworkProfileManager.currentProfile.value,
+                rttMs = BypassConfig.currentRttMs.value,
+                quicMode = BypassConfig.quicBypassMode.value
+            )
+
             TcpTransportHandler.handleTcpSession(
                 clientSocket = client,
-                targetHost = activeHost,
-                targetPort = targetPort,
+                flowContext = flowContext,
                 vpnService = vpnService,
                 scope = scope,
-                forcedStrategy = forcedStrategy,
                 onConnectSuccess = {
                     client.soTimeout = 0 // Remove timeout for the tunneled connection
                     try { client.keepAlive = true } catch (e: Exception) { Log.v("PinkProxy", "Keepalive error: ${e.message}") }
@@ -398,8 +408,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             Log.v("PinkProxy", "Client I/O error: ${e.message}")
         } catch (e: Exception) {
             Log.e("PinkProxy", "Client handling error from ${client.remoteSocketAddress}", e)
-        } catch (e: Throwable) {
-            Log.e("PinkProxy", "Critical client handling error", e)
         } finally {
             try { client.close() } catch (ex: Exception) {
                 Log.v("PinkProxy", "Failed to close client: ${ex.message}")
