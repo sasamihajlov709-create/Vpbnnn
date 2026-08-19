@@ -68,4 +68,22 @@ class RuntimeCoordinatorTest {
         RuntimeCoordinator.publishRecoverySignal(signal)
         assertNotNull(RecoveryStateMachine.currentState.value)
     }
+
+    @Test
+    fun testInitializeAndShutdownIdempotence() = runTest {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        RuntimeCoordinator.initialize(context)
+        kotlinx.coroutines.delay(50)
+        assertTrue(RuntimeCoordinator.isEngineActive.value)
+
+        // Multiple initialize calls should be safely idempotent
+        RuntimeCoordinator.initialize(context)
+        kotlinx.coroutines.delay(50)
+        assertTrue(RuntimeCoordinator.isEngineActive.value)
+
+        // Shutdown cleanly cancels session
+        RuntimeCoordinator.shutdown(context)
+        kotlinx.coroutines.delay(50)
+        assertFalse(RuntimeCoordinator.isEngineActive.value)
+    }
 }

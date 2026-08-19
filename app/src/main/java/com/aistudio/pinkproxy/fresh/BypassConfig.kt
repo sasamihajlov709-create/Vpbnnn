@@ -18,13 +18,13 @@ object BypassConfig {
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
     
     /**
-     * Public API for UI / settings changes: delegates to RuntimeCoordinator for safe validation.
+     * Public API for UI / settings changes: delegates to RuntimeCoordinator for safe validation and single-point mutation.
      */
     fun setStrategy(new: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "User Selection") {
         val isFamilyValid = DpiStrategySelector.isFamilyCompatible(new.family, transport)
         val isExecutorValid = StrategyExecutionRegistry.isExecutorSupported(new, transport)
         val target = if (isFamilyValid && isExecutorValid) new else DpiStrategySelector.getDefaultFallback(transport)
-        _strategy.value = target
+        applyInternalStrategy(target)
         VpnRuntimeState.updateStrategy(target.name, reason)
         RuntimeCoordinator.transitionGlobalStrategy(new, transport, reason)
     }
@@ -275,24 +275,7 @@ object BypassConfig {
     }
 
     fun rotateGlobalStrategy(transport: TransportType = TransportType.TCP) {
-        val category = HostCategory.OTHER
-        val now = System.currentTimeMillis()
-        val candidates = BypassStrategy.entries.filter { 
-            it != BypassStrategy.DIRECT && 
-            it != _strategy.value &&
-            StrategyExecutionRegistry.isExecutorSupported(it, transport) &&
-            (DpiEngine.circuitBreakers[it] ?: 0L) < now
-        }
-        val defaultFallback = when (transport) {
-            TransportType.TCP -> BypassStrategy.SNI_SPLIT
-            TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
-            TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
-        }
-        val best = candidates.maxByOrNull { DpiStrategySelector.getWeightedScore(it, category) } 
-            ?: defaultFallback
-        _strategy.value = best
-        VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
-        ProxyStats.logRecovery("Strategy rotated to highest-scoring alternative: ${best.name}")
+        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "BypassConfig Global Rotation")
     }
 
     fun recordSuccess(

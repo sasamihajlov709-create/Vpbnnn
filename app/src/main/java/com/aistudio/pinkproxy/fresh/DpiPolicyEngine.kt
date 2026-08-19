@@ -76,11 +76,7 @@ object DpiPolicyEngine {
             boosts.add(StrategyFamily.TIMING)
         }
 
-        val resolvedTransport = if (fingerprint.udpBlockRate > 0.6) {
-            TransportType.UDP
-        } else {
-            transport
-        }
+        val resolvedTransport = transport
 
         return PolicyDecision(
             targetIntensity = targetIntensity,

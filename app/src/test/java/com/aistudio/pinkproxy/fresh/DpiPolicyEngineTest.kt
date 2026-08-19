@@ -92,4 +92,33 @@ class DpiPolicyEngineTest {
         assertEquals(100, DpiEngine.strategyScores[HostCategory.OTHER]?.get(BypassStrategy.SNI_SPLIT)?.get())
         assertTrue(DpiEngine.circuitBreakers.isEmpty())
     }
+
+    @Test
+    fun testTransportSpecificPolicyEvaluation() {
+        val udpFingerprint = DpiAnalyzer.CensorshipFingerprint(
+            rstRate = 0.0,
+            sniBlockRate = 0.0,
+            udpBlockRate = 0.8,
+            timeoutRate = 0.4,
+            stallRate = 0.0,
+            jitter = 50.0,
+            intensity = 60
+        )
+
+        val udpDecision = DpiPolicyEngine.evaluatePolicy(
+            fingerprint = udpFingerprint,
+            globalSuccessRate = 50.0,
+            totalObservations = 20,
+            transport = TransportType.UDP
+        )
+        assertEquals(TransportType.UDP, udpDecision.affectedTransport)
+
+        val tcpDecision = DpiPolicyEngine.evaluatePolicy(
+            fingerprint = udpFingerprint,
+            globalSuccessRate = 50.0,
+            totalObservations = 20,
+            transport = TransportType.TCP
+        )
+        assertEquals(TransportType.TCP, tcpDecision.affectedTransport)
+    }
 }

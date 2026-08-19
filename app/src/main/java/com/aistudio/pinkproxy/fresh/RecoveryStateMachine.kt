@@ -300,15 +300,15 @@ object RecoveryStateMachine {
         }
     }
 
-    private fun processExtremeLatency(latencyMs: Long, transport: TransportType) {
+    private suspend fun processExtremeLatency(latencyMs: Long, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
-        BypassConfig.rotateGlobalStrategy(transport)
+        RuntimeCoordinator.rotateGlobalStrategy(transport, "Recovery: Extreme Latency ($latencyMs ms)")
         escalationLevel.set((escalationLevel.get() + 1).coerceAtMost(2))
     }
 
-    private fun processHealthDegraded(details: String, transport: TransportType) {
+    private suspend fun processHealthDegraded(details: String, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
-        BypassConfig.rotateGlobalStrategy(transport)
+        RuntimeCoordinator.rotateGlobalStrategy(transport, "Recovery: Health Degraded ($details)")
     }
 
     private fun processNetworkLost(networkType: String) {

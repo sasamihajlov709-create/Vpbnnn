@@ -19,6 +19,7 @@ object RuntimeCoordinator {
 
     private val coordinatorScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
     private val stateMutex = Mutex()
+    private var sessionJob: CompletableJob? = null
 
     private val _isEngineActive = MutableStateFlow(false)
     val isEngineActive: StateFlow<Boolean> = _isEngineActive.asStateFlow()
@@ -26,8 +27,14 @@ object RuntimeCoordinator {
     fun initialize(context: Context) {
         coordinatorScope.launch {
             stateMutex.withLock {
+                if (_isEngineActive.value && sessionJob?.isActive == true) {
+                    Log.d(TAG, "RuntimeCoordinator already initialized and active.")
+                    return@withLock
+                }
+                sessionJob?.cancel()
+                sessionJob = SupervisorJob()
                 _isEngineActive.value = true
-                Log.i(TAG, "RuntimeCoordinator initialized.")
+                Log.i(TAG, "RuntimeCoordinator initialized successfully.")
             }
         }
     }
@@ -36,7 +43,9 @@ object RuntimeCoordinator {
         coordinatorScope.launch {
             stateMutex.withLock {
                 _isEngineActive.value = false
-                Log.i(TAG, "RuntimeCoordinator shutdown completed.")
+                sessionJob?.cancel()
+                sessionJob = null
+                Log.i(TAG, "RuntimeCoordinator shutdown completed and session jobs cancelled.")
             }
         }
     }
