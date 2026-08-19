@@ -44,8 +44,8 @@ object RuntimeCoordinator {
     /**
      * Centralized transition to a new global bypass strategy with strict transport context and registry validation.
      */
-    fun transitionGlobalStrategy(newStrategy: BypassStrategy, transport: TransportType, reason: String) {
-        coordinatorScope.launch {
+    fun transitionGlobalStrategy(newStrategy: BypassStrategy, transport: TransportType, reason: String): Job {
+        return coordinatorScope.launch {
             applyStrategyTransition(newStrategy, transport, reason)
         }
     }
@@ -93,6 +93,15 @@ object RuntimeCoordinator {
         VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
         ProxyStats.logRecovery("Strategy rotated for $transport: ${best.name} ($reason)")
         best
+    }
+
+    /**
+     * Non-suspending dispatch version of strategy rotation.
+     */
+    fun requestGlobalStrategyRotation(transport: TransportType, reason: String = "Automated Rotation"): Job {
+        return coordinatorScope.launch {
+            rotateGlobalStrategy(transport, reason)
+        }
     }
 
     /**

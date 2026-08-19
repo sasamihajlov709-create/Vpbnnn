@@ -233,25 +233,25 @@ object DpiEngine {
         host: String,
         strat: BypassStrategy,
         success: Boolean,
+        transport: TransportType,
         latencyMs: Long = 0,
         reason: FailureReason? = null,
-        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
+        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null,
-        transport: TransportType = TransportType.TCP
+        effectiveStrategy: BypassStrategy? = null
     ) {
         val category = HostClassifier.classify(host)
         DpiStrategySelector.recordResult(
             strategy = strat,
             success = success,
+            transport = transport,
             category = category,
             reason = reason,
             latencyMs = latencyMs,
             host = host,
             quality = quality,
             requestedStrategy = requestedStrategy,
-            effectiveStrategy = effectiveStrategy,
-            transport = transport
+            effectiveStrategy = effectiveStrategy
         )
     }
 
@@ -365,7 +365,8 @@ object DpiEngine {
                             DpiStrategySelector.recordResult(
                                 executedStrategy, 
                                 true, 
-                                category, 
+                                transport = TransportType.TCP,
+                                category = category, 
                                 host = host,
                                 quality = ObservationQuality.TLS_RECORD_RECEIVED
                             )
@@ -374,7 +375,8 @@ object DpiEngine {
                             DpiStrategySelector.recordResult(
                                 executedStrategy,
                                 false,
-                                category,
+                                transport = TransportType.TCP,
+                                category = category,
                                 reason = FailureReason.CENSORSHIP_STALL,
                                 host = host,
                                 quality = ObservationQuality.CONNECT_ONLY
@@ -386,7 +388,8 @@ object DpiEngine {
                         DpiStrategySelector.recordResult(
                             executedStrategy,
                             false,
-                            category,
+                            transport = TransportType.TCP,
+                            category = category,
                             reason = FailureReason.TCP_RESET,
                             host = host,
                             quality = ObservationQuality.CONNECT_ONLY
@@ -414,16 +417,18 @@ object DpiEngine {
     fun recordResult(
         strategy: BypassStrategy, 
         success: Boolean, 
+        transport: TransportType,
         category: HostCategory = HostCategory.OTHER, 
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
+        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null
     ) = DpiStrategySelector.recordResult(
         strategy = strategy,
         success = success,
+        transport = transport,
         category = category,
         reason = reason,
         latencyMs = latencyMs,

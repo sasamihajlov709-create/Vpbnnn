@@ -317,7 +317,8 @@ object CensorshipExpert {
         
         // If everything is failing, rotate to a "Chaos" or "Combined" strategy
         if (successRate < 20 && ProxyStats.activeConnections.value > 5) {
-            BypassConfig.rotateGlobalStrategy(TransportType.TCP)
+            val targetTransport = if (fingerprint.udpBlockRate > 0.5) TransportType.UDP else TransportType.TCP
+            RuntimeCoordinator.requestGlobalStrategyRotation(targetTransport, "CensorshipExpert Deep Failure Rotation")
         }
     }
 

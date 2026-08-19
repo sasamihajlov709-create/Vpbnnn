@@ -29,7 +29,13 @@ class MultiNetworkAndDnsTest {
     fun testDpiStoragePersistenceAndClear() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         
-        DpiEngine.recordResult(BypassStrategy.TLS_APP_DATA_SPLIT, true, HostCategory.MESSENGER, latencyMs = 25)
+        DpiEngine.recordResult(
+            strategy = BypassStrategy.TLS_APP_DATA_SPLIT,
+            success = true,
+            transport = TransportType.TCP,
+            category = HostCategory.MESSENGER,
+            latencyMs = 25
+        )
         val scoreBefore = DpiStrategySelector.getAverageScore(BypassStrategy.TLS_APP_DATA_SPLIT)
         
         DpiStorage.saveScores(context)

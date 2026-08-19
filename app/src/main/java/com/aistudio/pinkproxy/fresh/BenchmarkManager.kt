@@ -68,7 +68,7 @@ object BenchmarkManager {
                                 strat = strategy,
                                 success = true,
                                 latencyMs = avgLatency,
-                                quality = ObservationQuality.FULL_DATA_TRANSFER,
+                                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
                                 requestedStrategy = strategy,
                                 effectiveStrategy = strategy,
                                 transport = TransportType.TCP

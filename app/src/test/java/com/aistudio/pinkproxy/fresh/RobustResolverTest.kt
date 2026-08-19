@@ -243,6 +243,7 @@ class RobustResolverTest {
         DpiStrategySelector.recordResult(
             strategy = testStrat,
             success = true,
+            transport = TransportType.TCP,
             category = HostCategory.OTHER,
             host = testHost,
             quality = ObservationQuality.CONNECT_ONLY
@@ -255,9 +256,10 @@ class RobustResolverTest {
         DpiStrategySelector.recordResult(
             strategy = testStrat,
             success = true,
+            transport = TransportType.TCP,
             category = HostCategory.OTHER,
             host = testHost,
-            quality = ObservationQuality.FULL_DATA_TRANSFER
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
         )
         assertNotNull("Full data transfer observation must persist in host memory", DpiEngine.hostSpecificMemory[testHost])
         assertEquals(testStrat, DpiEngine.hostSpecificMemory[testHost]?.strategy)

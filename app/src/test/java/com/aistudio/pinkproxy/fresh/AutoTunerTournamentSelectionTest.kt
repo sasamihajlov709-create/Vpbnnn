@@ -32,11 +32,11 @@ class AutoTunerTournamentSelectionTest {
             DpiStrategySelector.recordResult(
                 strategy = winningStrat,
                 success = true,
+                transport = transport,
                 category = category,
                 latencyMs = 25L,
                 host = host,
-                quality = ObservationQuality.FULL_DATA_TRANSFER,
-                transport = transport
+                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
             )
         }
 
@@ -58,11 +58,11 @@ class AutoTunerTournamentSelectionTest {
             DpiStrategySelector.recordResult(
                 strategy = failingStrat,
                 success = false,
+                transport = transport,
                 category = category,
                 reason = FailureReason.TCP_RESET,
                 host = host,
-                quality = ObservationQuality.CONNECT_ONLY,
-                transport = transport
+                quality = ObservationQuality.CONNECT_ONLY
             )
         }
 

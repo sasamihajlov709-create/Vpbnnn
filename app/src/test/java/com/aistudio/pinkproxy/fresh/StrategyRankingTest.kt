@@ -52,10 +52,10 @@ class StrategyRankingTest {
         BypassConfig.clearScores(context)
 
         repeat(5) {
-            DpiStrategySelector.recordResult(BypassStrategy.TLS_APP_DATA_SPLIT, true, HostCategory.MESSENGER, latencyMs = 20)
+            DpiStrategySelector.recordResult(BypassStrategy.TLS_APP_DATA_SPLIT, true, TransportType.TCP, HostCategory.MESSENGER, latencyMs = 20)
         }
         repeat(5) {
-            DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, false, HostCategory.MESSENGER)
+            DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, false, TransportType.TCP, HostCategory.MESSENGER)
         }
 
         val appDataScore = DpiStrategySelector.getAverageScore(BypassStrategy.TLS_APP_DATA_SPLIT)
@@ -71,7 +71,7 @@ class StrategyRankingTest {
         BypassConfig.clearScores(context)
 
         repeat(3) {
-            DpiEngine.recordStrategyResult("testdomain.org", BypassStrategy.SNI_SPLIT, true, 30)
+            DpiEngine.recordStrategyResult("testdomain.org", BypassStrategy.SNI_SPLIT, true, TransportType.TCP, 30)
         }
         val scoreBeforeSave = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
 
@@ -88,7 +88,7 @@ class StrategyRankingTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         BypassConfig.clearScores(context)
 
-        DpiEngine.recordStrategyResult("netdomain.com", BypassStrategy.SNI_SPLIT, false)
+        DpiEngine.recordStrategyResult("netdomain.com", BypassStrategy.SNI_SPLIT, false, TransportType.TCP)
         assertTrue(DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT) < 100)
 
         DpiEngine.resetStrategyScoresForNetworkChange()
@@ -119,7 +119,7 @@ class StrategyRankingTest {
         // Learn strategy on Wi-Fi
         DpiEngine.resetStrategyScoresForNetworkChange()
         repeat(4) {
-            DpiStrategySelector.recordResult(BypassStrategy.TCP_COMBINED_HYBRID, true, HostCategory.STREAMING, latencyMs = 25)
+            DpiStrategySelector.recordResult(BypassStrategy.TCP_COMBINED_HYBRID, true, TransportType.TCP, HostCategory.STREAMING, latencyMs = 25)
         }
         val wifiScore = DpiStrategySelector.getAverageScore(BypassStrategy.TCP_COMBINED_HYBRID).toInt()
         assertTrue("Wi-Fi learned score should be elevated", wifiScore > 100)
@@ -131,7 +131,7 @@ class StrategyRankingTest {
 
         // Learn different strategy on Cellular
         repeat(4) {
-            DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, true, HostCategory.STREAMING, latencyMs = 15)
+            DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, true, TransportType.TCP, HostCategory.STREAMING, latencyMs = 15)
         }
         val cellSniScore = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
         assertTrue("Cellular learned score for SNI_SPLIT should be elevated", cellSniScore > 100)
@@ -150,9 +150,10 @@ class StrategyRankingTest {
 
         // 1st success (HANDSHAKE_COMPLETE qualifies for host memory)
         DpiStrategySelector.recordResult(
-            BypassStrategy.TLS_SNI_JITTER_SPLIT,
-            true,
-            HostCategory.AI,
+            strategy = BypassStrategy.TLS_SNI_JITTER_SPLIT,
+            success = true,
+            transport = TransportType.TCP,
+            category = HostCategory.AI,
             latencyMs = 50,
             host = testHost,
             quality = ObservationQuality.HANDSHAKE_COMPLETE
@@ -163,12 +164,13 @@ class StrategyRankingTest {
 
         // 2nd success
         DpiStrategySelector.recordResult(
-            BypassStrategy.TLS_SNI_JITTER_SPLIT,
-            true,
-            HostCategory.AI,
+            strategy = BypassStrategy.TLS_SNI_JITTER_SPLIT,
+            success = true,
+            transport = TransportType.TCP,
+            category = HostCategory.AI,
             latencyMs = 45,
             host = testHost,
-            quality = ObservationQuality.FULL_DATA_TRANSFER
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
         )
         val mem2 = DpiEngine.hostSpecificMemory[testHost]
         assertNotNull(mem2)
@@ -206,6 +208,7 @@ class StrategyRankingTest {
         DpiStrategySelector.recordResult(
             strategy = executed,
             success = false,
+            transport = TransportType.TCP,
             category = HostCategory.OTHER,
             reason = FailureReason.TIMEOUT,
             host = testHost,
@@ -225,6 +228,7 @@ class StrategyRankingTest {
         DpiStrategySelector.recordResult(
             strategy = executed,
             success = true,
+            transport = TransportType.TCP,
             category = HostCategory.OTHER,
             latencyMs = 50,
             host = testHost,

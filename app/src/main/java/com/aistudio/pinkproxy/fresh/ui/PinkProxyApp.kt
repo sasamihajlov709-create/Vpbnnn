@@ -318,7 +318,7 @@ fun BypassTab(
             currentStrategy = currentStrategy,
             metrics = metrics,
             onSelect = { 
-                BypassConfig.setStrategy(it, TransportType.TCP, "UI Bypass Tab Selection")
+                RuntimeCoordinator.transitionGlobalStrategy(it, TransportType.TCP, "UI Bypass Tab Selection")
                 BypassConfig.saveBypassSettings(context)
                 onRestart()
             }

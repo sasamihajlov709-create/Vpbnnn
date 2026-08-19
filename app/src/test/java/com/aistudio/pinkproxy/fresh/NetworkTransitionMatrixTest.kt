@@ -46,11 +46,11 @@ class NetworkTransitionMatrixTest {
         DpiStrategySelector.recordResult(
             strategy = BypassStrategy.SNI_SPLIT,
             success = true,
+            transport = TransportType.TCP,
             category = HostCategory.STREAMING,
             latencyMs = 20L,
             host = "googlevideo.com",
-            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
-            transport = TransportType.TCP
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
         )
 
         val wifiChosen = DpiStrategySelector.getBestStrategy(HostCategory.STREAMING, "googlevideo.com", TransportType.TCP)
@@ -64,11 +64,11 @@ class NetworkTransitionMatrixTest {
         DpiStrategySelector.recordResult(
             strategy = BypassStrategy.TLS_SNI_EXT_MANGLE,
             success = true,
+            transport = TransportType.TCP,
             category = HostCategory.STREAMING,
             latencyMs = 45L,
             host = "googlevideo.com",
-            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
-            transport = TransportType.TCP
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
         )
 
         val lteChosen = DpiStrategySelector.getBestStrategy(HostCategory.STREAMING, "googlevideo.com", TransportType.TCP)

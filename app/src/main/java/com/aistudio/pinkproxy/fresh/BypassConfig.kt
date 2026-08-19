@@ -309,12 +309,12 @@ object BypassConfig {
         DpiStrategySelector.recordResult(
             strategy = strat,
             success = true,
+            transport = transport,
             category = cat,
             latencyMs = rtt,
             host = host,
             requestedStrategy = requestedStrategy,
-            effectiveStrategy = effectiveStrategy,
-            transport = transport
+            effectiveStrategy = effectiveStrategy
         )
         if (rtt > 0) {
             TrafficShaper.updateRtt(rtt)
@@ -340,12 +340,12 @@ object BypassConfig {
         DpiStrategySelector.recordResult(
             strategy = strat,
             success = false,
+            transport = transport,
             category = cat,
             reason = reason,
             host = host,
             requestedStrategy = requestedStrategy,
-            effectiveStrategy = effectiveStrategy,
-            transport = transport
+            effectiveStrategy = effectiveStrategy
         )
         if (host != null) {
             val count = censorHeuristic.getOrDefault(host, 0) + 1

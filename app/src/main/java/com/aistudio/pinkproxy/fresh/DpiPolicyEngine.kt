@@ -16,7 +16,8 @@ object DpiPolicyEngine {
         val recommendedMtu: Int?,
         val shouldEnterPanic: Boolean,
         val shouldReset: Boolean,
-        val familyBoosts: List<StrategyFamily>
+        val familyBoosts: List<StrategyFamily>,
+        val affectedTransport: TransportType = TransportType.TCP
     )
 
     /**
@@ -25,7 +26,8 @@ object DpiPolicyEngine {
     fun evaluatePolicy(
         fingerprint: DpiAnalyzer.CensorshipFingerprint,
         globalSuccessRate: Double,
-        totalObservations: Int
+        totalObservations: Int,
+        transport: TransportType = TransportType.TCP
     ): PolicyDecision {
         val currentIntensity = ProxyStats.censorshipIntensity.value
         val calculatedIntensity = (
@@ -74,13 +76,20 @@ object DpiPolicyEngine {
             boosts.add(StrategyFamily.TIMING)
         }
 
+        val resolvedTransport = if (fingerprint.udpBlockRate > 0.6) {
+            TransportType.UDP
+        } else {
+            transport
+        }
+
         return PolicyDecision(
             targetIntensity = targetIntensity,
             calculatedStability = stability,
             recommendedMtu = recommendedMtu,
             shouldEnterPanic = shouldEnterPanic,
             shouldReset = shouldReset,
-            familyBoosts = boosts
+            familyBoosts = boosts,
+            affectedTransport = resolvedTransport
         )
     }
 
@@ -104,7 +113,7 @@ object DpiPolicyEngine {
 
         if (decision.shouldEnterPanic) {
             DpiEngine.enterPanicMode()
-            BypassConfig.rotateGlobalStrategy(TransportType.TCP)
+            RuntimeCoordinator.requestGlobalStrategyRotation(decision.affectedTransport, "Policy Panic Trigger")
         }
 
         if (decision.shouldReset) {

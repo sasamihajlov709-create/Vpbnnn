@@ -160,11 +160,22 @@ object UdpDnsProtocols {
 }
 
 object TcpDnsProtocols {
+    private fun readFully(inputStream: java.io.InputStream, buffer: ByteArray, length: Int): Boolean {
+        var totalRead = 0
+        while (totalRead < length) {
+            val r = inputStream.read(buffer, totalRead, length - totalRead)
+            if (r == -1) return false
+            totalRead += r
+        }
+        return true
+    }
+
     suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.Socket? = null
         try {
             socket = java.net.Socket()
             vpnService?.protect(socket)
+            socket.tcpNoDelay = true
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 4000)
             socket.soTimeout = 4000
             
@@ -187,15 +198,11 @@ object TcpDnsProtocols {
             val len2 = isInput.read()
             if (len1 == -1 || len2 == -1) return@withContext emptyList<InetAddress>()
             val length = (len1 shl 8) or len2
+            if (length <= 0 || length > 65535) return@withContext emptyList<InetAddress>()
             
             val response = ByteArray(length)
-            var read = 0
-            while (read < length) {
-                val r = isInput.read(response, read, length - read)
-                if (r == -1) break
-                read += r
-            }
-            DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryId, expectedHost = host)
+            if (!readFully(isInput, response, length)) return@withContext emptyList<InetAddress>()
+            DnsPacketEngine.parseDnsResponse(response, length, expectedId = queryId, expectedHost = host)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emptyList()
@@ -236,6 +243,7 @@ object TcpDnsProtocols {
         try {
             socket = java.net.Socket()
             vpnService?.protect(socket)
+            socket.tcpNoDelay = true
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 5000)
             socket.soTimeout = 5000
             
@@ -250,15 +258,11 @@ object TcpDnsProtocols {
             val len2 = isInput.read()
             if (len1 == -1 || len2 == -1) return@withContext emptyList<InetAddress>()
             val length = (len1 shl 8) or len2
+            if (length <= 0 || length > 65535) return@withContext emptyList<InetAddress>()
             
             val response = ByteArray(length)
-            var read = 0
-            while (read < length) {
-                val r = isInput.read(response, read, length - read)
-                if (r == -1) break
-                read += r
-            }
-            DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryId, expectedHost = host)
+            if (!readFully(isInput, response, length)) return@withContext emptyList<InetAddress>()
+            DnsPacketEngine.parseDnsResponse(response, length, expectedId = queryId, expectedHost = host)
         } catch (e: java.net.SocketTimeoutException) {
             emptyList()
         } catch (e: Exception) {
@@ -389,11 +393,22 @@ object DohDnsProtocols {
 object DotDnsProtocols {
     private val socketFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
 
+    private fun readFully(inputStream: java.io.InputStream, buffer: ByteArray, length: Int): Boolean {
+        var totalRead = 0
+        while (totalRead < length) {
+            val r = inputStream.read(buffer, totalRead, length - totalRead)
+            if (r == -1) return false
+            totalRead += r
+        }
+        return true
+    }
+
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.Socket? = null
         try {
             val plainSocket = java.net.Socket()
             vpnService?.protect(plainSocket)
+            plainSocket.tcpNoDelay = true
             plainSocket.connect(java.net.InetSocketAddress(dotIp, 853), 4000)
             
             socket = socketFactory.createSocket(plainSocket, dotIp, 853, true)
@@ -409,15 +424,11 @@ object DotDnsProtocols {
             val len2 = isInput.read()
             if (len1 == -1 || len2 == -1) return@withContext emptyList<InetAddress>()
             val length = (len1 shl 8) or len2
+            if (length <= 0 || length > 65535) return@withContext emptyList<InetAddress>()
             
             val response = ByteArray(length)
-            var read = 0
-            while (read < length) {
-                val r = isInput.read(response, read, length - read)
-                if (r == -1) break
-                read += r
-            }
-            val result = DnsPacketEngine.parseDnsResponse(response, read, expectedId = queryCtx.id, expectedHost = queryCtx.host)
+            if (!readFully(isInput, response, length)) return@withContext emptyList<InetAddress>()
+            val result = DnsPacketEngine.parseDnsResponse(response, length, expectedId = queryCtx.id, expectedHost = queryCtx.host)
             if (result.isNotEmpty()) {
                 DnsOptimizer.recordDotSuccess(dotIp)
             } else {

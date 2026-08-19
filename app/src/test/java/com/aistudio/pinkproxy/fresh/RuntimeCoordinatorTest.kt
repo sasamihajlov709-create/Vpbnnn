@@ -53,4 +53,19 @@ class RuntimeCoordinatorTest {
         )
         assertEquals(selected, BypassConfig.strategy.value)
     }
+
+    @Test
+    fun testRequestGlobalStrategyRotationAsynchronous() = runTest {
+        val job = RuntimeCoordinator.requestGlobalStrategyRotation(TransportType.TCP, "Async Test Rotation")
+        job.join()
+        assertNotNull(BypassConfig.strategy.value)
+        assertTrue(DpiStrategySelector.isFamilyCompatible(BypassConfig.strategy.value.family, TransportType.TCP))
+    }
+
+    @Test
+    fun testPublishRecoverySignal() {
+        val signal = RecoverySignal.DpiDetected(DpiType.TCP_RESET, "test.org", TransportType.TCP)
+        RuntimeCoordinator.publishRecoverySignal(signal)
+        assertNotNull(RecoveryStateMachine.currentState.value)
+    }
 }

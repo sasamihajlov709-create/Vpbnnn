@@ -378,14 +378,14 @@ object DpiStrategySelector {
     fun recordResult(
         strategy: BypassStrategy, 
         success: Boolean, 
+        transport: TransportType,
         category: HostCategory = HostCategory.OTHER, 
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality = ObservationQuality.FULL_DATA_TRANSFER,
+        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null,
-        transport: TransportType = TransportType.TCP
+        effectiveStrategy: BypassStrategy? = null
     ) {
         if (requestedStrategy != null && requestedStrategy != strategy) {
             DpiPolicyEngine.recordStrategySubstitution(

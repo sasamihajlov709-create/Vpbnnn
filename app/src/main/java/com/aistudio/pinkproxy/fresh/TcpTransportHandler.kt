@@ -251,7 +251,8 @@ object TcpTransportHandler {
                                     host = targetHost,
                                     strat = effectiveStrategy,
                                     success = true,
-                                    quality = ObservationQuality.FULL_DATA_TRANSFER,
+                                    transport = TransportType.TCP,
+                                    quality = ObservationQuality.SUSTAINED_DATA_TRANSFER,
                                     requestedStrategy = requestedStrategy,
                                     effectiveStrategy = effectiveStrategy
                                 )
@@ -480,6 +481,7 @@ object TcpTransportHandler {
                         host = targetHost,
                         strat = currentStrategy,
                         success = true,
+                        transport = TransportType.TCP,
                         latencyMs = latency,
                         quality = quality,
                         requestedStrategy = requestedStrategy,
@@ -496,6 +498,7 @@ object TcpTransportHandler {
                         host = targetHost,
                         strat = currentStrategy,
                         success = false,
+                        transport = TransportType.TCP,
                         latencyMs = 0,
                         reason = failureReason,
                         requestedStrategy = requestedStrategy,
@@ -523,6 +526,7 @@ object TcpTransportHandler {
                     host = targetHost,
                     strat = currentStrategy,
                     success = false,
+                    transport = TransportType.TCP,
                     latencyMs = 0,
                     reason = reason,
                     requestedStrategy = requestedStrategy,
