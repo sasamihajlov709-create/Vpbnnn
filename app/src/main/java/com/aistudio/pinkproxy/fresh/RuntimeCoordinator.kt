@@ -24,25 +24,25 @@ object RuntimeCoordinator {
     private val _isEngineActive = MutableStateFlow(false)
     val isEngineActive: StateFlow<Boolean> = _isEngineActive.asStateFlow()
 
-    fun initialize(context: Context) {
-        coordinatorScope.launch {
+    fun initialize(context: Context): Job {
+        _isEngineActive.value = true
+        return coordinatorScope.launch {
             stateMutex.withLock {
-                if (_isEngineActive.value && sessionJob?.isActive == true) {
+                if (sessionJob?.isActive == true) {
                     Log.d(TAG, "RuntimeCoordinator already initialized and active.")
                     return@withLock
                 }
                 sessionJob?.cancel()
                 sessionJob = SupervisorJob()
-                _isEngineActive.value = true
-                Log.i(TAG, "RuntimeCoordinator initialized successfully.")
+                Log.i(TAG, "RuntimeCoordinator session initialized successfully.")
             }
         }
     }
 
-    fun shutdown(context: Context) {
-        coordinatorScope.launch {
+    fun shutdown(context: Context): Job {
+        _isEngineActive.value = false
+        return coordinatorScope.launch {
             stateMutex.withLock {
-                _isEngineActive.value = false
                 sessionJob?.cancel()
                 sessionJob = null
                 Log.i(TAG, "RuntimeCoordinator shutdown completed and session jobs cancelled.")

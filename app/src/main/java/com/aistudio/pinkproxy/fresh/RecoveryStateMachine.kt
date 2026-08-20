@@ -58,12 +58,14 @@ object RecoveryStateMachine {
         machineScope = scope
         _currentState.value = RecoveryState.IDLE
         escalationLevel.set(0)
+        dnsFailureCount.set(0)
         Log.i(TAG, "RecoveryStateMachine initialized in IDLE state")
     }
 
     fun stop() {
         machineScope = null
         _currentState.value = RecoveryState.IDLE
+        dnsFailureCount.set(0)
     }
 
     /**
@@ -255,22 +257,34 @@ object RecoveryStateMachine {
         triggerActiveProbeAsync(2000L)
     }
 
+    private val dnsFailureCount = java.util.concurrent.atomic.AtomicInteger(0)
+
     private fun processDnsFailure(signal: RecoverySignal.DnsFailure) {
         _currentState.value = RecoveryState.DEGRADED
         RobustResolver.clearCache()
         DnsCacheManager.clearAll()
         DnsOptimizer.forceRefresh()
 
+        val count = dnsFailureCount.incrementAndGet()
+        Log.w(TAG, "DNS failure registered ($count consecutive): ${signal.domain} (poisoned=${signal.isPoisoned})")
+
         if (signal.isPoisoned) {
             enterPanic("DNS Poisoning detected for ${signal.domain}")
             RobustResolver.dnsMode = "Smart DoH"
+            DnsOptimizer.selectNextBestResolver()
+        } else {
+            DnsOptimizer.selectNextBestResolver()
         }
 
-        if (escalationLevel.get() < 2) {
-            escalationLevel.incrementAndGet()
+        if (count < 5) {
+            // Early stages: rotate DoH/DoT resolver and clear cache without restarting tunnel
+            triggerActiveProbeAsync(1000L)
+        } else if (count < 10) {
+            enterPanic("Repeated DNS failures across resolvers")
+            RobustResolver.dnsMode = "Smart DoH"
         } else {
-            enterPanic("Repeated DNS failures")
-            requestTunnelRestart("Persistent DNS failures/poisoning")
+            dnsFailureCount.set(0)
+            requestTunnelRestart("Persistent DNS failures across all resolvers")
         }
     }
 
@@ -326,6 +340,7 @@ object RecoveryStateMachine {
         RobustResolver.clearCache()
         DnsOptimizer.forceRefresh()
         escalationLevel.set(0)
+        dnsFailureCount.set(0)
         BypassConfig.setPanicMode(false)
         BypassConfig.setMtu(1400)
         triggerActiveProbeAsync(500L)

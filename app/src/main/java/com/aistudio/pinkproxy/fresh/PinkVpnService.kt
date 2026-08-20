@@ -482,7 +482,7 @@ class PinkVpnService : VpnService() {
             dupFd = vpnInterface.dup()
             rawFd = dupFd.detachFd()
             key.setDevice("fd://$rawFd")
-            key.setLogLevel("info")
+            key.setLogLevel("error")
             engine.Engine.insert(key)
             
             val startAck = CompletableDeferred<Unit>()

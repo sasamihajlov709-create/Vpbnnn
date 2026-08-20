@@ -182,6 +182,28 @@ object DnsOptimizer {
         }
     }
 
+    /**
+     * Rotates current best resolvers to the next available unpenalized providers.
+     */
+    fun selectNextBestResolver() {
+        val now = System.currentTimeMillis()
+        val availableDoh = dohUrls.filter { (providerBlacklist[it] ?: 0L) < now }
+        val currentDohIdx = availableDoh.indexOf(bestDohUrl)
+        if (availableDoh.isNotEmpty()) {
+            val nextDoh = availableDoh[(currentDohIdx + 1).coerceAtLeast(0) % availableDoh.size]
+            bestDohUrl = nextDoh
+            Log.i("DnsOptimizer", "Rotated best DoH resolver to: $nextDoh")
+        }
+
+        val availableDot = dotServers.filter { (providerBlacklist[it] ?: 0L) < now }
+        val currentDotIdx = availableDot.indexOf(bestDotServer)
+        if (availableDot.isNotEmpty()) {
+            val nextDot = availableDot[(currentDotIdx + 1).coerceAtLeast(0) % availableDot.size]
+            bestDotServer = nextDot
+            Log.i("DnsOptimizer", "Rotated best DoT resolver to: $nextDot")
+        }
+    }
+
     private suspend fun probeNow(vpnService: VpnService?) {
         lastProbeTime = System.currentTimeMillis()
         val testDomains = listOf("google.com", "bing.com", "cloudflare.com")
