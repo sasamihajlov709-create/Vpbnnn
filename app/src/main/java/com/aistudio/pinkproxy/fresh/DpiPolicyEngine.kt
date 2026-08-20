@@ -23,71 +23,80 @@ object DpiPolicyEngine {
     /**
      * Evaluates active policy based on diagnosis fingerprint and success rates.
      */
-    fun evaluatePolicy(
-        fingerprint: DpiAnalyzer.CensorshipFingerprint,
-        globalSuccessRate: Double,
-        totalObservations: Int,
-        transport: TransportType = TransportType.TCP
-    ): PolicyDecision {
-        val currentIntensity = ProxyStats.censorshipIntensity.value
-        val calculatedIntensity = (
-            fingerprint.rstRate * 55 + 
-            fingerprint.sniBlockRate * 65 + 
-            fingerprint.timeoutRate * 25 + 
-            fingerprint.stallRate * 40 + 
-            fingerprint.udpBlockRate * 35
-        ).toInt().coerceIn(0, 100)
+     fun evaluatePolicy(
+         fingerprint: DpiAnalyzer.CensorshipFingerprint,
+         globalSuccessRate: Double,
+         totalObservations: Int,
+         transport: TransportType = TransportType.TCP
+     ): PolicyDecision {
+         val currentIntensity = ProxyStats.censorshipIntensity.value
+         val calculatedIntensity = when (transport) {
+             TransportType.TCP -> (
+                 fingerprint.rstRate * 60 + 
+                 fingerprint.sniBlockRate * 70 + 
+                 fingerprint.timeoutRate * 30 + 
+                 fingerprint.stallRate * 45
+             ).toInt().coerceIn(0, 100)
+             TransportType.UDP -> (
+                 fingerprint.udpBlockRate * 85 + 
+                 fingerprint.timeoutRate * 30
+             ).toInt().coerceIn(0, 100)
+             TransportType.DNS -> (
+                 fingerprint.timeoutRate * 60 + 
+                 fingerprint.rstRate * 40
+             ).toInt().coerceIn(0, 100)
+         }
 
-        val shouldEnterPanic = (globalSuccessRate < 15.0 && calculatedIntensity > 40) ||
-                               (totalObservations > 20 && (globalSuccessRate < 15.0 || fingerprint.timeoutRate > 0.8))
-        val shouldReset = totalObservations > 20 && globalSuccessRate < 5.0
+         val shouldEnterPanic = (globalSuccessRate < 15.0 && calculatedIntensity > 40) ||
+                                (totalObservations > 20 && (globalSuccessRate < 15.0 || fingerprint.timeoutRate > 0.8))
+         val shouldReset = totalObservations > 20 && globalSuccessRate < 5.0
 
-        val targetIntensity = if (calculatedIntensity > currentIntensity) {
-            (currentIntensity * 0.2 + calculatedIntensity * 0.8).toInt()
-        } else {
-            if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05) {
-                (currentIntensity * 0.7 + calculatedIntensity * 0.3).toInt()
-            } else {
-                (currentIntensity * 0.9 + calculatedIntensity * 0.1).toInt()
-            }
-        }
+         val targetIntensity = if (calculatedIntensity > currentIntensity) {
+             (currentIntensity * 0.2 + calculatedIntensity * 0.8).toInt()
+         } else {
+             if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05) {
+                 (currentIntensity * 0.7 + calculatedIntensity * 0.3).toInt()
+             } else {
+                 (currentIntensity * 0.9 + calculatedIntensity * 0.1).toInt()
+             }
+         }
 
-        val stability = (
-            globalSuccessRate * 0.5 + 
-            (100.0 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100.0).coerceAtLeast(0.0) * 0.5
-        ).toInt().coerceIn(0, 100)
+         val stability = (
+             globalSuccessRate * 0.5 + 
+             (100.0 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100.0).coerceAtLeast(0.0) * 0.5
+         ).toInt().coerceIn(0, 100)
 
-        val boosts = mutableListOf<StrategyFamily>()
-        var recommendedMtu: Int? = null
+         val boosts = mutableListOf<StrategyFamily>()
+         var recommendedMtu: Int? = null
 
-        if (fingerprint.timeoutRate > 0.35 || fingerprint.stallRate > 0.45) {
-            val currentMtu = BypassConfig.currentMtu.value
-            if (currentMtu > 1000) {
-                recommendedMtu = currentMtu - 32
-            }
-            boosts.add(StrategyFamily.TIMING)
-            boosts.add(StrategyFamily.FRAGMENTATION)
-        } else if (stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
-            recommendedMtu = BypassConfig.currentMtu.value + 16
-        }
+         if (transport == TransportType.TCP && (fingerprint.timeoutRate > 0.35 || fingerprint.stallRate > 0.45)) {
+             val currentMtu = BypassConfig.currentMtu.value
+             if (currentMtu > 1000) {
+                 recommendedMtu = currentMtu - 32
+             }
+             boosts.add(StrategyFamily.TIMING)
+             boosts.add(StrategyFamily.FRAGMENTATION)
+         } else if (transport == TransportType.TCP && stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
+             recommendedMtu = BypassConfig.currentMtu.value + 16
+         }
 
-        if (fingerprint.jitter > 600) {
-            boosts.add(StrategyFamily.ADAPTIVE)
-            boosts.add(StrategyFamily.TIMING)
-        }
+         if (fingerprint.jitter > 600) {
+             boosts.add(StrategyFamily.ADAPTIVE)
+             boosts.add(StrategyFamily.TIMING)
+         }
 
-        val resolvedTransport = transport
+         val resolvedTransport = transport
 
-        return PolicyDecision(
-            targetIntensity = targetIntensity,
-            calculatedStability = stability,
-            recommendedMtu = recommendedMtu,
-            shouldEnterPanic = shouldEnterPanic,
-            shouldReset = shouldReset,
-            familyBoosts = boosts,
-            affectedTransport = resolvedTransport
-        )
-    }
+         return PolicyDecision(
+             targetIntensity = targetIntensity,
+             calculatedStability = stability,
+             recommendedMtu = recommendedMtu,
+             shouldEnterPanic = shouldEnterPanic,
+             shouldReset = shouldReset,
+             familyBoosts = boosts,
+             affectedTransport = resolvedTransport
+         )
+     }
 
     /**
      * Applies the policy decision to engine states, statistics, and configuration.

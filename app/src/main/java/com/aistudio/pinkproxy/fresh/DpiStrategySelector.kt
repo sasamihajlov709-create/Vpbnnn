@@ -414,6 +414,8 @@ object DpiStrategySelector {
     }
 
     fun recordObservation(obs: StrategyObservation) {
+        StrategyStateRepository.recordObservation(obs)
+
         val strategy = obs.executedStrategy
         val category = obs.category
         val success = obs.success

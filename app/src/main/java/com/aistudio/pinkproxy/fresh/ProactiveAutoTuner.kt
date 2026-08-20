@@ -122,7 +122,7 @@ object ProactiveAutoTuner {
 
             BypassApplier.applyBypass(socket, out, payload, payload.size, config, host)
 
-            val buf = ByteArray(1024)
+            val buf = ByteArray(2048)
             val read = inStream.read(buf)
 
             if (read > 0) {
@@ -130,12 +130,13 @@ object ProactiveAutoTuner {
                 // Check if response is valid TLS ServerHello (0x16, 0x03)
                 val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
                 if (isTlsServerHello) {
+                    // Valid ServerHello proves the DPI middlebox permitted handshake record creation
                     DpiEngine.recordStrategyResult(
                         host = host,
                         strat = strategy,
                         success = true,
                         latencyMs = latency,
-                        quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                        quality = ObservationQuality.TLS_RECORD_RECEIVED,
                         requestedStrategy = strategy,
                         effectiveStrategy = strategy,
                         transport = TransportType.TCP

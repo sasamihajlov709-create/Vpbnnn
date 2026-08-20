@@ -20,6 +20,7 @@ object RuntimeCoordinator {
     private val coordinatorScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
     private val stateMutex = Mutex()
     private var sessionJob: CompletableJob? = null
+    private var sessionScope: CoroutineScope? = null
 
     private val _isEngineActive = MutableStateFlow(false)
     val isEngineActive: StateFlow<Boolean> = _isEngineActive.asStateFlow()
@@ -33,7 +34,10 @@ object RuntimeCoordinator {
                     return@withLock
                 }
                 sessionJob?.cancel()
-                sessionJob = SupervisorJob()
+                val job = SupervisorJob()
+                sessionJob = job
+                sessionScope = CoroutineScope(ProxyDispatcher.io + job + ProxyDispatcher.globalHandler)
+                _isEngineActive.value = true
                 Log.i(TAG, "RuntimeCoordinator session initialized successfully.")
             }
         }
@@ -43,8 +47,11 @@ object RuntimeCoordinator {
         _isEngineActive.value = false
         return coordinatorScope.launch {
             stateMutex.withLock {
+                sessionScope?.cancel()
+                sessionScope = null
                 sessionJob?.cancel()
                 sessionJob = null
+                _isEngineActive.value = false
                 Log.i(TAG, "RuntimeCoordinator shutdown completed and session jobs cancelled.")
             }
         }
@@ -54,7 +61,8 @@ object RuntimeCoordinator {
      * Centralized transition to a new global bypass strategy with strict transport context and registry validation.
      */
     fun transitionGlobalStrategy(newStrategy: BypassStrategy, transport: TransportType, reason: String): Job {
-        return coordinatorScope.launch {
+        val targetScope = sessionScope ?: coordinatorScope
+        return targetScope.launch {
             applyStrategyTransition(newStrategy, transport, reason)
         }
     }
@@ -108,7 +116,8 @@ object RuntimeCoordinator {
      * Non-suspending dispatch version of strategy rotation.
      */
     fun requestGlobalStrategyRotation(transport: TransportType, reason: String = "Automated Rotation"): Job {
-        return coordinatorScope.launch {
+        val targetScope = sessionScope ?: coordinatorScope
+        return targetScope.launch {
             rotateGlobalStrategy(transport, reason)
         }
     }

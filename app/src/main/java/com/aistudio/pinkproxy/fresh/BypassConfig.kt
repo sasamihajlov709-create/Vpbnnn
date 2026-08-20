@@ -21,11 +21,6 @@ object BypassConfig {
      * Public API for UI / settings changes: delegates to RuntimeCoordinator for safe validation and single-point mutation.
      */
     fun setStrategy(new: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "User Selection") {
-        val isFamilyValid = DpiStrategySelector.isFamilyCompatible(new.family, transport)
-        val isExecutorValid = StrategyExecutionRegistry.isExecutorSupported(new, transport)
-        val target = if (isFamilyValid && isExecutorValid) new else DpiStrategySelector.getDefaultFallback(transport)
-        applyInternalStrategy(target)
-        VpnRuntimeState.updateStrategy(target.name, reason)
         RuntimeCoordinator.transitionGlobalStrategy(new, transport, reason)
     }
 

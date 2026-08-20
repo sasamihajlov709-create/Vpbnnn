@@ -12,10 +12,11 @@ object DpiAnalyzer {
         val timeoutRate: Double,
         val stallRate: Double,
         val jitter: Double,
-        val intensity: Int
+        val intensity: Int,
+        val transport: TransportType = TransportType.TCP
     )
 
-    fun getCensorshipFingerprint(): CensorshipFingerprint {
+    fun getCensorshipFingerprint(transport: TransportType = TransportType.TCP): CensorshipFingerprint {
         val total = DpiEngine.eventHistory.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
         
         val allHistory = DpiEngine.rttHistory.values.flatMap { synchronized(it) { it.toList() } }
@@ -31,7 +32,8 @@ object DpiAnalyzer {
             timeoutRate = (DpiEngine.eventHistory[DpiType.CONNECTION_TIMEOUT]?.get() ?: 0) / total,
             stallRate = ((DpiEngine.eventHistory[DpiType.TCP_STALL]?.get() ?: 0) + (DpiEngine.eventHistory[DpiType.SSL_STALL]?.get() ?: 0)) / total,
             jitter = jitter,
-            intensity = ProxyStats.censorshipIntensity.value
+            intensity = ProxyStats.censorshipIntensity.value,
+            transport = transport
         )
     }
 
