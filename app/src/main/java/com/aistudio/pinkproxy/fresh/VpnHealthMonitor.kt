@@ -18,23 +18,23 @@ class VpnHealthMonitor(
 ) {
 
     private var watchdogJob: Job? = null
-    private var engineMonitorJob: Job? = null
     private var memoryMonitorJob: Job? = null
     private var chaffJob: Job? = null
+    private var trafficMonitorJob: Job? = null
 
     fun start(scope: CoroutineScope) {
         stop()
         startWatchdog(scope)
         startMemoryMonitor(scope)
-        startEngineMonitor(scope)
+        startTrafficMonitor(scope)
         startChaffGenerator(scope)
     }
 
     fun stop() {
         watchdogJob?.cancel()
         watchdogJob = null
-        engineMonitorJob?.cancel()
-        engineMonitorJob = null
+        trafficMonitorJob?.cancel()
+        trafficMonitorJob = null
         memoryMonitorJob?.cancel()
         memoryMonitorJob = null
         chaffJob?.cancel()
@@ -44,6 +44,8 @@ class VpnHealthMonitor(
     private fun startWatchdog(scope: CoroutineScope) {
         watchdogJob = scope.launch {
             var lastDnsFailures = 0L
+            var lastCoolDown = System.currentTimeMillis()
+
             while (isActive) {
                 try {
                     val activeConns = ProxyStats.activeConnections.value
@@ -57,6 +59,17 @@ class VpnHealthMonitor(
                     delay(delayMs)
 
                     if (!isVpnRunning()) continue
+                    
+                    val now = System.currentTimeMillis()
+                    if (now - lastCoolDown > 600000) { // Every 10 minutes
+                        val rate = ProxyStats.successRate.value
+                        if (rate > 80) {
+                            val reduction = if (rate > 95) 2 else 1
+                            RecoveryStateMachine.coolDownEscalation(reduction)
+                            Log.i("VpnHealthMonitor", "Strategy cooling: RecoveryStateMachine escalation reduced by $reduction")
+                        }
+                        lastCoolDown = now
+                    }
 
                     val dnsFailures = ProxyStats.dnsFailureCount.value
 
@@ -112,25 +125,51 @@ class VpnHealthMonitor(
         }
     }
 
-    private fun startEngineMonitor(scope: CoroutineScope) {
-        engineMonitorJob = scope.launch {
+    private fun startTrafficMonitor(scope: CoroutineScope) {
+        trafficMonitorJob = scope.launch {
+            var lastBytes = ProxyStats.bytesTransferred.value
+            var stallCounter = 0
+            
             while (isActive && isVpnRunning()) {
-                val delayMs = if (!BypassConfig.isScreenOn) 90000L else 30000L
-                delay(delayMs)
-                if (isVpnRunning() && (BypassConfig.isScreenOn || ProxyStats.activeConnections.value > 0)) {
-                    try {
-                        val socket = Socket()
-                        try { protectSocket(socket) } catch (e: Exception) {}
-                        socket.connect(InetSocketAddress("127.0.0.1", proxyPort), 1500)
-                        socket.close()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e("VpnHealthMonitor", "Engine health check failed: ${e.message}. Reporting signal...")
-                        ProxyStats.recordDpiEvent(DpiType.CONNECTION_TIMEOUT)
-                        RecoveryStateMachine.postSignal(RecoverySignal.ProxyUnresponsive("engine_connect_timeout: ${e.message}"))
-                    }
+                val rtt = BypassConfig.currentRttMs.value
+                val checkInterval = if (rtt > 800) 8000L else 5000L
+                delay(checkInterval)
+                
+                if (!isVpnRunning()) continue
+                
+                val currentBytes = ProxyStats.bytesTransferred.value
+                val activeConns = ProxyStats.activeConnections.value
+                val rate = ProxyStats.successRate.value
+                
+                // Monitor RTT for suspicious spikes
+                val currentRtt = ProxyStats.lastLatency.value
+                if (currentRtt > 2500 && activeConns > 0) {
+                    RecoveryStateMachine.postSignal(RecoverySignal.ExtremeLatency(currentRtt))
                 }
+                
+                // Check for DPI detected
+                if (ProxyStats.currentDpiType.value != DpiType.NONE) {
+                    RecoveryStateMachine.postSignal(RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value))
+                    ProxyStats.clearDpiType()
+                }
+
+                // Check for censorship stall
+                if (activeConns > 0 && ProxyStats.censorshipIntensity.value > 85 && rate < 30) {
+                    RecoveryStateMachine.postSignal(RecoverySignal.TunnelStall(15000L, activeConns))
+                }
+
+                // Traffic stall check
+                if (activeConns > 0 && currentBytes == lastBytes) {
+                    stallCounter++
+                    val threshold = if (rtt > 1000) 4 else 3
+                    if (stallCounter >= threshold) { 
+                        RecoveryStateMachine.postSignal(RecoverySignal.TunnelStall((stallCounter * checkInterval).toLong(), activeConns))
+                        stallCounter = 0
+                    }
+                } else {
+                    stallCounter = 0
+                }
+                lastBytes = currentBytes
             }
         }
     }

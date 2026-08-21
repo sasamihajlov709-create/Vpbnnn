@@ -104,10 +104,8 @@ object DpiStrategySelector {
             }
         }
 
-        val catScores = DpiEngine.strategyScores[category] ?: return getDefaultFallback(transport)
-        
         val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
-        val validStrategies = catScores.entries.filter { (strat, _) ->
+        val validStrategies = BypassStrategy.entries.filter { strat ->
             isFamilyCompatible(strat.family, transport) &&
             StrategyExecutionRegistry.isExecutorSupported(strat, transport) &&
             (DpiEngine.circuitBreakers[strat] ?: 0L) < now && 
@@ -128,7 +126,7 @@ object DpiStrategySelector {
         // Auto-Tuner 2.0: Adaptive Tournament Pre-Filtering
         // Dynamic K sizing based on Bayesian confidence: high confidence focuses on Top performers (exploitation), low confidence expands exploration slots.
         val candidatePool = if (validStrategies.size > 10) {
-            val topState = StrategyStateRepository.getStrategyState(category, validStrategies.first().key)
+            val topState = StrategyStateRepository.getStrategyState(validStrategies.first(), transport, category, profileId)
             val (_, confidence) = topState.calculateBetaPosterior()
             val (kSize, exploreSize) = when {
                 confidence > 0.85 -> Pair(4, 1)
@@ -136,23 +134,21 @@ object DpiStrategySelector {
                 else -> Pair(16, 4)
             }
 
-            val sortedByPrior = validStrategies.sortedByDescending { (strat, score) ->
-                val base = score.get().toDouble()
-                val weightedS = (DpiEngine.categoryWeightedSuccessHistory[category]?.get(strat)?.get() ?: 0L) / 1000.0
-                val failures = DpiEngine.categoryFailureHistory[category]?.get(strat)?.get() ?: 0
+            val sortedByPrior = validStrategies.sortedByDescending { strat ->
+                val state = StrategyStateRepository.getStrategyState(strat, transport, category, profileId)
+                val base = state.score.get().toDouble()
+                val weightedS = state.weightedSuccess.get() / 1000.0
+                val failures = state.failureCount.get()
                 base + (weightedS * 15.0) - (failures * 20.0)
             }
             val topPerformers = sortedByPrior.take(kSize)
             val explorationSlots = sortedByPrior.drop(kSize).shuffled().take(exploreSize)
-            (topPerformers + explorationSlots).distinctBy { it.key }
+            (topPerformers + explorationSlots).distinct()
         } else {
             validStrategies
         }
 
         // Bayesian Thompson Sampling (Multi-Armed Bandit) integration across the optimized candidate pool
-        val catSuccessMap = DpiEngine.categorySuccessHistory[category]
-        val catFailureMap = DpiEngine.categoryFailureHistory[category]
-
         val weightedList = mutableListOf<Pair<BypassStrategy, Double>>()
         var currentTotal = 0.0
         val currentDpi = ProxyStats.currentDpiType.value
@@ -160,35 +156,30 @@ object DpiStrategySelector {
         val netTypeVal = BypassConfig.currentNetworkType.value
         val isPowerSave = BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 20
         
-        for ((strat, sRaw) in candidatePool) {
-            val catWeightedS = (DpiEngine.categoryWeightedSuccessHistory[category]?.get(strat)?.get() ?: 0L) / 1000.0
-            val globalWeightedS = (DpiEngine.weightedSuccessHistory[strat]?.get() ?: 0L) / 1000.0
-            val catF = catFailureMap?.get(strat)?.get() ?: 0
-            val globalF = DpiEngine.failureHistory[strat]?.get() ?: 0
+        for (strat in candidatePool) {
+            val state = StrategyStateRepository.getStrategyState(strat, transport, category, profileId)
+            
+            val catWeightedS = state.weightedSuccess.get() / 1000.0
+            val catF = state.failureCount.get()
 
-            // Prior alpha & beta based on baseline score + gentle global prior (0.15 weight) without double-counting
-            val baseScore = sRaw.get().toDouble().coerceIn(10.0, 500.0)
-            val priorAlpha = (baseScore / 80.0).coerceIn(1.0, 6.0) + (globalWeightedS * 0.15)
-            val priorBeta = 2.0 + (globalF * 0.15)
+            // Prior alpha & beta based on baseline score
+            val baseScore = state.score.get().toDouble().coerceIn(10.0, 500.0)
+            val priorAlpha = (baseScore / 80.0).coerceIn(1.0, 6.0)
+            val priorBeta = 2.0
 
-            val alpha = priorAlpha + (catWeightedS * 0.85)
+            val alpha = priorAlpha + catWeightedS
             val beta = priorBeta + (catF * 1.15)
 
             // Draw probability sample from posterior Beta distribution
             val sampledWinRate = ThompsonSampler.sampleBeta(alpha, beta)
 
             var s = sampledWinRate * 200.0
-            
-            val gPenalty = DpiEngine.globalPenalties[strat]?.get() ?: 0
-            val gBoost = DpiEngine.globalBoosts[strat]?.get() ?: 0
-            s = (s - (gPenalty * 0.5) + (gBoost * 0.5)).coerceAtLeast(1.0)
 
             val globalScore = ProxyStats.getStrategyScore(strat).toDouble()
             if (globalScore > 0) s += globalScore * 3.0
             else if (globalScore < 0) s += globalScore * 6.0
             
             s = s.coerceAtLeast(1.0)
-            s += (DpiEngine.strategyMaturity[strat]?.get() ?: 0) / 8.0
             
             when (currentDpi) {
                 DpiType.TLS_SNI_BLOCK -> if (strat.family == StrategyFamily.TLS || strat.family == StrategyFamily.FRAGMENTATION) s *= 1.8
@@ -264,7 +255,9 @@ object DpiStrategySelector {
         }
 
         if (currentTotal <= 0 || weightedList.isEmpty()) {
-            return validStrategies.maxByOrNull { it.value.get() }?.key ?: getDefaultFallback(transport)
+            return validStrategies.maxByOrNull { strat ->
+                StrategyStateRepository.getStrategyState(strat, transport, category, profileId).score.get()
+            } ?: getDefaultFallback(transport)
         }
 
         val bestByWeightPair = weightedList.maxByOrNull { it.second }

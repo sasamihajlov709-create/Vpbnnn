@@ -401,7 +401,6 @@ class PinkVpnService : VpnService() {
             RuntimeCoordinator.initialize(this@PinkVpnService)
             RecoveryStateMachine.start(engineScope)
             ServiceChecker.startChecking(engineScope, this@PinkVpnService)
-            RecoveryManager.startHealthCheck(engineScope)
             healthMonitor?.start(engineScope)
 
             startSessionWarmup()
@@ -600,7 +599,6 @@ class PinkVpnService : VpnService() {
             UdpTransportHandler.clearBuffers()
             RecoveryStateMachine.stop()
             RuntimeCoordinator.shutdown(this@PinkVpnService)
-            RecoveryManager.stopHealthCheck()
             DeviceMonitor.stopDeviceMonitoring(this@PinkVpnService)
 
             vpnNetworkMonitor?.stop()

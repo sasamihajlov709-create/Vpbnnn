@@ -31,7 +31,10 @@ object BenchmarkManager {
         _isRunning.value = true
         _progress.value = 0f
         
-        val strategies = BypassStrategy.entries.filter { it != BypassStrategy.DIRECT }
+        val strategies = BypassStrategy.entries.filter { 
+            it != BypassStrategy.DIRECT && 
+            StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) 
+        }
         _results.value = strategies.map { BenchmarkResult(it) }
 
         benchmarkJob = scope.launch(Dispatchers.IO) {
@@ -45,35 +48,37 @@ object BenchmarkManager {
                 strategies.forEachIndexed { index, strategy ->
                     if (!isActive) return@forEachIndexed
                     
-                    BypassConfig.forcedBenchmarkStrategy = strategy
-                    
-                    val attemptResults = testHosts.map { (name, url) ->
-                        val status = NetworkProber.probeServiceViaProxy(name, url, proxyPort)
-                        status
+                    val attemptResults = mutableListOf<Pair<Pair<String, String>, ServiceChecker.ServiceStatus>>()
+                    try {
+                        BypassConfig.forcedBenchmarkStrategy = strategy
+                        for (testHost in testHosts) {
+                            if (!isActive) break
+                            val status = NetworkProber.probeServiceViaProxy(testHost.first, testHost.second, proxyPort)
+                            attemptResults.add(testHost to status)
+                        }
+                    } finally {
+                        BypassConfig.forcedBenchmarkStrategy = null
                     }
-                    
-                    BypassConfig.forcedBenchmarkStrategy = null
 
-                    val successCount = attemptResults.count { it.isUp }
+                    val successCount = attemptResults.count { it.second.isUp }
                     val avgLatency = if (successCount > 0) {
-                        attemptResults.filter { it.isUp }.map { it.latencyMs }.average().toLong()
+                        attemptResults.filter { it.second.isUp }.map { it.second.latencyMs }.average().toLong()
                     } else 0L
 
-                    // Feed confirmed benchmark results into DpiEngine learning memory
-                    if (successCount > 0) {
-                        testHosts.forEach { (name, url) ->
-                            val host = try { java.net.URL(url).host } catch (e: Exception) { name.lowercase() }
-                            DpiEngine.recordStrategyResult(
-                                host = host,
-                                strat = strategy,
-                                success = true,
-                                latencyMs = avgLatency,
-                                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
-                                requestedStrategy = strategy,
-                                effectiveStrategy = strategy,
-                                transport = TransportType.TCP
-                            )
-                        }
+                    // Feed confirmed benchmark results individually per host
+                    attemptResults.forEach { (hostInfo, result) ->
+                        val (name, url) = hostInfo
+                        val host = try { java.net.URL(url).host } catch (e: Exception) { name.lowercase() }
+                        DpiEngine.recordStrategyResult(
+                            host = host,
+                            strat = strategy,
+                            success = result.isUp,
+                            transport = TransportType.TCP,
+                            quality = if (result.isUp) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
+                            requestedStrategy = strategy,
+                            effectiveStrategy = strategy,
+                            latencyMs = result.latencyMs
+                        )
                     }
 
                     val newResult = BenchmarkResult(

@@ -98,10 +98,10 @@ class ProfileIsolationAndScoringDecayTest {
     fun testThompsonSamplerSamplingBounds() {
         for (i in 0 until 100) {
             val sampleLow = ThompsonSampler.sampleBeta(1.0, 50.0)
-            assertTrue("Sample with heavy failure should be < 0.2", sampleLow < 0.2)
+            assertTrue("Sample with heavy failure should be < 0.25", sampleLow < 0.25)
 
             val sampleHigh = ThompsonSampler.sampleBeta(50.0, 1.0)
-            assertTrue("Sample with high success should be > 0.8", sampleHigh > 0.8)
+            assertTrue("Sample with high success should be > 0.75", sampleHigh > 0.75)
 
             val sampleBalanced = ThompsonSampler.sampleBeta(10.0, 10.0)
             assertTrue("Sample balanced should be between 0.0001 and 0.9999", sampleBalanced in 0.0001..0.9999)

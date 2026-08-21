@@ -108,48 +108,46 @@ object ProactiveAutoTuner {
         val rtt = BypassConfig.currentRttMs.value
         val config = BypassConfig.getSessionConfig(host, strategy, rtt, TransportType.TCP)
         
-        for (targetIp in ips.take(3)) {
-            val socket = Socket()
-            try {
-                vpnService?.protect(socket)
-                socket.tcpNoDelay = true
-                socket.soTimeout = 1200
-
-                socket.connect(InetSocketAddress(targetIp, port), 1200)
-
-                val out = socket.getOutputStream()
-                val inStream = socket.getInputStream()
-                val startTime = System.currentTimeMillis()
-
-                BypassApplier.applyBypass(socket, out, payload, payload.size, config, host)
-
-                val buf = ByteArray(2048)
-                val read = inStream.read(buf)
-
-                if (read > 0) {
-                    val latency = System.currentTimeMillis() - startTime
-                    // Check if response is valid TLS ServerHello (0x16, 0x03)
-                    val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
-                    if (isTlsServerHello) {
-                        // Valid ServerHello proves the DPI middlebox permitted handshake record creation
-                        DpiEngine.recordStrategyResult(
-                            host = host,
-                            strat = strategy,
-                            success = true,
-                            latencyMs = latency,
-                            quality = ObservationQuality.TLS_RECORD_RECEIVED,
-                            requestedStrategy = strategy,
-                            effectiveStrategy = strategy,
-                            transport = TransportType.TCP
-                        )
-                        return@withContext true
+        try {
+            val socket = HappyEyeballsConnector.connectHappyEyeballs(ips, port, vpnService, host)
+            if (socket != null) {
+                try {
+                    val out = socket.getOutputStream()
+                    val inStream = socket.getInputStream()
+                    val startTime = System.currentTimeMillis()
+    
+                    BypassApplier.applyBypass(socket, out, payload, payload.size, config, host)
+    
+                    val buf = ByteArray(2048)
+                    val read = inStream.read(buf)
+    
+                    if (read > 0) {
+                        val latency = System.currentTimeMillis() - startTime
+                        // Check if response is valid TLS ServerHello (0x16, 0x03)
+                        val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
+                        if (isTlsServerHello) {
+                            // Valid ServerHello proves the DPI middlebox permitted handshake record creation
+                            DpiEngine.recordStrategyResult(
+                                host = host,
+                                strat = strategy,
+                                success = true,
+                                latencyMs = latency,
+                                quality = ObservationQuality.TLS_RECORD_RECEIVED,
+                                requestedStrategy = strategy,
+                                effectiveStrategy = strategy,
+                                transport = TransportType.TCP
+                            )
+                            // We return false because a TLS record does NOT prove full application data exchange,
+                            // so we don't want to abort tuning for other candidates prematurely.
+                            return@withContext false
+                        }
                     }
+                } finally {
+                    try { socket.close() } catch (e: Exception) {}
                 }
-            } catch (e: Exception) {
-                // Try next IP endpoint before concluding strategy failed
-            } finally {
-                try { socket.close() } catch (e: Exception) {}
             }
+        } catch (e: Exception) {
+            // connection failed
         }
 
         // All resolved IP attempts failed for this strategy candidate

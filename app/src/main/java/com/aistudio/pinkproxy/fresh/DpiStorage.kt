@@ -54,8 +54,23 @@ object DpiStorage {
         }
         val hostBl = DpiEngine.hostStrategyBlacklist.mapValues { (_, map) -> map.toMap() }
 
+        val ctxStates = mutableMapOf<StrategyContextKey, StrategyMetricState>()
+        StrategyStateRepository.getAllContextStates().forEach { (key, state) ->
+            if (key.profileId == profileId) {
+                ctxStates[key] = StrategyMetricState(
+                    score = state.score.get(),
+                    successCount = state.successCount.get(),
+                    failureCount = state.failureCount.get(),
+                    weightedSuccess = state.weightedSuccess.get(),
+                    verifiedSuccessCount = state.verifiedSuccessCount.get(),
+                    totalLatencyMs = state.totalLatencyMs.get(),
+                    lastUsedTimestamp = state.lastUsedTimestamp.get()
+                )
+            }
+        }
+
         return StrategyProfileState(
-            version = 1,
+            version = 2,
             profileId = profileId,
             timestamp = System.currentTimeMillis(),
             metricsByCategory = metricsMap,
@@ -63,7 +78,8 @@ object DpiStorage {
             networkMemory = netMem,
             hostMemory = hostMem,
             contextualHostMemory = ctxHostMem,
-            hostBlacklist = hostBl
+            hostBlacklist = hostBl,
+            contextualStrategyStates = ctxStates
         )
     }
 
@@ -116,15 +132,20 @@ object DpiStorage {
         }
 
         // Restore canonical StrategyStateRepository states
-        state.metricsByCategory.forEach { (cat, stratMap) ->
-            stratMap.forEach { (strat, metric) ->
-                val key = StrategyContextKey(
-                    strategy = strat,
-                    transport = TransportType.TCP,
-                    category = cat,
-                    profileId = state.profileId
-                )
-                StrategyStateRepository.restoreStates(mapOf(key to metric))
+        if (state.contextualStrategyStates.isNotEmpty()) {
+            StrategyStateRepository.restoreStates(state.contextualStrategyStates)
+        } else {
+            // Legacy fallback for old V1 profiles
+            state.metricsByCategory.forEach { (cat, stratMap) ->
+                stratMap.forEach { (strat, metric) ->
+                    val key = StrategyContextKey(
+                        strategy = strat,
+                        transport = TransportType.TCP,
+                        category = cat,
+                        profileId = state.profileId
+                    )
+                    StrategyStateRepository.restoreStates(mapOf(key to metric))
+                }
             }
         }
     }

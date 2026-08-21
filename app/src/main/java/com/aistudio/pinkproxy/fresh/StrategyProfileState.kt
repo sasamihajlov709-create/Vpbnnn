@@ -7,7 +7,10 @@ data class StrategyMetricState(
     val score: Int = 100,
     val successCount: Int = 0,
     val failureCount: Int = 0,
-    val weightedSuccess: Long = 0L
+    val weightedSuccess: Long = 0L,
+    val verifiedSuccessCount: Int = 0,
+    val totalLatencyMs: Long = 0L,
+    val lastUsedTimestamp: Long = 0L
 ) {
     fun toJsonObject(): JSONObject {
         val json = JSONObject()
@@ -15,6 +18,9 @@ data class StrategyMetricState(
         json.put("successCount", successCount)
         json.put("failureCount", failureCount)
         json.put("weightedSuccess", weightedSuccess)
+        json.put("verifiedSuccessCount", verifiedSuccessCount)
+        json.put("totalLatencyMs", totalLatencyMs)
+        json.put("lastUsedTimestamp", lastUsedTimestamp)
         return json
     }
 
@@ -24,14 +30,17 @@ data class StrategyMetricState(
                 score = json.optInt("score", 100),
                 successCount = json.optInt("successCount", 0),
                 failureCount = json.optInt("failureCount", 0),
-                weightedSuccess = json.optLong("weightedSuccess", 0L)
+                weightedSuccess = json.optLong("weightedSuccess", 0L),
+                verifiedSuccessCount = json.optInt("verifiedSuccessCount", 0),
+                totalLatencyMs = json.optLong("totalLatencyMs", 0L),
+                lastUsedTimestamp = json.optLong("lastUsedTimestamp", 0L)
             )
         }
     }
 }
 
 data class StrategyProfileState(
-    val version: Int = 1,
+    val version: Int = 2,
     val profileId: String,
     val timestamp: Long = System.currentTimeMillis(),
     val metricsByCategory: Map<HostCategory, Map<BypassStrategy, StrategyMetricState>> = emptyMap(),
@@ -39,7 +48,8 @@ data class StrategyProfileState(
     val networkMemory: Map<HostCategory, DpiEngine.NetworkMemory> = emptyMap(),
     val hostMemory: Map<String, DpiEngine.HostMemory> = emptyMap(),
     val contextualHostMemory: Map<HostContextKey, DpiEngine.HostMemory> = emptyMap(),
-    val hostBlacklist: Map<String, Map<BypassStrategy, Long>> = emptyMap()
+    val hostBlacklist: Map<String, Map<BypassStrategy, Long>> = emptyMap(),
+    val contextualStrategyStates: Map<StrategyContextKey, StrategyMetricState> = emptyMap()
 ) {
     fun toJson(): String {
         val root = JSONObject()
@@ -57,6 +67,17 @@ data class StrategyProfileState(
             metricsJson.put(cat.name, catObj)
         }
         root.put("metricsByCategory", metricsJson)
+
+        val ctxStatesJson = JSONArray()
+        contextualStrategyStates.forEach { (key, metric) ->
+            val item = JSONObject()
+            item.put("strategy", key.strategy.name)
+            item.put("transport", key.transport.name)
+            item.put("category", key.category.name)
+            item.put("metric", metric.toJsonObject())
+            ctxStatesJson.put(item)
+        }
+        root.put("contextualStrategyStates", ctxStatesJson)
 
         // globalWeightedSuccess
         val globalWeightedJson = JSONObject()
@@ -146,6 +167,31 @@ data class StrategyProfileState(
                             }
                             if (strats.isNotEmpty()) {
                                 metricsMap[cat] = strats
+                            }
+                        }
+                    }
+                }
+
+                val ctxStates = mutableMapOf<StrategyContextKey, StrategyMetricState>()
+                val ctxStatesArray = root.optJSONArray("contextualStrategyStates")
+                if (ctxStatesArray != null) {
+                    for (i in 0 until ctxStatesArray.length()) {
+                        val item = ctxStatesArray.optJSONObject(i)
+                        if (item != null) {
+                            val stratStr = item.optString("strategy")
+                            val transStr = item.optString("transport")
+                            val catStr = item.optString("category")
+                            val metricObj = item.optJSONObject("metric")
+                            if (metricObj != null) {
+                                try {
+                                    val strat = BypassStrategy.valueOf(stratStr)
+                                    val trans = TransportType.valueOf(transStr)
+                                    val cat = HostCategory.valueOf(catStr)
+                                    val key = StrategyContextKey(strat, trans, cat, profileId)
+                                    ctxStates[key] = StrategyMetricState.fromJsonObject(metricObj)
+                                } catch (e: Exception) {
+                                    // ignore parse errors for individual keys
+                                }
                             }
                         }
                     }
@@ -278,7 +324,8 @@ data class StrategyProfileState(
                     networkMemory = netMem,
                     hostMemory = hostMem,
                     contextualHostMemory = ctxHostMem,
-                    hostBlacklist = hostBl
+                    hostBlacklist = hostBl,
+                    contextualStrategyStates = ctxStates
                 )
             } catch (e: Exception) {
                 null

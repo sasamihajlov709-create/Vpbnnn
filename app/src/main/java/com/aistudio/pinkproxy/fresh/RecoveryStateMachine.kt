@@ -235,18 +235,8 @@ object RecoveryStateMachine {
             is RecoverySignal.SslStall -> signal.transport
             else -> TransportType.TCP
         }
-        val candidates = listOf(
-            BypassStrategy.TLS_REC_SPLIT,
-            BypassStrategy.TLS_CLIENT_HELLO_CHOP,
-            BypassStrategy.BYEBYEDPI_EXTREME,
-            BypassStrategy.TCP_WINDOW_SHRINK,
-            BypassStrategy.TCP_TLS_SESSION_DESYNC
-        ).filter { StrategyExecutionRegistry.isExecutorSupported(it, transport) }
-        val selected = candidates.maxWithOrNull(
-            compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
-                .thenBy { it.name.hashCode() }
-        ) ?: DpiStrategySelector.getDefaultFallback(transport)
-        RuntimeCoordinator.applyStrategyTransition(selected, transport, "Socket Stall Recovery")
+        
+        RuntimeCoordinator.rotateGlobalStrategy(transport, "Socket Stall Recovery")
 
         val currentMtu = BypassConfig.currentMtu.value
         if (currentMtu > 1100) {

@@ -137,6 +137,9 @@ object StrategyStateRepository {
             state.failureCount.set(metric.failureCount)
             state.weightedSuccess.set(metric.weightedSuccess)
             state.sampleCount.set(metric.successCount + metric.failureCount)
+            state.verifiedSuccessCount.set(metric.verifiedSuccessCount)
+            state.totalLatencyMs.set(metric.totalLatencyMs)
+            state.lastUsedTimestamp.set(metric.lastUsedTimestamp)
         }
     }
 
