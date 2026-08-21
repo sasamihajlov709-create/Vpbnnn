@@ -175,13 +175,13 @@ object CensorshipExpert {
                             }
                         } catch (e: java.net.ConnectException) {
                             Log.v("CensorshipExpert", "Probe $strat connect failed on $testHost: ${e.message}")
-                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, reason = FailureReason.CONNECTION_REFUSED, transport = TransportType.TCP)
+                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.CONNECTION_REFUSED)
                         } catch (e: java.net.SocketTimeoutException) {
                             Log.v("CensorshipExpert", "Probe $strat timed out on $testHost")
-                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, reason = FailureReason.TIMEOUT, transport = TransportType.TCP)
+                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.TIMEOUT)
                         } catch (e: Exception) {
                             Log.v("CensorshipExpert", "Probe $strat unexpected error on $testHost: ${e.message}")
-                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, reason = FailureReason.UNKNOWN, transport = TransportType.TCP)
+                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.UNKNOWN)
                         } finally {
                             try { probeSocket?.close() } catch (e: java.io.IOException) {}
                         }

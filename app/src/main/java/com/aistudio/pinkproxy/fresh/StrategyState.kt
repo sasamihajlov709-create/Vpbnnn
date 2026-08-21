@@ -6,7 +6,17 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.sqrt
 
 /**
- * Unified canonical state record for a single bypass strategy within a host category or profile.
+ * Immutable context key uniquely identifying strategy execution state.
+ */
+data class StrategyContextKey(
+    val strategy: BypassStrategy,
+    val transport: TransportType,
+    val category: HostCategory = HostCategory.OTHER,
+    val profileId: String = "default"
+)
+
+/**
+ * Unified canonical state record for a single bypass strategy within a host category, transport and profile.
  */
 data class StrategyState(
     val strategy: BypassStrategy,
@@ -39,11 +49,13 @@ data class StrategyState(
     }
 
     /**
-     * Bayesian Beta-Posterior calculation (Beta distribution conjugate prior).
+     * Clean Bayesian Beta-Posterior calculation (Beta conjugate prior).
+     * Increases alpha with fractional quality-weight (no double counting),
+     * and beta with failure count.
      * Returns a pair of (posteriorMean, posteriorConfidence).
      */
     fun calculateBetaPosterior(priorAlpha: Double = 1.0, priorBeta: Double = 1.0): Pair<Double, Double> {
-        val s = verifiedSuccessCount.get().toDouble() + (weightedSuccess.get() / 1000.0) * 0.2
+        val s = (weightedSuccess.get() / 1000.0).coerceAtLeast(0.0)
         val f = failureCount.get().toDouble()
         val alpha = priorAlpha + s
         val beta = priorBeta + f
@@ -53,8 +65,8 @@ data class StrategyState(
         // Variance of Beta distribution = (alpha * beta) / ((alpha + beta)^2 * (alpha + beta + 1))
         val variance = (alpha * beta) / (total * total * (total + 1.0))
         val stdDev = sqrt(variance)
-        // Confidence increases as variance decreases (1.0 - 2 * stdDev), bounded in [0.05, 0.99]
-        val confidence = (1.0 - (stdDev * 3.0)).coerceIn(0.05, 0.99)
+        // Confidence scaling based on standard deviation reduction
+        val confidence = (1.0 - (stdDev * 3.16)).coerceIn(0.05, 0.99)
         return Pair(mean, confidence)
     }
 
@@ -73,48 +85,72 @@ data class StrategyState(
 }
 
 /**
- * Unified Canonical Repository for all strategy states across categories and profiles.
+ * Unified Canonical Repository for all strategy states across categories, transports, and profiles.
  */
 object StrategyStateRepository {
-    private val categoryStates = ConcurrentHashMap<HostCategory, ConcurrentHashMap<BypassStrategy, StrategyState>>().apply {
-        HostCategory.entries.forEach { cat ->
-            val map = ConcurrentHashMap<BypassStrategy, StrategyState>()
-            BypassStrategy.entries.forEach { strat ->
-                map[strat] = StrategyState(strategy = strat)
-            }
-            put(cat, map)
-        }
-    }
+    private val contextStates = ConcurrentHashMap<StrategyContextKey, StrategyState>()
 
-    fun getStrategyState(category: HostCategory, strategy: BypassStrategy): StrategyState {
-        return categoryStates.getOrPut(category) {
-            ConcurrentHashMap()
-        }.getOrPut(strategy) {
+    fun getStrategyState(
+        strategy: BypassStrategy,
+        transport: TransportType = TransportType.TCP,
+        category: HostCategory = HostCategory.OTHER,
+        profileId: String = "default"
+    ): StrategyState {
+        val key = StrategyContextKey(strategy, transport, category, profileId)
+        return contextStates.getOrPut(key) {
             StrategyState(strategy = strategy)
         }
     }
 
+    fun getStrategyState(category: HostCategory, strategy: BypassStrategy): StrategyState {
+        return getStrategyState(strategy, TransportType.TCP, category, "default")
+    }
+
     fun recordObservation(obs: StrategyObservation) {
-        val state = getStrategyState(obs.category, obs.executedStrategy)
+        val state = getStrategyState(obs.executedStrategy, obs.transport, obs.category, obs.profileId)
         state.recordObservation(obs)
     }
 
+    fun getAllStates(
+        transport: TransportType = TransportType.TCP,
+        category: HostCategory = HostCategory.OTHER,
+        profileId: String = "default"
+    ): Map<BypassStrategy, StrategyState> {
+        return BypassStrategy.entries.associateWith { strat ->
+            getStrategyState(strat, transport, category, profileId)
+        }
+    }
+
     fun getAllStates(category: HostCategory): Map<BypassStrategy, StrategyState> {
-        return categoryStates[category] ?: emptyMap()
+        return getAllStates(TransportType.TCP, category, "default")
+    }
+
+    fun getAllContextStates(): Map<StrategyContextKey, StrategyState> {
+        return contextStates.toMap()
+    }
+
+    fun restoreStates(states: Map<StrategyContextKey, StrategyMetricState>) {
+        states.forEach { (key, metric) ->
+            val state = getStrategyState(key.strategy, key.transport, key.category, key.profileId)
+            state.score.set(metric.score)
+            state.successCount.set(metric.successCount)
+            state.failureCount.set(metric.failureCount)
+            state.weightedSuccess.set(metric.weightedSuccess)
+            state.sampleCount.set(metric.successCount + metric.failureCount)
+        }
     }
 
     fun resetAll() {
-        categoryStates.values.forEach { catMap ->
-            catMap.values.forEach { state ->
-                state.score.set(100)
-                state.sampleCount.set(0)
-                state.successCount.set(0)
-                state.verifiedSuccessCount.set(0)
-                state.failureCount.set(0)
-                state.weightedSuccess.set(0L)
-                state.totalLatencyMs.set(0L)
-                state.lastUsedTimestamp.set(0L)
-            }
+        contextStates.values.forEach { state ->
+            state.score.set(100)
+            state.sampleCount.set(0)
+            state.successCount.set(0)
+            state.verifiedSuccessCount.set(0)
+            state.failureCount.set(0)
+            state.weightedSuccess.set(0L)
+            state.totalLatencyMs.set(0L)
+            state.lastUsedTimestamp.set(0L)
         }
     }
 }
+

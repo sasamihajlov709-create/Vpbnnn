@@ -25,6 +25,13 @@ object BypassConfig {
     }
 
     /**
+     * Direct strategy assignment helper.
+     */
+    fun setGlobalStrategy(new: BypassStrategy) {
+        _strategy.value = new
+    }
+
+    /**
      * Internal mutation called solely by RuntimeCoordinator after validation.
      */
     internal fun applyInternalStrategy(new: BypassStrategy) {
@@ -277,6 +284,7 @@ object BypassConfig {
         strat: BypassStrategy,
         rtt: Long,
         host: String?,
+        quality: ObservationQuality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null,
         transport: TransportType = TransportType.TCP
@@ -288,6 +296,7 @@ object BypassConfig {
             strategy = strat,
             success = true,
             transport = transport,
+            quality = quality,
             category = cat,
             latencyMs = rtt,
             host = host,
@@ -308,6 +317,7 @@ object BypassConfig {
         strat: BypassStrategy,
         host: String?,
         reason: FailureReason = FailureReason.UNKNOWN,
+        quality: ObservationQuality = ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null,
         transport: TransportType = TransportType.TCP
@@ -319,6 +329,7 @@ object BypassConfig {
             strategy = strat,
             success = false,
             transport = transport,
+            quality = quality,
             category = cat,
             reason = reason,
             host = host,
@@ -359,7 +370,7 @@ object BypassConfig {
             frag3 = f3,
             delay1 = d1,
             fakeTtl = ttl,
-            useIPv6 = host.contains(":") || (rnd.nextInt(100) < 15 && intensity > 60),
+            useIPv6 = host.contains(":"),
             mss = if (intensity > 75) rnd.nextInt(512, 1000) else 1440
         )
     }

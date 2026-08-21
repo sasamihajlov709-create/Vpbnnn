@@ -52,10 +52,23 @@ class StrategyRankingTest {
         BypassConfig.clearScores(context)
 
         repeat(5) {
-            DpiStrategySelector.recordResult(BypassStrategy.TLS_APP_DATA_SPLIT, true, TransportType.TCP, HostCategory.MESSENGER, latencyMs = 20)
+            DpiStrategySelector.recordResult(
+                strategy = BypassStrategy.TLS_APP_DATA_SPLIT,
+                success = true,
+                transport = TransportType.TCP,
+                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                category = HostCategory.MESSENGER,
+                latencyMs = 20
+            )
         }
         repeat(5) {
-            DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, false, TransportType.TCP, HostCategory.MESSENGER)
+            DpiStrategySelector.recordResult(
+                strategy = BypassStrategy.SNI_SPLIT,
+                success = false,
+                transport = TransportType.TCP,
+                quality = ObservationQuality.CONNECT_ONLY,
+                category = HostCategory.MESSENGER
+            )
         }
 
         val appDataScore = DpiStrategySelector.getAverageScore(BypassStrategy.TLS_APP_DATA_SPLIT)
@@ -71,7 +84,14 @@ class StrategyRankingTest {
         BypassConfig.clearScores(context)
 
         repeat(3) {
-            DpiEngine.recordStrategyResult("testdomain.org", BypassStrategy.SNI_SPLIT, true, TransportType.TCP, 30)
+            DpiEngine.recordStrategyResult(
+                host = "testdomain.org",
+                strat = BypassStrategy.SNI_SPLIT,
+                success = true,
+                transport = TransportType.TCP,
+                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                latencyMs = 30
+            )
         }
         val scoreBeforeSave = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
 
@@ -88,7 +108,13 @@ class StrategyRankingTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         BypassConfig.clearScores(context)
 
-        DpiEngine.recordStrategyResult("netdomain.com", BypassStrategy.SNI_SPLIT, false, TransportType.TCP)
+        DpiEngine.recordStrategyResult(
+            host = "netdomain.com",
+            strat = BypassStrategy.SNI_SPLIT,
+            success = false,
+            transport = TransportType.TCP,
+            quality = ObservationQuality.CONNECT_ONLY
+        )
         assertTrue(DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT) < 100)
 
         DpiEngine.resetStrategyScoresForNetworkChange()
@@ -119,7 +145,14 @@ class StrategyRankingTest {
         // Learn strategy on Wi-Fi
         DpiEngine.resetStrategyScoresForNetworkChange()
         repeat(4) {
-            DpiStrategySelector.recordResult(BypassStrategy.TCP_COMBINED_HYBRID, true, TransportType.TCP, HostCategory.STREAMING, latencyMs = 25)
+            DpiStrategySelector.recordResult(
+                strategy = BypassStrategy.TCP_COMBINED_HYBRID,
+                success = true,
+                transport = TransportType.TCP,
+                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                category = HostCategory.STREAMING,
+                latencyMs = 25
+            )
         }
         val wifiScore = DpiStrategySelector.getAverageScore(BypassStrategy.TCP_COMBINED_HYBRID).toInt()
         assertTrue("Wi-Fi learned score should be elevated", wifiScore > 100)
@@ -131,7 +164,14 @@ class StrategyRankingTest {
 
         // Learn different strategy on Cellular
         repeat(4) {
-            DpiStrategySelector.recordResult(BypassStrategy.SNI_SPLIT, true, TransportType.TCP, HostCategory.STREAMING, latencyMs = 15)
+            DpiStrategySelector.recordResult(
+                strategy = BypassStrategy.SNI_SPLIT,
+                success = true,
+                transport = TransportType.TCP,
+                quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                category = HostCategory.STREAMING,
+                latencyMs = 15
+            )
         }
         val cellSniScore = DpiStrategySelector.getAverageScore(BypassStrategy.SNI_SPLIT).toInt()
         assertTrue("Cellular learned score for SNI_SPLIT should be elevated", cellSniScore > 100)
@@ -209,6 +249,7 @@ class StrategyRankingTest {
             strategy = executed,
             success = false,
             transport = TransportType.TCP,
+            quality = ObservationQuality.CONNECT_ONLY,
             category = HostCategory.OTHER,
             reason = FailureReason.TIMEOUT,
             host = testHost,
@@ -229,6 +270,7 @@ class StrategyRankingTest {
             strategy = executed,
             success = true,
             transport = TransportType.TCP,
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
             category = HostCategory.OTHER,
             latencyMs = 50,
             host = testHost,

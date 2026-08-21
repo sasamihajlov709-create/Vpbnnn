@@ -18,7 +18,12 @@ class StrategyStateRepositoryTest {
 
     @Test
     fun testRecordObservationUpdatesStateAndConfidence() {
-        val state = StrategyStateRepository.getStrategyState(HostCategory.STREAMING, BypassStrategy.SNI_SPLIT)
+        val state = StrategyStateRepository.getStrategyState(
+            strategy = BypassStrategy.SNI_SPLIT,
+            transport = TransportType.TCP,
+            category = HostCategory.STREAMING,
+            profileId = "profile-1"
+        )
         assertEquals(0, state.sampleCount.get())
         assertEquals(0, state.successCount.get())
 
@@ -46,6 +51,45 @@ class StrategyStateRepositoryTest {
         val (mean, conf) = state.calculateBetaPosterior()
         assertTrue("Posterior mean should be high on verified success", mean > 0.5)
         assertTrue("Confidence should be within valid bounds", conf in 0.05..0.99)
+    }
+
+    @Test
+    fun testContextIsolationAcrossTransports() {
+        val tcpObs = StrategyObservation(
+            executedStrategy = BypassStrategy.SNI_SPLIT,
+            transport = TransportType.TCP,
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+            category = HostCategory.STREAMING,
+            success = true,
+            latencyMs = 40L
+        )
+        val udpObs = StrategyObservation(
+            executedStrategy = BypassStrategy.SNI_SPLIT,
+            transport = TransportType.UDP,
+            quality = ObservationQuality.CONNECT_ONLY,
+            category = HostCategory.STREAMING,
+            success = false,
+            failureReason = FailureReason.TIMEOUT
+        )
+
+        StrategyStateRepository.recordObservation(tcpObs)
+        StrategyStateRepository.recordObservation(udpObs)
+
+        val tcpState = StrategyStateRepository.getStrategyState(
+            strategy = BypassStrategy.SNI_SPLIT,
+            transport = TransportType.TCP,
+            category = HostCategory.STREAMING
+        )
+        val udpState = StrategyStateRepository.getStrategyState(
+            strategy = BypassStrategy.SNI_SPLIT,
+            transport = TransportType.UDP,
+            category = HostCategory.STREAMING
+        )
+
+        assertEquals(1, tcpState.successCount.get())
+        assertEquals(0, tcpState.failureCount.get())
+        assertEquals(0, udpState.successCount.get())
+        assertEquals(1, udpState.failureCount.get())
     }
 
     @Test

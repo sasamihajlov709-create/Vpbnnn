@@ -125,17 +125,25 @@ object DpiStrategySelector {
             }
         }
 
-        // Auto-Tuner 2.0: Fast Tournament Pre-Filtering (reduce candidate space to top-k promising candidates + exploration slot)
-        val candidatePool = if (validStrategies.size > 20) {
+        // Auto-Tuner 2.0: Adaptive Tournament Pre-Filtering
+        // Dynamic K sizing based on Bayesian confidence: high confidence focuses on Top performers (exploitation), low confidence expands exploration slots.
+        val candidatePool = if (validStrategies.size > 10) {
+            val topState = StrategyStateRepository.getStrategyState(category, validStrategies.first().key)
+            val (_, confidence) = topState.calculateBetaPosterior()
+            val (kSize, exploreSize) = when {
+                confidence > 0.85 -> Pair(4, 1)
+                confidence > 0.50 -> Pair(8, 2)
+                else -> Pair(16, 4)
+            }
+
             val sortedByPrior = validStrategies.sortedByDescending { (strat, score) ->
                 val base = score.get().toDouble()
                 val weightedS = (DpiEngine.categoryWeightedSuccessHistory[category]?.get(strat)?.get() ?: 0L) / 1000.0
                 val failures = DpiEngine.categoryFailureHistory[category]?.get(strat)?.get() ?: 0
                 base + (weightedS * 15.0) - (failures * 20.0)
             }
-            // Take Top-16 best performers + 4 random exploration slots from valid pool
-            val topPerformers = sortedByPrior.take(16)
-            val explorationSlots = sortedByPrior.drop(16).shuffled().take(4)
+            val topPerformers = sortedByPrior.take(kSize)
+            val explorationSlots = sortedByPrior.drop(kSize).shuffled().take(exploreSize)
             (topPerformers + explorationSlots).distinctBy { it.key }
         } else {
             validStrategies
@@ -379,11 +387,11 @@ object DpiStrategySelector {
         strategy: BypassStrategy, 
         success: Boolean, 
         transport: TransportType,
+        quality: ObservationQuality,
         category: HostCategory = HostCategory.OTHER, 
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null
     ) {

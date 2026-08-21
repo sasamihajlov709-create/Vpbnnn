@@ -234,9 +234,9 @@ object DpiEngine {
         strat: BypassStrategy,
         success: Boolean,
         transport: TransportType,
+        quality: ObservationQuality,
         latencyMs: Long = 0,
         reason: FailureReason? = null,
-        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null
     ) {

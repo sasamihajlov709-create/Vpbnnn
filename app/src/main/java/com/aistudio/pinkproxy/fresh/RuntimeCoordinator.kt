@@ -90,9 +90,14 @@ object RuntimeCoordinator {
     }
 
     /**
-     * Centralized rotation to the best alternative strategy for a specific transport.
+     * Centralized rotation to the best alternative strategy for a specific transport, category, and profile.
      */
-    suspend fun rotateGlobalStrategy(transport: TransportType, reason: String = "Automated Rotation"): BypassStrategy = stateMutex.withLock {
+    suspend fun rotateGlobalStrategy(
+        transport: TransportType,
+        reason: String = "Automated Rotation",
+        category: HostCategory = HostCategory.OTHER,
+        profileId: String = "default"
+    ): BypassStrategy = stateMutex.withLock {
         val current = BypassConfig.strategy.value
         val now = System.currentTimeMillis()
         val candidates = BypassStrategy.entries.filter { 
@@ -103,22 +108,32 @@ object RuntimeCoordinator {
             (DpiEngine.circuitBreakers[it] ?: 0L) < now
         }
         val fallback = DpiStrategySelector.getDefaultFallback(transport)
-        val best = candidates.maxByOrNull { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) } ?: fallback
+        val best = candidates.maxByOrNull { strat ->
+            val state = StrategyStateRepository.getStrategyState(strat, transport, category, profileId)
+            val (posteriorMean, confidence) = state.calculateBetaPosterior()
+            val baseWeighted = DpiStrategySelector.getWeightedScore(strat, category)
+            posteriorMean * (50.0 + 50.0 * confidence) + baseWeighted * 0.5
+        } ?: fallback
 
-        Log.i(TAG, "Rotating strategy for $transport to $best. Reason: $reason")
+        Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
         BypassConfig.applyInternalStrategy(best)
         VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
-        ProxyStats.logRecovery("Strategy rotated for $transport: ${best.name} ($reason)")
+        ProxyStats.logRecovery("Strategy rotated for $transport ($category): ${best.name} ($reason)")
         best
     }
 
     /**
      * Non-suspending dispatch version of strategy rotation.
      */
-    fun requestGlobalStrategyRotation(transport: TransportType, reason: String = "Automated Rotation"): Job {
+    fun requestGlobalStrategyRotation(
+        transport: TransportType,
+        reason: String = "Automated Rotation",
+        category: HostCategory = HostCategory.OTHER,
+        profileId: String = "default"
+    ): Job {
         val targetScope = sessionScope ?: coordinatorScope
         return targetScope.launch {
-            rotateGlobalStrategy(transport, reason)
+            rotateGlobalStrategy(transport, reason, category, profileId)
         }
     }
 

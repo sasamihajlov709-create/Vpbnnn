@@ -107,75 +107,63 @@ object ProactiveAutoTuner {
     ): Boolean = withContext(ProxyDispatcher.io) {
         val rtt = BypassConfig.currentRttMs.value
         val config = BypassConfig.getSessionConfig(host, strategy, rtt, TransportType.TCP)
-        val socket = Socket()
-        try {
-            vpnService?.protect(socket)
-            socket.tcpNoDelay = true
-            socket.soTimeout = 1200
+        
+        for (targetIp in ips.take(3)) {
+            val socket = Socket()
+            try {
+                vpnService?.protect(socket)
+                socket.tcpNoDelay = true
+                socket.soTimeout = 1200
 
-            val targetIp = ips.firstOrNull() ?: return@withContext false
-            socket.connect(InetSocketAddress(targetIp, port), 1200)
+                socket.connect(InetSocketAddress(targetIp, port), 1200)
 
-            val out = socket.getOutputStream()
-            val inStream = socket.getInputStream()
-            val startTime = System.currentTimeMillis()
+                val out = socket.getOutputStream()
+                val inStream = socket.getInputStream()
+                val startTime = System.currentTimeMillis()
 
-            BypassApplier.applyBypass(socket, out, payload, payload.size, config, host)
+                BypassApplier.applyBypass(socket, out, payload, payload.size, config, host)
 
-            val buf = ByteArray(2048)
-            val read = inStream.read(buf)
+                val buf = ByteArray(2048)
+                val read = inStream.read(buf)
 
-            if (read > 0) {
-                val latency = System.currentTimeMillis() - startTime
-                // Check if response is valid TLS ServerHello (0x16, 0x03)
-                val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
-                if (isTlsServerHello) {
-                    // Valid ServerHello proves the DPI middlebox permitted handshake record creation
-                    DpiEngine.recordStrategyResult(
-                        host = host,
-                        strat = strategy,
-                        success = true,
-                        latencyMs = latency,
-                        quality = ObservationQuality.TLS_RECORD_RECEIVED,
-                        requestedStrategy = strategy,
-                        effectiveStrategy = strategy,
-                        transport = TransportType.TCP
-                    )
-                    return@withContext true
+                if (read > 0) {
+                    val latency = System.currentTimeMillis() - startTime
+                    // Check if response is valid TLS ServerHello (0x16, 0x03)
+                    val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
+                    if (isTlsServerHello) {
+                        // Valid ServerHello proves the DPI middlebox permitted handshake record creation
+                        DpiEngine.recordStrategyResult(
+                            host = host,
+                            strat = strategy,
+                            success = true,
+                            latencyMs = latency,
+                            quality = ObservationQuality.TLS_RECORD_RECEIVED,
+                            requestedStrategy = strategy,
+                            effectiveStrategy = strategy,
+                            transport = TransportType.TCP
+                        )
+                        return@withContext true
+                    }
                 }
+            } catch (e: Exception) {
+                // Try next IP endpoint before concluding strategy failed
+            } finally {
+                try { socket.close() } catch (e: Exception) {}
             }
-            DpiEngine.recordStrategyResult(
-                host = host,
-                strat = strategy,
-                success = false,
-                latencyMs = 0,
-                reason = FailureReason.CENSORSHIP_STALL,
-                quality = ObservationQuality.CONNECT_ONLY,
-                requestedStrategy = strategy,
-                effectiveStrategy = strategy,
-                transport = TransportType.TCP
-            )
-            false
-        } catch (e: Exception) {
-            val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
-                FailureReason.TCP_RESET
-            } else {
-                FailureReason.TIMEOUT
-            }
-            DpiEngine.recordStrategyResult(
-                host = host,
-                strat = strategy,
-                success = false,
-                latencyMs = 0,
-                reason = reason,
-                quality = ObservationQuality.CONNECT_ONLY,
-                requestedStrategy = strategy,
-                effectiveStrategy = strategy,
-                transport = TransportType.TCP
-            )
-            false
-        } finally {
-            try { socket.close() } catch (e: Exception) {}
         }
+
+        // All resolved IP attempts failed for this strategy candidate
+        DpiEngine.recordStrategyResult(
+            host = host,
+            strat = strategy,
+            success = false,
+            latencyMs = 0,
+            reason = FailureReason.TIMEOUT,
+            quality = ObservationQuality.CONNECT_ONLY,
+            requestedStrategy = strategy,
+            effectiveStrategy = strategy,
+            transport = TransportType.TCP
+        )
+        false
     }
 }

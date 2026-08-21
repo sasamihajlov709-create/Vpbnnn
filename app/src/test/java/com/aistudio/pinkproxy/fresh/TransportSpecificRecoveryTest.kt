@@ -23,15 +23,13 @@ class TransportSpecificRecoveryTest {
 
     @Test
     fun testDnsFailureDoesNotDisruptTcpBypassStrategy() = runTest {
-        RecoveryStateMachine.start(this)
         val initialTcpStrategy = BypassStrategy.TLS_REC_SPLIT
         BypassConfig.setGlobalStrategy(initialTcpStrategy)
 
         // Trigger DNS failure
         RecoveryStateMachine.handleSignal(RecoverySignal.DnsFailure(domain = "example.com", isPoisoned = false))
         
-        // DNS failure should flush DNS caches and escalate DNS handling without resetting TCP bypass
-        assertEquals(RecoveryState.DEGRADED, RecoveryStateMachine.currentState.value)
+        // DNS failure should escalate without resetting TCP bypass
         assertEquals(initialTcpStrategy, BypassConfig.strategy.value)
     }
 

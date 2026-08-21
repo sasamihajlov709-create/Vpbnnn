@@ -114,6 +114,19 @@ object DpiStorage {
         state.hostBlacklist.forEach { (host, map) ->
             DpiEngine.hostStrategyBlacklist[host] = ConcurrentHashMap(map)
         }
+
+        // Restore canonical StrategyStateRepository states
+        state.metricsByCategory.forEach { (cat, stratMap) ->
+            stratMap.forEach { (strat, metric) ->
+                val key = StrategyContextKey(
+                    strategy = strat,
+                    transport = TransportType.TCP,
+                    category = cat,
+                    profileId = state.profileId
+                )
+                StrategyStateRepository.restoreStates(mapOf(key to metric))
+            }
+        }
     }
 
     fun captureProfileState(profileId: String): NetworkProfileState {
