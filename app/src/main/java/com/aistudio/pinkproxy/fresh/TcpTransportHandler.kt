@@ -327,6 +327,7 @@ object TcpTransportHandler {
                 } finally {
                     BufferPoolManager.release16k(clientBuffer)
                     remoteToClientJob.cancel()
+                    this@coroutineScope.cancel()
                 }
             }
         } catch (e: CancellationException) {

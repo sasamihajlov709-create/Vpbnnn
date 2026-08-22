@@ -68,10 +68,15 @@ object ProxyStats {
     val currentDpiType = StabilityAnalyzer.currentDpiType
 
     fun recordDpiEvent(type: DpiType) {
+        val transport = when(type) {
+            DpiType.UDP_BLOCK -> TransportType.UDP
+            DpiType.DNS_POISONING, DpiType.DNS_VERIFICATION_FAILURE -> TransportType.DNS
+            else -> TransportType.TCP
+        }
         StabilityAnalyzer.recordDpi(type)
         dpiEvents.compute(type) { _, current -> (current ?: 0) + 1 }
         VpnRuntimeState.updateDpi(type.name)
-        recordCensorshipEvent(true)
+        recordCensorshipEvent(true, transport = transport)
         DpiEngine.recordEvent(type)
         logRecovery("Detected censorship type: $type")
     }
@@ -81,7 +86,7 @@ object ProxyStats {
     
     fun recordDnsFailure() {
         _dnsFailureCount.update { it + 1 }
-        recordCensorshipEvent(true)
+        recordCensorshipEvent(true, transport = TransportType.DNS)
         DpiEngine.recordEvent(DpiType.DNS_POISONING)
     }
     
@@ -146,9 +151,9 @@ object ProxyStats {
     fun updateCensorshipIntensity(newVal: Int) { StabilityAnalyzer.setCensorshipIntensity(newVal) }
     fun clearCensorshipHistory() { StabilityAnalyzer.reset() }
 
-    fun recordCensorshipEvent(isFailure: Boolean) {
+    fun recordCensorshipEvent(isFailure: Boolean, transport: TransportType = TransportType.TCP) {
         if (isFailure) _errors.update { it + 1 }
-        StabilityAnalyzer.recordEvent(isFailure)
+        StabilityAnalyzer.recordEvent(isFailure, transport = transport)
     }
 
     private val _recoveryLog = MutableStateFlow(emptyList<String>())
@@ -218,10 +223,10 @@ object ProxyStats {
         if (success) {
             _dnsSuccessCount.update { it + 1 }
             _dnsFailureCount.value = 0
-            recordGlobalSuccess(0)
+            recordGlobalSuccess(0, transport = TransportType.DNS)
         } else {
             _dnsFailureCount.update { it + 1 }
-            recordCensorshipEvent(true)
+            recordCensorshipEvent(true, transport = TransportType.DNS)
         }
     }
 
@@ -263,7 +268,7 @@ object ProxyStats {
                 if (activeConns > 0 && currentSpeed < 50 * 1024 && now - lastThrottleCheck > 15000) { // < 50KB/s with active conns
                     if (StabilityAnalyzer.successRate.value > 70) { // Success rate is fine, but speed is low (likely throttled)
                         logRecovery("Low throughput detected (${currentSpeed / 1024} KB/s). Triggering fragment re-calibration.")
-                        DpiEngine.triggerRecalibration()
+                        DpiEngine.triggerRecalibration(com.aistudio.pinkproxy.fresh.TransportType.TCP)
                         lastThrottleCheck = now
                     }
                 }
@@ -300,12 +305,12 @@ object ProxyStats {
         return String.format(java.util.Locale.ROOT, "%.1f %sB", bytes / Math.pow(1024.0, exp.toDouble()), pre)
     }
 
-    fun recordGlobalSuccess(rtt: Long) {
-        StabilityAnalyzer.recordEvent(false, rtt)
+    fun recordGlobalSuccess(rtt: Long, transport: TransportType = TransportType.TCP) {
+        StabilityAnalyzer.recordEvent(false, rtt, transport = transport)
     }
 
-    fun recordGlobalFailure() {
-        StabilityAnalyzer.recordEvent(true)
+    fun recordGlobalFailure(transport: TransportType = TransportType.TCP) {
+        StabilityAnalyzer.recordEvent(true, transport = transport)
     }
 
     fun addTraffic(host: String) {
@@ -318,8 +323,8 @@ object ProxyStats {
         updateBytes(sent + received)
     }
 
-    fun unregisterFlow(id: String, success: Boolean) {
-        recordCensorshipEvent(!success)
+    fun unregisterFlow(id: String, success: Boolean, transport: TransportType = TransportType.TCP) {
+        recordCensorshipEvent(!success, transport)
         closeFlow(id)
     }
 }

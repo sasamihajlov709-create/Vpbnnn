@@ -124,7 +124,7 @@ object TcpRaceConnector {
             if (readBytes > 0) {
                 val latency = System.currentTimeMillis() - startTime
                 val quality = if (BypassApplier.isProbableTls(responseBuf, readBytes) || BypassApplier.isProbableHttp(responseBuf, readBytes)) {
-                    ObservationQuality.HANDSHAKE_COMPLETE
+                    ObservationQuality.SERVER_HELLO_RECEIVED
                 } else {
                     ObservationQuality.TLS_RECORD_RECEIVED
                 }

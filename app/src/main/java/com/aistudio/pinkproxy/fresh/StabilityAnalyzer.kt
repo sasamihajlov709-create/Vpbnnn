@@ -15,6 +15,15 @@ object StabilityAnalyzer {
     private val _successRate = MutableStateFlow(100)
     val successRate: StateFlow<Int> = _successRate.asStateFlow()
 
+    private val _tcpSuccessRate = MutableStateFlow(100)
+    val tcpSuccessRate: StateFlow<Int> = _tcpSuccessRate.asStateFlow()
+
+    private val _udpSuccessRate = MutableStateFlow(100)
+    val udpSuccessRate: StateFlow<Int> = _udpSuccessRate.asStateFlow()
+
+    private val _dnsSuccessRate = MutableStateFlow(100)
+    val dnsSuccessRate: StateFlow<Int> = _dnsSuccessRate.asStateFlow()
+
     private val _censorshipIntensity = MutableStateFlow(0)
     val censorshipIntensity: StateFlow<Int> = _censorshipIntensity.asStateFlow()
 
@@ -36,13 +45,23 @@ object StabilityAnalyzer {
         _lastLatency.value = ms
     }
 
-    fun recordEvent(isFailure: Boolean, rtt: Long = 0) {
+    fun recordEvent(isFailure: Boolean, rtt: Long = 0, transport: TransportType = TransportType.TCP) {
         if (isFailure) {
             _successRate.update { (it * 0.85 + 0).toInt().coerceIn(0, 100) }
+            when (transport) {
+                TransportType.TCP -> _tcpSuccessRate.update { (it * 0.85 + 0).toInt().coerceIn(0, 100) }
+                TransportType.UDP -> _udpSuccessRate.update { (it * 0.85 + 0).toInt().coerceIn(0, 100) }
+                TransportType.DNS -> _dnsSuccessRate.update { (it * 0.85 + 0).toInt().coerceIn(0, 100) }
+            }
             _censorshipIntensity.update { (it + 8).coerceAtMost(100) }
             _stabilityScore.update { (it - 3).coerceAtLeast(0) }
         } else {
             _successRate.update { (it * 0.98 + 2).toInt().coerceIn(0, 100) }
+            when (transport) {
+                TransportType.TCP -> _tcpSuccessRate.update { (it * 0.98 + 2).toInt().coerceIn(0, 100) }
+                TransportType.UDP -> _udpSuccessRate.update { (it * 0.98 + 2).toInt().coerceIn(0, 100) }
+                TransportType.DNS -> _dnsSuccessRate.update { (it * 0.98 + 2).toInt().coerceIn(0, 100) }
+            }
             _censorshipIntensity.update { (it - 2).coerceAtLeast(0) }
             if (rtt > 0) {
                 val lastRtt = _lastLatency.value

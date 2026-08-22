@@ -393,7 +393,7 @@ object RobustResolver {
                     
                     if (cleanRes.isEmpty()) {
                         ProxyStats.recordDpiEvent(DpiType.DNS_POISONING)
-                        ProxyStats.recordCensorshipEvent(true) // Повышаем интенсивность при отравлении
+                        ProxyStats.recordCensorshipEvent(true, com.aistudio.pinkproxy.fresh.TransportType.DNS) // Повышаем интенсивность при отравлении
                         completed++
                         continue
                     }

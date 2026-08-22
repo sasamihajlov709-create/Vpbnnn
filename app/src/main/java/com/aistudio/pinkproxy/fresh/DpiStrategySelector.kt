@@ -156,7 +156,7 @@ object DpiStrategySelector {
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
+        quality: ObservationQuality,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null
     ) {
@@ -199,7 +199,7 @@ object DpiStrategySelector {
             }
         } else {
             if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) {
-                ProxyStats.recordCensorshipEvent(true)
+                ProxyStats.recordCensorshipEvent(true, transport = transport)
             }
             
             val fails = DpiEngine.consecutiveFailures.getOrPut(strategy) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()

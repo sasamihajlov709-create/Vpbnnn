@@ -66,23 +66,11 @@ object DpiEngine {
         initStrategyChains()
         DpiStorage.loadScores(ctx)
         NetworkProfileManager.addListener(profileChangeListener)
-
-        microProbeJob?.cancel()
-        microProbeJob = scope.launch {
-            while (isActive) {
-                delay(TimeUnit.MINUTES.toMillis(5))
-                if (ProxyStats.censorshipIntensity.value > 75) {
-                    val target = if (java.util.concurrent.ThreadLocalRandom.current().nextBoolean()) "google.com" else "telegram.org"
-                    triggerMicroProbe(target, HostCategory.OTHER)
-                }
-            }
-        }
-
-        optimizerJob?.cancel()
+        
         optimizerJob = scope.launch {
             while (isActive) {
-                delay(TimeUnit.MINUTES.toMillis(10))
-                pruneStrategies()
+                delay(15000)
+                DpiAnalyzer.analyzeAndAdjust()
             }
         }
     }
@@ -112,7 +100,7 @@ object DpiEngine {
         consecutiveFailuresByHost.clear()
     }
 
-    fun markSuccess(strat: BypassStrategy, transport: TransportType, host: String, latencyMs: Long = 0, quality: ObservationQuality = ObservationQuality.SUSTAINED_DATA_TRANSFER) {
+    fun markSuccess(strat: BypassStrategy, transport: TransportType, host: String, latencyMs: Long = 0, quality: ObservationQuality) {
         val category = HostClassifier.classify(host)
         DpiStrategySelector.recordResult(
             strategy = strat,
@@ -131,7 +119,7 @@ object DpiEngine {
         host: String, 
         latencyMs: Long = 0,
         reason: FailureReason? = null,
-        quality: ObservationQuality = ObservationQuality.CONNECT_ONLY
+        quality: ObservationQuality
     ) {
         val category = HostClassifier.classify(host)
         DpiStrategySelector.recordResult(
@@ -149,18 +137,18 @@ object DpiEngine {
     fun recordStrategyResult(
         strategy: BypassStrategy,
         success: Boolean,
-        transport: TransportType = TransportType.TCP,
-        host: String? = null,
+        transport: TransportType,
+        host: String?,
         latencyMs: Long = 0,
-        quality: ObservationQuality? = null,
+        quality: ObservationQuality,
         reason: FailureReason? = null
     ) {
         if (success) {
-            markSuccess(strategy, transport, host ?: "unknown", latencyMs, quality ?: ObservationQuality.SUSTAINED_DATA_TRANSFER)
+            markSuccess(strategy, transport, host ?: "unknown", latencyMs, quality)
         } else {
-            markFailure(strategy, transport, host ?: "unknown", latencyMs, reason, quality ?: ObservationQuality.CONNECT_ONLY)
+            markFailure(strategy, transport, host ?: "unknown", latencyMs, reason, quality)
         }
-}
+    }
 
 
     fun initStrategyChains() {
@@ -170,16 +158,6 @@ object DpiEngine {
         // strategyChains[BypassStrategy.HTTP_SPACE_MANGLE] = BypassStrategy.HTTP_MIXED_CASE
     }
 
-    fun triggerMicroProbe(target: String, category: HostCategory) {
-        scope.launch {
-            // ProactiveAutoTuner handles it usually, but we just want it to compile
-        }
-    }
-
-    fun pruneStrategies() {
-        // Dummy implementation to satisfy compilation
-    }
-
     fun enterPanicMode() {
         BypassConfig.setPanicMode(true)
     }
@@ -187,8 +165,8 @@ object DpiEngine {
     fun getRecommendedFragSize(): Int { return 100 }
     fun getRecommendedDelay(): Long { return 50L }
 
-    fun triggerRecalibration() {
-        RuntimeCoordinator.requestGlobalStrategyRotation(TransportType.TCP, "Trigger Recalibration", HostCategory.OTHER)
+    fun triggerRecalibration(transport: TransportType) {
+        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Trigger Recalibration", HostCategory.OTHER)
     }
     
     fun recordEvent(type: DpiType) {

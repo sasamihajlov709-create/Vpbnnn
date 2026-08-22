@@ -121,6 +121,12 @@ object BypassConfig {
     private val censorHeuristic = ConcurrentHashMap<String, Int>()
     private val hostLockTime = ConcurrentHashMap<String, Long>()
 
+    fun cleanupExpiredHeuristics() {
+        val now = System.currentTimeMillis()
+        hostLockTime.entries.removeIf { now - it.value > 300_000 }
+        if (censorHeuristic.size > 2000) censorHeuristic.clear()
+    }
+
     fun startDeviceMonitoring(context: Context) = DeviceMonitor.startDeviceMonitoring(context)
 
     fun isHostProbablyCensored(host: String): Boolean {
@@ -158,28 +164,6 @@ object BypassConfig {
 
     fun isHostCensored(host: String): Boolean = isHostProbablyCensored(host)
     fun isHostDirect(host: String): Boolean = HostClassifier.classify(host) == com.aistudio.pinkproxy.fresh.HostCategory.DIRECT
-
-    private var warmupJob: Job? = null
-
-    fun startWarmupTask(scope: CoroutineScope) {
-        warmupJob?.cancel()
-        warmupJob = scope.launch {
-            while (isActive) {
-                try {
-                    val target = if (ThreadLocalRandom.current().nextBoolean()) "google.com" else "cloudflare.com"
-                    DpiEngine.triggerMicroProbe(target, HostCategory.OTHER)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Throwable) {}
-                delay(TimeUnit.MINUTES.toMillis(15))
-            }
-        }
-    }
-
-    fun stopWarmupTask() {
-        warmupJob?.cancel()
-        warmupJob = null
-    }
 
     fun setTtl(ttl: Int) { fakeTtl = ttl.coerceIn(0, 30) }
     val currentTtl: Int get() = if (fakeTtl > 0) fakeTtl else 3
@@ -323,7 +307,7 @@ object BypassConfig {
         effectiveStrategy: BypassStrategy? = null,
         transport: TransportType = TransportType.TCP
     ) {
-        ProxyStats.recordCensorshipEvent(true)
+        ProxyStats.recordCensorshipEvent(true, transport = transport)
         ProxyStats.reportStrategyResult(strategy, false)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         DpiStrategySelector.recordResult(

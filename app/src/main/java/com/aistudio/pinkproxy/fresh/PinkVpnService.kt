@@ -459,7 +459,6 @@ class PinkVpnService : VpnService() {
     }
 
     private fun startSessionWarmup() {
-        BypassConfig.startWarmupTask(engineScope)
         engineScope.launch {
             delay(5000)
             ServiceChecker.runActiveProbing(this@PinkVpnService)
@@ -590,7 +589,6 @@ class PinkVpnService : VpnService() {
 
             ServiceChecker.stopChecking()
             DpiEngine.stop()
-            BypassConfig.stopWarmupTask()
             RobustResolver.stopBackgroundProber()
             CensorshipExpert.stop()
             PrefetchManager.stop()
