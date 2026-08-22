@@ -4,7 +4,6 @@ import android.util.Log
 import java.util.concurrent.atomic.AtomicInteger
 
 object DpiAnalyzer {
-
     data class CensorshipFingerprint(
         val rstRate: Double,
         val sniBlockRate: Double,
@@ -71,8 +70,8 @@ object DpiAnalyzer {
             if (DpiEngine.consecutiveFailuresByHost.size > 1000) DpiEngine.consecutiveFailuresByHost.clear()
         }
 
-        val totalSuccess = DpiEngine.successHistory.values.sumOf { it.get() }
-        val totalFailure = DpiEngine.failureHistory.values.sumOf { it.get() }
+        val totalSuccess = StrategyStateRepository.getAllContextStates().values.sumOf { it.successCount.get() }
+        val totalFailure = StrategyStateRepository.getAllContextStates().values.sumOf { it.failureCount.get() }
         
         if (DpiEngine.hostSpecificMemory.size > 1000) {
             val now = System.currentTimeMillis()
@@ -90,20 +89,6 @@ object DpiAnalyzer {
             DpiPolicyEngine.applyPolicyDecision(decision)
         }
 
-        // Freshness decay of strategy bonuses without artificial inflation:
-        // High scores (>100) gradually decay back towards baseline 100 when not actively reinforced.
-        // Penalized scores (<100) are NOT artificially boosted without actual successful observations.
-        DpiEngine.strategyScores.values.forEach { catScores ->
-            catScores.values.forEach { score ->
-                val s = score.get()
-                if (s > 100) {
-                    val decay = if (ProxyStats.censorshipIntensity.value / 100.0 > 0.8) 0.99 else 0.95
-                    val decayed = (s * decay + 100 * (1.0 - decay)).toInt().coerceAtLeast(100)
-                    score.set(decayed)
-                }
-            }
-        }
-        
         // Decay stale network strategy memory confidence
         val now = System.currentTimeMillis()
         DpiEngine.networkStrategyMemory.values.forEach { catMap ->
@@ -116,25 +101,22 @@ object DpiAnalyzer {
             }
         }
         
-        BypassConfig.frag1 = DpiEngine.getRecommendedFragSize()
-        BypassConfig.delay1 = DpiEngine.getRecommendedDelay()
-        
-        DpiEngine.pruneStrategies()
         decayEventHistory()
 
         if (totalSuccess + totalFailure > 1000) {
-            DpiEngine.successHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toInt() } }
-            DpiEngine.failureHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toInt() } }
-            DpiEngine.weightedSuccessHistory.forEach { (_, count) -> count.updateAndGet { (it * 0.5).toLong() } }
-            DpiEngine.categoryWeightedSuccessHistory.values.forEach { catMap ->
-                catMap.values.forEach { count -> count.updateAndGet { (it * 0.5).toLong() } }
+            val states = StrategyStateRepository.getAllContextStates().values
+            states.forEach { state ->
+                state.successCount.updateAndGet { (it * 0.5).toInt() }
+                state.failureCount.updateAndGet { (it * 0.5).toInt() }
+                state.weightedSuccess.updateAndGet { (it * 0.5).toLong() }
             }
         }
     }
 
     fun checkGlobalStall() {
-        val totalSuccess = DpiEngine.successHistory.values.sumOf { it.get() }
-        val totalFailure = DpiEngine.failureHistory.values.sumOf { it.get() }
+        val states = StrategyStateRepository.getAllContextStates().values
+        val totalSuccess = states.sumOf { it.successCount.get() }
+        val totalFailure = states.sumOf { it.failureCount.get() }
         val total = totalSuccess + totalFailure
         if (total > 20) {
             val rate = (totalSuccess.toDouble() / total * 100)

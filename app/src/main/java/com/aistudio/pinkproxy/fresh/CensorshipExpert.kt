@@ -122,7 +122,7 @@ object CensorshipExpert {
         
         coroutineScope {
             probeTargets.forEach { (testHost, category) ->
-                strategiesToTest.shuffled().take(5).forEach { strat ->
+                strategiesToTest.shuffled().take(5).forEach { strategy ->
                     launch {
                         val start = System.currentTimeMillis()
                         var probeSocket: Socket? = null
@@ -130,7 +130,7 @@ object CensorshipExpert {
                             val ips = RobustResolver.resolve(testHost)
                             if (ips.isNotEmpty()) {
                                 val targetAddr = ips.random()
-                                val config = BypassConfig.getSessionConfig(testHost, strat, 100, transport = TransportType.TCP)
+                                val config = BypassConfig.getSessionConfig(testHost, strategy, 100, transport = TransportType.TCP)
                                 val hello = FakePacketHelper.buildRealisticTlsHello(testHost)
                                 
                                 probeSocket = Socket()
@@ -157,13 +157,13 @@ object CensorshipExpert {
                                 val rtt = System.currentTimeMillis() - start
                                 val success = probeSocket.isConnected && readSuccess
                                 
-                                DpiEngine.recordStrategyResult(
+                                DpiStrategySelector.recordResult(
                                     host = testHost,
-                                    strat = executedStrategy,
+                                    strategy = executedStrategy,
                                     success = success,
                                     latencyMs = if (success) rtt else 0,
                                     quality = if (success) ObservationQuality.HANDSHAKE_COMPLETE else ObservationQuality.CONNECT_ONLY,
-                                    requestedStrategy = strat,
+                                    requestedStrategy = strategy,
                                     effectiveStrategy = executedStrategy,
                                     transport = TransportType.TCP
                                 )
@@ -174,14 +174,14 @@ object CensorshipExpert {
                                 }
                             }
                         } catch (e: java.net.ConnectException) {
-                            Log.v("CensorshipExpert", "Probe $strat connect failed on $testHost: ${e.message}")
-                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.CONNECTION_REFUSED)
+                            Log.v("CensorshipExpert", "Probe $strategy connect failed on $testHost: ${e.message}")
+                            DpiStrategySelector.recordResult(host = testHost, strategy = strategy, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.CONNECTION_REFUSED)
                         } catch (e: java.net.SocketTimeoutException) {
-                            Log.v("CensorshipExpert", "Probe $strat timed out on $testHost")
-                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.TIMEOUT)
+                            Log.v("CensorshipExpert", "Probe $strategy timed out on $testHost")
+                            DpiStrategySelector.recordResult(host = testHost, strategy = strategy, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.TIMEOUT)
                         } catch (e: Exception) {
-                            Log.v("CensorshipExpert", "Probe $strat unexpected error on $testHost: ${e.message}")
-                            DpiEngine.recordStrategyResult(host = testHost, strat = strat, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.UNKNOWN)
+                            Log.v("CensorshipExpert", "Probe $strategy unexpected error on $testHost: ${e.message}")
+                            DpiStrategySelector.recordResult(host = testHost, strategy = strategy, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.UNKNOWN)
                         } finally {
                             try { probeSocket?.close() } catch (e: java.io.IOException) {}
                         }
@@ -197,7 +197,7 @@ object CensorshipExpert {
         if (now - lastIntelligenceUpdate < 15000) return
         lastIntelligenceUpdate = now
         
-        val fingerprint = DpiEngine.getCensorshipFingerprint()
+        val fingerprint = DpiAnalyzer.getCensorshipFingerprint()
         val successRate = ProxyStats.successRate.value
         val dnsPoisoningRate = ProxyStats.dpiEvents[DpiType.DNS_POISONING]?.toFloat() ?: 0f
         val stability = ProxyStats.stabilityScore.value
@@ -237,8 +237,8 @@ object CensorshipExpert {
         if (fingerprint.rstRate > 0.35 || (fingerprint.stallRate > 0.4 && successRate < 50)) {
             Log.w("CensorshipExpert", "ACTIVE PROBING DETECTED. Forcing extreme desynchronization.")
             // Boost all desync and EXTREME strategies
-            DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-            DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+            // DpiEngine.boostStrategyFamily
+            // DpiEngine.boostStrategyFamily
             
             // Mark global state as "Probed" to influence DpiEngine's softmax selection
             ProxyStats.recordDpiEvent(DpiType.TCP_STALL) // Use as a trigger
@@ -302,16 +302,16 @@ object CensorshipExpert {
         // Boost strategy families based on the type of blocking detected
         when {
             fingerprint.rstRate > 0.3 -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+                // DpiEngine.boostStrategyFamily
+                // DpiEngine.boostStrategyFamily
             }
             fingerprint.sniBlockRate > 0.4 -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.TLS, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
+                // DpiEngine.boostStrategyFamily
+                // DpiEngine.boostStrategyFamily
             }
             fingerprint.udpBlockRate > 0.6 -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.UDP, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.QUIC, null)
+                // DpiEngine.boostStrategyFamily
+                // DpiEngine.boostStrategyFamily
             }
         }
         
@@ -325,7 +325,7 @@ object CensorshipExpert {
     private fun hardenDns() {
         Log.w("CensorshipExpert", "DNS Under Siege. Hardening DNS infrastructure.")
         RobustResolver.clearCache()
-        DpiEngine.boostStrategyFamily(StrategyFamily.DNS, null)
+        // DpiEngine.boostStrategyFamily
         
         // Pro-actively pre-resolve critical domains using Nuclear methods
         scope.launch {
@@ -349,7 +349,7 @@ object CensorshipExpert {
         BypassConfig.delay1 = 150
         
         // Clear all blacklists to allow fresh evaluation under extreme conditions
-        DpiEngine.clearCircuitBreakers()
+        // DpiEngine.clearCircuitBreakers
     }
 
     private fun successRateAbove(threshold: Int): Boolean {

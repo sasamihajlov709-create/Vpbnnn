@@ -113,7 +113,7 @@ object TcpTransportHandler {
                 remoteSocket = TcpTransportManager.connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
             } else {
                 // Check if host has high failures or in panic mode - use multi-strategy race
-                val useRace = censorship > 40 || DpiEngine.isBlacklisted(effectiveStrategy, targetHost) || (ProxyStats.censorshipIntensity.value > 50)
+                val useRace = censorship > 40 || ((DpiEngine.circuitBreakers[effectiveStrategy] ?: 0L) > System.currentTimeMillis()) || (ProxyStats.censorshipIntensity.value > 50)
                 
                 if (useRace) {
                     val category = HostClassifier.classify(targetHost)
@@ -247,9 +247,9 @@ object TcpTransportHandler {
                             }
                             lastActivity.set(System.currentTimeMillis())
                             if (read > 0 && !recordedFullTransfer.getAndSet(true)) {
-                                DpiEngine.recordStrategyResult(
+                                DpiStrategySelector.recordResult(
                                     host = targetHost,
-                                    strat = effectiveStrategy,
+                                    strategy = effectiveStrategy,
                                     success = true,
                                     transport = TransportType.TCP,
                                     quality = ObservationQuality.SUSTAINED_DATA_TRANSFER,
@@ -447,8 +447,8 @@ object TcpTransportHandler {
                     transport = TransportType.TCP,
                     host = targetHost,
                     category = category
-                ) ?: DpiStrategySelector.getDiverseFallback(currentStrategy, category, TransportType.TCP)
-                currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getDiverseFallback(currentStrategy, category, TransportType.TCP)
+                ) ?: DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
+                currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
                 continue
             }
 
@@ -477,9 +477,9 @@ object TcpTransportHandler {
                     } else {
                         ObservationQuality.TLS_RECORD_RECEIVED
                     }
-                    DpiEngine.recordStrategyResult(
+                    DpiStrategySelector.recordResult(
                         host = targetHost,
-                        strat = currentStrategy,
+                        strategy = currentStrategy,
                         success = true,
                         transport = TransportType.TCP,
                         latencyMs = latency,
@@ -494,9 +494,9 @@ object TcpTransportHandler {
                 } else {
                     // Silent drop or stall detected by TSPU / watchdog
                     val failureReason = FailureReason.CENSORSHIP_STALL
-                    DpiEngine.recordStrategyResult(
+                    DpiStrategySelector.recordResult(
                         host = targetHost,
-                        strat = currentStrategy,
+                        strategy = currentStrategy,
                         success = false,
                         transport = TransportType.TCP,
                         quality = ObservationQuality.CONNECT_ONLY,
@@ -514,8 +514,8 @@ object TcpTransportHandler {
                         transport = TransportType.TCP,
                         host = targetHost,
                         category = category
-                    ) ?: DpiStrategySelector.getDiverseFallback(currentStrategy, category, TransportType.TCP)
-                    currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getDiverseFallback(currentStrategy, category, TransportType.TCP)
+                    ) ?: DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
+                    currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
                 }
             } catch (e: Exception) {
                 val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
@@ -523,9 +523,9 @@ object TcpTransportHandler {
                 } else {
                     FailureReason.TIMEOUT
                 }
-                DpiEngine.recordStrategyResult(
+                DpiStrategySelector.recordResult(
                     host = targetHost,
-                    strat = currentStrategy,
+                    strategy = currentStrategy,
                     success = false,
                     transport = TransportType.TCP,
                     quality = ObservationQuality.CONNECT_ONLY,
@@ -543,8 +543,8 @@ object TcpTransportHandler {
                     transport = TransportType.TCP,
                     host = targetHost,
                     category = category
-                ) ?: DpiStrategySelector.getDiverseFallback(currentStrategy, category, TransportType.TCP)
-                currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getDiverseFallback(currentStrategy, category, TransportType.TCP)
+                ) ?: DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
+                currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
             }
         }
         return null

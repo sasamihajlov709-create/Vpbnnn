@@ -61,7 +61,7 @@ object ProactiveAutoTuner {
 
     private suspend fun tuneHost(host: String, port: Int, vpnService: VpnService?) {
         val category = HostClassifier.classify(host)
-        val currentBest = DpiEngine.selectStrategy(host, category, TransportType.TCP)
+        val currentBest = DpiStrategySelector.getBestStrategy(category, host, TransportType.TCP)
 
         // Generate synthetic realistic TLS ClientHello for the target host
         val dummyClientHello = FakePacketHelper.buildRealisticTlsHello(host)
@@ -74,7 +74,7 @@ object ProactiveAutoTuner {
         if (ips.isEmpty()) return
 
         // Auto-Tuner 2.0: Rank and select top candidate strategies (Current best + Thompson dynamic top + robust diverse fallback)
-        val diverseExtreme = DpiStrategySelector.getDiverseFallback(failed = currentBest, category = category, transport = TransportType.TCP)
+        val diverseExtreme = DpiStrategySelector.getFallbackStrategy(strategy = currentBest, transport = TransportType.TCP)
         val candidates = listOf(
             currentBest,
             BypassStrategy.SNI_SPLIT,
@@ -85,7 +85,7 @@ object ProactiveAutoTuner {
         ).filter { 
             DpiStrategySelector.isFamilyCompatible(it.family, TransportType.TCP) &&
             StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) &&
-            !DpiEngine.isBlacklisted(it, host)
+            !((DpiEngine.circuitBreakers[it] ?: 0L) > System.currentTimeMillis())
         }.distinct().take(4)
 
         for (candidate in candidates) {
@@ -108,38 +108,33 @@ object ProactiveAutoTuner {
         val rtt = BypassConfig.currentRttMs.value
         val config = BypassConfig.getSessionConfig(host, strategy, rtt, TransportType.TCP)
         
-        try {
+                try {
             val socket = HappyEyeballsConnector.connectHappyEyeballs(ips, port, vpnService, host)
             if (socket != null) {
                 try {
                     val out = socket.getOutputStream()
                     val inStream = socket.getInputStream()
                     val startTime = System.currentTimeMillis()
-    
+                    
                     BypassApplier.applyBypass(socket, out, payload, payload.size, config, host)
-    
+                    
                     val buf = ByteArray(2048)
                     val read = inStream.read(buf)
-    
+                    
                     if (read > 0) {
                         val latency = System.currentTimeMillis() - startTime
-                        // Check if response is valid TLS ServerHello (0x16, 0x03)
                         val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
                         if (isTlsServerHello) {
-                            // Valid ServerHello proves the DPI middlebox permitted handshake record creation
-                            DpiEngine.recordStrategyResult(
-                                host = host,
-                                strat = strategy,
+                            DpiStrategySelector.recordResult(
+                                strategy = strategy,
                                 success = true,
+                                transport = TransportType.TCP,
+                                category = HostClassifier.classify(host),
+                                host = host,
                                 latencyMs = latency,
-                                quality = ObservationQuality.TLS_RECORD_RECEIVED,
-                                requestedStrategy = strategy,
-                                effectiveStrategy = strategy,
-                                transport = TransportType.TCP
+                                quality = ObservationQuality.TLS_RECORD_RECEIVED
                             )
-                            // We return false because a TLS record does NOT prove full application data exchange,
-                            // so we don't want to abort tuning for other candidates prematurely.
-                            return@withContext false
+                            return@withContext true
                         }
                     }
                 } finally {
@@ -147,21 +142,19 @@ object ProactiveAutoTuner {
                 }
             }
         } catch (e: Exception) {
-            // connection failed
+            // ignore
         }
-
-        // All resolved IP attempts failed for this strategy candidate
-        DpiEngine.recordStrategyResult(
-            host = host,
-            strat = strategy,
+        
+        DpiStrategySelector.recordResult(
+            strategy = strategy,
             success = false,
-            latencyMs = 0,
+            transport = TransportType.TCP,
+            category = HostClassifier.classify(host),
+            host = host,
+            latencyMs = 0L,
             reason = FailureReason.TIMEOUT,
-            quality = ObservationQuality.CONNECT_ONLY,
-            requestedStrategy = strategy,
-            effectiveStrategy = strategy,
-            transport = TransportType.TCP
+            quality = ObservationQuality.CONNECT_ONLY
         )
-        false
+        return@withContext false
     }
 }

@@ -70,6 +70,7 @@ object RuntimeCoordinator {
     /**
      * Synchronous suspension version of strategy transition for internal engine workflows under mutex.
      */
+
     suspend fun applyStrategyTransition(newStrategy: BypassStrategy, transport: TransportType, reason: String): Boolean = stateMutex.withLock {
         // Validate transport and registry executor compatibility
         val isFamilyValid = DpiStrategySelector.isFamilyCompatible(newStrategy.family, transport)
@@ -78,50 +79,39 @@ object RuntimeCoordinator {
         val targetStrategy = if (isFamilyValid && isExecutorValid) {
             newStrategy
         } else {
-            val fallback = DpiStrategySelector.getDefaultFallback(transport)
-            Log.w(TAG, "Requested strategy $newStrategy is incompatible with $transport (family: $isFamilyValid, executor: $isExecutorValid). Falling back to $fallback")
-            fallback
+            DpiStrategySelector.getDefaultFallback(transport)
         }
 
-        Log.i(TAG, "Applying global strategy transition to $targetStrategy for $transport. Reason: $reason")
+        Log.i(TAG, "Transitioning strategy for $transport to $targetStrategy. Reason: $reason")
         BypassConfig.applyInternalStrategy(targetStrategy)
-        VpnRuntimeState.updateStrategy(targetStrategy.name, reason)
-        true
+        VpnRuntimeState.updateStrategy(targetStrategy.name, DpiStrategySelector.getSelectionReasoning(targetStrategy))
+        return true
     }
 
-    /**
-     * Centralized rotation to the best alternative strategy for a specific transport, category, and profile.
-     */
     suspend fun rotateGlobalStrategy(
         transport: TransportType,
-        reason: String = "Automated Rotation",
+        reason: String,
         category: HostCategory = HostCategory.OTHER,
         profileId: String = "default"
-    ): BypassStrategy = stateMutex.withLock {
-        val current = BypassConfig.strategy.value
-        val now = System.currentTimeMillis()
+    ): BypassStrategy {
         val candidates = BypassStrategy.entries.filter { 
-            it != BypassStrategy.DIRECT && 
-            it != current &&
             DpiStrategySelector.isFamilyCompatible(it.family, transport) &&
-            StrategyExecutionRegistry.isExecutorSupported(it, transport) &&
-            (DpiEngine.circuitBreakers[it] ?: 0L) < now
+            StrategyExecutionRegistry.isExecutorSupported(it, transport)
         }
         val fallback = DpiStrategySelector.getDefaultFallback(transport)
-        val best = candidates.maxByOrNull { strat ->
-            val state = StrategyStateRepository.getStrategyState(strat, transport, category, profileId)
+        val best = candidates.maxByOrNull { strategy ->
+            val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
             val (posteriorMean, confidence) = state.calculateBetaPosterior()
-            val baseWeighted = DpiStrategySelector.getWeightedScore(strat, category)
+            val baseWeighted = DpiStrategySelector.getAverageScore(strategy)
             posteriorMean * (50.0 + 50.0 * confidence) + baseWeighted * 0.5
         } ?: fallback
-
+        
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
         BypassConfig.applyInternalStrategy(best)
         VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
         ProxyStats.logRecovery("Strategy rotated for $transport ($category): ${best.name} ($reason)")
-        best
+        return best
     }
-
     /**
      * Non-suspending dispatch version of strategy rotation.
      */

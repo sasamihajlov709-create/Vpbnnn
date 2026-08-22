@@ -113,13 +113,13 @@ object RecoveryStateMachine {
                     BypassStrategy.OOB_DESYNC
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.TCP_COMBINED_NUCLEAR
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "Active TCP Reset DPI detected")
                 if (targetHost != null) {
-                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TCP_RESET)
-                }
+                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost))
+                    }
                 enterPanic("Active TCP Reset DPI detected")
             }
             DpiType.TLS_SNI_BLOCK -> {
@@ -131,13 +131,13 @@ object RecoveryStateMachine {
                     BypassStrategy.TLS_CLIENT_HELLO_CHOP
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.SNI_SPLIT
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "TLS SNI Block Detected")
                 if (targetHost != null) {
-                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.CENSORSHIP_STALL)
-                }
+                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost))
+                    }
             }
             DpiType.HTTP_BLOCK -> {
                 val candidates = listOf(
@@ -148,13 +148,13 @@ object RecoveryStateMachine {
                     BypassStrategy.HTTP_HOST_REORDER
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.HTTP_HOST_SPACE
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "HTTP Block Detected")
                 if (targetHost != null) {
-                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.CENSORSHIP_STALL)
-                }
+                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost))
+                    }
             }
             DpiType.CONNECTION_TIMEOUT -> {
                 val candidates = listOf(
@@ -163,13 +163,13 @@ object RecoveryStateMachine {
                     BypassStrategy.TCP_WINDOW_SIZE_CHAOS
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, transport) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
                         .thenBy { it.name.hashCode() }
                 ) ?: DpiStrategySelector.getDefaultFallback(transport)
                 RuntimeCoordinator.applyStrategyTransition(selected, transport, "DPI Timeout Escalation")
                 if (targetHost != null) {
-                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
-                }
+                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost))
+                    }
                 if (escalationLevel.get() >= 2) enterPanic("DPI Timeout Escalation")
             }
             DpiType.UDP_BLOCK -> {
@@ -180,16 +180,16 @@ object RecoveryStateMachine {
                     BypassStrategy.QUIC_INITIAL_FRAGMENTATION
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.UDP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getWeightedScore(it, HostCategory.OTHER) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.UDP_COMBINED_NUCLEAR
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.UDP, "UDP Block Detected")
                 if (targetHost != null) {
-                    DpiStrategySelector.escalateHostStrategy(targetHost, selected, FailureReason.TIMEOUT)
-                }
+                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost))
+                    }
             }
             else -> {
-                RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation")
+                RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostCategory.OTHER)
             }
         }
 
@@ -201,7 +201,7 @@ object RecoveryStateMachine {
         val currentEsc = escalationLevel.get()
         if (currentEsc < 3) {
             _currentState.value = RecoveryState.RECONFIGURING_MTU
-            RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Watchdog Tunnel Stall Rotation")
+            RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Watchdog Tunnel Stall Rotation", HostCategory.OTHER)
 
             if (currentEsc > 0) {
                 val currentMtu = BypassConfig.currentMtu.value
@@ -236,7 +236,7 @@ object RecoveryStateMachine {
             else -> TransportType.TCP
         }
         
-        RuntimeCoordinator.rotateGlobalStrategy(transport, "Socket Stall Recovery")
+        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Socket Stall Recovery", HostCategory.OTHER)
 
         val currentMtu = BypassConfig.currentMtu.value
         if (currentMtu > 1100) {
@@ -306,13 +306,13 @@ object RecoveryStateMachine {
 
     private suspend fun processExtremeLatency(latencyMs: Long, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
-        RuntimeCoordinator.rotateGlobalStrategy(transport, "Recovery: Extreme Latency ($latencyMs ms)")
+        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Recovery: Extreme Latency ($latencyMs ms)", HostCategory.OTHER)
         escalationLevel.set((escalationLevel.get() + 1).coerceAtMost(2))
     }
 
     private suspend fun processHealthDegraded(details: String, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
-        RuntimeCoordinator.rotateGlobalStrategy(transport, "Recovery: Health Degraded ($details)")
+        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Recovery: Health Degraded ($details)", HostCategory.OTHER)
     }
 
     private fun processNetworkLost(networkType: String) {

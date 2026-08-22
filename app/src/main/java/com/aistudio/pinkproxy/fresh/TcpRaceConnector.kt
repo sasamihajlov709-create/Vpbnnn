@@ -128,9 +128,9 @@ object TcpRaceConnector {
                 } else {
                     ObservationQuality.TLS_RECORD_RECEIVED
                 }
-                DpiEngine.recordStrategyResult(
+                DpiStrategySelector.recordResult(
                     host = host,
-                    strat = strategy,
+                    strategy = strategy,
                     success = true,
                     transport = TransportType.TCP,
                     latencyMs = latency,
@@ -140,9 +140,9 @@ object TcpRaceConnector {
                 )
                 return RaceResult(rs, rsIn, rsOut, responseBuf, readBytes, strategy)
             } else {
-                DpiEngine.recordStrategyResult(
+                DpiStrategySelector.recordResult(
                     host = host,
-                    strat = strategy,
+                    strategy = strategy,
                     success = false,
                     transport = TransportType.TCP,
                     quality = ObservationQuality.CONNECT_ONLY,
@@ -160,9 +160,9 @@ object TcpRaceConnector {
             } else {
                 FailureReason.TIMEOUT
             }
-            DpiEngine.recordStrategyResult(
+            DpiStrategySelector.recordResult(
                 host = host,
-                strat = strategy,
+                strategy = strategy,
                 success = false,
                 transport = TransportType.TCP,
                 quality = ObservationQuality.CONNECT_ONLY,

@@ -64,8 +64,8 @@ object PrefetchManager {
     }
 
     private suspend fun warmupConnection(host: String, ips: List<InetAddress>, vpnService: VpnService?) {
-        val strat = BypassConfig.getBestStrategyForHost(host)
-        if (strat.group == StrategyGroup.LIGHT || strat.group == StrategyGroup.MEDIUM) {
+        val strategy = BypassConfig.getBestStrategyForHost(host)
+        if (strategy.group == StrategyGroup.LIGHT || strategy.group == StrategyGroup.MEDIUM) {
             withContext(ProxyDispatcher.io) {
                 val s = Socket()
                 try {

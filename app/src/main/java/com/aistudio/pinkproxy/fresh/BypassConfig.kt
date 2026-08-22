@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicLong
 import java.io.*
 
 object BypassConfig {
-    private val _strategy = MutableStateFlow(BypassStrategy.SNI_SPLIT)
+    private val _strategy = kotlinx.coroutines.flow.MutableStateFlow(BypassStrategy.SNI_SPLIT)
+    private val _strat = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
     
     /**
@@ -198,7 +199,7 @@ object BypassConfig {
         if (_currentNetworkType.value != type) {
             _currentNetworkType.value = type
             ProxyStats.resetScores()
-            DpiEngine.clearCircuitBreakers()
+            // DpiEngine.clearCircuitBreakers
         }
     }
 
@@ -266,7 +267,7 @@ object BypassConfig {
             }
         }
         
-        var best = DpiEngine.getBestStrategy(HostClassifier.classify(host), host, transport)
+        var best = DpiStrategySelector.getBestStrategy(HostClassifier.classify(host), host, transport)
         if (isStrictBypassMode && best == BypassStrategy.DIRECT) {
             best = DpiStrategySelector.getDefaultFallback(transport)
         }
@@ -281,7 +282,7 @@ object BypassConfig {
     }
 
     fun recordSuccess(
-        strat: BypassStrategy,
+        strategy: BypassStrategy,
         rtt: Long,
         host: String?,
         quality: ObservationQuality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
@@ -290,10 +291,10 @@ object BypassConfig {
         transport: TransportType = TransportType.TCP
     ) {
         ProxyStats.recordGlobalSuccess(rtt)
-        ProxyStats.reportStrategyResult(strat, true)
+        ProxyStats.reportStrategyResult(strategy, true)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         DpiStrategySelector.recordResult(
-            strategy = strat,
+            strategy = strategy,
             success = true,
             transport = transport,
             quality = quality,
@@ -314,7 +315,7 @@ object BypassConfig {
     }
 
     fun recordFailure(
-        strat: BypassStrategy,
+        strategy: BypassStrategy,
         host: String?,
         reason: FailureReason = FailureReason.UNKNOWN,
         quality: ObservationQuality = ObservationQuality.CONNECT_ONLY,
@@ -323,10 +324,10 @@ object BypassConfig {
         transport: TransportType = TransportType.TCP
     ) {
         ProxyStats.recordCensorshipEvent(true)
-        ProxyStats.reportStrategyResult(strat, false)
+        ProxyStats.reportStrategyResult(strategy, false)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         DpiStrategySelector.recordResult(
-            strategy = strat,
+            strategy = strategy,
             success = false,
             transport = transport,
             quality = quality,
@@ -346,7 +347,7 @@ object BypassConfig {
     fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long, transport: TransportType = TransportType.TCP): SessionConfig {
         val rnd = ThreadLocalRandom.current()
         val intensity = ProxyStats.censorshipIntensity.value
-        var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) DpiEngine.getBestExtremeStrategy(host, transport) else strategy
+        var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) BypassStrategy.BYEBYEDPI_HYBRID else strategy
         
         if (!DpiStrategySelector.isFamilyCompatible(effectiveStrategy.family, transport) ||
             !StrategyExecutionRegistry.isExecutorSupported(effectiveStrategy, transport)) {
@@ -375,8 +376,8 @@ object BypassConfig {
         )
     }
 
-    fun setGlobalStrategy(strat: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "Recovery State Machine") {
-        setStrategy(strat, transport, reason)
+    fun setGlobalStrategy(strategy: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "Recovery State Machine") {
+        setStrategy(strategy, transport, reason)
     }
     fun getStrategyMetrics(): List<StrategyMetric> = DpiStrategySelector.getStrategyMetrics()
 
@@ -393,7 +394,7 @@ object BypassConfig {
 
     fun resetScores() {
         ProxyStats.resetScores()
-        DpiEngine.resetStrategyScoresForNetworkChange()
+        // DpiEngine.resetStrategyScoresForNetworkChange()
     }
 
     fun clearScores(context: Context) {
@@ -407,13 +408,7 @@ object BypassConfig {
         host: String? = null,
         category: HostCategory? = null
     ): BypassStrategy {
-        return DpiStrategySelector.getFallbackStrategy(
-            failedStrategy = current,
-            transport = transport,
-            reason = reason,
-            host = host,
-            category = category
-        ) ?: when (transport) {
+        return DpiStrategySelector.getFallbackStrategy(strategy = current, transport = transport) ?: when (transport) {
             TransportType.TCP -> when (current.family) {
                 StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
                 StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE

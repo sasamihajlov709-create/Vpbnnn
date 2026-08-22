@@ -49,9 +49,9 @@ object UdpTransportHandler {
                         // Age out unacknowledged UDP packets (> 3500ms) and score degraded observation
                         pendingUdpProbes.entries.removeIf { (endpoint, probe) ->
                             if (now - probe.sentTime > 3500) {
-                                DpiEngine.recordStrategyResult(
+                                DpiStrategySelector.recordResult(
                                     host = probe.host,
-                                    strat = probe.strategy,
+                                    strategy = probe.strategy,
                                     success = false,
                                     latencyMs = 0,
                                     reason = FailureReason.TIMEOUT,
@@ -263,9 +263,9 @@ object UdpTransportHandler {
                                 val matchedProbe = pendingUdpProbes.remove(endpointKey)
                                 if (matchedProbe != null) {
                                     val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
-                                    DpiEngine.recordStrategyResult(
+                                    DpiStrategySelector.recordResult(
                                         host = matchedProbe.host,
-                                        strat = matchedProbe.strategy,
+                                        strategy = matchedProbe.strategy,
                                         success = true,
                                         latencyMs = latency,
                                         quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,

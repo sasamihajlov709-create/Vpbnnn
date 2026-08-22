@@ -53,7 +53,7 @@ object DiagnosticManager {
         (dnsJobs + tcpJobs).joinAll()
         
         val intensity = ProxyStats.censorshipIntensity.value
-        val bestStrat = DpiEngine.getBestStrategy(HostCategory.OTHER).name
+        val bestStrat = BypassStrategy.SNI_SPLIT.name
         
         val rec = when {
             tcpSuccess.get() == 0 -> "Критическая блокировка TCP. Попробуйте сменить сеть или включить режим 'Extreme'."

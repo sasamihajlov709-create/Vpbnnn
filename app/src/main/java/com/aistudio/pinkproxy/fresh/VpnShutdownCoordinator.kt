@@ -55,7 +55,7 @@ object VpnShutdownCoordinator {
             try {
                 val appCtx = ctx.applicationContext
                 DnsCacheManager.save(appCtx)
-                DpiStorage.saveScores(appCtx, synchronous = false)
+                DpiStorage.saveProfileScores(appCtx, NetworkProfileManager.currentProfile.value.id)
             } catch (e: Exception) {
                 Log.v("ShutdownCoordinator", "Storage flush warning: ${e.message}")
             }

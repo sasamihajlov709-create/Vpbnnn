@@ -146,7 +146,7 @@ object StrategyEscalationMatrix {
         }
 
         // Fallback to diverse extreme strategy if all chain members are exhausted or blocked
-        return DpiStrategySelector.getDiverseFallback(failedStrategy, category, transport)
+        return DpiStrategySelector.getFallbackStrategy(failedStrategy, transport)
     }
 
     private fun selectChainForContext(reason: FailureReason?, transport: TransportType): List<BypassStrategy> {

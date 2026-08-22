@@ -69,9 +69,9 @@ object BenchmarkManager {
                     attemptResults.forEach { (hostInfo, result) ->
                         val (name, url) = hostInfo
                         val host = try { java.net.URL(url).host } catch (e: Exception) { name.lowercase() }
-                        DpiEngine.recordStrategyResult(
+                        DpiStrategySelector.recordResult(
                             host = host,
-                            strat = strategy,
+                            strategy = strategy,
                             success = result.isUp,
                             transport = TransportType.TCP,
                             quality = if (result.isUp) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,

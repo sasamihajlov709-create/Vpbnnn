@@ -9,42 +9,8 @@ import java.util.concurrent.atomic.AtomicLong
 object DpiStorage {
 
     fun captureStrategyProfileState(profileId: String): StrategyProfileState {
-        val metricsMap = mutableMapOf<HostCategory, Map<BypassStrategy, StrategyMetricState>>()
-
-        HostCategory.values().forEach { cat ->
-            val catScores = DpiEngine.strategyScores[cat] ?: emptyMap()
-            val catSuccess = DpiEngine.categorySuccessHistory[cat] ?: emptyMap()
-            val catFailure = DpiEngine.categoryFailureHistory[cat] ?: emptyMap()
-            val catWeighted = DpiEngine.categoryWeightedSuccessHistory[cat] ?: emptyMap()
-
-            val strats = mutableMapOf<BypassStrategy, StrategyMetricState>()
-            BypassStrategy.values().forEach { strat ->
-                val score = catScores[strat]?.get() ?: 100
-                val succ = catSuccess[strat]?.get() ?: 0
-                val fail = catFailure[strat]?.get() ?: 0
-                val weight = catWeighted[strat]?.get() ?: 0L
-                if (score != 100 || succ > 0 || fail > 0 || weight > 0L) {
-                    strats[strat] = StrategyMetricState(
-                        score = score,
-                        successCount = succ,
-                        failureCount = fail,
-                        weightedSuccess = weight
-                    )
-                }
-            }
-            if (strats.isNotEmpty()) {
-                metricsMap[cat] = strats
-            }
-        }
-
-        val globalWeighted = DpiEngine.weightedSuccessHistory.mapValues { (_, atomic) -> atomic.get() }
-            .filter { it.value > 0L }
         val netMem = (DpiEngine.networkStrategyMemory[profileId] ?: emptyMap()).toMap()
-        val hostMem = if (DpiEngine.hostSpecificMemory.isNotEmpty()) {
-            DpiEngine.hostSpecificMemory.toMap()
-        } else {
-            DpiEngine.contextualHostMemory.mapKeys { it.key.host }.toMap()
-        }
+
         val ctxHostMem = if (DpiEngine.contextualHostMemory.isNotEmpty()) {
             DpiEngine.contextualHostMemory.toMap()
         } else {
@@ -52,6 +18,7 @@ object DpiStorage {
                 HostContextKey(host, mem.transport, mem.profileId)
             }
         }
+
         val hostBl = DpiEngine.hostStrategyBlacklist.mapValues { (_, map) -> map.toMap() }
 
         val ctxStates = mutableMapOf<StrategyContextKey, StrategyMetricState>()
@@ -63,20 +30,17 @@ object DpiStorage {
                     failureCount = state.failureCount.get(),
                     weightedSuccess = state.weightedSuccess.get(),
                     verifiedSuccessCount = state.verifiedSuccessCount.get(),
-                    totalLatencyMs = state.totalLatencyMs.get(),
+                    totalLatencyMs = state.ewmaLatencyMs.get(),
                     lastUsedTimestamp = state.lastUsedTimestamp.get()
                 )
             }
         }
 
         return StrategyProfileState(
-            version = 2,
+            version = 3,
             profileId = profileId,
             timestamp = System.currentTimeMillis(),
-            metricsByCategory = metricsMap,
-            globalWeightedSuccess = globalWeighted,
             networkMemory = netMem,
-            hostMemory = hostMem,
             contextualHostMemory = ctxHostMem,
             hostBlacklist = hostBl,
             contextualStrategyStates = ctxStates
@@ -84,200 +48,35 @@ object DpiStorage {
     }
 
     fun restoreStrategyProfileState(state: StrategyProfileState) {
-        HostCategory.values().forEach { cat ->
-            val catScores = DpiEngine.strategyScores.getOrPut(cat) { ConcurrentHashMap() }
-            val catSuccess = DpiEngine.categorySuccessHistory.getOrPut(cat) { ConcurrentHashMap() }
-            val catFailure = DpiEngine.categoryFailureHistory.getOrPut(cat) { ConcurrentHashMap() }
-            val catWeighted = DpiEngine.categoryWeightedSuccessHistory.getOrPut(cat) { ConcurrentHashMap() }
-            val catMetrics = state.metricsByCategory[cat]
+        StrategyStateRepository.restoreStates(state.contextualStrategyStates)
 
-            BypassStrategy.values().forEach { strat ->
-                val metric = catMetrics?.get(strat)
-                catScores.getOrPut(strat) { AtomicInteger(100) }.set(metric?.score ?: 100)
-                catSuccess.getOrPut(strat) { AtomicInteger(0) }.set(metric?.successCount ?: 0)
-                catFailure.getOrPut(strat) { AtomicInteger(0) }.set(metric?.failureCount ?: 0)
-                catWeighted.getOrPut(strat) { AtomicLong(0L) }.set(metric?.weightedSuccess ?: 0L)
-            }
-        }
-        BypassStrategy.values().forEach { strat ->
-            DpiEngine.weightedSuccessHistory.getOrPut(strat) { AtomicLong(0L) }.set(state.globalWeightedSuccess[strat] ?: 0L)
-        }
-        DpiEngine.networkStrategyMemory.clear()
-        if (state.networkMemory.isNotEmpty()) {
-            val catMap = ConcurrentHashMap(state.networkMemory)
-            DpiEngine.networkStrategyMemory[state.profileId] = catMap
-        }
+        val netMap = DpiEngine.networkStrategyMemory.getOrPut(state.profileId) { ConcurrentHashMap() }
+        netMap.clear()
+        netMap.putAll(state.networkMemory)
+
         DpiEngine.contextualHostMemory.clear()
         DpiEngine.hostSpecificMemory.clear()
-        if (state.contextualHostMemory.isNotEmpty()) {
-            DpiEngine.contextualHostMemory.putAll(state.contextualHostMemory)
-            state.contextualHostMemory.forEach { (ctxKey, mem) ->
-                DpiEngine.hostSpecificMemory[ctxKey.host] = mem
-            }
+        state.contextualHostMemory.forEach { (key, mem) ->
+            DpiEngine.contextualHostMemory[key] = mem
+            DpiEngine.hostSpecificMemory[key.host] = mem
         }
-        if (state.hostMemory.isNotEmpty()) {
-            state.hostMemory.forEach { (host, mem) ->
-                if (!DpiEngine.hostSpecificMemory.containsKey(host)) {
-                    DpiEngine.hostSpecificMemory[host] = mem
-                }
-                val ctxKey = HostContextKey(host, mem.transport, mem.profileId)
-                if (!DpiEngine.contextualHostMemory.containsKey(ctxKey)) {
-                    DpiEngine.contextualHostMemory[ctxKey] = mem
-                }
-            }
-        }
+
         DpiEngine.hostStrategyBlacklist.clear()
         state.hostBlacklist.forEach { (host, map) ->
-            DpiEngine.hostStrategyBlacklist[host] = ConcurrentHashMap(map)
-        }
-
-        // Restore canonical StrategyStateRepository states
-        if (state.contextualStrategyStates.isNotEmpty()) {
-            StrategyStateRepository.restoreStates(state.contextualStrategyStates)
-        } else {
-            // Legacy fallback for old V1 profiles
-            state.metricsByCategory.forEach { (cat, stratMap) ->
-                stratMap.forEach { (strat, metric) ->
-                    val key = StrategyContextKey(
-                        strategy = strat,
-                        transport = TransportType.TCP,
-                        category = cat,
-                        profileId = state.profileId
-                    )
-                    StrategyStateRepository.restoreStates(mapOf(key to metric))
-                }
-            }
+            val concMap = ConcurrentHashMap<BypassStrategy, Long>()
+            concMap.putAll(map)
+            DpiEngine.hostStrategyBlacklist[host] = concMap
         }
     }
 
-    fun captureProfileState(profileId: String): NetworkProfileState {
-        val scores = DpiEngine.strategyScores.mapValues { (_, map) ->
-            map.mapValues { (_, atomic) -> atomic.get() }
-        }
-        val catSuccess = DpiEngine.categorySuccessHistory.mapValues { (_, map) ->
-            map.mapValues { (_, atomic) -> atomic.get() }
-        }
-        val catFailure = DpiEngine.categoryFailureHistory.mapValues { (_, map) ->
-            map.mapValues { (_, atomic) -> atomic.get() }
-        }
-        val catWeightedSuccess = DpiEngine.categoryWeightedSuccessHistory.mapValues { (_, map) ->
-            map.mapValues { (_, atomic) -> atomic.get() }
-        }
-        val weightedSuccess = DpiEngine.weightedSuccessHistory.mapValues { (_, atomic) -> atomic.get() }
-        val netMem = (DpiEngine.networkStrategyMemory[profileId] ?: emptyMap()).toMap()
-        val hostMem = DpiEngine.hostSpecificMemory.toMap()
-        val hostBl = DpiEngine.hostStrategyBlacklist.mapValues { (_, map) -> map.toMap() }
-
-        return NetworkProfileState(
-            profileId = profileId,
-            scores = scores,
-            categorySuccess = catSuccess,
-            categoryFailure = catFailure,
-            categoryWeightedSuccess = catWeightedSuccess,
-            weightedSuccess = weightedSuccess,
-            networkMemory = netMem,
-            hostMemory = hostMem,
-            hostBlacklist = hostBl,
-            lastUpdated = System.currentTimeMillis()
-        )
-    }
-
-    fun restoreProfileState(state: NetworkProfileState) {
-        DpiEngine.strategyScores.forEach { (cat, map) ->
-            val catScores = state.scores[cat]
-            map.forEach { (strat, atomic) ->
-                atomic.set(catScores?.get(strat) ?: 100)
-            }
-        }
-        DpiEngine.categorySuccessHistory.forEach { (cat, map) ->
-            val catMap = state.categorySuccess[cat]
-            map.forEach { (strat, atomic) ->
-                atomic.set(catMap?.get(strat) ?: 0)
-            }
-        }
-        DpiEngine.categoryFailureHistory.forEach { (cat, map) ->
-            val catMap = state.categoryFailure[cat]
-            map.forEach { (strat, atomic) ->
-                atomic.set(catMap?.get(strat) ?: 0)
-            }
-        }
-        DpiEngine.categoryWeightedSuccessHistory.forEach { (cat, map) ->
-            val catMap = state.categoryWeightedSuccess[cat]
-            map.forEach { (strat, atomic) ->
-                atomic.set(catMap?.get(strat) ?: 0L)
-            }
-        }
-        DpiEngine.weightedSuccessHistory.forEach { (strat, atomic) ->
-            atomic.set(state.weightedSuccess[strat] ?: 0L)
-        }
-        DpiEngine.networkStrategyMemory.clear()
-        if (state.networkMemory.isNotEmpty()) {
-            val catMap = ConcurrentHashMap(state.networkMemory)
-            DpiEngine.networkStrategyMemory[state.profileId] = catMap
-        }
-        DpiEngine.hostSpecificMemory.clear()
-        DpiEngine.hostSpecificMemory.putAll(state.hostMemory)
-        DpiEngine.hostStrategyBlacklist.clear()
-        state.hostBlacklist.forEach { (host, map) ->
-            DpiEngine.hostStrategyBlacklist[host] = ConcurrentHashMap(map)
-        }
-    }
-
-    fun saveScores(context: Context, synchronous: Boolean = false) {
-        val profileId = NetworkProfileManager.currentProfile.value.id
-        saveProfileScores(context, profileId, synchronous)
-    }
-
-    fun loadScores(context: Context) {
-        val profileId = NetworkProfileManager.currentProfile.value.id
-        loadProfileScores(context, profileId)
-    }
-
-    fun saveProfileScores(context: Context, profileId: String, synchronous: Boolean = false) {
-        // Save unified JSON state
+    fun saveProfileScores(context: Context, profileId: String) {
         val state = captureStrategyProfileState(profileId)
+        val jsonStr = state.toJson()
         val v2Prefs = context.getSharedPreferences("dpi_profile_v2_$profileId", Context.MODE_PRIVATE)
-        val v2Editor = v2Prefs.edit().putString("state_json", state.toJson())
-        if (synchronous) v2Editor.commit() else v2Editor.apply()
+        v2Prefs.edit().putString("state_json", jsonStr).apply()
 
-        saveHostMemoryForProfile(context, profileId, synchronous)
+        saveHostMemoryForProfile(context, profileId, isSynchronous = false)
         AutoTtlProber.saveTtlMtuState(context, profileId)
-        val prefs = context.getSharedPreferences("dpi_scores_$profileId", Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-        editor.clear()
-        DpiEngine.strategyScores.forEach { (cat, scores) ->
-            scores.forEach { (strat, score) ->
-                editor.putInt("${cat.name}_${strat.name}", score.get())
-            }
-        }
-        DpiEngine.categorySuccessHistory.forEach { (cat, map) ->
-            map.forEach { (strat, cnt) ->
-                editor.putInt("succ_${cat.name}_${strat.name}", cnt.get())
-            }
-        }
-        DpiEngine.categoryFailureHistory.forEach { (cat, map) ->
-            map.forEach { (strat, cnt) ->
-                editor.putInt("fail_${cat.name}_${strat.name}", cnt.get())
-            }
-        }
-        DpiEngine.categoryWeightedSuccessHistory.forEach { (cat, map) ->
-            map.forEach { (strat, cnt) ->
-                editor.putLong("wsucc_${cat.name}_${strat.name}", cnt.get())
-            }
-        }
-        DpiEngine.weightedSuccessHistory.forEach { (strat, cnt) ->
-            editor.putLong("wsucc_global_${strat.name}", cnt.get())
-        }
-        // Save network strategy memory strictly for this profile
-        val profileMem = DpiEngine.networkStrategyMemory[profileId]
-        if (profileMem != null) {
-            profileMem.forEach { (cat, mem) ->
-                editor.putString("netmem_${profileId}::${cat.name}", "${mem.strategy.name}|${mem.timestamp}|${mem.confidence}")
-            }
-        }
-        if (synchronous) editor.commit() else editor.apply()
-
-        // Also update registry of known profiles
         updateProfileRegistry(context, profileId)
     }
 
@@ -285,7 +84,6 @@ object DpiStorage {
         loadHostMemoryForProfile(context, profileId)
         AutoTtlProber.loadTtlMtuState(context, profileId)
 
-        // 1. Try unified JSON v2 state first
         val v2Prefs = context.getSharedPreferences("dpi_profile_v2_$profileId", Context.MODE_PRIVATE)
         val jsonStr = v2Prefs.getString("state_json", null)
         if (!jsonStr.isNullOrBlank()) {
@@ -293,64 +91,6 @@ object DpiStorage {
             if (state != null) {
                 restoreStrategyProfileState(state)
                 return
-            }
-        }
-
-        // 2. Fallback to legacy keys
-        val prefs = context.getSharedPreferences("dpi_scores_$profileId", Context.MODE_PRIVATE)
-        val hasSavedScores = prefs.all.isNotEmpty()
-        val sourcePrefs = if (hasSavedScores) prefs else context.getSharedPreferences("dpi_engine_scores", Context.MODE_PRIVATE)
-
-        DpiEngine.strategyScores.forEach { (cat, scores) ->
-            scores.forEach { (strat, score) ->
-                val saved = sourcePrefs.getInt("${cat.name}_${strat.name}", -1)
-                if (saved != -1) score.set(saved) else score.set(100)
-            }
-        }
-
-        DpiEngine.categorySuccessHistory.forEach { (cat, map) ->
-            map.forEach { (strat, cnt) ->
-                val saved = sourcePrefs.getInt("succ_${cat.name}_${strat.name}", 0)
-                cnt.set(saved)
-            }
-        }
-        DpiEngine.categoryFailureHistory.forEach { (cat, map) ->
-            map.forEach { (strat, cnt) ->
-                val saved = sourcePrefs.getInt("fail_${cat.name}_${strat.name}", 0)
-                cnt.set(saved)
-            }
-        }
-
-        DpiEngine.categoryWeightedSuccessHistory.forEach { (cat, map) ->
-            map.forEach { (strat, cnt) ->
-                val saved = sourcePrefs.getLong("wsucc_${cat.name}_${strat.name}", 0L)
-                cnt.set(saved)
-            }
-        }
-        DpiEngine.weightedSuccessHistory.forEach { (strat, cnt) ->
-            val saved = sourcePrefs.getLong("wsucc_global_${strat.name}", 0L)
-            cnt.set(saved)
-        }
-
-        DpiEngine.networkStrategyMemory.clear()
-        sourcePrefs.all.keys.filter { it.startsWith("netmem_") }.forEach { key ->
-            val raw = key.removePrefix("netmem_")
-            val parts = if (raw.contains("::")) raw.split("::", limit = 2) else raw.split("_", limit = 2)
-            if (parts.size == 2) {
-                val netType = parts[0]
-                val catName = parts[1]
-                val valStr = sourcePrefs.getString(key, null)
-                if (valStr != null) {
-                    try {
-                        val cat = HostCategory.valueOf(catName)
-                        val valParts = valStr.split("|")
-                        val strat = BypassStrategy.valueOf(valParts[0])
-                        val ts = if (valParts.size > 1) valParts[1].toLongOrNull() ?: System.currentTimeMillis() else System.currentTimeMillis()
-                        val conf = if (valParts.size > 2) valParts[2].toDoubleOrNull() ?: 1.0 else 1.0
-                        val catMap = DpiEngine.networkStrategyMemory.getOrPut(netType) { ConcurrentHashMap() }
-                        catMap[cat] = DpiEngine.NetworkMemory(strat, ts, conf)
-                    } catch (e: Throwable) {}
-                }
             }
         }
     }
@@ -361,6 +101,7 @@ object DpiStorage {
         editor.clear()
         val now = System.currentTimeMillis()
         val expiry = 86400000L * 7
+
         DpiEngine.hostSpecificMemory.forEach { (host, mem) ->
             if (now - mem.timestamp < expiry) {
                 editor.putString(host, "${mem.strategy.name}|${mem.timestamp}|${mem.successCount}")
@@ -371,6 +112,7 @@ object DpiStorage {
         val blPrefs = context.getSharedPreferences("dpi_host_bl_$profileId", Context.MODE_PRIVATE)
         val blEditor = blPrefs.edit()
         blEditor.clear()
+
         DpiEngine.hostStrategyBlacklist.forEach { (host, map) ->
             val validEntries = map.filter { it.value > now }.map { "${it.key.name}:${it.value}" }.joinToString(",")
             if (validEntries.isNotEmpty()) {
@@ -387,18 +129,17 @@ object DpiStorage {
         val prefs = context.getSharedPreferences("dpi_host_mem_$profileId", Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val expiry = 86400000L * 7
-        val sourcePrefs = if (prefs.all.isNotEmpty()) prefs else if (profileId == "default") context.getSharedPreferences("dpi_engine_host_memory", Context.MODE_PRIVATE) else prefs
 
-        sourcePrefs.all.forEach { (host, value) ->
+        prefs.all.forEach { (host, value) ->
             if (value is String) {
                 val parts = value.split("|")
                 if (parts.size >= 2) {
                     try {
-                        val strat = BypassStrategy.valueOf(parts[0])
+                        val strategy = BypassStrategy.valueOf(parts[0])
                         val ts = parts[1].toLong()
                         val successCount = if (parts.size >= 3) parts[2].toIntOrNull() ?: 1 else 1
                         if (now - ts < expiry) {
-                            DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strat, ts, successCount)
+                            DpiEngine.hostSpecificMemory[host] = DpiEngine.HostMemory(strategy, ts, successCount)
                         }
                     } catch (e: Throwable) {}
                 }
@@ -406,19 +147,17 @@ object DpiStorage {
         }
 
         val blPrefs = context.getSharedPreferences("dpi_host_bl_$profileId", Context.MODE_PRIVATE)
-        val sourceBlPrefs = if (blPrefs.all.isNotEmpty()) blPrefs else context.getSharedPreferences("dpi_engine_host_blacklist", Context.MODE_PRIVATE)
-
-        sourceBlPrefs.all.forEach { (host, value) ->
+        blPrefs.all.forEach { (host, value) ->
             if (value is String) {
                 val map = DpiEngine.hostStrategyBlacklist.getOrPut(host) { ConcurrentHashMap() }
                 value.split(",").forEach { entry ->
                     val parts = entry.split(":")
                     if (parts.size == 2) {
                         try {
-                            val strat = BypassStrategy.valueOf(parts[0])
+                            val strategy = BypassStrategy.valueOf(parts[0])
                             val until = parts[1].toLong()
                             if (until > now) {
-                                map[strat] = until
+                                map[strategy] = until
                             }
                         } catch (e: Throwable) {}
                     }
@@ -438,12 +177,12 @@ object DpiStorage {
             allProfiles.add(profileId)
 
             if (allProfiles.size > 25) {
-                // Evict the least recently used profile using timestamp
                 val oldest = allProfiles.minByOrNull { id -> registry.getLong("ts_$id", 0L) }
                 if (oldest != null && oldest != profileId) {
                     allProfiles.remove(oldest)
                     editor.remove("ts_$oldest")
                     context.getSharedPreferences("dpi_scores_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
+                    context.getSharedPreferences("dpi_profile_v2_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
                     context.getSharedPreferences("dpi_host_mem_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
                     context.getSharedPreferences("dpi_host_bl_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
                 }
@@ -454,5 +193,9 @@ object DpiStorage {
             Log.v("DpiStorage", "Profile registry update error: ${e.message}")
         }
     }
+    
+    fun loadScores(context: Context) {
+        val currentProfile = NetworkProfileManager.currentProfile.value
+        loadProfileScores(context, currentProfile.id)
+    }
 }
-

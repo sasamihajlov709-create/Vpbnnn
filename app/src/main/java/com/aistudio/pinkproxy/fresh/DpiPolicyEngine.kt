@@ -16,7 +16,6 @@ object DpiPolicyEngine {
         val recommendedMtu: Int?,
         val shouldEnterPanic: Boolean,
         val shouldReset: Boolean,
-        val familyBoosts: List<StrategyFamily>,
         val affectedTransport: TransportType = TransportType.TCP
     )
 
@@ -49,6 +48,7 @@ object DpiPolicyEngine {
 
          val shouldEnterPanic = (globalSuccessRate < 15.0 && calculatedIntensity > 40) ||
                                 (totalObservations > 20 && (globalSuccessRate < 15.0 || fingerprint.timeoutRate > 0.8))
+
          val shouldReset = totalObservations > 20 && globalSuccessRate < 5.0
 
          val targetIntensity = if (calculatedIntensity > currentIntensity) {
@@ -66,26 +66,15 @@ object DpiPolicyEngine {
              (100.0 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100.0).coerceAtLeast(0.0) * 0.5
          ).toInt().coerceIn(0, 100)
 
-         val boosts = mutableListOf<StrategyFamily>()
          var recommendedMtu: Int? = null
-
          if (transport == TransportType.TCP && (fingerprint.timeoutRate > 0.35 || fingerprint.stallRate > 0.45)) {
              val currentMtu = BypassConfig.currentMtu.value
              if (currentMtu > 1000) {
                  recommendedMtu = currentMtu - 32
              }
-             boosts.add(StrategyFamily.TIMING)
-             boosts.add(StrategyFamily.FRAGMENTATION)
          } else if (transport == TransportType.TCP && stability > 90 && globalSuccessRate > 90 && BypassConfig.currentMtu.value < 1400) {
              recommendedMtu = BypassConfig.currentMtu.value + 16
          }
-
-         if (fingerprint.jitter > 600) {
-             boosts.add(StrategyFamily.ADAPTIVE)
-             boosts.add(StrategyFamily.TIMING)
-         }
-
-         val resolvedTransport = transport
 
          return PolicyDecision(
              targetIntensity = targetIntensity,
@@ -93,8 +82,7 @@ object DpiPolicyEngine {
              recommendedMtu = recommendedMtu,
              shouldEnterPanic = shouldEnterPanic,
              shouldReset = shouldReset,
-             familyBoosts = boosts,
-             affectedTransport = resolvedTransport
+             affectedTransport = transport
          )
      }
 
@@ -105,65 +93,23 @@ object DpiPolicyEngine {
         if (Math.abs(decision.targetIntensity - ProxyStats.censorshipIntensity.value) >= 1) {
             ProxyStats.updateCensorshipIntensity(decision.targetIntensity)
         }
-
         ProxyStats.updateStabilityScore(decision.calculatedStability)
-
+        
         decision.recommendedMtu?.let { newMtu ->
             BypassConfig.setMtu(newMtu)
         }
-
-        decision.familyBoosts.forEach { family ->
-            DpiEngine.boostStrategyFamily(family, null)
-        }
-
+        
         if (decision.shouldEnterPanic) {
             DpiEngine.enterPanicMode()
             RuntimeCoordinator.requestGlobalStrategyRotation(decision.affectedTransport, "Policy Panic Trigger")
         }
-
         if (decision.shouldReset) {
             resetAllEngineStates()
         }
     }
 
-    /**
-     * Handles specific DPI event diagnosis by determining required strategy family boosts.
-     */
     fun onDpiEventDiagnosed(type: DpiType) {
-        when (type) {
-            DpiType.TLS_SNI_BLOCK -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TLS, null)
-            }
-            DpiType.UDP_BLOCK -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.UDP, null)
-            }
-            DpiType.TCP_RESET -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-            }
-            DpiType.DNS_POISONING -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.DNS, null)
-            }
-            DpiType.HTTP_BLOCK -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.HTTP, null)
-            }
-            DpiType.TLS_HANDSHAKE_TIMEOUT -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.TLS, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-            }
-            DpiType.CONNECTION_TIMEOUT -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-            }
-            DpiType.TCP_STALL, DpiType.SSL_STALL -> {
-                DpiEngine.boostStrategyFamily(StrategyFamily.FRAGMENTATION, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TCP, null)
-                DpiEngine.boostStrategyFamily(StrategyFamily.TIMING, null)
-            }
-            else -> {}
-        }
+        // Obsolete globally. Left empty or implement proper context-based boost in the future.
     }
 
     /**
@@ -171,17 +117,9 @@ object DpiPolicyEngine {
      */
     fun resetAllEngineStates() {
         Log.w("DpiPolicyEngine", "Executing full state reset due to critical network anomaly policy trigger.")
-        DpiEngine.strategyScores.values.forEach { catScores ->
-            catScores.values.forEach { it.set(100) }
-        }
+        StrategyStateRepository.resetAll()
         DpiEngine.circuitBreakers.clear()
         DpiEngine.consecutiveFailures.clear()
-        DpiEngine.successHistory.clear()
-        DpiEngine.failureHistory.clear()
-        DpiEngine.weightedSuccessHistory.clear()
-        DpiEngine.categorySuccessHistory.clear()
-        DpiEngine.categoryFailureHistory.clear()
-        DpiEngine.categoryWeightedSuccessHistory.clear()
     }
 
     /**
@@ -196,10 +134,6 @@ object DpiPolicyEngine {
     ) {
         if (requested != executed) {
             Log.d("DpiPolicyEngine", "Strategy substitution tracked: requested=$requested, effective=$effective, executed=$executed for host=$host (success=$success)")
-            if (!success) {
-                // Apply soft penalty to requested strategy to reduce repeat selection overhead
-                DpiEngine.globalPenalties.getOrPut(requested) { java.util.concurrent.atomic.AtomicInteger(0) }.addAndGet(25)
-            }
         }
     }
 }
