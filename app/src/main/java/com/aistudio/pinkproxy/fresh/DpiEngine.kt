@@ -21,26 +21,10 @@ object DpiEngine {
 
     val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
     val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
-    val consecutiveFailuresByHost = ConcurrentHashMap<String, AtomicInteger>()
-
-    data class NetworkMemory(val strategy: BypassStrategy, val timestamp: Long = System.currentTimeMillis(), val confidence: Double = 1.0)
-    val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
-
-    data class HostMemory(
-        val strategy: BypassStrategy,
-        val timestamp: Long,
-        val successCount: Int = 1,
-        val transport: TransportType = TransportType.TCP,
-        val profileId: String = "default",
-        val confidence: Double = 1.0
-    )
-    val contextualHostMemory = ConcurrentHashMap<HostContextKey, HostMemory>()
-    val hostSpecificMemory = ConcurrentHashMap<String, HostMemory>()
-    val hostStrategyBlacklist = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Long>>()
     val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
 
     val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
-    val rttHistory = ConcurrentHashMap<HostCategory, MutableList<Long>>()
+    val rttHistory = ConcurrentHashMap<TransportType, MutableList<Long>>()
 
     init {
         initStrategyChains()
@@ -97,10 +81,15 @@ object DpiEngine {
     private fun resetStrategyScoresForNetworkChange() {
         circuitBreakers.clear()
         consecutiveFailures.clear()
-        consecutiveFailuresByHost.clear()
+        StrategyStateRepository.consecutiveFailuresByHost.clear()
     }
 
     fun markSuccess(strat: BypassStrategy, transport: TransportType, host: String, latencyMs: Long = 0, quality: ObservationQuality) {
+        if (latencyMs > 0) {
+            val list = rttHistory.getOrPut(transport) { java.util.Collections.synchronizedList(java.util.LinkedList<Long>()) }
+            list.add(latencyMs)
+            if (list.size > 50) list.removeAt(0)
+        }
         val category = HostClassifier.classify(host)
         DpiStrategySelector.recordResult(
             strategy = strat,
@@ -162,8 +151,40 @@ object DpiEngine {
         BypassConfig.setPanicMode(true)
     }
 
-    fun getRecommendedFragSize(): Int { return 100 }
-    fun getRecommendedDelay(): Long { return 50L }
+    fun getRecommendedFragSize(): Int {
+        val intensity = ProxyStats.censorshipIntensity.value
+        return when {
+            intensity > 80 -> 10
+            intensity > 50 -> 40
+            intensity > 20 -> 100
+            else -> 500
+        }
+    }
+
+    fun getRecommendedDelay(): Long {
+        val intensity = ProxyStats.censorshipIntensity.value
+        if (intensity < 10) return 0L
+        
+        val history = rttHistory[TransportType.TCP]?.let { synchronized(it) { it.toList() } } ?: emptyList()
+        val (avgRtt, jitter) = if (history.size > 2) {
+            val avg = history.average()
+            val diffs = history.zipWithNext { a, b -> Math.abs(a - b) }.average()
+            avg to diffs
+        } else {
+            100.0 to 10.0
+        }
+        
+        if (avgRtt > 400.0) return 5L
+        
+        val factor = (intensity / 100.0)
+        var computed = (jitter * factor * 1.5).toLong()
+        
+        if (avgRtt < 50.0 && intensity > 50) {
+            computed += 20L
+        }
+        
+        return computed.coerceIn(5L, 100L)
+    }
 
     fun triggerRecalibration(transport: TransportType) {
         RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Trigger Recalibration", HostCategory.OTHER)

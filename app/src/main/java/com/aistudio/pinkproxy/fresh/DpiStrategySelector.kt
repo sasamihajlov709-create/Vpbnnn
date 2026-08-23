@@ -37,16 +37,16 @@ object DpiStrategySelector {
         }
 
         if (host != null) {
-            val hostFails = DpiEngine.consecutiveFailuresByHost[host]?.get() ?: 0
+            val hostFails = StrategyStateRepository.consecutiveFailuresByHost[host]?.get() ?: 0
             val ctxKey = HostContextKey(host, transport, profileId)
-            val lastMem = DpiEngine.contextualHostMemory[ctxKey] 
-                 ?: DpiEngine.hostSpecificMemory[host]?.takeIf { it.transport == transport && (it.profileId == profileId || it.profileId == "default") }
+            val lastMem = StrategyStateRepository.contextualHostMemory[ctxKey] 
+                 ?: StrategyStateRepository.hostSpecificMemory[host]?.takeIf { it.transport == transport && (it.profileId == profileId || it.profileId == "default") }
 
             if (hostFails == 0) {
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strategy = lastMem.strategy
                     if (isFamilyCompatible(strategy.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strategy, transport) && (DpiEngine.circuitBreakers[strategy] ?: 0L) < now) {
-                        val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
+                        val hostBlacklist = StrategyStateRepository.hostStrategyBlacklist[host]
                         if ((hostBlacklist?.get(strategy) ?: 0L) < now) {
                             return strategy
                         }
@@ -59,7 +59,7 @@ object DpiStrategySelector {
                         currentStep = currentStep?.let { getFallbackStrategy(it, transport) }
                     }
                     if (currentStep != null && isFamilyCompatible(currentStep.family, transport) && StrategyExecutionRegistry.isExecutorSupported(currentStep, transport) && (DpiEngine.circuitBreakers[currentStep] ?: 0L) < now) {
-                        val hostBlacklist = DpiEngine.hostStrategyBlacklist[host]
+                        val hostBlacklist = StrategyStateRepository.hostStrategyBlacklist[host]
                         if ((hostBlacklist?.get(currentStep) ?: 0L) < now) {
                             return currentStep
                         }
@@ -69,7 +69,7 @@ object DpiStrategySelector {
             }
         }
 
-        val netMem = DpiEngine.networkStrategyMemory[profileId]?.get(category)
+        val netMem = StrategyStateRepository.networkStrategyMemory[profileId]?.get(category)
         netMem?.let { mem ->
             val nowMs = System.currentTimeMillis()
             val ageMs = nowMs - mem.timestamp
@@ -77,7 +77,7 @@ object DpiStrategySelector {
             if (ageMs < maxAge && mem.confidence >= 0.3) {
                 val strategy = mem.strategy
                 if (isFamilyCompatible(strategy.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strategy, transport) && (DpiEngine.circuitBreakers[strategy] ?: 0L) < now) {
-                    val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
+                    val hostBlacklist = host?.let { StrategyStateRepository.hostStrategyBlacklist[it] }
                     val blacklistedUntil = hostBlacklist?.get(strategy) ?: 0L
                     if (blacklistedUntil < now) {
                         return strategy
@@ -86,7 +86,7 @@ object DpiStrategySelector {
             }
         }
 
-        val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
+        val hostBlacklist = host?.let { StrategyStateRepository.hostStrategyBlacklist[it] }
         val validStrategies = BypassStrategy.entries.filter { strategy ->
             isFamilyCompatible(strategy.family, transport) &&
             StrategyExecutionRegistry.isExecutorSupported(strategy, transport) &&
@@ -96,7 +96,7 @@ object DpiStrategySelector {
         }
         
         if (validStrategies.isEmpty()) {
-            if (host != null) DpiEngine.hostStrategyBlacklist.remove(host)
+            if (host != null) StrategyStateRepository.hostStrategyBlacklist.remove(host)
             DpiEngine.circuitBreakers.entries.removeIf { it.value < now }
             return getDefaultFallback(transport)
         }
@@ -119,7 +119,7 @@ object DpiStrategySelector {
         val now = System.currentTimeMillis()
         val profileId = NetworkProfileManager.currentProfile.value.id
         val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        val hostBlacklist = host?.let { DpiEngine.hostStrategyBlacklist[it] }
+        val hostBlacklist = host?.let { StrategyStateRepository.hostStrategyBlacklist[it] }
 
         val extremeCandidates = BypassStrategy.entries.filter { 
             it.group == StrategyGroup.EXTREME &&
@@ -182,19 +182,19 @@ object DpiStrategySelector {
             DpiEngine.circuitBreakers.remove(strategy)
             if (host != null && quality.minLevelForHostMemory) {
                 val ctxKey = HostContextKey(host, transport, profileId)
-                val lastCount = DpiEngine.contextualHostMemory[ctxKey]?.successCount ?: 0
-                val newMem = DpiEngine.HostMemory(strategy, now, lastCount + 1, transport, profileId)
-                DpiEngine.contextualHostMemory[ctxKey] = newMem
-                DpiEngine.hostSpecificMemory[host] = newMem
-                DpiEngine.consecutiveFailuresByHost.remove(host)
-                DpiEngine.hostStrategyBlacklist.remove(host)
+                val lastCount = StrategyStateRepository.contextualHostMemory[ctxKey]?.successCount ?: 0
+                val newMem = HostMemory(strategy, now, lastCount + 1, transport, profileId)
+                StrategyStateRepository.contextualHostMemory[ctxKey] = newMem
+                StrategyStateRepository.hostSpecificMemory[host] = newMem
+                StrategyStateRepository.consecutiveFailuresByHost.remove(host)
+                StrategyStateRepository.hostStrategyBlacklist.remove(host)
             }
             if (quality.minLevelForHostMemory) {
                 val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
                 if (state.sampleCount.get() > 3) {
                     val conf = state.calculateConfidence()
-                    val profileNetMemory = DpiEngine.networkStrategyMemory.getOrPut(profileId) { java.util.concurrent.ConcurrentHashMap() }
-                    profileNetMemory[category] = DpiEngine.NetworkMemory(strategy, now, conf)
+                    val profileNetMemory = StrategyStateRepository.networkStrategyMemory.getOrPut(profileId) { java.util.concurrent.ConcurrentHashMap() }
+                    profileNetMemory[category] = NetworkMemory(strategy, now, conf)
                 }
             }
         } else {
@@ -210,11 +210,11 @@ object DpiStrategySelector {
                 DpiEngine.consecutiveFailures.remove(strategy)
             }
             if (host != null && (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL)) {
-                val hostBlacklist = DpiEngine.hostStrategyBlacklist.getOrPut(host) { java.util.concurrent.ConcurrentHashMap() }
+                val hostBlacklist = StrategyStateRepository.hostStrategyBlacklist.getOrPut(host) { java.util.concurrent.ConcurrentHashMap() }
                 val currentLevel = hostBlacklist[strategy] ?: 0L
                 val waitTime = if (now > currentLevel) 900_000L else 3_600_000L
                 hostBlacklist[strategy] = now + waitTime
-                DpiEngine.consecutiveFailuresByHost.getOrPut(host) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+                StrategyStateRepository.consecutiveFailuresByHost.getOrPut(host) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
             }
         }
     }

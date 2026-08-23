@@ -42,7 +42,7 @@ object DpiPolicyEngine {
              ).toInt().coerceIn(0, 100)
              TransportType.DNS -> (
                  fingerprint.timeoutRate * 60 + 
-                 fingerprint.rstRate * 40
+                 fingerprint.dnsBlockRate * 80
              ).toInt().coerceIn(0, 100)
          }
 
@@ -54,7 +54,7 @@ object DpiPolicyEngine {
          val targetIntensity = if (calculatedIntensity > currentIntensity) {
              (currentIntensity * 0.2 + calculatedIntensity * 0.8).toInt()
          } else {
-             if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05) {
+             if (globalSuccessRate > 95 && fingerprint.rstRate < 0.05 && fingerprint.sniBlockRate < 0.05 && fingerprint.dnsBlockRate < 0.05) {
                  (currentIntensity * 0.7 + calculatedIntensity * 0.3).toInt()
              } else {
                  (currentIntensity * 0.9 + calculatedIntensity * 0.1).toInt()
@@ -63,7 +63,7 @@ object DpiPolicyEngine {
 
          val stability = (
              globalSuccessRate * 0.5 + 
-             (100.0 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.timeoutRate) * 100.0).coerceAtLeast(0.0) * 0.5
+             (100.0 - (fingerprint.rstRate + fingerprint.sniBlockRate + fingerprint.udpBlockRate + fingerprint.dnsBlockRate + fingerprint.timeoutRate) * 100.0).coerceAtLeast(0.0) * 0.5
          ).toInt().coerceIn(0, 100)
 
          var recommendedMtu: Int? = null

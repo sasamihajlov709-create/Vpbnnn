@@ -8,6 +8,7 @@ object DpiAnalyzer {
         val rstRate: Double,
         val sniBlockRate: Double,
         val udpBlockRate: Double,
+        val dnsBlockRate: Double,
         val timeoutRate: Double,
         val stallRate: Double,
         val jitter: Double,
@@ -24,9 +25,9 @@ object DpiAnalyzer {
 
         val total = DpiEngine.eventHistory.filterKeys { it in relevantTypes }.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
         
-        val allHistory = DpiEngine.rttHistory.values.flatMap { synchronized(it) { it.toList() } }
-        val jitter = if (allHistory.size > 2) {
-            val diffs = allHistory.zipWithNext { a, b -> Math.abs(a - b) }
+        val transportHistory = DpiEngine.rttHistory[transport]?.let { synchronized(it) { it.toList() } } ?: emptyList()
+        val jitter = if (transportHistory.size > 2) {
+            val diffs = transportHistory.zipWithNext { a, b -> Math.abs(a - b) }
             diffs.average()
         } else 0.0
 
@@ -34,6 +35,7 @@ object DpiAnalyzer {
             rstRate = (DpiEngine.eventHistory[DpiType.TCP_RESET]?.get() ?: 0) / total,
             sniBlockRate = (DpiEngine.eventHistory[DpiType.TLS_SNI_BLOCK]?.get() ?: 0) / total,
             udpBlockRate = (DpiEngine.eventHistory[DpiType.UDP_BLOCK]?.get() ?: 0) / total,
+            dnsBlockRate = ((DpiEngine.eventHistory[DpiType.DNS_POISONING]?.get() ?: 0) + (DpiEngine.eventHistory[DpiType.DNS_VERIFICATION_FAILURE]?.get() ?: 0)) / total,
             timeoutRate = (DpiEngine.eventHistory[DpiType.CONNECTION_TIMEOUT]?.get() ?: 0) / total,
             stallRate = ((DpiEngine.eventHistory[DpiType.TCP_STALL]?.get() ?: 0) + (DpiEngine.eventHistory[DpiType.SSL_STALL]?.get() ?: 0)) / total,
             jitter = jitter,
@@ -65,20 +67,21 @@ object DpiAnalyzer {
     }
 
     fun analyzeAndAdjust() {
-        if (DpiEngine.hostStrategyBlacklist.size > 500) {
+        if (StrategyStateRepository.hostStrategyBlacklist.size > 500) {
             val now = System.currentTimeMillis()
-            DpiEngine.hostStrategyBlacklist.entries.removeIf { map -> map.value.values.all { it < now } }
-            if (DpiEngine.hostStrategyBlacklist.size > 1000) DpiEngine.hostStrategyBlacklist.clear()
+            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { map -> map.value.values.all { it < now } }
+            if (StrategyStateRepository.hostStrategyBlacklist.size > 1000) StrategyStateRepository.hostStrategyBlacklist.clear()
         }
         
-        if (DpiEngine.consecutiveFailuresByHost.size > 500) {
-            DpiEngine.consecutiveFailuresByHost.entries.removeIf { it.value.get() == 0 }
-            if (DpiEngine.consecutiveFailuresByHost.size > 1000) DpiEngine.consecutiveFailuresByHost.clear()
+        if (StrategyStateRepository.consecutiveFailuresByHost.size > 500) {
+            StrategyStateRepository.consecutiveFailuresByHost.entries.removeIf { it.value.get() == 0 }
+            if (StrategyStateRepository.consecutiveFailuresByHost.size > 1000) StrategyStateRepository.consecutiveFailuresByHost.clear()
         }
 
-        val tcpStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.TCP }.values
-        val udpStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.UDP }.values
-        val dnsStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.DNS }.values
+        val currentProfileId = NetworkProfileManager.currentProfile.value.id
+        val tcpStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.TCP && it.profileId == currentProfileId }.values
+        val udpStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.UDP && it.profileId == currentProfileId }.values
+        val dnsStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.DNS && it.profileId == currentProfileId }.values
 
         val tcpSuccess = tcpStates.sumOf { it.successCount.get() }
         val tcpFailure = tcpStates.sumOf { it.failureCount.get() }
@@ -87,30 +90,30 @@ object DpiAnalyzer {
         val dnsSuccess = dnsStates.sumOf { it.successCount.get() }
         val dnsFailure = dnsStates.sumOf { it.failureCount.get() }
         
-        if (DpiEngine.hostSpecificMemory.size > 1000) {
+        if (StrategyStateRepository.hostSpecificMemory.size > 1000) {
             val now = System.currentTimeMillis()
             val expiry = 86400000L * 7
-            DpiEngine.hostSpecificMemory.entries.removeIf { now - it.value.timestamp > expiry }
-            if (DpiEngine.hostSpecificMemory.size > 1500) DpiEngine.hostSpecificMemory.clear()
+            StrategyStateRepository.hostSpecificMemory.entries.removeIf { now - it.value.timestamp > expiry }
+            if (StrategyStateRepository.hostSpecificMemory.size > 1500) StrategyStateRepository.hostSpecificMemory.clear()
         }
 
-        if (DpiEngine.consecutiveFailuresByHost.size > 2000) {
-            DpiEngine.consecutiveFailuresByHost.clear()
+        if (StrategyStateRepository.consecutiveFailuresByHost.size > 2000) {
+            StrategyStateRepository.consecutiveFailuresByHost.clear()
         }
         
-        if (DpiEngine.hostStrategyBlacklist.size > 1000) {
+        if (StrategyStateRepository.hostStrategyBlacklist.size > 1000) {
             val now = System.currentTimeMillis()
-            DpiEngine.hostStrategyBlacklist.entries.removeIf { (_, strategies) ->
+            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { (_, strategies) ->
                 strategies.entries.removeIf { now > it.value }
                 strategies.isEmpty()
             }
         }
 
-        if (DpiEngine.contextualHostMemory.size > 2000) {
+        if (StrategyStateRepository.contextualHostMemory.size > 2000) {
             val now = System.currentTimeMillis()
             val expiry = 86400000L * 7
-            DpiEngine.contextualHostMemory.entries.removeIf { now - it.value.timestamp > expiry }
-            if (DpiEngine.contextualHostMemory.size > 3000) DpiEngine.contextualHostMemory.clear()
+            StrategyStateRepository.contextualHostMemory.entries.removeIf { now - it.value.timestamp > expiry }
+            if (StrategyStateRepository.contextualHostMemory.size > 3000) StrategyStateRepository.contextualHostMemory.clear()
         }
 
         // Analyze TCP
@@ -146,7 +149,7 @@ object DpiAnalyzer {
 
         // Decay stale network strategy memory confidence
         val now = System.currentTimeMillis()
-        DpiEngine.networkStrategyMemory.values.forEach { catMap ->
+        StrategyStateRepository.networkStrategyMemory.values.forEach { catMap ->
             catMap.entries.forEach { (cat, mem) ->
                 val ageMs = now - mem.timestamp
                 if (ageMs > 30 * 60 * 1000L && mem.confidence > 0.3) {
@@ -159,7 +162,7 @@ object DpiAnalyzer {
         decayEventHistory()
 
         if (totalSuccess + totalFailure > 1000) {
-            val states = StrategyStateRepository.getAllContextStates().values
+            val states = StrategyStateRepository.getAllContextStates().filterKeys { it.profileId == currentProfileId }.values
             states.forEach { state ->
                 state.successCount.updateAndGet { (it * 0.5).toInt() }
                 state.failureCount.updateAndGet { (it * 0.5).toInt() }
@@ -170,7 +173,8 @@ object DpiAnalyzer {
     }
 
     fun checkGlobalStall(transport: TransportType = TransportType.TCP) {
-        val states = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == transport }.values
+        val currentProfileId = NetworkProfileManager.currentProfile.value.id
+        val states = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == transport && it.profileId == currentProfileId }.values
         val totalSuccess = states.sumOf { it.successCount.get() }
         val totalFailure = states.sumOf { it.failureCount.get() }
         val total = totalSuccess + totalFailure

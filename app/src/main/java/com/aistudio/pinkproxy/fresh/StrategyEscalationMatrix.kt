@@ -138,7 +138,7 @@ object StrategyEscalationMatrix {
             
             // Check host-specific blacklist
             if (host != null) {
-                val bl = DpiEngine.hostStrategyBlacklist[host]?.get(candidate) ?: 0L
+                val bl = StrategyStateRepository.hostStrategyBlacklist[host]?.get(candidate) ?: 0L
                 if (bl >= now) continue
             }
 

@@ -15,6 +15,21 @@ data class StrategyContextKey(
     val profileId: String
 )
 
+data class NetworkMemory(
+    val strategy: BypassStrategy,
+    val timestamp: Long = System.currentTimeMillis(),
+    val confidence: Double = 1.0
+)
+
+data class HostMemory(
+    val strategy: BypassStrategy,
+    val timestamp: Long,
+    val successCount: Int = 1,
+    val transport: TransportType = TransportType.TCP,
+    val profileId: String = "default",
+    val confidence: Double = 1.0
+)
+
 /**
  * Unified canonical state record for a single bypass strategy within a host category, transport and profile.
  */
@@ -92,6 +107,11 @@ data class StrategyState(
  */
 object StrategyStateRepository {
     private val contextStates = ConcurrentHashMap<StrategyContextKey, StrategyState>()
+    val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
+    val contextualHostMemory = ConcurrentHashMap<HostContextKey, HostMemory>()
+    val hostSpecificMemory = ConcurrentHashMap<String, HostMemory>()
+    val hostStrategyBlacklist = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Long>>()
+    val consecutiveFailuresByHost = ConcurrentHashMap<String, AtomicInteger>()
 
     fun getStrategyState(
         strategy: BypassStrategy,
@@ -142,6 +162,15 @@ object StrategyStateRepository {
             state.ewmaLatencyMs.set(metric.totalLatencyMs)
             state.lastUsedTimestamp.set(metric.lastUsedTimestamp)
         }
+    }
+
+    fun clearAll() {
+        contextStates.clear()
+        networkStrategyMemory.clear()
+        contextualHostMemory.clear()
+        hostSpecificMemory.clear()
+        hostStrategyBlacklist.clear()
+        consecutiveFailuresByHost.clear()
     }
 
     fun resetAll() {

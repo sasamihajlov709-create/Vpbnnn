@@ -43,8 +43,8 @@ data class StrategyProfileState(
     val version: Int = 3,
     val profileId: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val networkMemory: Map<HostCategory, DpiEngine.NetworkMemory> = emptyMap(),
-    val contextualHostMemory: Map<HostContextKey, DpiEngine.HostMemory> = emptyMap(),
+    val networkMemory: Map<HostCategory, NetworkMemory> = emptyMap(),
+    val contextualHostMemory: Map<HostContextKey, HostMemory> = emptyMap(),
     val hostBlacklist: Map<String, Map<BypassStrategy, Long>> = emptyMap(),
     val contextualStrategyStates: Map<StrategyContextKey, StrategyMetricState> = emptyMap()
 ) {
@@ -133,7 +133,7 @@ data class StrategyProfileState(
                     }
                 }
 
-                val netMem = mutableMapOf<HostCategory, DpiEngine.NetworkMemory>()
+                val netMem = mutableMapOf<HostCategory, NetworkMemory>()
                 val netMemJson = root.optJSONObject("networkMemory")
                 if (netMemJson != null) {
                     val keys = netMemJson.keys()
@@ -144,7 +144,7 @@ data class StrategyProfileState(
                         if (cat != null && memObj != null) {
                             val strategy = try { BypassStrategy.valueOf(memObj.optString("strategy")) } catch (e: Exception) { null }
                             if (strategy != null) {
-                                netMem[cat] = DpiEngine.NetworkMemory(
+                                netMem[cat] = NetworkMemory(
                                     strategy = strategy,
                                     timestamp = memObj.optLong("timestamp", System.currentTimeMillis()),
                                     confidence = memObj.optDouble("confidence", 1.0)
@@ -154,7 +154,7 @@ data class StrategyProfileState(
                     }
                 }
 
-                val ctxHostMem = mutableMapOf<HostContextKey, DpiEngine.HostMemory>()
+                val ctxHostMem = mutableMapOf<HostContextKey, HostMemory>()
                 val ctxHostMemJson = root.optJSONObject("contextualHostMemory")
                 if (ctxHostMemJson != null) {
                     val keys = ctxHostMemJson.keys()
@@ -167,7 +167,7 @@ data class StrategyProfileState(
                                 val ctxKey = HostContextKey.fromStorageString(keyStr)
                                 val trans = try { TransportType.valueOf(memObj.optString("transport", ctxKey.transport.name)) } catch (e: Exception) { ctxKey.transport }
                                 val prof = memObj.optString("profileId", ctxKey.profileId)
-                                val mem = DpiEngine.HostMemory(
+                                val mem = HostMemory(
                                     strategy = strategy,
                                     timestamp = memObj.optLong("timestamp", System.currentTimeMillis()),
                                     successCount = memObj.optInt("successCount", 1),
