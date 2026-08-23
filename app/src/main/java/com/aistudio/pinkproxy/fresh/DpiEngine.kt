@@ -167,11 +167,11 @@ object DpiEngine {
         }
     }
 
-    fun getRecommendedDelay(): Long {
+    fun getRecommendedDelay(transport: TransportType = TransportType.TCP): Long {
         val intensity = ProxyStats.censorshipIntensity.value
         if (intensity < 10) return 0L
         
-        val history = rttHistory[TransportType.TCP]?.let { synchronized(it) { it.toList() } } ?: emptyList()
+        val history = rttHistory[transport]?.let { synchronized(it) { it.toList() } } ?: emptyList()
         val (avgRtt, jitter) = if (history.size > 2) {
             val avg = history.average()
             val diffs = history.zipWithNext { a, b -> Math.abs(a - b) }.average()

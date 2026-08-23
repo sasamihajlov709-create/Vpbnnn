@@ -262,10 +262,10 @@ object BypassConfig {
         strategy: BypassStrategy,
         rtt: Long,
         host: String?,
-        quality: ObservationQuality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+        transport: TransportType,
+        quality: ObservationQuality,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null,
-        transport: TransportType = TransportType.TCP
+        effectiveStrategy: BypassStrategy? = null
     ) {
         ProxyStats.recordGlobalSuccess(rtt)
         ProxyStats.reportStrategyResult(strategy, true)
@@ -294,11 +294,11 @@ object BypassConfig {
     fun recordFailure(
         strategy: BypassStrategy,
         host: String?,
+        transport: TransportType,
+        quality: ObservationQuality,
         reason: FailureReason = FailureReason.UNKNOWN,
-        quality: ObservationQuality = ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null,
-        transport: TransportType = TransportType.TCP
+        effectiveStrategy: BypassStrategy? = null
     ) {
         ProxyStats.recordCensorshipEvent(true, transport = transport)
         ProxyStats.reportStrategyResult(strategy, false)

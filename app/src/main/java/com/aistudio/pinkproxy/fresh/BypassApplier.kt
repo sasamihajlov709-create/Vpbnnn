@@ -58,11 +58,8 @@ object BypassApplier {
         }
 
         if (!StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.TCP)) {
-            android.util.Log.w("BypassApplier", "Strategy $strategy is not supported by executor on TCP. Falling back to direct write.")
-            ProxyStats.logRecovery("Strategy $strategy unsupported on TCP executor: fallback applied")
-            output.write(finalData, 0, finalLen)
-            output.flush()
-            return
+            android.util.Log.e("BypassApplier", "Strategy $strategy is not supported by executor on TCP. Throwing exception to trigger recovery.")
+            throw UnsupportedStrategyException(strategy, StrategyExecutionRegistry.getExecutorType(strategy) ?: StrategyExecutionRegistry.ExecutorType.DIRECT)
         }
 
         val executor = StrategyExecutionRegistry.getExecutor(strategy)
@@ -87,10 +84,8 @@ object BypassApplier {
             socket.send(packet); return
         }
         if (!StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.UDP)) {
-            android.util.Log.w("BypassApplier", "Strategy $strategy is not supported by executor on UDP. Falling back to direct send.")
-            ProxyStats.logRecovery("Strategy $strategy unsupported on UDP executor: fallback applied")
-            socket.send(packet)
-            return
+            android.util.Log.e("BypassApplier", "Strategy $strategy is not supported by executor on UDP. Throwing exception to trigger recovery.")
+            throw UnsupportedStrategyException(strategy, StrategyExecutionRegistry.getExecutorType(strategy) ?: StrategyExecutionRegistry.ExecutorType.DIRECT)
         }
         val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
         val executor = StrategyExecutionRegistry.getExecutor(strategy)
@@ -106,14 +101,6 @@ object BypassApplier {
             random = rnd
         )
         executor.executeUdp(udpContext)
-    }
-
-    fun recordStrategyResult(host: String, strategy: BypassStrategy, success: Boolean, avgDuration: Long = 50L) {
-        if (success) {
-            BypassConfig.recordSuccess(strategy, avgDuration, host)
-        } else {
-            BypassConfig.recordFailure(strategy, host)
-        }
     }
 
     fun isProbableHttp(data: ByteArray, length: Int): Boolean {

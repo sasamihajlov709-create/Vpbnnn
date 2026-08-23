@@ -228,7 +228,16 @@ object DpiStrategySelector {
     fun getScore(strategy: BypassStrategy, transport: TransportType, category: HostCategory, profileId: String): Double {
         val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
         val (mean, confidence) = state.calculateBetaPosterior()
-        return mean * 1000.0 * (0.5 + 0.5 * confidence)
+        
+        // Use global average score as a weak prior for auto-tuner
+        val globalAverageMean = getAverageScore(strategy) / 1000.0
+        val blendedMean = if (confidence < 0.5) {
+            (mean * confidence) + (globalAverageMean * (1.0 - confidence))
+        } else {
+            mean
+        }
+        
+        return blendedMean * 1000.0 * (0.5 + 0.5 * confidence)
     }
 
     fun getAverageScore(strategy: BypassStrategy): Double {

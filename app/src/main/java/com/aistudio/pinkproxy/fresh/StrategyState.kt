@@ -163,6 +163,14 @@ object StrategyStateRepository {
         }
     }
 
+    fun clearProfileState(profileId: String) {
+        contextStates.keys.removeIf { it.profileId == profileId }
+        networkStrategyMemory.remove(profileId)
+        contextualHostMemory.keys.removeIf { it.profileId == profileId }
+        hostStrategyBlacklist.keys.removeIf { it.profileId == profileId }
+        // consecutiveFailuresByHost is NOT profile-specific, but we can clear it or leave it. Usually it's short-lived.
+    }
+
     fun clearAll() {
         contextStates.clear()
         networkStrategyMemory.clear()

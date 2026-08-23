@@ -5,7 +5,7 @@ package com.aistudio.pinkproxy.fresh
  */
 data class HostContextKey(
     val host: String,
-    val transport: TransportType = TransportType.TCP,
+    val transport: TransportType,
     val profileId: String = "default"
 ) {
     fun toStorageString(): String = "$host|$transport|$profileId"

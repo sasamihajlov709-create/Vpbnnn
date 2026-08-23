@@ -39,13 +39,20 @@ data class StrategyMetricState(
     }
 }
 
+data class HostBlacklistEntry(
+    val host: String,
+    val transport: TransportType,
+    val strategy: BypassStrategy,
+    val until: Long
+)
+
 data class StrategyProfileState(
-    val version: Int = 3,
+    val version: Int = 4,
     val profileId: String,
     val timestamp: Long = System.currentTimeMillis(),
     val networkMemory: Map<HostCategory, NetworkMemory> = emptyMap(),
     val contextualHostMemory: Map<HostContextKey, HostMemory> = emptyMap(),
-    val hostBlacklist: Map<String, Map<BypassStrategy, Long>> = emptyMap(),
+    val hostBlacklist: List<HostBlacklistEntry> = emptyList(),
     val contextualStrategyStates: Map<StrategyContextKey, StrategyMetricState> = emptyMap()
 ) {
     fun toJson(): String {
@@ -88,15 +95,16 @@ data class StrategyProfileState(
         }
         root.put("contextualHostMemory", ctxHostMemJson)
 
-        val hostBlJson = JSONObject()
-        hostBlacklist.forEach { (host, map) ->
+        val hostBlJson = JSONArray()
+        hostBlacklist.forEach { entry ->
             val blObj = JSONObject()
-            map.forEach { (strategy, until) ->
-                blObj.put(strategy.name, until)
-            }
-            hostBlJson.put(host, blObj)
+            blObj.put("host", entry.host)
+            blObj.put("transport", entry.transport.name)
+            blObj.put("strategy", entry.strategy.name)
+            blObj.put("until", entry.until)
+            hostBlJson.put(blObj)
         }
-        root.put("hostBlacklist", hostBlJson)
+        root.put("hostBlacklistList", hostBlJson)
 
         return root.toString()
     }
@@ -181,25 +189,38 @@ data class StrategyProfileState(
                     }
                 }
 
-                val hostBl = mutableMapOf<String, Map<BypassStrategy, Long>>()
-                val hostBlJson = root.optJSONObject("hostBlacklist")
-                if (hostBlJson != null) {
-                    val keys = hostBlJson.keys()
-                    while (keys.hasNext()) {
-                        val host = keys.next()
-                        val blObj = hostBlJson.optJSONObject(host)
-                        if (blObj != null) {
-                            val map = mutableMapOf<BypassStrategy, Long>()
-                            val blKeys = blObj.keys()
-                            while (blKeys.hasNext()) {
-                                val stratName = blKeys.next()
-                                val strategy = try { BypassStrategy.valueOf(stratName) } catch (e: Exception) { null }
-                                if (strategy != null) {
-                                    map[strategy] = blObj.optLong(stratName, 0L)
-                                }
+                val hostBl = mutableListOf<HostBlacklistEntry>()
+                val hostBlListJson = root.optJSONArray("hostBlacklistList")
+                if (hostBlListJson != null) {
+                    for (i in 0 until hostBlListJson.length()) {
+                        val item = hostBlListJson.optJSONObject(i)
+                        if (item != null) {
+                            val host = item.optString("host")
+                            val trans = try { TransportType.valueOf(item.optString("transport")) } catch (e: Exception) { TransportType.TCP }
+                            val strat = try { BypassStrategy.valueOf(item.optString("strategy")) } catch (e: Exception) { null }
+                            val until = item.optLong("until", 0L)
+                            if (host.isNotEmpty() && strat != null) {
+                                hostBl.add(HostBlacklistEntry(host, trans, strat, until))
                             }
-                            if (map.isNotEmpty()) {
-                                hostBl[host] = map
+                        }
+                    }
+                } else {
+                    // Legacy parsing
+                    val hostBlJson = root.optJSONObject("hostBlacklist")
+                    if (hostBlJson != null) {
+                        val keys = hostBlJson.keys()
+                        while (keys.hasNext()) {
+                            val host = keys.next()
+                            val blObj = hostBlJson.optJSONObject(host)
+                            if (blObj != null) {
+                                val blKeys = blObj.keys()
+                                while (blKeys.hasNext()) {
+                                    val stratName = blKeys.next()
+                                    val strategy = try { BypassStrategy.valueOf(stratName) } catch (e: Exception) { null }
+                                    if (strategy != null) {
+                                        hostBl.add(HostBlacklistEntry(host, TransportType.TCP, strategy, blObj.optLong(stratName, 0L)))
+                                    }
+                                }
                             }
                         }
                     }

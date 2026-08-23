@@ -50,11 +50,13 @@ object DpiAnalyzer {
         )
     }
 
-    fun decayEventHistory() {
-        val total = DpiEngine.eventHistory.values.sumOf { it.get() }
+    fun decayEventHistory(profileId: String) {
+        val total = DpiEngine.eventHistory.filterKeys { it.profileId == profileId }.values.sumOf { it.get() }
         if (total > 500) {
-            DpiEngine.eventHistory.forEach { (_, count) ->
-                count.updateAndGet { (it * 0.9).toInt() }
+            DpiEngine.eventHistory.forEach { (key, count) ->
+                if (key.profileId == profileId) {
+                    count.updateAndGet { (it * 0.9).toInt() }
+                }
             }
         }
     }
@@ -145,19 +147,17 @@ object DpiAnalyzer {
             ProxyStats.updateCensorshipIntensity((ProxyStats.censorshipIntensity.value - 2).coerceAtLeast(0))
         }
 
-        // Decay stale network strategy memory confidence
+        // Decay stale network strategy memory confidence for current profile
         val now = System.currentTimeMillis()
-        StrategyStateRepository.networkStrategyMemory.values.forEach { catMap ->
-            catMap.entries.forEach { (cat, mem) ->
-                val ageMs = now - mem.timestamp
-                if (ageMs > 30 * 60 * 1000L && mem.confidence > 0.3) {
-                    val newConf = (mem.confidence * 0.95).coerceAtLeast(0.3)
-                    catMap[cat] = mem.copy(confidence = newConf)
-                }
+        StrategyStateRepository.networkStrategyMemory[currentProfileId]?.entries?.forEach { (cat, mem) ->
+            val ageMs = now - mem.timestamp
+            if (ageMs > 30 * 60 * 1000L && mem.confidence > 0.3) {
+                val newConf = (mem.confidence * 0.95).coerceAtLeast(0.3)
+                StrategyStateRepository.networkStrategyMemory[currentProfileId]?.put(cat, mem.copy(confidence = newConf))
             }
         }
         
-        decayEventHistory()
+        decayEventHistory(currentProfileId)
 
         if (totalSuccess + totalFailure > 1000) {
             val states = StrategyStateRepository.getAllContextStates().filterKeys { it.profileId == currentProfileId }.values

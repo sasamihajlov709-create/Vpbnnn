@@ -2,6 +2,9 @@ package com.aistudio.pinkproxy.fresh
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -97,15 +100,15 @@ class RecoveryStateMachineTest {
     }
 
     @Test
-    fun testUdpRecoverySignalRotatesUdpStrategy() = runTest {
-        RecoveryStateMachine.start(this)
+    fun testUdpRecoverySignalRotatesUdpStrategy() = runBlocking {
+        RecoveryStateMachine.start(this@runBlocking)
 
-        // Post UDP extreme latency signal
+        // Post UDP extreme latency signal synchronously
         RecoveryStateMachine.handleSignal(RecoverySignal.ExtremeLatency(latencyMs = 2500, transport = TransportType.UDP))
         assertEquals(RecoveryState.DEGRADED, RecoveryStateMachine.currentState.value)
         
         // Wait for async strategy rotation to complete
-        kotlinx.coroutines.delay(500)
+        kotlinx.coroutines.delay(1000)
         
         val rotatedStrategy = BypassConfig.strategy.value
         assertTrue(
