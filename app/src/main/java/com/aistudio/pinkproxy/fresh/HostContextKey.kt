@@ -28,3 +28,26 @@ data class HostContextKey(
         }
     }
 }
+
+data class HostStrategyBlacklistKey(
+    val host: String,
+    val transport: TransportType,
+    val profileId: String,
+    val strategy: BypassStrategy
+) {
+    fun toStorageString(): String = "$host|$transport|$profileId|${strategy.name}"
+
+    companion object {
+        fun fromStorageString(str: String): HostStrategyBlacklistKey? {
+            val parts = str.split("|")
+            if (parts.size >= 4) {
+                val host = parts[0]
+                val transport = try { TransportType.valueOf(parts[1]) } catch (e: Exception) { return null }
+                val profile = parts[2]
+                val strategy = try { BypassStrategy.valueOf(parts[3]) } catch (e: Exception) { return null }
+                return HostStrategyBlacklistKey(host, transport, profile, strategy)
+            }
+            return null
+        }
+    }
+}

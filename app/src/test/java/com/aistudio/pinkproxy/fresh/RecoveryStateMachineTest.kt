@@ -103,9 +103,13 @@ class RecoveryStateMachineTest {
         // Post UDP extreme latency signal
         RecoveryStateMachine.handleSignal(RecoverySignal.ExtremeLatency(latencyMs = 2500, transport = TransportType.UDP))
         assertEquals(RecoveryState.DEGRADED, RecoveryStateMachine.currentState.value)
+        
+        // Wait for async strategy rotation to complete
+        kotlinx.coroutines.delay(500)
+        
         val rotatedStrategy = BypassConfig.strategy.value
         assertTrue(
-            "Rotated strategy for UDP signal must be UDP compatible",
+            "Rotated strategy for UDP signal must be UDP compatible (got $rotatedStrategy)",
             DpiStrategySelector.isFamilyCompatible(rotatedStrategy.family, TransportType.UDP)
         )
     }

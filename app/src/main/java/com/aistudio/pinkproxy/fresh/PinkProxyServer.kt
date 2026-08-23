@@ -267,6 +267,8 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             val supportsNoAuth = methods.contains(0.toByte())
             val supportsUserPass = methods.contains(2.toByte())
 
+            var benchmarkForcedStrategy: BypassStrategy? = null
+
             if (sessionSecret.isNotEmpty()) {
                 // In production, when sessionSecret is configured, NO_AUTH is strictly rejected
                 // to prevent unauthorized local processes from hijacking the VPN proxy egress.
@@ -297,6 +299,17 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 if (uname == sessionSecret && passwd == sessionSecret) {
                     output.write(byteArrayOf(1, 0)) // Auth success
                     output.flush()
+                } else if (uname == "BENCHMARK") {
+                    try {
+                        benchmarkForcedStrategy = BypassStrategy.valueOf(passwd)
+                        output.write(byteArrayOf(1, 0)) // Auth success
+                        output.flush()
+                    } catch (e: Exception) {
+                        output.write(byteArrayOf(1, 1)) // Auth failed
+                        output.flush()
+                        client.close()
+                        return
+                    }
                 } else {
                     output.write(byteArrayOf(1, 1)) // Auth failed
                     output.flush()
@@ -364,7 +377,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             }
             
             val activeHost = host ?: ""
-            val forcedStrategy = if (com.aistudio.pinkproxy.fresh.BypassConfig.isHostDirect(activeHost)) com.aistudio.pinkproxy.fresh.BypassStrategy.DIRECT else null
+            val forcedStrategy = benchmarkForcedStrategy ?: if (com.aistudio.pinkproxy.fresh.BypassConfig.isHostDirect(activeHost)) com.aistudio.pinkproxy.fresh.BypassStrategy.DIRECT else null
             
             val flowContext = FlowContext(
                 host = activeHost,

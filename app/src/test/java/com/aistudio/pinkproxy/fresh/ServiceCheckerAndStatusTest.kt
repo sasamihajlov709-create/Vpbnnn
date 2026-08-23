@@ -60,7 +60,6 @@ class ServiceCheckerAndStatusTest {
         
         BenchmarkManager.stopBenchmark()
         assertFalse(BenchmarkManager.isRunning.value)
-        assertNull(BypassConfig.forcedBenchmarkStrategy)
     }
 
     @Test

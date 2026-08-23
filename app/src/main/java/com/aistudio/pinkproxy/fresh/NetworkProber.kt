@@ -11,7 +11,17 @@ import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 
+object ProxyAuthenticator : java.net.Authenticator() {
+    val credentials = ThreadLocal<java.net.PasswordAuthentication?>()
+    override fun getPasswordAuthentication(): java.net.PasswordAuthentication? {
+        return credentials.get()
+    }
+}
+
 object NetworkProber {
+    init {
+        java.net.Authenticator.setDefault(ProxyAuthenticator)
+    }
 
     suspend fun checkBaselineInternet(context: Context?): Boolean {
         var internetUp = false
@@ -74,7 +84,8 @@ object NetworkProber {
     suspend fun probeServiceViaProxy(
         name: String, 
         url: String, 
-        proxyPort: Int
+        proxyPort: Int,
+        strategyName: String? = null
     ): ServiceChecker.ServiceStatus {
         val start = System.currentTimeMillis()
         var isUp = false
@@ -86,6 +97,9 @@ object NetworkProber {
             var connection: HttpURLConnection? = null
             val attemptStart = System.currentTimeMillis()
             try {
+                if (strategyName != null) {
+                    ProxyAuthenticator.credentials.set(java.net.PasswordAuthentication("BENCHMARK", strategyName.toCharArray()))
+                }
                 val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort))
                 connection = URL(url).openConnection(proxy) as HttpURLConnection
                 connection.connectTimeout = 5000
@@ -116,6 +130,9 @@ object NetworkProber {
             } catch (e: Throwable) {
                 isUp = false
             } finally {
+                if (strategyName != null) {
+                    ProxyAuthenticator.credentials.remove()
+                }
                 try { connection?.disconnect() } catch (e: Throwable) {}
             }
             if (!isUp && attempt < 2) kotlinx.coroutines.delay(1000)

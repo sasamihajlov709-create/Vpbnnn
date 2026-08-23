@@ -58,37 +58,6 @@ class BypassConfigAndLifecycleIntegrationTest {
     }
 
     @Test
-    fun testForcedBenchmarkStrategyTransportValidation() {
-        try {
-            // Force a UDP strategy
-            BypassConfig.forcedBenchmarkStrategy = BypassStrategy.UDP_COMBINED_HYBRID
-            val selectedForTcp = BypassConfig.getBestStrategyForHost("example.com", TransportType.TCP)
-            assertTrue(
-                "Forced UDP strategy must not be returned for TCP transport",
-                selectedForTcp != BypassStrategy.UDP_COMBINED_HYBRID
-            )
-            assertTrue(
-                "Selected strategy must be supported for TCP",
-                StrategyExecutionRegistry.isExecutorSupported(selectedForTcp, TransportType.TCP)
-            )
-
-            // Force a TCP strategy
-            BypassConfig.forcedBenchmarkStrategy = BypassStrategy.SNI_SPLIT
-            val selectedForUdp = BypassConfig.getBestStrategyForHost("example.com", TransportType.UDP)
-            assertTrue(
-                "Forced TCP strategy must not be returned for UDP transport",
-                selectedForUdp != BypassStrategy.SNI_SPLIT
-            )
-            assertTrue(
-                "Selected strategy must be supported for UDP",
-                StrategyExecutionRegistry.isExecutorSupported(selectedForUdp, TransportType.UDP)
-            )
-        } finally {
-            BypassConfig.forcedBenchmarkStrategy = null
-        }
-    }
-
-    @Test
     fun testManualModeIncompatibleStrategySafety() {
         try {
             BypassConfig.isAutoTuning = false

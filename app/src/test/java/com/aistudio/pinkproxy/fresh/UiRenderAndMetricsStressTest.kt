@@ -72,6 +72,7 @@ class UiRenderAndMetricsStressTest {
                             udpBlockRate = 0.01,
                             timeoutRate = 0.01,
                             stallRate = 0.02,
+                            dnsBlockRate = 0.0,
                             jitter = 24.5,
                             intensity = 35
                         )

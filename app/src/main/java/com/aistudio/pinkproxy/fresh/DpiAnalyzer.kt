@@ -17,27 +17,33 @@ object DpiAnalyzer {
     )
 
     fun getCensorshipFingerprint(transport: TransportType = TransportType.TCP): CensorshipFingerprint {
+        val currentProfileId = NetworkProfileManager.currentProfile.value.id
         val relevantTypes = when (transport) {
             TransportType.TCP -> setOf(DpiType.TCP_RESET, DpiType.TLS_SNI_BLOCK, DpiType.CONNECTION_TIMEOUT, DpiType.HTTP_BLOCK, DpiType.TLS_HANDSHAKE_TIMEOUT, DpiType.BLACKHOLE, DpiType.TCP_STALL, DpiType.SSL_STALL, DpiType.MTU_EXCEEDED)
             TransportType.UDP -> setOf(DpiType.UDP_BLOCK, DpiType.CONNECTION_TIMEOUT, DpiType.BLACKHOLE, DpiType.MTU_EXCEEDED)
             TransportType.DNS -> setOf(DpiType.DNS_POISONING, DpiType.DNS_VERIFICATION_FAILURE, DpiType.CONNECTION_TIMEOUT)
         }
 
-        val total = DpiEngine.eventHistory.filterKeys { it in relevantTypes }.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
+        val profileEvents = DpiEngine.eventHistory.filterKeys { it.profileId == currentProfileId && it.transport == transport }
+        val total = profileEvents.filterKeys { it.type in relevantTypes }.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
         
         val transportHistory = DpiEngine.rttHistory[transport]?.let { synchronized(it) { it.toList() } } ?: emptyList()
         val jitter = if (transportHistory.size > 2) {
             val diffs = transportHistory.zipWithNext { a, b -> Math.abs(a - b) }
             diffs.average()
         } else 0.0
+        
+        fun getEventCount(type: DpiType): Int {
+            return profileEvents[DpiEventKey(currentProfileId, transport, type)]?.get() ?: 0
+        }
 
         return CensorshipFingerprint(
-            rstRate = (DpiEngine.eventHistory[DpiType.TCP_RESET]?.get() ?: 0) / total,
-            sniBlockRate = (DpiEngine.eventHistory[DpiType.TLS_SNI_BLOCK]?.get() ?: 0) / total,
-            udpBlockRate = (DpiEngine.eventHistory[DpiType.UDP_BLOCK]?.get() ?: 0) / total,
-            dnsBlockRate = ((DpiEngine.eventHistory[DpiType.DNS_POISONING]?.get() ?: 0) + (DpiEngine.eventHistory[DpiType.DNS_VERIFICATION_FAILURE]?.get() ?: 0)) / total,
-            timeoutRate = (DpiEngine.eventHistory[DpiType.CONNECTION_TIMEOUT]?.get() ?: 0) / total,
-            stallRate = ((DpiEngine.eventHistory[DpiType.TCP_STALL]?.get() ?: 0) + (DpiEngine.eventHistory[DpiType.SSL_STALL]?.get() ?: 0)) / total,
+            rstRate = getEventCount(DpiType.TCP_RESET) / total,
+            sniBlockRate = getEventCount(DpiType.TLS_SNI_BLOCK) / total,
+            udpBlockRate = getEventCount(DpiType.UDP_BLOCK) / total,
+            dnsBlockRate = (getEventCount(DpiType.DNS_POISONING) + getEventCount(DpiType.DNS_VERIFICATION_FAILURE)) / total,
+            timeoutRate = getEventCount(DpiType.CONNECTION_TIMEOUT) / total,
+            stallRate = (getEventCount(DpiType.TCP_STALL) + getEventCount(DpiType.SSL_STALL)) / total,
             jitter = jitter,
             intensity = ProxyStats.censorshipIntensity.value,
             transport = transport
@@ -55,21 +61,23 @@ object DpiAnalyzer {
 
     fun recordSpoofedRst(host: String, rttMs: Long) {
         Log.w("DpiAnalyzer", "SPOOFED TCP RST DETECTED for $host (RTT=${rttMs}ms). Active DPI middlebox injected packet.")
-        DpiEngine.eventHistory.getOrPut(DpiType.TCP_RESET) { AtomicInteger(0) }.incrementAndGet()
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        DpiEngine.eventHistory.getOrPut(DpiEventKey(profileId, TransportType.TCP, DpiType.TCP_RESET)) { AtomicInteger(0) }.incrementAndGet()
         
         // Delegate DPI event policy response to Policy Engine
         DpiPolicyEngine.onDpiEventDiagnosed(DpiType.TCP_RESET)
     }
 
-    fun recordEvent(type: DpiType) {
-        DpiEngine.eventHistory.getOrPut(type) { AtomicInteger(0) }.incrementAndGet()
+    fun recordEvent(type: DpiType, transport: TransportType = TransportType.TCP) {
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        DpiEngine.eventHistory.getOrPut(DpiEventKey(profileId, transport, type)) { AtomicInteger(0) }.incrementAndGet()
         DpiPolicyEngine.onDpiEventDiagnosed(type)
     }
 
     fun analyzeAndAdjust() {
         if (StrategyStateRepository.hostStrategyBlacklist.size > 500) {
             val now = System.currentTimeMillis()
-            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { map -> map.value.values.all { it < now } }
+            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { it.value < now }
             if (StrategyStateRepository.hostStrategyBlacklist.size > 1000) StrategyStateRepository.hostStrategyBlacklist.clear()
         }
         
@@ -89,13 +97,6 @@ object DpiAnalyzer {
         val udpFailure = udpStates.sumOf { it.failureCount.get() }
         val dnsSuccess = dnsStates.sumOf { it.successCount.get() }
         val dnsFailure = dnsStates.sumOf { it.failureCount.get() }
-        
-        if (StrategyStateRepository.hostSpecificMemory.size > 1000) {
-            val now = System.currentTimeMillis()
-            val expiry = 86400000L * 7
-            StrategyStateRepository.hostSpecificMemory.entries.removeIf { now - it.value.timestamp > expiry }
-            if (StrategyStateRepository.hostSpecificMemory.size > 1500) StrategyStateRepository.hostSpecificMemory.clear()
-        }
 
         if (StrategyStateRepository.consecutiveFailuresByHost.size > 2000) {
             StrategyStateRepository.consecutiveFailuresByHost.clear()
@@ -103,10 +104,7 @@ object DpiAnalyzer {
         
         if (StrategyStateRepository.hostStrategyBlacklist.size > 1000) {
             val now = System.currentTimeMillis()
-            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { (_, strategies) ->
-                strategies.entries.removeIf { now > it.value }
-                strategies.isEmpty()
-            }
+            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { it.value < now }
         }
 
         if (StrategyStateRepository.contextualHostMemory.size > 2000) {

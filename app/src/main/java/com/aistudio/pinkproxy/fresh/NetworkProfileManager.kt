@@ -144,6 +144,13 @@ object NetworkProfileManager {
         if (oldProfile.id != newProfile.id) {
             Log.i("NetworkProfileManager", "Network profile switch: ${oldProfile.displayName} -> ${newProfile.displayName} (ID: ${newProfile.id})")
             _currentProfile.value = newProfile
+            StabilityAnalyzer.reset()
+            ProxyStats.resetDnsFailures()
+            RecoveryStateMachine.resetDnsFailures()
+            DnsOptimizer.forceRefresh()
+            RobustResolver.clearCache()
+            DnsCacheManager.clearAll()
+            DpiEngine.clearTimeouts()
             profileChangeListeners.forEach { listener ->
                 try {
                     listener(oldProfile, newProfile)

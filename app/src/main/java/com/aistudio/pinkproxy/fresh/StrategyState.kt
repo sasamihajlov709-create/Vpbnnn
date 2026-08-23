@@ -109,8 +109,7 @@ object StrategyStateRepository {
     private val contextStates = ConcurrentHashMap<StrategyContextKey, StrategyState>()
     val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
     val contextualHostMemory = ConcurrentHashMap<HostContextKey, HostMemory>()
-    val hostSpecificMemory = ConcurrentHashMap<String, HostMemory>()
-    val hostStrategyBlacklist = ConcurrentHashMap<String, ConcurrentHashMap<BypassStrategy, Long>>()
+    val hostStrategyBlacklist = ConcurrentHashMap<HostStrategyBlacklistKey, Long>()
     val consecutiveFailuresByHost = ConcurrentHashMap<String, AtomicInteger>()
 
     fun getStrategyState(
@@ -168,7 +167,6 @@ object StrategyStateRepository {
         contextStates.clear()
         networkStrategyMemory.clear()
         contextualHostMemory.clear()
-        hostSpecificMemory.clear()
         hostStrategyBlacklist.clear()
         consecutiveFailuresByHost.clear()
     }

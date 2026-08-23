@@ -40,14 +40,14 @@ object DpiStrategySelector {
             val hostFails = StrategyStateRepository.consecutiveFailuresByHost[host]?.get() ?: 0
             val ctxKey = HostContextKey(host, transport, profileId)
             val lastMem = StrategyStateRepository.contextualHostMemory[ctxKey] 
-                 ?: StrategyStateRepository.hostSpecificMemory[host]?.takeIf { it.transport == transport && (it.profileId == profileId || it.profileId == "default") }
 
             if (hostFails == 0) {
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strategy = lastMem.strategy
                     if (isFamilyCompatible(strategy.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strategy, transport) && (DpiEngine.circuitBreakers[strategy] ?: 0L) < now) {
-                        val hostBlacklist = StrategyStateRepository.hostStrategyBlacklist[host]
-                        if ((hostBlacklist?.get(strategy) ?: 0L) < now) {
+                        val blKey = HostStrategyBlacklistKey(host, transport, profileId, strategy)
+                        val hostBlacklistedUntil = StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L
+                        if (hostBlacklistedUntil < now) {
                             return strategy
                         }
                     }
@@ -59,8 +59,9 @@ object DpiStrategySelector {
                         currentStep = currentStep?.let { getFallbackStrategy(it, transport) }
                     }
                     if (currentStep != null && isFamilyCompatible(currentStep.family, transport) && StrategyExecutionRegistry.isExecutorSupported(currentStep, transport) && (DpiEngine.circuitBreakers[currentStep] ?: 0L) < now) {
-                        val hostBlacklist = StrategyStateRepository.hostStrategyBlacklist[host]
-                        if ((hostBlacklist?.get(currentStep) ?: 0L) < now) {
+                        val blKey = HostStrategyBlacklistKey(host, transport, profileId, currentStep)
+                        val hostBlacklistedUntil = StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L
+                        if (hostBlacklistedUntil < now) {
                             return currentStep
                         }
                     }
@@ -77,8 +78,9 @@ object DpiStrategySelector {
             if (ageMs < maxAge && mem.confidence >= 0.3) {
                 val strategy = mem.strategy
                 if (isFamilyCompatible(strategy.family, transport) && StrategyExecutionRegistry.isExecutorSupported(strategy, transport) && (DpiEngine.circuitBreakers[strategy] ?: 0L) < now) {
-                    val hostBlacklist = host?.let { StrategyStateRepository.hostStrategyBlacklist[it] }
-                    val blacklistedUntil = hostBlacklist?.get(strategy) ?: 0L
+                    val blacklistedUntil = host?.let { 
+                        StrategyStateRepository.hostStrategyBlacklist[HostStrategyBlacklistKey(it, transport, profileId, strategy)] 
+                    } ?: 0L
                     if (blacklistedUntil < now) {
                         return strategy
                     }
@@ -86,17 +88,20 @@ object DpiStrategySelector {
             }
         }
 
-        val hostBlacklist = host?.let { StrategyStateRepository.hostStrategyBlacklist[it] }
         val validStrategies = BypassStrategy.entries.filter { strategy ->
             isFamilyCompatible(strategy.family, transport) &&
             StrategyExecutionRegistry.isExecutorSupported(strategy, transport) &&
             (DpiEngine.circuitBreakers[strategy] ?: 0L) < now && 
-             (hostBlacklist?.get(strategy) ?: 0L) < now &&
+             (host == null || (StrategyStateRepository.hostStrategyBlacklist[HostStrategyBlacklistKey(host, transport, profileId, strategy)] ?: 0L) < now) &&
             (!BypassConfig.isStrictBypassMode || strategy != BypassStrategy.DIRECT)
         }
         
         if (validStrategies.isEmpty()) {
-            if (host != null) StrategyStateRepository.hostStrategyBlacklist.remove(host)
+            if (host != null) {
+                StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { 
+                    it.key.host == host && it.key.transport == transport && it.key.profileId == profileId 
+                }
+            }
             DpiEngine.circuitBreakers.entries.removeIf { it.value < now }
             return getDefaultFallback(transport)
         }
@@ -119,14 +124,13 @@ object DpiStrategySelector {
         val now = System.currentTimeMillis()
         val profileId = NetworkProfileManager.currentProfile.value.id
         val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
-        val hostBlacklist = host?.let { StrategyStateRepository.hostStrategyBlacklist[it] }
 
         val extremeCandidates = BypassStrategy.entries.filter { 
             it.group == StrategyGroup.EXTREME &&
             isFamilyCompatible(it.family, transport) &&
             StrategyExecutionRegistry.isExecutorSupported(it, transport) &&
             (DpiEngine.circuitBreakers[it] ?: 0L) < now &&
-            (hostBlacklist?.get(it) ?: 0L) < now 
+            (host == null || (StrategyStateRepository.hostStrategyBlacklist[HostStrategyBlacklistKey(host, transport, profileId, it)] ?: 0L) < now) 
         }
 
         if (extremeCandidates.isEmpty()) return getDefaultExtremeFallback(transport)
@@ -185,9 +189,11 @@ object DpiStrategySelector {
                 val lastCount = StrategyStateRepository.contextualHostMemory[ctxKey]?.successCount ?: 0
                 val newMem = HostMemory(strategy, now, lastCount + 1, transport, profileId)
                 StrategyStateRepository.contextualHostMemory[ctxKey] = newMem
-                StrategyStateRepository.hostSpecificMemory[host] = newMem
                 StrategyStateRepository.consecutiveFailuresByHost.remove(host)
-                StrategyStateRepository.hostStrategyBlacklist.remove(host)
+                // Remove all blacklist entries for this host + transport + profile
+                StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { 
+                    it.key.host == host && it.key.transport == transport && it.key.profileId == profileId 
+                }
             }
             if (quality.minLevelForHostMemory) {
                 val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
@@ -210,13 +216,19 @@ object DpiStrategySelector {
                 DpiEngine.consecutiveFailures.remove(strategy)
             }
             if (host != null && (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL)) {
-                val hostBlacklist = StrategyStateRepository.hostStrategyBlacklist.getOrPut(host) { java.util.concurrent.ConcurrentHashMap() }
-                val currentLevel = hostBlacklist[strategy] ?: 0L
+                val blKey = HostStrategyBlacklistKey(host, transport, profileId, strategy)
+                val currentLevel = StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L
                 val waitTime = if (now > currentLevel) 900_000L else 3_600_000L
-                hostBlacklist[strategy] = now + waitTime
+                StrategyStateRepository.hostStrategyBlacklist[blKey] = now + waitTime
                 StrategyStateRepository.consecutiveFailuresByHost.getOrPut(host) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
             }
         }
+    }
+
+    fun getScore(strategy: BypassStrategy, transport: TransportType, category: HostCategory, profileId: String): Double {
+        val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
+        val (mean, confidence) = state.calculateBetaPosterior()
+        return mean * 1000.0 * (0.5 + 0.5 * confidence)
     }
 
     fun getAverageScore(strategy: BypassStrategy): Double {

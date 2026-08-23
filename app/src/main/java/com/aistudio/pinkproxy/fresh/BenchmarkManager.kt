@@ -49,15 +49,10 @@ object BenchmarkManager {
                     if (!isActive) return@forEachIndexed
                     
                     val attemptResults = mutableListOf<Pair<Pair<String, String>, ServiceChecker.ServiceStatus>>()
-                    try {
-                        BypassConfig.forcedBenchmarkStrategy = strategy
-                        for (testHost in testHosts) {
-                            if (!isActive) break
-                            val status = NetworkProber.probeServiceViaProxy(testHost.first, testHost.second, proxyPort)
-                            attemptResults.add(testHost to status)
-                        }
-                    } finally {
-                        BypassConfig.forcedBenchmarkStrategy = null
+                    for (testHost in testHosts) {
+                        if (!isActive) break
+                        val status = NetworkProber.probeServiceViaProxy(testHost.first, testHost.second, proxyPort, strategy.name)
+                        attemptResults.add(testHost to status)
                     }
 
                     val successCount = attemptResults.count { it.second.isUp }
@@ -112,7 +107,6 @@ object BenchmarkManager {
 
     fun stopBenchmark() {
         benchmarkJob?.cancel()
-        BypassConfig.forcedBenchmarkStrategy = null
         _isRunning.value = false
     }
 }

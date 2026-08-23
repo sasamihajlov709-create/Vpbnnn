@@ -77,7 +77,7 @@ object ProxyStats {
         dpiEvents.compute(type) { _, current -> (current ?: 0) + 1 }
         VpnRuntimeState.updateDpi(type.name)
         recordCensorshipEvent(true, transport = transport)
-        DpiEngine.recordEvent(type)
+        DpiEngine.recordEvent(type, transport)
         logRecovery("Detected censorship type: $type")
     }
     
@@ -87,7 +87,7 @@ object ProxyStats {
     fun recordDnsFailure() {
         _dnsFailureCount.update { it + 1 }
         recordCensorshipEvent(true, transport = TransportType.DNS)
-        DpiEngine.recordEvent(DpiType.DNS_POISONING)
+        DpiEngine.recordEvent(DpiType.DNS_POISONING, TransportType.DNS)
     }
     
     fun clearDpiType() {
@@ -188,8 +188,15 @@ object ProxyStats {
     private val _dnsFailureCount = MutableStateFlow(0L)
     val dnsFailureCount: StateFlow<Long> = _dnsFailureCount.asStateFlow()
 
+    fun resetDnsFailures() {
+        _dnsFailureCount.value = 0L
+    }
+
     val stabilityScore = StabilityAnalyzer.stabilityScore
     val successRate = StabilityAnalyzer.successRate
+    val tcpSuccessRate = StabilityAnalyzer.tcpSuccessRate
+    val udpSuccessRate = StabilityAnalyzer.udpSuccessRate
+    val dnsSuccessRate = StabilityAnalyzer.dnsSuccessRate
 
     fun updateStabilityScore(newVal: Int) { StabilityAnalyzer.setStabilityScore(newVal) }
     fun updateCongestionWindow(delta: Int) { _congestionWindow.update { (it + delta).coerceIn(1, 1000) } }

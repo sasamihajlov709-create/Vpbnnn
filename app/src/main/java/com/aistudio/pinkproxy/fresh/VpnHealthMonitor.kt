@@ -139,7 +139,6 @@ class VpnHealthMonitor(
                 
                 val currentBytes = ProxyStats.bytesTransferred.value
                 val activeConns = ProxyStats.activeConnections.value
-                val rate = ProxyStats.successRate.value
                 
                 // Monitor RTT for suspicious spikes
                 val currentRtt = ProxyStats.lastLatency.value
@@ -154,8 +153,16 @@ class VpnHealthMonitor(
                 }
 
                 // Check for censorship stall
-                if (activeConns > 0 && ProxyStats.censorshipIntensity.value > 85 && rate < 30) {
-                    RecoveryStateMachine.postSignal(RecoverySignal.TunnelStall(15000L, activeConns))
+                val tcpRate = ProxyStats.tcpSuccessRate.value
+                val udpRate = ProxyStats.udpSuccessRate.value
+                
+                if (activeConns > 0 && ProxyStats.censorshipIntensity.value > 85) {
+                    if (tcpRate < 30) {
+                        RecoveryStateMachine.postSignal(RecoverySignal.TunnelStall(15000L, activeConns, TransportType.TCP))
+                    }
+                    if (udpRate < 30) {
+                        RecoveryStateMachine.postSignal(RecoverySignal.TunnelStall(15000L, activeConns, TransportType.UDP))
+                    }
                 }
 
                 // Traffic stall check

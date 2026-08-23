@@ -125,6 +125,17 @@ object ProactiveAutoTuner {
                         val latency = System.currentTimeMillis() - startTime
                         val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
                         if (isTlsServerHello) {
+                            // Mitigate TCP RST injection by waiting to see if connection drops immediately
+                            try {
+                                socket.soTimeout = 500
+                                inStream.read(buf)
+                            } catch (e: java.net.SocketTimeoutException) {
+                                // Timeout is expected if server waits for our ClientKeyExchange. DPI RST would drop instantly.
+                            } catch (e: Exception) {
+                                // RST caught!
+                                return@withContext false
+                            }
+                            
                             DpiStrategySelector.recordResult(
                                 strategy = strategy,
                                 success = true,
@@ -132,7 +143,7 @@ object ProactiveAutoTuner {
                                 category = HostClassifier.classify(host),
                                 host = host,
                                 latencyMs = latency,
-                                quality = ObservationQuality.TLS_RECORD_RECEIVED
+                                quality = ObservationQuality.HANDSHAKE_COMPLETE
                             )
                             return@withContext true
                         }

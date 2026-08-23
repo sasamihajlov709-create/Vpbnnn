@@ -13,6 +13,12 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.LinkedList
 import java.util.Collections
 
+data class DpiEventKey(
+    val profileId: String,
+    val transport: TransportType,
+    val type: DpiType
+)
+
 object DpiEngine {
     private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
 
@@ -23,7 +29,7 @@ object DpiEngine {
     val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
 
-    val eventHistory = ConcurrentHashMap<DpiType, AtomicInteger>()
+    val eventHistory = ConcurrentHashMap<DpiEventKey, AtomicInteger>()
     val rttHistory = ConcurrentHashMap<TransportType, MutableList<Long>>()
 
     init {
@@ -190,8 +196,13 @@ object DpiEngine {
         RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Trigger Recalibration", HostCategory.OTHER)
     }
     
-    fun recordEvent(type: DpiType) {
-        DpiAnalyzer.recordEvent(type)
+    fun clearTimeouts() {
+        circuitBreakers.clear()
+        consecutiveFailures.clear()
+    }
+    
+    fun recordEvent(type: DpiType, transport: TransportType = TransportType.TCP) {
+        DpiAnalyzer.recordEvent(type, transport)
     }
 
 }

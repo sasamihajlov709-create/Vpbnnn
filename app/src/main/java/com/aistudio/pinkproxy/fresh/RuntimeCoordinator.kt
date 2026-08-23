@@ -100,10 +100,7 @@ object RuntimeCoordinator {
         }
         val fallback = DpiStrategySelector.getDefaultFallback(transport)
         val best = candidates.maxByOrNull { strategy ->
-            val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
-            val (posteriorMean, confidence) = state.calculateBetaPosterior()
-            val baseWeighted = DpiStrategySelector.getAverageScore(strategy)
-            posteriorMean * (50.0 + 50.0 * confidence) + baseWeighted * 0.5
+            DpiStrategySelector.getScore(strategy, transport, category, profileId)
         } ?: fallback
         
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
@@ -119,7 +116,7 @@ object RuntimeCoordinator {
         transport: TransportType,
         reason: String = "Automated Rotation",
         category: HostCategory = HostCategory.OTHER,
-        profileId: String = "default"
+        profileId: String = NetworkProfileManager.currentProfile.value.id
     ): Job {
         val targetScope = sessionScope ?: coordinatorScope
         return targetScope.launch {

@@ -104,6 +104,8 @@ object RecoveryStateMachine {
         val type = signal.type
         val targetHost = signal.host
         val transport = signal.transport
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        val category = targetHost?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         when (type) {
             DpiType.TCP_RESET -> {
                 val candidates = listOf(
@@ -113,7 +115,7 @@ object RecoveryStateMachine {
                     BypassStrategy.OOB_DESYNC
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.TCP_COMBINED_NUCLEAR
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "Active TCP Reset DPI detected")
@@ -131,7 +133,7 @@ object RecoveryStateMachine {
                     BypassStrategy.TLS_CLIENT_HELLO_CHOP
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.SNI_SPLIT
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "TLS SNI Block Detected")
@@ -148,7 +150,7 @@ object RecoveryStateMachine {
                     BypassStrategy.HTTP_HOST_REORDER
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.HTTP_HOST_SPACE
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "HTTP Block Detected")
@@ -163,7 +165,7 @@ object RecoveryStateMachine {
                     BypassStrategy.TCP_WINDOW_SIZE_CHAOS
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, transport) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, transport, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: DpiStrategySelector.getDefaultFallback(transport)
                 RuntimeCoordinator.applyStrategyTransition(selected, transport, "DPI Timeout Escalation")
@@ -180,7 +182,7 @@ object RecoveryStateMachine {
                     BypassStrategy.QUIC_INITIAL_FRAGMENTATION
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.UDP) }
                 val selected = candidates.maxWithOrNull(
-                    compareBy<BypassStrategy> { DpiStrategySelector.getAverageScore(it) }
+                    compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.UDP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.UDP_COMBINED_NUCLEAR
                 RuntimeCoordinator.applyStrategyTransition(selected, TransportType.UDP, "UDP Block Detected")
@@ -248,6 +250,10 @@ object RecoveryStateMachine {
     }
 
     private val dnsFailureCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun resetDnsFailures() {
+        dnsFailureCount.set(0)
+    }
 
     private fun processDnsFailure(signal: RecoverySignal.DnsFailure) {
         _currentState.value = RecoveryState.DEGRADED

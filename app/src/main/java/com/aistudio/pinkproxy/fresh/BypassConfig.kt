@@ -61,7 +61,6 @@ object BypassConfig {
 
     private val _isKillSwitchEnabled = MutableStateFlow(false)
     val isKillSwitchEnabled: StateFlow<Boolean> = _isKillSwitchEnabled.asStateFlow()
-    var forcedBenchmarkStrategy: BypassStrategy? = null
     fun setKillSwitch(enabled: Boolean, context: Context) {
         _isKillSwitchEnabled.value = enabled
         context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE).edit {
@@ -230,12 +229,6 @@ object BypassConfig {
 
     fun getBestStrategyForHost(host: String, transport: TransportType = TransportType.TCP): BypassStrategy {
         val now = System.currentTimeMillis()
-        forcedBenchmarkStrategy?.let {
-            if (DpiStrategySelector.isFamilyCompatible(it.family, transport) &&
-                StrategyExecutionRegistry.isExecutorSupported(it, transport)) {
-                return it
-            }
-        }
         if (!isAutoTuning) {
             val base = _strategy.value
             if (DpiStrategySelector.isFamilyCompatible(base.family, transport) &&
@@ -392,6 +385,16 @@ object BypassConfig {
         host: String? = null,
         category: HostCategory? = null
     ): BypassStrategy {
+        if (reason != null && host != null && category != null) {
+            val esc = StrategyEscalationMatrix.getEscalatedStrategy(
+                failedStrategy = current,
+                reason = reason,
+                transport = transport,
+                category = category,
+                host = host
+            )
+            if (esc != null) return esc
+        }
         return DpiStrategySelector.getFallbackStrategy(strategy = current, transport = transport) ?: when (transport) {
             TransportType.TCP -> when (current.family) {
                 StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE

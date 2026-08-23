@@ -102,6 +102,9 @@ object StabilityAnalyzer {
         _jitter.value = 0
         _stabilityScore.value = 100
         _successRate.value = 100
+        _tcpSuccessRate.value = 100
+        _udpSuccessRate.value = 100
+        _dnsSuccessRate.value = 100
         _censorshipIntensity.value = 0
         _currentDpiType.value = DpiType.NONE
         _dpiEventHistory.value = emptyList()

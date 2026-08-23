@@ -113,6 +113,7 @@ object StrategyEscalationMatrix {
         val chain = selectChainForContext(reason, transport)
         val index = chain.indexOf(failedStrategy)
         val now = System.currentTimeMillis()
+        val profileId = NetworkProfileManager.currentProfile.value.id
 
         // Check if failed strategy is in the dedicated chain
         val candidates = if (index >= 0 && index < chain.size - 1) {
@@ -138,7 +139,8 @@ object StrategyEscalationMatrix {
             
             // Check host-specific blacklist
             if (host != null) {
-                val bl = StrategyStateRepository.hostStrategyBlacklist[host]?.get(candidate) ?: 0L
+                val blKey = HostStrategyBlacklistKey(host, transport, profileId, candidate)
+                val bl = StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L
                 if (bl >= now) continue
             }
 
