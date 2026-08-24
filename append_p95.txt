@@ -1,0 +1,12 @@
+
+    @Synchronized
+    fun getP95Latency(): Long {
+        synchronized(recentLatencies) {
+            if (latencyCount == 0) return 0L
+            val copy = LongArray(latencyCount)
+            System.arraycopy(recentLatencies, 0, copy, 0, latencyCount)
+            copy.sort()
+            val p95Index = (latencyCount * 0.95).toInt().coerceAtMost(latencyCount - 1)
+            return copy[p95Index]
+        }
+    }

@@ -1,4 +1,4 @@
-package com.aistudio.pinkproxy.fresh
+code = """package com.aistudio.pinkproxy.fresh
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -9,8 +9,7 @@ data class StrategyContextKey(
     val strategy: BypassStrategy,
     val transport: TransportType,
     val category: HostCategory,
-    val profileId: String,
-    val confidence: Double = 1.0
+    val profileId: String
 ) {
     fun toStorageString(): String = "${strategy.name}|$transport|${category.name}|$profileId"
     companion object {
@@ -28,18 +27,17 @@ data class StrategyContextKey(
 }
 
 data class NetworkMemory(
-    val strategy: BypassStrategy,
-    val timestamp: Long,
+    val bestStrategy: BypassStrategy,
+    val lastUpdated: Long,
     val confidence: Double
 )
 
 data class HostMemory(
-    val strategy: BypassStrategy,
-    val timestamp: Long,
+    val bestStrategy: BypassStrategy,
+    val lastUpdated: Long,
     val successCount: Int,
     val transport: TransportType,
-    val profileId: String,
-    val confidence: Double = 1.0
+    val profileId: String
 )
 
 class StrategyState(
@@ -169,7 +167,7 @@ object StrategyStateRepository {
         val now = System.currentTimeMillis()
         val expiredThreshold = 7 * 24 * 60 * 60 * 1000L
         contextStates.entries.removeIf { it.key.profileId == profileId && (now - it.value.lastUsedTimestamp.get()) > expiredThreshold }
-        contextualHostMemory.entries.removeIf { it.key.profileId == profileId && (now - it.value.timestamp) > expiredThreshold }
+        contextualHostMemory.entries.removeIf { it.key.profileId == profileId && (now - it.value.lastUpdated) > expiredThreshold }
     }
 
     fun clearProfileState(profileId: String) {
@@ -200,3 +198,6 @@ object StrategyStateRepository {
         }
     }
 }
+"""
+with open("app/src/main/java/com/aistudio/pinkproxy/fresh/StrategyState.kt", "w") as f:
+    f.write(code)

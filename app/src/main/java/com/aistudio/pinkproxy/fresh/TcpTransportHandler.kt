@@ -233,6 +233,8 @@ object TcpTransportHandler {
                 val isStreaming = HostClassifier.classify(targetHost) == HostCategory.STREAMING
                 val remoteToClientJob = launch {
                     val buffer = if (isStreaming) BufferPool.obtain() else BufferPoolManager.obtain16k()
+                    var totalBytesRead = 0L
+                    val streamStartTime = System.currentTimeMillis()
                     try {
                         while (isActive) {
                             val read = finalRemoteIn.read(buffer)
@@ -246,18 +248,22 @@ object TcpTransportHandler {
                                 break
                             }
                             lastActivity.set(System.currentTimeMillis())
-                            if (read > 0 && !recordedFullTransfer.getAndSet(true)) {
-                                DpiStrategySelector.recordResult(
-                                    host = targetHost,
-                                    strategy = effectiveStrategy,
-                                    success = true,
-                                    transport = TransportType.TCP,
-                                    quality = ObservationQuality.SUSTAINED_DATA_TRANSFER,
-                                    requestedStrategy = requestedStrategy,
-                                    effectiveStrategy = effectiveStrategy
-                                )
+                            totalBytesRead += read
+                            if (!recordedFullTransfer.get() && (totalBytesRead > 32768 || (System.currentTimeMillis() - streamStartTime > 2000 && totalBytesRead > 0))) {
+                                if (!recordedFullTransfer.getAndSet(true)) {
+                                    DpiStrategySelector.recordResult(
+                                        host = targetHost,
+                                        strategy = effectiveStrategy,
+                                        success = true,
+                                        transport = TransportType.TCP,
+                                        quality = ObservationQuality.SUSTAINED_DATA_TRANSFER,
+                                        requestedStrategy = requestedStrategy,
+                                        effectiveStrategy = effectiveStrategy
+                                    )
+                                }
                             }
-                            if (intensity > 70 && ThreadLocalRandom.current().nextInt(100) < 5) {
+
+                            if (intensity > 70 && java.util.concurrent.ThreadLocalRandom.current().nextInt(100) < 5) {
                                 TcpTransportManager.oscillateWindowSize(clientSocket)
                             }
                             clientOut.write(buffer, 0, read)
@@ -265,16 +271,15 @@ object TcpTransportHandler {
                             ProxyStats.recordStats(sessionId, 0, read.toLong())
                         }
                     } catch (e: java.net.SocketException) {
-                        Log.v("TcpTransport", "Remote to client pump socket closed: ${e.message}")
+                        android.util.Log.v("TcpTransport", "Remote to client pump socket closed: ${e.message}")
                     } catch (e: java.io.IOException) {
-                        Log.v("TcpTransport", "Remote to client pump IOException: ${e.message}")
+                        android.util.Log.v("TcpTransport", "Remote to client pump IOException: ${e.message}")
                     } catch (e: Exception) {
-                        Log.v("TcpTransport", "Remote to client pump error: ${e.message}")
+                        android.util.Log.v("TcpTransport", "Remote to client pump error: ${e.message}")
                     } finally {
                         if (isStreaming) BufferPool.release(buffer) else BufferPoolManager.release16k(buffer)
-                        try { clientSocket.close() } catch (e: java.io.IOException) {
-                            Log.v("TcpTransport", "Failed to close client socket in pump: ${e.message}")
-                        }
+                        try { clientSocket.close() } catch (e: Exception) {}
+                        try { finalRemoteSocket.close() } catch (e: Exception) {}
                     }
                 }
 

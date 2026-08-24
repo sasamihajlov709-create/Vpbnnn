@@ -1,3 +1,4 @@
+cat << 'INNER_EOF' > tmp_StrategyState.kt
 package com.aistudio.pinkproxy.fresh
 
 import java.util.concurrent.ConcurrentHashMap
@@ -5,45 +6,48 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.sqrt
 
+data class StrategyObservation(
+    val executedStrategy: BypassStrategy,
+    val transport: TransportType,
+    val category: HostCategory,
+    val profileId: String,
+    val success: Boolean,
+    val quality: ObservationQuality,
+    val latencyMs: Long,
+    val failureReason: FailureReason?,
+    val host: String?,
+    val timestamp: Long
+)
+
+data class HostStrategyBlacklistKey(
+    val host: String,
+    val transport: TransportType,
+    val profileId: String,
+    val strategy: BypassStrategy
+)
+
 data class StrategyContextKey(
     val strategy: BypassStrategy,
     val transport: TransportType,
     val category: HostCategory,
-    val profileId: String,
-    val confidence: Double = 1.0
-) {
-    fun toStorageString(): String = "${strategy.name}|$transport|${category.name}|$profileId"
-    companion object {
-        fun fromStorageString(str: String): StrategyContextKey? {
-            val parts = str.split("|")
-            if (parts.size >= 4) {
-                val strategy = try { BypassStrategy.valueOf(parts[0]) } catch (e: Exception) { return null }
-                val transport = try { TransportType.valueOf(parts[1]) } catch (e: Exception) { return null }
-                val category = try { HostCategory.valueOf(parts[2]) } catch (e: Exception) { return null }
-                return StrategyContextKey(strategy, transport, category, parts[3])
-            }
-            return null
-        }
-    }
-}
+    val profileId: String
+)
 
 data class NetworkMemory(
-    val strategy: BypassStrategy,
-    val timestamp: Long,
+    val bestStrategy: BypassStrategy,
+    val lastUpdated: Long,
     val confidence: Double
 )
 
 data class HostMemory(
-    val strategy: BypassStrategy,
-    val timestamp: Long,
+    val bestStrategy: BypassStrategy,
+    val lastUpdated: Long,
     val successCount: Int,
     val transport: TransportType,
-    val profileId: String,
-    val confidence: Double = 1.0
+    val profileId: String
 )
 
 class StrategyState(
-    val score: AtomicInteger = AtomicInteger(0),
     val successCount: AtomicInteger = AtomicInteger(0),
     val verifiedSuccessCount: AtomicInteger = AtomicInteger(0),
     val failureCount: AtomicInteger = AtomicInteger(0),
@@ -54,8 +58,6 @@ class StrategyState(
     private var latencyCount: Int = 0,
     val lastUsedTimestamp: AtomicLong = AtomicLong(0L)
 ) {
-    val sampleCount: AtomicInteger = AtomicInteger(0)
-
     fun recordObservation(obs: StrategyObservation) {
         sampleCount.incrementAndGet()
         lastUsedTimestamp.set(obs.timestamp)
@@ -74,6 +76,7 @@ class StrategyState(
                 if (currentEwma == 0L) {
                     ewmaLatencyMs.set(obs.latencyMs)
                 } else {
+                    // alpha = 0.2
                     val next = (currentEwma * 0.8 + obs.latencyMs * 0.2).toLong()
                     ewmaLatencyMs.set(next)
                 }
@@ -88,6 +91,9 @@ class StrategyState(
         }
     }
 
+    /**
+     * Clean Bayesian Beta-Posterior calculation (Beta conjugate prior).
+     */
     fun calculateBetaPosterior(priorAlpha: Double = 1.0, priorBeta: Double = 1.0): Pair<Double, Double> {
         val s = (weightedSuccess.get() / 1000.0).coerceAtLeast(0.0)
         val f = failureCount.get().toDouble()
@@ -97,10 +103,13 @@ class StrategyState(
         val total = alpha + beta
         val mean = alpha / total
         
+        // Variance of Beta distribution = (alpha * beta) / ((alpha + beta)^2 * (alpha + beta + 1))
         val variance = (alpha * beta) / (total * total * (total + 1.0))
         val stdDev = sqrt(variance)
         
+        // Confidence scaling based on standard deviation reduction
         val confidence = (1.0 - (stdDev * 3.16)).coerceIn(0.05, 0.99)
+        
         return Pair(mean, confidence)
     }
 
@@ -122,8 +131,13 @@ class StrategyState(
 
     val averageLatencyMs: Long
         get() = ewmaLatencyMs.get()
+        
+    val sampleCount: AtomicInteger = AtomicInteger(0)
 }
 
+/**
+ * Unified Canonical Repository for all strategy states across categories, transports, and profiles.
+ */
 object StrategyStateRepository {
     private val contextStates = ConcurrentHashMap<StrategyContextKey, StrategyState>()
     val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
@@ -165,28 +179,6 @@ object StrategyStateRepository {
         return contextStates.toMap()
     }
 
-    fun cleanupExpired(profileId: String) {
-        val now = System.currentTimeMillis()
-        val expiredThreshold = 7 * 24 * 60 * 60 * 1000L
-        contextStates.entries.removeIf { it.key.profileId == profileId && (now - it.value.lastUsedTimestamp.get()) > expiredThreshold }
-        contextualHostMemory.entries.removeIf { it.key.profileId == profileId && (now - it.value.timestamp) > expiredThreshold }
-    }
-
-    fun clearProfileState(profileId: String) {
-        contextStates.entries.removeIf { it.key.profileId == profileId }
-        contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
-        networkStrategyMemory.remove(profileId)
-        hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
-    }
-
-    fun resetAll() {
-        contextStates.clear()
-        networkStrategyMemory.clear()
-        contextualHostMemory.clear()
-        consecutiveFailuresByHost.clear()
-        hostStrategyBlacklist.clear()
-    }
-
     fun restoreStates(states: Map<StrategyContextKey, StrategyMetricState>) {
         states.forEach { (key, metric) ->
             val state = getStrategyState(key.strategy, key.transport, key.category, key.profileId)
@@ -200,3 +192,5 @@ object StrategyStateRepository {
         }
     }
 }
+INNER_EOF
+mv tmp_StrategyState.kt app/src/main/java/com/aistudio/pinkproxy/fresh/StrategyState.kt

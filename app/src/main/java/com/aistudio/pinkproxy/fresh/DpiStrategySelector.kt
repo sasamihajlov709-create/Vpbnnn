@@ -234,7 +234,14 @@ object DpiStrategySelector {
         val priorWeight = 0.1 * (1.0 - confidence).coerceAtLeast(0.0)
         val blendedMean = (mean * (1.0 - priorWeight)) + (globalAverageMean * priorWeight)
         
-        return blendedMean * 1000.0 * (0.5 + 0.5 * confidence)
+        val p95 = state.getP95Latency()
+        val average = state.averageLatencyMs
+        val spikePenalty = if (average > 0 && p95 > average * 2) {
+            0.8 + 0.2 * (average * 2.0 / p95).coerceAtLeast(0.1)
+        } else {
+            1.0
+        }
+        return blendedMean * 1000.0 * (0.5 + 0.5 * confidence) * spikePenalty
     }
 
     fun getAverageScore(strategy: BypassStrategy): Double {

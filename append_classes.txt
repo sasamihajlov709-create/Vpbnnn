@@ -1,0 +1,20 @@
+data class StrategyContextKey(
+    val strategy: BypassStrategy,
+    val transport: TransportType,
+    val category: HostCategory,
+    val profileId: String
+)
+
+data class NetworkMemory(
+    val bestStrategy: BypassStrategy,
+    val lastUpdated: Long,
+    val confidence: Double
+)
+
+data class HostMemory(
+    val bestStrategy: BypassStrategy,
+    val lastUpdated: Long,
+    val successCount: Int,
+    val transport: TransportType,
+    val profileId: String
+)

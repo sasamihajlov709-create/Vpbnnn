@@ -1,0 +1,22 @@
+
+    fun cleanupExpired(profileId: String) {
+        val now = System.currentTimeMillis()
+        val expiredThreshold = 7 * 24 * 60 * 60 * 1000L // 7 days
+        contextStates.entries.removeIf { it.key.profileId == profileId && (now - it.value.lastUsedTimestamp.get()) > expiredThreshold }
+        contextualHostMemory.entries.removeIf { it.key.profileId == profileId && (now - it.value.lastUpdated) > expiredThreshold }
+    }
+
+    fun clearProfileState(profileId: String) {
+        contextStates.entries.removeIf { it.key.profileId == profileId }
+        contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
+        networkStrategyMemory.remove(profileId)
+        hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
+    }
+
+    fun resetAll() {
+        contextStates.clear()
+        networkStrategyMemory.clear()
+        contextualHostMemory.clear()
+        consecutiveFailuresByHost.clear()
+        hostStrategyBlacklist.clear()
+    }
