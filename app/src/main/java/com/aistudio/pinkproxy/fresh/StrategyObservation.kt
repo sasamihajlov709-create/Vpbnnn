@@ -12,7 +12,7 @@ data class StrategyObservation(
     val effectiveStrategy: BypassStrategy = executedStrategy,
     val category: HostCategory = HostCategory.OTHER,
     val host: String? = null,
-    val profileId: String = "default",
+    val profileId: String,
     val success: Boolean,
     val latencyMs: Long = 0L,
     val failureReason: FailureReason? = null,

@@ -92,7 +92,7 @@ object RuntimeCoordinator {
         transport: TransportType,
         reason: String,
         category: HostCategory = HostCategory.OTHER,
-        profileId: String = "default"
+        profileId: String = NetworkProfileManager.currentProfile.value.id
     ): BypassStrategy {
         val candidates = BypassStrategy.entries.filter { 
             DpiStrategySelector.isFamilyCompatible(it.family, transport) &&

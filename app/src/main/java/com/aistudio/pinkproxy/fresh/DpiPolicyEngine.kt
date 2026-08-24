@@ -104,7 +104,7 @@ object DpiPolicyEngine {
             RuntimeCoordinator.requestGlobalStrategyRotation(decision.affectedTransport, "Policy Panic Trigger")
         }
         if (decision.shouldReset) {
-            resetAllEngineStates()
+            resetProfileEngineStates(NetworkProfileManager.currentProfile.value.id)
         }
     }
 
@@ -115,9 +115,11 @@ object DpiPolicyEngine {
     /**
      * Resets internal score weights and histories when severe anomalies dictate a clean slate.
      */
-    fun resetAllEngineStates() {
-        Log.w("DpiPolicyEngine", "Executing full state reset due to critical network anomaly policy trigger.")
-        StrategyStateRepository.resetAll()
+    fun resetProfileEngineStates(profileId: String) {
+        Log.w("DpiPolicyEngine", "Executing state reset for profile $profileId due to critical network anomaly policy trigger.")
+        StrategyStateRepository.resetProfile(profileId)
+        // DpiEngine maps usually use strategy as key, so it might need some other clearance, but clear() affects everything.
+        // For now let's just clear for the specific strategy if possible, or clear circuit breakers since they are transient anyway.
         DpiEngine.circuitBreakers.clear()
         DpiEngine.consecutiveFailures.clear()
     }

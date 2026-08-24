@@ -185,14 +185,20 @@ object DpiStrategySelector {
             DpiEngine.consecutiveFailures.remove(strategy)
             DpiEngine.circuitBreakers.remove(strategy)
             if (host != null && quality.minLevelForHostMemory) {
-                val ctxKey = HostContextKey(host, transport, profileId)
-                val lastCount = StrategyStateRepository.contextualHostMemory[ctxKey]?.successCount ?: 0
-                val newMem = HostMemory(strategy, now, lastCount + 1, transport, profileId)
-                StrategyStateRepository.contextualHostMemory[ctxKey] = newMem
-                StrategyStateRepository.consecutiveFailuresByHost.remove(host)
-                // Remove all blacklist entries for this host + transport + profile
-                StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { 
-                    it.key.host == host && it.key.transport == transport && it.key.profileId == profileId 
+                val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
+                val confidence = state.calculateConfidence()
+                val verifiedSamples = state.verifiedSuccessCount.get()
+
+                if (confidence > 0.75 && verifiedSamples >= 3) {
+                    val ctxKey = HostContextKey(host, transport, profileId)
+                    val lastCount = StrategyStateRepository.contextualHostMemory[ctxKey]?.successCount ?: 0
+                    val newMem = HostMemory(strategy, now, lastCount + 1, transport, profileId, confidence)
+                    StrategyStateRepository.contextualHostMemory[ctxKey] = newMem
+                    StrategyStateRepository.consecutiveFailuresByHost.remove(host)
+                    // Remove all blacklist entries for this host + transport + profile
+                    StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { 
+                        it.key.host == host && it.key.transport == transport && it.key.profileId == profileId 
+                    }
                 }
             }
             if (quality.minLevelForHostMemory) {
@@ -230,7 +236,7 @@ object DpiStrategySelector {
         val (mean, confidence) = state.calculateBetaPosterior()
         
         // Use global average score as a weak prior for auto-tuner (max 10% weight)
-        val globalAverageMean = getAverageScore(strategy) / 1000.0
+        val globalAverageMean = getAverageScore(strategy, profileId) / 1000.0
         val priorWeight = 0.1 * (1.0 - confidence).coerceAtLeast(0.0)
         val blendedMean = (mean * (1.0 - priorWeight)) + (globalAverageMean * priorWeight)
         
@@ -244,21 +250,21 @@ object DpiStrategySelector {
         return blendedMean * 1000.0 * (0.5 + 0.5 * confidence) * spikePenalty
     }
 
-    fun getAverageScore(strategy: BypassStrategy): Double {
-        val states = StrategyStateRepository.getStates(strategy = strategy)
+    fun getAverageScore(strategy: BypassStrategy, profileId: String = NetworkProfileManager.currentProfile.value.id): Double {
+        val states = StrategyStateRepository.getStates(strategy = strategy, profileId = profileId)
         if (states.isEmpty()) return 100.0
         val sumMean = states.sumOf { it.calculateBetaPosterior().first * 1000 }
         return sumMean / states.size
     }
 
-    fun getStrategyMetrics(): List<StrategyMetric> {
+    fun getStrategyMetrics(profileId: String = NetworkProfileManager.currentProfile.value.id): List<StrategyMetric> {
         return BypassStrategy.entries.map { strategy ->
-            val states = StrategyStateRepository.getStates(strategy = strategy)
+            val states = StrategyStateRepository.getStates(strategy = strategy, profileId = profileId)
             val successes = states.sumOf { it.successCount.get().toLong() }
             val failures = states.sumOf { it.failureCount.get().toLong() }
             val ewmaLatencies = states.map { it.ewmaLatencyMs.get() }.filter { it > 0 }
             val avgRtt = if (ewmaLatencies.isNotEmpty()) ewmaLatencies.average().toLong() else 0L
-            val score = getAverageScore(strategy).toInt()
+            val score = getAverageScore(strategy, profileId).toInt()
             StrategyMetric(strategy, score, successes, failures, avgRtt)
         }.sortedByDescending { it.score }
     }

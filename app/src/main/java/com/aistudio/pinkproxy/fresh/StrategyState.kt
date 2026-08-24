@@ -179,12 +179,11 @@ object StrategyStateRepository {
         hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
     }
 
-    fun resetAll() {
-        contextStates.clear()
-        networkStrategyMemory.clear()
-        contextualHostMemory.clear()
-        consecutiveFailuresByHost.clear()
-        hostStrategyBlacklist.clear()
+    fun resetProfile(profileId: String) {
+        contextStates.entries.removeIf { it.key.profileId == profileId }
+        networkStrategyMemory.remove(profileId)
+        contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
+        hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
     }
 
     fun restoreStates(states: Map<StrategyContextKey, StrategyMetricState>) {

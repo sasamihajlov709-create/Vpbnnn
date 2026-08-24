@@ -143,7 +143,7 @@ object ProactiveAutoTuner {
                                 category = HostClassifier.classify(host),
                                 host = host,
                                 latencyMs = latency,
-                                quality = ObservationQuality.SUSTAINED_DATA_TRANSFER
+                                quality = ObservationQuality.TLS_RECORD_RECEIVED
                             )
                             return@withContext true
                         }

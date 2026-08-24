@@ -331,7 +331,7 @@ object RecoveryStateMachine {
     private fun processManualReset() {
         Log.w(TAG, "Manual full recalibration triggered")
         _currentState.value = RecoveryState.IDLE
-        DpiPolicyEngine.resetAllEngineStates()
+        DpiPolicyEngine.resetProfileEngineStates(NetworkProfileManager.currentProfile.value.id)
         DnsCacheManager.clearAll()
         RobustResolver.clearCache()
         DnsOptimizer.forceRefresh()
