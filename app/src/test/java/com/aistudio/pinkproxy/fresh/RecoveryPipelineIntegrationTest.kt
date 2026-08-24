@@ -41,13 +41,13 @@ class RecoveryPipelineIntegrationTest {
     @Test
     fun testDpiAnalyzerFingerprintPolicyConvergence() {
         // Feed various DPI events
-        DpiAnalyzer.recordEvent(DpiType.TLS_SNI_BLOCK)
-        DpiAnalyzer.recordEvent(DpiType.TCP_RESET)
+        DpiAnalyzer.recordEvent(DpiType.TLS_SNI_BLOCK, com.aistudio.pinkproxy.fresh.TransportType.TCP)
+        DpiAnalyzer.recordEvent(DpiType.TCP_RESET, com.aistudio.pinkproxy.fresh.TransportType.TCP)
         
-        val fingerprint = DpiAnalyzer.getCensorshipFingerprint()
+        val fingerprint = DpiAnalyzer.getCensorshipFingerprint(com.aistudio.pinkproxy.fresh.TransportType.TCP)
         assertTrue(fingerprint.rstRate > 0.0 || fingerprint.sniBlockRate > 0.0)
 
-        val decision = DpiPolicyEngine.evaluatePolicy(
+        val decision = DpiPolicyEngine.evaluatePolicy(transport = com.aistudio.pinkproxy.fresh.TransportType.TCP,
             fingerprint = fingerprint,
             globalSuccessRate = 85.0,
             totalObservations = 20

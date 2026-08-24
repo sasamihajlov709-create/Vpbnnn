@@ -24,7 +24,7 @@ class TransportSpecificRecoveryTest {
     @Test
     fun testDnsFailureDoesNotDisruptTcpBypassStrategy() = runTest {
         val initialTcpStrategy = BypassStrategy.TLS_REC_SPLIT
-        BypassConfig.setGlobalStrategy(initialTcpStrategy)
+        BypassConfig.setStrategy(initialTcpStrategy, com.aistudio.pinkproxy.fresh.TransportType.TCP)
 
         // Trigger DNS failure
         RecoveryStateMachine.handleSignal(RecoverySignal.DnsFailure(domain = "example.com", isPoisoned = false))

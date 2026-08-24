@@ -74,7 +74,7 @@ class UiRenderAndMetricsStressTest {
                             stallRate = 0.02,
                             dnsBlockRate = 0.0,
                             jitter = 24.5,
-                            intensity = 35
+                            intensity = 35, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP
                         )
                     )
                 }

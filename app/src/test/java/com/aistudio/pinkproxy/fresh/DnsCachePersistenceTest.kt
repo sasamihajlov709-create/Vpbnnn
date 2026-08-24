@@ -54,7 +54,7 @@ class DnsCachePersistenceTest {
     fun `getSessionConfig uses adaptive RTT delay`() {
         val host = "rtt-test.com"
         
-        val configHighRtt = BypassConfig.getSessionConfig(host, strategy = BypassStrategy.SNI_SPLIT, rtt = 400L)
+        val configHighRtt = BypassConfig.getSessionConfig(host, strategy = BypassStrategy.SNI_SPLIT, rtt = 400L, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP)
         
         assertEquals(100L, configHighRtt.delay1)
     }

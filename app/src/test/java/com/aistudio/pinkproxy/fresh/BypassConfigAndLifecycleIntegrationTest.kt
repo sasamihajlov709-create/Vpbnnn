@@ -19,7 +19,7 @@ class BypassConfigAndLifecycleIntegrationTest {
     fun testStrictBypassModeStrategyOverride() {
         BypassConfig.isStrictBypassMode = true
         BypassConfig.isAutoTuning = false
-        BypassConfig.setStrategy(BypassStrategy.DIRECT)
+        BypassConfig.setStrategy(BypassStrategy.DIRECT, com.aistudio.pinkproxy.fresh.TransportType.TCP)
 
         try {
             // TCP
@@ -61,7 +61,7 @@ class BypassConfigAndLifecycleIntegrationTest {
     fun testManualModeIncompatibleStrategySafety() {
         try {
             BypassConfig.isAutoTuning = false
-            BypassConfig.setStrategy(BypassStrategy.UDP_COMBINED_NUCLEAR)
+            BypassConfig.setStrategy(BypassStrategy.UDP_COMBINED_NUCLEAR, com.aistudio.pinkproxy.fresh.TransportType.UDP)
 
             val selectedForTcp = BypassConfig.getBestStrategyForHost("example.com", TransportType.TCP)
             assertTrue(
@@ -76,7 +76,7 @@ class BypassConfigAndLifecycleIntegrationTest {
             )
         } finally {
             BypassConfig.isAutoTuning = true
-            BypassConfig.setStrategy(BypassStrategy.SNI_SPLIT)
+            BypassConfig.setStrategy(BypassStrategy.SNI_SPLIT, com.aistudio.pinkproxy.fresh.TransportType.TCP)
         }
     }
 
@@ -86,7 +86,7 @@ class BypassConfigAndLifecycleIntegrationTest {
         BypassConfig.frag2 = 24
         BypassConfig.frag3 = 36
 
-        val config = BypassConfig.getSessionConfig("example.com", BypassStrategy.SNI_TRIPLE, 50L)
+        val config = BypassConfig.getSessionConfig("example.com", BypassStrategy.SNI_TRIPLE, 50L, com.aistudio.pinkproxy.fresh.TransportType.TCP)
         assertEquals(12, config.frag1)
         assertEquals(24, config.frag2)
         assertEquals(36, config.frag3)

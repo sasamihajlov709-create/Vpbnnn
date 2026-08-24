@@ -77,13 +77,13 @@ class ServiceCheckerAndStatusTest {
         assertEquals(0, StabilityAnalyzer.censorshipIntensity.value)
 
         // Record failure
-        StabilityAnalyzer.recordEvent(isFailure = true)
+        StabilityAnalyzer.recordEvent(isFailure = true, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP)
         assertTrue(StabilityAnalyzer.successRate.value < 100)
         assertTrue(StabilityAnalyzer.censorshipIntensity.value > 0)
         assertTrue(StabilityAnalyzer.stabilityScore.value < 100)
 
         // Record success with RTT
-        StabilityAnalyzer.recordEvent(isFailure = false, rtt = 120L)
+        StabilityAnalyzer.recordEvent(isFailure = false, rtt = 120L, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP)
         assertEquals(120L, StabilityAnalyzer.lastLatency.value)
 
         // Test signal quality update
