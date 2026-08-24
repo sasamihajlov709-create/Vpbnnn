@@ -45,7 +45,7 @@ object StabilityAnalyzer {
         _lastLatency.value = ms
     }
 
-    fun recordEvent(isFailure: Boolean, rtt: Long = 0, transport: TransportType = TransportType.TCP) {
+    fun recordEvent(isFailure: Boolean, rtt: Long = 0, transport: TransportType) {
         if (isFailure) {
             _successRate.update { (it * 0.85 + 0).toInt().coerceIn(0, 100) }
             when (transport) {

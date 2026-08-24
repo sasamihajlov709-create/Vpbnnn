@@ -21,15 +21,8 @@ object BypassConfig {
     /**
      * Public API for UI / settings changes: delegates to RuntimeCoordinator for safe validation and single-point mutation.
      */
-    fun setStrategy(new: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "User Selection") {
+    fun setStrategy(new: BypassStrategy, transport: TransportType, reason: String = "User Selection") {
         RuntimeCoordinator.transitionGlobalStrategy(new, transport, reason)
-    }
-
-    /**
-     * Direct strategy assignment helper.
-     */
-    fun setGlobalStrategy(new: BypassStrategy) {
-        _strategy.value = new
     }
 
     /**
@@ -227,7 +220,7 @@ object BypassConfig {
         }
     }
 
-    fun getBestStrategyForHost(host: String, transport: TransportType = TransportType.TCP): BypassStrategy {
+    fun getBestStrategyForHost(host: String, transport: TransportType): BypassStrategy {
         val now = System.currentTimeMillis()
         if (!isAutoTuning) {
             val base = _strategy.value
@@ -254,7 +247,7 @@ object BypassConfig {
         return best
     }
 
-    fun rotateGlobalStrategy(transport: TransportType = TransportType.TCP) {
+    fun rotateGlobalStrategy(transport: TransportType) {
         RuntimeCoordinator.requestGlobalStrategyRotation(transport, "BypassConfig Global Rotation")
     }
 
@@ -267,7 +260,7 @@ object BypassConfig {
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null
     ) {
-        ProxyStats.recordGlobalSuccess(rtt)
+        ProxyStats.recordGlobalSuccess(rtt, transport)
         ProxyStats.reportStrategyResult(strategy, true)
         val cat = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
         DpiStrategySelector.recordResult(
@@ -321,7 +314,7 @@ object BypassConfig {
         }
     }
 
-    fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long, transport: TransportType = TransportType.TCP): SessionConfig {
+    fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long, transport: TransportType): SessionConfig {
         val rnd = ThreadLocalRandom.current()
         val intensity = ProxyStats.censorshipIntensity.value
         var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) BypassStrategy.BYEBYEDPI_HYBRID else strategy
@@ -337,7 +330,7 @@ object BypassConfig {
         val f1 = if (frag1 > 0) frag1 else DpiEngine.getRecommendedFragSize()
         val f2 = if (frag2 > 0) frag2 else (f1 + rnd.nextInt(1, 4))
         val f3 = if (frag3 > 0) frag3 else (f2 + rnd.nextInt(1, 4))
-        val baseDelay = DpiEngine.getRecommendedDelay()
+        val baseDelay = DpiEngine.getRecommendedDelay(transport)
         val d1 = if (rtt > 0) Math.max(baseDelay, Math.min(rtt / 4, 150L)) else baseDelay
         val ttl = if (fakeTtl == 0) rnd.nextInt(3, 8) else fakeTtl
         return SessionConfig(
@@ -353,9 +346,6 @@ object BypassConfig {
         )
     }
 
-    fun setGlobalStrategy(strategy: BypassStrategy, transport: TransportType = TransportType.TCP, reason: String = "Recovery State Machine") {
-        setStrategy(strategy, transport, reason)
-    }
     fun getStrategyMetrics(): List<StrategyMetric> = DpiStrategySelector.getStrategyMetrics()
 
     val strategyMetrics: kotlinx.coroutines.flow.Flow<List<StrategyMetric>> = flow {
@@ -380,7 +370,7 @@ object BypassConfig {
 
     fun getFallbackStrategy(
         current: BypassStrategy,
-        transport: TransportType = TransportType.TCP,
+        transport: TransportType,
         reason: FailureReason? = null,
         host: String? = null,
         category: HostCategory? = null

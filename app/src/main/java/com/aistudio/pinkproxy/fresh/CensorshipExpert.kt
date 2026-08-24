@@ -197,7 +197,7 @@ object CensorshipExpert {
         if (now - lastIntelligenceUpdate < 15000) return
         lastIntelligenceUpdate = now
         
-        val fingerprint = DpiAnalyzer.getCensorshipFingerprint()
+        val fingerprint = DpiAnalyzer.getCensorshipFingerprint(TransportType.TCP)
         val successRate = ProxyStats.successRate.value
         val dnsPoisoningRate = ProxyStats.dpiEvents[DpiType.DNS_POISONING]?.toFloat() ?: 0f
         val stability = ProxyStats.stabilityScore.value
@@ -266,7 +266,7 @@ object CensorshipExpert {
                     val out = s.getOutputStream()
                     val hello = FakePacketHelper.buildRealisticTlsHello(host)
                     // Use light bypass to look like a real browser
-                    val config = BypassConfig.getSessionConfig(host, BypassStrategy.TLS_SNI_FRAGMENT, 50)
+                    val config = BypassConfig.getSessionConfig(host, BypassStrategy.TLS_SNI_FRAGMENT, 50, TransportType.TCP)
                     BypassConfig.applyBypass(s, out, hello, hello.size, config, host)
                     delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(100, 500))
                     s.close()

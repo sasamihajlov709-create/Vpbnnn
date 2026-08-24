@@ -167,7 +167,7 @@ object DpiEngine {
         }
     }
 
-    fun getRecommendedDelay(transport: TransportType = TransportType.TCP): Long {
+    fun getRecommendedDelay(transport: TransportType): Long {
         val intensity = ProxyStats.censorshipIntensity.value
         if (intensity < 10) return 0L
         
@@ -201,7 +201,7 @@ object DpiEngine {
         consecutiveFailures.clear()
     }
     
-    fun recordEvent(type: DpiType, transport: TransportType = TransportType.TCP) {
+    fun recordEvent(type: DpiType, transport: TransportType) {
         DpiAnalyzer.recordEvent(type, transport)
     }
 

@@ -1,0 +1,8 @@
+sed -i 's/RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value)/RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt
+sed -i 's/RecoverySignal.TunnelStall(15000L, ProxyStats.activeConnections.value)/RecoverySignal.TunnelStall(15000L, ProxyStats.activeConnections.value, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt
+sed -i 's/RecoverySignal.TcpStall("", BypassConfig.strategy.value)/RecoverySignal.TcpStall("", BypassConfig.strategy.value, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt
+sed -i 's/RecoverySignal.SslStall("", BypassConfig.strategy.value)/RecoverySignal.SslStall("", BypassConfig.strategy.value, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt
+sed -i 's/RecoverySignal.ProxyUnresponsive(details)/RecoverySignal.ProxyUnresponsive(details, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt
+sed -i 's/RecoverySignal.TunnelStall(5000L, 1)/RecoverySignal.TunnelStall(5000L, 1, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt
+sed -i 's/RecoverySignal.ExtremeLatency(ProxyStats.lastLatency.value)/RecoverySignal.ExtremeLatency(ProxyStats.lastLatency.value, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt
+sed -i 's/RecoverySignal.HealthDegraded("Handshake failure: $details")/RecoverySignal.HealthDegraded("Handshake failure: $details", transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/RecoveryManager.kt

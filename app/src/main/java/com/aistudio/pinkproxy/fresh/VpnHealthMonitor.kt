@@ -100,7 +100,7 @@ class VpnHealthMonitor(
                             }
                         } catch (e: java.io.IOException) {
                             ProxyStats.logRecovery("Watchdog: Proxy server unresponsive (${e.message}). Reporting signal...")
-                            RecoveryStateMachine.postSignal(RecoverySignal.ProxyUnresponsive(e.message ?: "io_error"))
+                            RecoveryStateMachine.postSignal(RecoverySignal.ProxyUnresponsive(e.message ?: "io_error", transport = TransportType.TCP))
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -143,12 +143,12 @@ class VpnHealthMonitor(
                 // Monitor RTT for suspicious spikes
                 val currentRtt = ProxyStats.lastLatency.value
                 if (currentRtt > 2500 && activeConns > 0) {
-                    RecoveryStateMachine.postSignal(RecoverySignal.ExtremeLatency(currentRtt))
+                    RecoveryStateMachine.postSignal(RecoverySignal.ExtremeLatency(currentRtt, transport = TransportType.TCP))
                 }
                 
                 // Check for DPI detected
                 if (ProxyStats.currentDpiType.value != DpiType.NONE) {
-                    RecoveryStateMachine.postSignal(RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value))
+                    RecoveryStateMachine.postSignal(RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value, transport = TransportType.TCP))
                     ProxyStats.clearDpiType()
                 }
 
@@ -170,7 +170,7 @@ class VpnHealthMonitor(
                     stallCounter++
                     val threshold = if (rtt > 1000) 4 else 3
                     if (stallCounter >= threshold) { 
-                        RecoveryStateMachine.postSignal(RecoverySignal.TunnelStall((stallCounter * checkInterval).toLong(), activeConns))
+                        RecoveryStateMachine.postSignal(RecoverySignal.TunnelStall((stallCounter * checkInterval).toLong(), activeConns, transport = TransportType.TCP))
                         stallCounter = 0
                     }
                 } else {

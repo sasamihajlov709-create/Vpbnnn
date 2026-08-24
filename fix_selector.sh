@@ -1,0 +1,1 @@
+sed -i 's/val states = StrategyStateRepository.getAllContextStates().filterKeys { it.strategy == strategy }/val states = StrategyStateRepository.getStates(strategy = strategy)/' app/src/main/java/com/aistudio/pinkproxy/fresh/DpiStrategySelector.kt

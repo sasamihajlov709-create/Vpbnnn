@@ -28,7 +28,7 @@ object DpiStrategySelector {
         }
     }
 
-    fun getBestStrategy(category: HostCategory, host: String? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
+    fun getBestStrategy(category: HostCategory, host: String? = null, transport: TransportType): BypassStrategy {
         val now = System.currentTimeMillis()
         val profileId = NetworkProfileManager.currentProfile.value.id
 
@@ -120,7 +120,7 @@ object DpiStrategySelector {
         return best ?: getDefaultFallback(transport)
     }
 
-    fun getBestExtremeStrategy(host: String? = null, transport: TransportType = TransportType.TCP): BypassStrategy {
+    fun getBestExtremeStrategy(host: String? = null, transport: TransportType): BypassStrategy {
         val now = System.currentTimeMillis()
         val profileId = NetworkProfileManager.currentProfile.value.id
         val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
@@ -229,30 +229,27 @@ object DpiStrategySelector {
         val state = StrategyStateRepository.getStrategyState(strategy, transport, category, profileId)
         val (mean, confidence) = state.calculateBetaPosterior()
         
-        // Use global average score as a weak prior for auto-tuner
+        // Use global average score as a weak prior for auto-tuner (max 10% weight)
         val globalAverageMean = getAverageScore(strategy) / 1000.0
-        val blendedMean = if (confidence < 0.5) {
-            (mean * confidence) + (globalAverageMean * (1.0 - confidence))
-        } else {
-            mean
-        }
+        val priorWeight = 0.1 * (1.0 - confidence).coerceAtLeast(0.0)
+        val blendedMean = (mean * (1.0 - priorWeight)) + (globalAverageMean * priorWeight)
         
         return blendedMean * 1000.0 * (0.5 + 0.5 * confidence)
     }
 
     fun getAverageScore(strategy: BypassStrategy): Double {
-        val states = StrategyStateRepository.getAllContextStates().filterKeys { it.strategy == strategy }
+        val states = StrategyStateRepository.getStates(strategy = strategy)
         if (states.isEmpty()) return 100.0
-        val sumMean = states.values.sumOf { it.calculateBetaPosterior().first * 1000 }
+        val sumMean = states.sumOf { it.calculateBetaPosterior().first * 1000 }
         return sumMean / states.size
     }
 
     fun getStrategyMetrics(): List<StrategyMetric> {
         return BypassStrategy.entries.map { strategy ->
-            val states = StrategyStateRepository.getAllContextStates().filterKeys { it.strategy == strategy }
-            val successes = states.values.sumOf { it.successCount.get().toLong() }
-            val failures = states.values.sumOf { it.failureCount.get().toLong() }
-            val ewmaLatencies = states.values.map { it.ewmaLatencyMs.get() }.filter { it > 0 }
+            val states = StrategyStateRepository.getStates(strategy = strategy)
+            val successes = states.sumOf { it.successCount.get().toLong() }
+            val failures = states.sumOf { it.failureCount.get().toLong() }
+            val ewmaLatencies = states.map { it.ewmaLatencyMs.get() }.filter { it > 0 }
             val avgRtt = if (ewmaLatencies.isNotEmpty()) ewmaLatencies.average().toLong() else 0L
             val score = getAverageScore(strategy).toInt()
             StrategyMetric(strategy, score, successes, failures, avgRtt)

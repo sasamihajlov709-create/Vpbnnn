@@ -106,7 +106,7 @@ object StrategyEscalationMatrix {
     fun getEscalatedStrategy(
         failedStrategy: BypassStrategy,
         reason: FailureReason? = null,
-        transport: TransportType = TransportType.TCP,
+        transport: TransportType,
         host: String? = null,
         category: HostCategory? = null
     ): BypassStrategy? {

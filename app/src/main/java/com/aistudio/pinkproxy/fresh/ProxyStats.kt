@@ -151,7 +151,7 @@ object ProxyStats {
     fun updateCensorshipIntensity(newVal: Int) { StabilityAnalyzer.setCensorshipIntensity(newVal) }
     fun clearCensorshipHistory() { StabilityAnalyzer.reset() }
 
-    fun recordCensorshipEvent(isFailure: Boolean, transport: TransportType = TransportType.TCP) {
+    fun recordCensorshipEvent(isFailure: Boolean, transport: TransportType) {
         if (isFailure) _errors.update { it + 1 }
         StabilityAnalyzer.recordEvent(isFailure, transport = transport)
     }
@@ -312,11 +312,11 @@ object ProxyStats {
         return String.format(java.util.Locale.ROOT, "%.1f %sB", bytes / Math.pow(1024.0, exp.toDouble()), pre)
     }
 
-    fun recordGlobalSuccess(rtt: Long, transport: TransportType = TransportType.TCP) {
+    fun recordGlobalSuccess(rtt: Long, transport: TransportType) {
         StabilityAnalyzer.recordEvent(false, rtt, transport = transport)
     }
 
-    fun recordGlobalFailure(transport: TransportType = TransportType.TCP) {
+    fun recordGlobalFailure(transport: TransportType) {
         StabilityAnalyzer.recordEvent(true, transport = transport)
     }
 

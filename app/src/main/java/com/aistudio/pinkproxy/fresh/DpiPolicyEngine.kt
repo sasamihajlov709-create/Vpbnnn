@@ -16,7 +16,7 @@ object DpiPolicyEngine {
         val recommendedMtu: Int?,
         val shouldEnterPanic: Boolean,
         val shouldReset: Boolean,
-        val affectedTransport: TransportType = TransportType.TCP
+        val affectedTransport: TransportType
     )
 
     /**
@@ -26,7 +26,7 @@ object DpiPolicyEngine {
          fingerprint: DpiAnalyzer.CensorshipFingerprint,
          globalSuccessRate: Double,
          totalObservations: Int,
-         transport: TransportType = TransportType.TCP
+         transport: TransportType
      ): PolicyDecision {
          val currentIntensity = ProxyStats.censorshipIntensity.value
          val calculatedIntensity = when (transport) {

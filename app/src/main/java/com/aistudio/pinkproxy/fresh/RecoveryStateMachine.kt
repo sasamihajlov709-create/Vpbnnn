@@ -26,15 +26,15 @@ enum class RecoveryState {
  * Strongly-typed event signals published by health monitors and network observers.
  */
 sealed class RecoverySignal {
-    data class DpiDetected(val type: DpiType, val host: String? = null, val transport: TransportType = TransportType.TCP) : RecoverySignal()
-    data class TunnelStall(val durationMs: Long, val activeConnections: Int, val transport: TransportType = TransportType.TCP) : RecoverySignal()
-    data class TcpStall(val host: String, val strategy: BypassStrategy, val transport: TransportType = TransportType.TCP) : RecoverySignal()
-    data class SslStall(val host: String, val strategy: BypassStrategy, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class DpiDetected(val type: DpiType, val host: String? = null, val transport: TransportType) : RecoverySignal()
+    data class TunnelStall(val durationMs: Long, val activeConnections: Int, val transport: TransportType) : RecoverySignal()
+    data class TcpStall(val host: String, val strategy: BypassStrategy, val transport: TransportType) : RecoverySignal()
+    data class SslStall(val host: String, val strategy: BypassStrategy, val transport: TransportType) : RecoverySignal()
     data class DnsFailure(val domain: String, val isPoisoned: Boolean, val transport: TransportType = TransportType.DNS) : RecoverySignal()
-    data class ProxyUnresponsive(val reason: String, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class ProxyUnresponsive(val reason: String, val transport: TransportType) : RecoverySignal()
     data class MemoryPressure(val usedPercent: Int) : RecoverySignal()
-    data class ExtremeLatency(val latencyMs: Long, val transport: TransportType = TransportType.TCP) : RecoverySignal()
-    data class HealthDegraded(val details: String, val transport: TransportType = TransportType.TCP) : RecoverySignal()
+    data class ExtremeLatency(val latencyMs: Long, val transport: TransportType) : RecoverySignal()
+    data class HealthDegraded(val details: String, val transport: TransportType) : RecoverySignal()
     data class NetworkLost(val networkType: String) : RecoverySignal()
     object ManualReset : RecoverySignal()
 }

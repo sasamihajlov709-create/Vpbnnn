@@ -145,6 +145,21 @@ object StrategyStateRepository {
         }
     }
 
+    fun getStates(
+        profileId: String? = null,
+        transport: TransportType? = null,
+        category: HostCategory? = null,
+        strategy: BypassStrategy? = null
+    ): List<StrategyState> {
+        return contextStates.entries.mapNotNull { (key, state) ->
+            if (profileId != null && key.profileId != profileId) return@mapNotNull null
+            if (transport != null && key.transport != transport) return@mapNotNull null
+            if (category != null && key.category != category) return@mapNotNull null
+            if (strategy != null && key.strategy != strategy) return@mapNotNull null
+            state
+        }
+    }
+
     fun getAllContextStates(): Map<StrategyContextKey, StrategyState> {
         return contextStates.toMap()
     }
@@ -163,6 +178,24 @@ object StrategyStateRepository {
         }
     }
 
+    fun cleanupExpired(profileId: String) {
+        val now = System.currentTimeMillis()
+        val expiry = 86400000L * 7
+        hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId && it.value < now }
+        contextualHostMemory.entries.removeIf { it.key.profileId == profileId && now - it.value.timestamp > expiry }
+        
+        // Safety bounds for the current profile only
+        val profileBlacklistCount = hostStrategyBlacklist.count { it.key.profileId == profileId }
+        if (profileBlacklistCount > 1000) {
+            hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
+        }
+        
+        val profileHostMemoryCount = contextualHostMemory.count { it.key.profileId == profileId }
+        if (profileHostMemoryCount > 2000) {
+            contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
+        }
+    }
+    
     fun clearProfileState(profileId: String) {
         contextStates.keys.removeIf { it.profileId == profileId }
         networkStrategyMemory.remove(profileId)

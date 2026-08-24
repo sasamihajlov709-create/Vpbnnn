@@ -13,10 +13,10 @@ object DpiAnalyzer {
         val stallRate: Double,
         val jitter: Double,
         val intensity: Int,
-        val transport: TransportType = TransportType.TCP
+        val transport: TransportType
     )
 
-    fun getCensorshipFingerprint(transport: TransportType = TransportType.TCP): CensorshipFingerprint {
+    fun getCensorshipFingerprint(transport: TransportType): CensorshipFingerprint {
         val currentProfileId = NetworkProfileManager.currentProfile.value.id
         val relevantTypes = when (transport) {
             TransportType.TCP -> setOf(DpiType.TCP_RESET, DpiType.TLS_SNI_BLOCK, DpiType.CONNECTION_TIMEOUT, DpiType.HTTP_BLOCK, DpiType.TLS_HANDSHAKE_TIMEOUT, DpiType.BLACKHOLE, DpiType.TCP_STALL, DpiType.SSL_STALL, DpiType.MTU_EXCEEDED)
@@ -70,28 +70,24 @@ object DpiAnalyzer {
         DpiPolicyEngine.onDpiEventDiagnosed(DpiType.TCP_RESET)
     }
 
-    fun recordEvent(type: DpiType, transport: TransportType = TransportType.TCP) {
+    fun recordEvent(type: DpiType, transport: TransportType) {
         val profileId = NetworkProfileManager.currentProfile.value.id
         DpiEngine.eventHistory.getOrPut(DpiEventKey(profileId, transport, type)) { AtomicInteger(0) }.incrementAndGet()
         DpiPolicyEngine.onDpiEventDiagnosed(type)
     }
 
     fun analyzeAndAdjust() {
-        if (StrategyStateRepository.hostStrategyBlacklist.size > 500) {
-            val now = System.currentTimeMillis()
-            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { it.value < now }
-            if (StrategyStateRepository.hostStrategyBlacklist.size > 1000) StrategyStateRepository.hostStrategyBlacklist.clear()
-        }
-        
+        val currentProfileId = NetworkProfileManager.currentProfile.value.id
+        StrategyStateRepository.cleanupExpired(currentProfileId)
+
         if (StrategyStateRepository.consecutiveFailuresByHost.size > 500) {
             StrategyStateRepository.consecutiveFailuresByHost.entries.removeIf { it.value.get() == 0 }
             if (StrategyStateRepository.consecutiveFailuresByHost.size > 1000) StrategyStateRepository.consecutiveFailuresByHost.clear()
         }
 
-        val currentProfileId = NetworkProfileManager.currentProfile.value.id
-        val tcpStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.TCP && it.profileId == currentProfileId }.values
-        val udpStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.UDP && it.profileId == currentProfileId }.values
-        val dnsStates = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == TransportType.DNS && it.profileId == currentProfileId }.values
+        val tcpStates = StrategyStateRepository.getStates(profileId = currentProfileId, transport = TransportType.TCP)
+        val udpStates = StrategyStateRepository.getStates(profileId = currentProfileId, transport = TransportType.UDP)
+        val dnsStates = StrategyStateRepository.getStates(profileId = currentProfileId, transport = TransportType.DNS)
 
         val tcpSuccess = tcpStates.sumOf { it.successCount.get() }
         val tcpFailure = tcpStates.sumOf { it.failureCount.get() }
@@ -100,21 +96,6 @@ object DpiAnalyzer {
         val dnsSuccess = dnsStates.sumOf { it.successCount.get() }
         val dnsFailure = dnsStates.sumOf { it.failureCount.get() }
 
-        if (StrategyStateRepository.consecutiveFailuresByHost.size > 2000) {
-            StrategyStateRepository.consecutiveFailuresByHost.clear()
-        }
-        
-        if (StrategyStateRepository.hostStrategyBlacklist.size > 1000) {
-            val now = System.currentTimeMillis()
-            StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { it.value < now }
-        }
-
-        if (StrategyStateRepository.contextualHostMemory.size > 2000) {
-            val now = System.currentTimeMillis()
-            val expiry = 86400000L * 7
-            StrategyStateRepository.contextualHostMemory.entries.removeIf { now - it.value.timestamp > expiry }
-            if (StrategyStateRepository.contextualHostMemory.size > 3000) StrategyStateRepository.contextualHostMemory.clear()
-        }
 
         // Analyze TCP
         if (tcpSuccess + tcpFailure > 0) {
@@ -160,7 +141,7 @@ object DpiAnalyzer {
         decayEventHistory(currentProfileId)
 
         if (totalSuccess + totalFailure > 1000) {
-            val states = StrategyStateRepository.getAllContextStates().filterKeys { it.profileId == currentProfileId }.values
+            val states = StrategyStateRepository.getStates(profileId = currentProfileId)
             states.forEach { state ->
                 state.successCount.updateAndGet { (it * 0.5).toInt() }
                 state.failureCount.updateAndGet { (it * 0.5).toInt() }
@@ -170,9 +151,9 @@ object DpiAnalyzer {
         BypassConfig.cleanupExpiredHeuristics()
     }
 
-    fun checkGlobalStall(transport: TransportType = TransportType.TCP) {
+    fun checkGlobalStall(transport: TransportType) {
         val currentProfileId = NetworkProfileManager.currentProfile.value.id
-        val states = StrategyStateRepository.getAllContextStates().filterKeys { it.transport == transport && it.profileId == currentProfileId }.values
+        val states = StrategyStateRepository.getStates(profileId = currentProfileId, transport = transport)
         val totalSuccess = states.sumOf { it.successCount.get() }
         val totalFailure = states.sumOf { it.failureCount.get() }
         val total = totalSuccess + totalFailure

@@ -70,13 +70,11 @@ object DpiStorage {
         val v2Prefs = context.getSharedPreferences("dpi_profile_v2_$profileId", Context.MODE_PRIVATE)
         v2Prefs.edit().putString("state_json", jsonStr).apply()
 
-        saveHostMemoryForProfile(context, profileId, isSynchronous = false)
         AutoTtlProber.saveTtlMtuState(context, profileId)
         updateProfileRegistry(context, profileId)
     }
 
     fun loadProfileScores(context: Context, profileId: String) {
-        loadHostMemoryForProfile(context, profileId)
         AutoTtlProber.loadTtlMtuState(context, profileId)
 
         val v2Prefs = context.getSharedPreferences("dpi_profile_v2_$profileId", Context.MODE_PRIVATE)
@@ -86,81 +84,6 @@ object DpiStorage {
             if (state != null) {
                 restoreStrategyProfileState(state)
                 return
-            }
-        }
-    }
-
-    private fun saveHostMemoryForProfile(context: Context, profileId: String, isSynchronous: Boolean = false) {
-        val prefs = context.getSharedPreferences("dpi_host_mem_$profileId", Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-        editor.clear()
-        val now = System.currentTimeMillis()
-        val expiry = 86400000L * 7
-
-        StrategyStateRepository.contextualHostMemory.forEach { (ctxKey, mem) ->
-            if (ctxKey.profileId == profileId && now - mem.timestamp < expiry) {
-                editor.putString(ctxKey.toStorageString(), "${mem.strategy.name}|${mem.timestamp}|${mem.successCount}")
-            }
-        }
-        if (isSynchronous) editor.commit() else editor.apply()
-
-        val blPrefs = context.getSharedPreferences("dpi_host_bl_$profileId", Context.MODE_PRIVATE)
-        val blEditor = blPrefs.edit()
-        blEditor.clear()
-
-        val hostBl = mutableMapOf<String, MutableMap<BypassStrategy, Long>>()
-        StrategyStateRepository.hostStrategyBlacklist.forEach { (key, until) ->
-            if (key.profileId == profileId && until > now) {
-                hostBl.getOrPut(key.host) { mutableMapOf() }[key.strategy] = until
-            }
-        }
-        hostBl.forEach { (host, map) ->
-            val validEntries = map.map { "${it.key.name}:${it.value}" }.joinToString(",")
-            if (validEntries.isNotEmpty()) {
-                blEditor.putString(host, validEntries)
-            }
-        }
-        if (isSynchronous) blEditor.commit() else blEditor.apply()
-    }
-
-    private fun loadHostMemoryForProfile(context: Context, profileId: String) {
-        val prefs = context.getSharedPreferences("dpi_host_mem_$profileId", Context.MODE_PRIVATE)
-        val now = System.currentTimeMillis()
-        val expiry = 86400000L * 7
-
-        prefs.all.forEach { (keyStr, value) ->
-            if (value is String) {
-                val parts = value.split("|")
-                if (parts.size >= 2) {
-                    try {
-                        val strategy = BypassStrategy.valueOf(parts[0])
-                        val ts = parts[1].toLong()
-                        val successCount = if (parts.size >= 3) parts[2].toIntOrNull() ?: 1 else 1
-                        if (now - ts < expiry) {
-                            val ctxKey = if (keyStr.contains("|")) HostContextKey.fromStorageString(keyStr) else HostContextKey(keyStr, TransportType.TCP, profileId)
-                            StrategyStateRepository.contextualHostMemory[ctxKey] = HostMemory(strategy, ts, successCount, ctxKey.transport, ctxKey.profileId)
-                        }
-                    } catch (e: Throwable) {}
-                }
-            }
-        }
-
-        val blPrefs = context.getSharedPreferences("dpi_host_bl_$profileId", Context.MODE_PRIVATE)
-        blPrefs.all.forEach { (host, value) ->
-            if (value is String) {
-                value.split(",").forEach { entry ->
-                    val parts = entry.split(":")
-                    if (parts.size == 2) {
-                        try {
-                            val strategy = BypassStrategy.valueOf(parts[0])
-                            val until = parts[1].toLong()
-                            if (until > now) {
-                                val key = HostStrategyBlacklistKey(host, TransportType.TCP, profileId, strategy)
-                                StrategyStateRepository.hostStrategyBlacklist[key] = until
-                            }
-                        } catch (e: Throwable) {}
-                    }
-                }
             }
         }
     }

@@ -37,17 +37,17 @@ object RecoveryManager {
     fun handleEvent(event: RecoveryEvent, details: String = ""): Job {
         Log.w("RecoveryManager", "Reporting event to RecoveryStateMachine: $event ($details)")
         val signal: RecoverySignal = when (event) {
-            RecoveryEvent.DPI_DETECTED -> RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value)
-            RecoveryEvent.TUNNEL_STALL -> RecoverySignal.TunnelStall(15000L, ProxyStats.activeConnections.value)
-            RecoveryEvent.TCP_STALL -> RecoverySignal.TcpStall("", BypassConfig.strategy.value)
-            RecoveryEvent.SSL_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value)
+            RecoveryEvent.DPI_DETECTED -> RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value, transport = TransportType.TCP)
+            RecoveryEvent.TUNNEL_STALL -> RecoverySignal.TunnelStall(15000L, ProxyStats.activeConnections.value, transport = TransportType.TCP)
+            RecoveryEvent.TCP_STALL -> RecoverySignal.TcpStall("", BypassConfig.strategy.value, transport = TransportType.TCP)
+            RecoveryEvent.SSL_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value, transport = TransportType.TCP)
             RecoveryEvent.DNS_FAILURE -> RecoverySignal.DnsFailure("", isPoisoned = false)
             RecoveryEvent.DNS_POISONED -> RecoverySignal.DnsFailure("", isPoisoned = true)
-            RecoveryEvent.PROXY_UNREACHABLE -> RecoverySignal.ProxyUnresponsive(details)
-            RecoveryEvent.MTU_EXCEEDED -> RecoverySignal.TunnelStall(5000L, 1)
-            RecoveryEvent.HIGH_RTT -> RecoverySignal.ExtremeLatency(ProxyStats.lastLatency.value)
-            RecoveryEvent.HANDSHAKE_FAILURE -> RecoverySignal.HealthDegraded("Handshake failure: $details")
-            RecoveryEvent.CENSORSHIP_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value)
+            RecoveryEvent.PROXY_UNREACHABLE -> RecoverySignal.ProxyUnresponsive(details, transport = TransportType.TCP)
+            RecoveryEvent.MTU_EXCEEDED -> RecoverySignal.TunnelStall(5000L, 1, transport = TransportType.TCP)
+            RecoveryEvent.HIGH_RTT -> RecoverySignal.ExtremeLatency(ProxyStats.lastLatency.value, transport = TransportType.TCP)
+            RecoveryEvent.HANDSHAKE_FAILURE -> RecoverySignal.HealthDegraded("Handshake failure: $details", transport = TransportType.TCP)
+            RecoveryEvent.CENSORSHIP_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value, transport = TransportType.TCP)
         }
         return RecoveryStateMachine.postSignal(signal)
     }
