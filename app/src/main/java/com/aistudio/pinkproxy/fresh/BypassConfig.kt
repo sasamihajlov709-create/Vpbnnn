@@ -154,6 +154,8 @@ object BypassConfig {
         val new = mtu.coerceIn(576, 1500)
         if (_currentMtu.value != new) {
             _currentMtu.value = new
+            DpiPolicyEngine.transportPolicies[TransportType.TCP]?.mtu = new
+            DpiPolicyEngine.transportPolicies[TransportType.UDP]?.mtu = new
             Log.i("BypassConfig", "MTU changed to $new")
         }
     }
@@ -325,7 +327,7 @@ object BypassConfig {
     fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long, transport: TransportType): SessionConfig {
         val rnd = ThreadLocalRandom.current()
         val intensity = ProxyStats.censorshipIntensity.value
-        var effectiveStrategy = if (isPanicMode && rnd.nextInt(100) < 80) BypassStrategy.BYEBYEDPI_HYBRID else strategy
+        var effectiveStrategy = if (isPanicModeForTransport(transport) && rnd.nextInt(100) < 80) BypassStrategy.BYEBYEDPI_HYBRID else strategy
         
         if (!DpiStrategySelector.isFamilyCompatible(effectiveStrategy.family, transport) ||
             !StrategyExecutionRegistry.isExecutorSupported(effectiveStrategy, transport)) {

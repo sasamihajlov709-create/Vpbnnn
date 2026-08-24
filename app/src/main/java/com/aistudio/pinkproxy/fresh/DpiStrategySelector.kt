@@ -32,7 +32,7 @@ object DpiStrategySelector {
         val now = System.currentTimeMillis()
         val profileId = NetworkProfileManager.currentProfile.value.id
 
-        if (DpiEngine.isPanicMode.value || ProxyStats.censorshipIntensity.value > 92) {
+        if (BypassConfig.isPanicModeForTransport(transport) || ProxyStats.censorshipIntensity.value > 92) {
              return getBestExtremeStrategy(host, transport)
         }
 

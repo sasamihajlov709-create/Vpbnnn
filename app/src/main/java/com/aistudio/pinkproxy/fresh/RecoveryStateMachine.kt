@@ -209,7 +209,7 @@ object RecoveryStateMachine {
                 val currentMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
                 if (currentMtu > 1100) {
                     val reduction = 80
-                    // BypassConfig.setMtu(currentMtu - reduction)
+                    BypassConfig.setMtu(currentMtu - reduction)
                     ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to tunnel stall")
                 }
 
@@ -242,7 +242,7 @@ object RecoveryStateMachine {
 
         val currentMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
         if (currentMtu > 1100) {
-            // BypassConfig.setMtu(currentMtu - 150)
+            BypassConfig.setMtu(currentMtu - 150)
             ProxyStats.logRecovery("Stall Handler: Reduced MTU to ${currentMtu - 150}")
         }
         escalationLevel.incrementAndGet()
@@ -338,7 +338,7 @@ object RecoveryStateMachine {
         escalationLevel.set(0)
         dnsFailureCount.set(0)
         BypassConfig.setPanicMode(false)
-        // BypassConfig.setMtu(1400)
+        BypassConfig.setMtu(1400)
         triggerActiveProbeAsync(500L)
     }
 

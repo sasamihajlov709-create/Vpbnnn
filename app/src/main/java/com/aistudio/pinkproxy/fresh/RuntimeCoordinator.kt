@@ -97,9 +97,8 @@ object RuntimeCoordinator {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, null, category)
         val candidates = CandidateEngine.getEligibleCandidates(ctx)
         val fallback = DpiStrategySelector.getDefaultFallback(transport)
-        val best = candidates.maxByOrNull { strategy ->
-            DpiStrategySelector.getScore(strategy, transport, category, profileId)
-        } ?: fallback
+        val ranked = CandidateEngine.rankCandidatesBayesian(candidates, ctx)
+        val best = ranked.firstOrNull() ?: fallback
         
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
         BypassConfig.applyInternalStrategy(best)

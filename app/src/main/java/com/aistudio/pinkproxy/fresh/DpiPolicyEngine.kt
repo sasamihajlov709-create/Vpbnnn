@@ -2,12 +2,6 @@ package com.aistudio.pinkproxy.fresh
 
 import android.util.Log
 
-/**
- * DpiPolicyEngine represents the Policy Decision Layer in the DPI subsystem.
- * 
- * Pipeline:
- * [DpiAnalyzer (Diagnosis)] -> [DpiPolicyEngine (Decision/Policy)] -> [DpiStrategySelector (Selection)]
- */
 object DpiPolicyEngine {
 
     data class PolicyDecision(
@@ -19,10 +13,7 @@ object DpiPolicyEngine {
         val affectedTransport: TransportType
     )
 
-    /**
-     * Evaluates active policy based on diagnosis fingerprint and success rates.
-     */
-     fun evaluatePolicy(
+         fun evaluatePolicy(
          fingerprint: DpiAnalyzer.CensorshipFingerprint,
          globalSuccessRate: Double,
          totalObservations: Int,
@@ -86,10 +77,7 @@ object DpiPolicyEngine {
          )
      }
 
-    /**
-     * Applies the policy decision to engine states, statistics, and configuration.
-     */
-
+    
     data class TransportPolicyState(
         var mtu: Int = 1500,
         var isPanicMode: Boolean = false,
@@ -138,44 +126,18 @@ object DpiPolicyEngine {
             ProxyStats.updateCensorshipIntensity(globalIntensity)
         }
     }
-    /*
-        if (Math.abs(decision.targetIntensity - ProxyStats.censorshipIntensity.value) >= 1) {
-            ProxyStats.updateCensorshipIntensity(decision.targetIntensity)
-        }
-        ProxyStats.updateStabilityScore(decision.calculatedStability)
-        
-        decision.recommendedMtu?.let { newMtu ->
-            // BypassConfig.setMtu(newMtu)
-        }
-        
-        if (decision.shouldEnterPanic) {
-            DpiEngine.enterPanicMode()
-            RuntimeCoordinator.requestGlobalStrategyRotation(decision.affectedTransport, "Policy Panic Trigger")
-        }
-        if (decision.shouldReset) {
-            resetProfileEngineStates(NetworkProfileManager.currentProfile.value.id)
-        }
-    }
-
-*/
-    fun onDpiEventDiagnosed(type: DpiType) {
+        fun onDpiEventDiagnosed(type: DpiType) {
         // Obsolete globally. Left empty or implement proper context-based boost in the future.
     }
 
-    /**
-     * Resets internal score weights and histories when severe anomalies dictate a clean slate.
-     */
-    fun resetProfileEngineStates(profileId: String) {
+        fun resetProfileEngineStates(profileId: String) {
         Log.w("DpiPolicyEngine", "Executing state reset for profile $profileId due to critical network anomaly policy trigger.")
         StrategyStateRepository.resetProfile(profileId)
         // DpiEngine maps usually use strategy as key, so it might need some other clearance, but clear() affects everything.
         // For now let's just clear for the specific strategy if possible, or clear circuit breakers since they are transient anyway.
         }
 
-    /**
-     * Records strategy substitution and degradation feedback when requested strategy differs from executed strategy.
-     */
-    fun recordStrategySubstitution(
+        fun recordStrategySubstitution(
         requested: BypassStrategy,
         effective: BypassStrategy,
         executed: BypassStrategy,
