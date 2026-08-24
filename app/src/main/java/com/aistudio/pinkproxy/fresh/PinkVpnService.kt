@@ -120,8 +120,9 @@ class PinkVpnService : VpnService() {
         registerNetworkMonitor()
 
         engineScope.launch {
-            var lastMtu = BypassConfig.currentMtu.value
-            BypassConfig.currentMtu.collect { newMtu ->
+            var lastMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
+            BypassConfig.isPanicModeFlow.collect { _ ->
+                val newMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
                 if (_isRunning.value && vpnTunnelManager?.isEstablished() == true) {
                     val diff = Math.abs(newMtu - lastMtu)
                     if (diff >= 32) {
@@ -340,7 +341,7 @@ class PinkVpnService : VpnService() {
             val pfd = try {
                 vpnTunnelManager?.establish(
                     sessionName = "PinkProxy VPN",
-                    mtu = BypassConfig.currentMtu.value,
+                    mtu = BypassConfig.getMtuForTransport(TransportType.TCP),
                     addressV4 = "10.0.0.2",
                     prefixV4 = 24,
                     dnsServers = dnsServers,

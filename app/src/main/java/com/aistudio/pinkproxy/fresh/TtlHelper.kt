@@ -131,7 +131,7 @@ object TtlHelper {
 
     fun applyMssClamping(socket: Socket, host: String?) {
         try {
-            val baseMtu = BypassConfig.currentMtu.value
+            val baseMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
             val isIpv6 = socket.inetAddress is Inet6Address || (host != null && host.contains(":"))
             val overhead = if (isIpv6) 60 else 40
             

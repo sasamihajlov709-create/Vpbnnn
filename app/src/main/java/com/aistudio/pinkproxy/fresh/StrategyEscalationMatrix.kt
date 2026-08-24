@@ -128,14 +128,10 @@ object StrategyEscalationMatrix {
             }
         }
 
+        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, HostCategory.OTHER)
         for (candidate in candidates) {
             if (candidate == failedStrategy) continue
-            if (!DpiStrategySelector.isFamilyCompatible(candidate.family, transport)) continue
-            if (!StrategyExecutionRegistry.isExecutorSupported(candidate, transport)) continue
-            
-            // Check global circuit breaker
-            val cb = DpiEngine.circuitBreakers[candidate] ?: 0L
-            if (cb >= now) continue
+            if (!CandidateEngine.isEligible(candidate, ctx)) continue
             
             // Check host-specific blacklist
             if (host != null) {

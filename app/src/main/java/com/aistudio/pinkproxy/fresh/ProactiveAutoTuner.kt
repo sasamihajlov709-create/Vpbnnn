@@ -74,19 +74,18 @@ object ProactiveAutoTuner {
         if (ips.isEmpty()) return
 
         // Auto-Tuner 2.0: Rank and select top candidate strategies (Current best + Thompson dynamic top + robust diverse fallback)
+        val profileId = NetworkProfileManager.currentProfile.value.id
         val diverseExtreme = DpiStrategySelector.getFallbackStrategy(strategy = currentBest, transport = TransportType.TCP)
-        val candidates = listOf(
+        val ctx = CandidateEngine.SelectionContext(TransportType.TCP, profileId, host, category)
+        val baseList = listOf(
             currentBest,
             BypassStrategy.SNI_SPLIT,
             BypassStrategy.TLS_SNI_EXT_MANGLE,
             BypassStrategy.BYEBYEDPI_HYBRID,
             BypassStrategy.TCP_COMBINED_HYBRID,
             diverseExtreme
-        ).filter { 
-            DpiStrategySelector.isFamilyCompatible(it.family, TransportType.TCP) &&
-            StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) &&
-            !((DpiEngine.circuitBreakers[it] ?: 0L) > System.currentTimeMillis())
-        }.distinct().take(4)
+        )
+        val candidates = CandidateEngine.getEligibleCandidates(ctx, baseList).distinct().take(4)
 
         for (candidate in candidates) {
             val success = testCandidate(ips, port, host, candidate, dummyClientHello, vpnService)

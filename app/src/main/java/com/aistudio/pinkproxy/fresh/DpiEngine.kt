@@ -25,8 +25,6 @@ object DpiEngine {
     private val _currentDpiLevel = MutableStateFlow(0)
     val currentDpiLevel = _currentDpiLevel.asStateFlow()
 
-    val circuitBreakers = ConcurrentHashMap<BypassStrategy, Long>()
-    val consecutiveFailures = ConcurrentHashMap<BypassStrategy, AtomicInteger>()
     val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
 
     val eventHistory = ConcurrentHashMap<DpiEventKey, AtomicInteger>()
@@ -85,10 +83,7 @@ object DpiEngine {
     }
 
     private fun resetStrategyScoresForNetworkChange() {
-        circuitBreakers.clear()
-        consecutiveFailures.clear()
-        StrategyStateRepository.consecutiveFailuresByHost.clear()
-    }
+        }
 
     fun markSuccess(strat: BypassStrategy, transport: TransportType, host: String, latencyMs: Long = 0, quality: ObservationQuality) {
         if (latencyMs > 0) {
@@ -197,9 +192,7 @@ object DpiEngine {
     }
     
     fun clearTimeouts() {
-        circuitBreakers.clear()
-        consecutiveFailures.clear()
-    }
+        }
     
     fun recordEvent(type: DpiType, transport: TransportType) {
         DpiAnalyzer.recordEvent(type, transport)

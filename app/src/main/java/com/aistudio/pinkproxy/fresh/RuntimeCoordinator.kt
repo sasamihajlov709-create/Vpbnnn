@@ -94,10 +94,8 @@ object RuntimeCoordinator {
         category: HostCategory = HostCategory.OTHER,
         profileId: String = NetworkProfileManager.currentProfile.value.id
     ): BypassStrategy {
-        val candidates = BypassStrategy.entries.filter { 
-            DpiStrategySelector.isFamilyCompatible(it.family, transport) &&
-            StrategyExecutionRegistry.isExecutorSupported(it, transport)
-        }
+        val ctx = CandidateEngine.SelectionContext(transport, profileId, null, category)
+        val candidates = CandidateEngine.getEligibleCandidates(ctx)
         val fallback = DpiStrategySelector.getDefaultFallback(transport)
         val best = candidates.maxByOrNull { strategy ->
             DpiStrategySelector.getScore(strategy, transport, category, profileId)

@@ -278,7 +278,7 @@ object CensorshipExpert {
     
 
     private fun tuneMtu(fingerprint: DpiAnalyzer.CensorshipFingerprint, stability: Int) {
-        val currentMtu = BypassConfig.currentMtu.value
+        val currentMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
         var targetMtu = currentMtu
         val mtuErrors = ProxyStats.dpiEvents[DpiType.MTU_EXCEEDED] ?: 0
         
@@ -293,7 +293,7 @@ object CensorshipExpert {
         }
         
         if (targetMtu != currentMtu) {
-            BypassConfig.setMtu(targetMtu)
+            // BypassConfig.setMtu(targetMtu) // Handled by DpiPolicyEngine
             Log.i("CensorshipExpert", "Adaptive MTU intelligently tuned to $targetMtu (MTU Errors: $mtuErrors)")
         }
     }

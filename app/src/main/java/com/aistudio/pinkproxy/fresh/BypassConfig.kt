@@ -14,6 +14,15 @@ import java.util.concurrent.atomic.AtomicLong
 import java.io.*
 
 object BypassConfig {
+
+    fun getMtuForTransport(transport: TransportType): Int {
+        return DpiPolicyEngine.transportPolicies[transport]?.mtu ?: currentMtu.value
+    }
+    
+    fun isPanicModeForTransport(transport: TransportType): Boolean {
+        return DpiPolicyEngine.transportPolicies[transport]?.isPanicMode ?: isPanicModeFlow.value
+    }
+
     private val _strategy = kotlinx.coroutines.flow.MutableStateFlow(BypassStrategy.SNI_SPLIT)
     private val _strat = MutableStateFlow(BypassStrategy.SNI_SPLIT)
     val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
@@ -224,9 +233,8 @@ object BypassConfig {
         val now = System.currentTimeMillis()
         if (!isAutoTuning) {
             val base = _strategy.value
-            if (DpiStrategySelector.isFamilyCompatible(base.family, transport) &&
-                StrategyExecutionRegistry.isExecutorSupported(base, transport) &&
-                (DpiEngine.circuitBreakers[base] ?: 0L) < now) {
+            val ctx = CandidateEngine.SelectionContext(transport)
+            if (CandidateEngine.isEligible(base, ctx)) {
                 return if (isStrictBypassMode && base == BypassStrategy.DIRECT) {
                     DpiStrategySelector.getDefaultFallback(transport)
                 } else {

@@ -5,6 +5,17 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.sqrt
 
+
+data class CircuitBreakerKey(
+    val profileId: String,
+    val transport: TransportType,
+    val strategy: BypassStrategy
+)
+
+data class HostFailureKey(
+    val profileId: String,
+    val host: String
+)
 data class StrategyContextKey(
     val strategy: BypassStrategy,
     val transport: TransportType,
@@ -128,7 +139,9 @@ object StrategyStateRepository {
     private val contextStates = ConcurrentHashMap<StrategyContextKey, StrategyState>()
     val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
     val contextualHostMemory = ConcurrentHashMap<HostContextKey, HostMemory>()
-    val consecutiveFailuresByHost = ConcurrentHashMap<String, AtomicInteger>()
+    val consecutiveFailuresByHost = ConcurrentHashMap<HostFailureKey, AtomicInteger>()
+    val circuitBreakers = ConcurrentHashMap<CircuitBreakerKey, Long>()
+    val consecutiveFailures = ConcurrentHashMap<CircuitBreakerKey, AtomicInteger>()
     val hostStrategyBlacklist = ConcurrentHashMap<HostStrategyBlacklistKey, Long>()
 
     fun recordObservation(obs: StrategyObservation) {
@@ -177,6 +190,9 @@ object StrategyStateRepository {
         contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
         networkStrategyMemory.remove(profileId)
         hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
+        circuitBreakers.entries.removeIf { it.key.profileId == profileId }
+        consecutiveFailures.entries.removeIf { it.key.profileId == profileId }
+        consecutiveFailuresByHost.entries.removeIf { it.key.profileId == profileId }
     }
 
     fun resetProfile(profileId: String) {
@@ -184,6 +200,9 @@ object StrategyStateRepository {
         networkStrategyMemory.remove(profileId)
         contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
         hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
+        circuitBreakers.entries.removeIf { it.key.profileId == profileId }
+        consecutiveFailures.entries.removeIf { it.key.profileId == profileId }
+        consecutiveFailuresByHost.entries.removeIf { it.key.profileId == profileId }
     }
 
     fun restoreStates(states: Map<StrategyContextKey, StrategyMetricState>) {
