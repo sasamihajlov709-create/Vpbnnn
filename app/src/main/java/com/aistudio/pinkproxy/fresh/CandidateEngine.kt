@@ -30,7 +30,7 @@ object CandidateEngine {
         if (BypassConfig.isStrictBypassMode && strategy == BypassStrategy.DIRECT) return false
 
         // 4. Panic Mode Check
-        val isPanic = BypassConfig.isPanicModeForTransport(context.transport) || ProxyStats.censorshipIntensity.value > 92
+        val isPanic = BypassConfig.isPanicModeForTransport(context.transport) || BypassConfig.getIntensityForTransport(context.transport) > 92
         if (isPanic && (strategy.group == StrategyGroup.LIGHT || strategy.group == StrategyGroup.MEDIUM)) return false
         
         // 5. Global Circuit Breakers (By Profile + Transport)
@@ -61,10 +61,24 @@ object CandidateEngine {
      * Ranks the given eligible candidates using Bayesian Thompson Sampling based on the context.
      */
     fun rankCandidatesBayesian(candidates: List<BypassStrategy>, context: SelectionContext): List<BypassStrategy> {
+        // Hierarchical Prior
+        // Level 1: Host-specific memory
+        val hostMemory = context.host?.let { 
+            StrategyStateRepository.contextualHostMemory[HostContextKey(it, context.transport, context.profileId)] 
+        }
+
         val scored = candidates.map { strategy ->
             val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)
-            val alpha = 1.0 + (state.weightedSuccess.get() / 1000.0)
-            val beta = 1.0 + state.failureCount.get()
+            
+            var alpha = 1.0 + (state.weightedSuccess.get() / 1000.0)
+            var beta = 1.0 + (state.weightedFailure.get() / 1000.0) // Note: using weightedFailure directly
+            
+            // Apply Host Memory bonus if the strategy matches the known best host strategy
+            if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0) {
+                // Boost alpha proportionally to confidence and success count
+                alpha += (hostMemory.successCount * hostMemory.confidence * 10.0) 
+            }
+
             val sampled = ThompsonSampler.sampleBeta(alpha, beta)
             Pair(strategy, sampled)
         }

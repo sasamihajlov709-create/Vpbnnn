@@ -20,8 +20,7 @@ data class StrategyContextKey(
     val strategy: BypassStrategy,
     val transport: TransportType,
     val category: HostCategory,
-    val profileId: String,
-    val confidence: Double = 1.0
+    val profileId: String
 ) {
     fun toStorageString(): String = "${strategy.name}|$transport|${category.name}|$profileId"
     companion object {
@@ -58,6 +57,7 @@ class StrategyState(
     val successCount: AtomicInteger = AtomicInteger(0),
     val verifiedSuccessCount: AtomicInteger = AtomicInteger(0),
     val failureCount: AtomicInteger = AtomicInteger(0),
+    val weightedFailure: AtomicLong = AtomicLong(0L),
     val weightedSuccess: AtomicLong = AtomicLong(0L),
     val ewmaLatencyMs: AtomicLong = AtomicLong(0L),
     private val recentLatencies: LongArray = LongArray(100),
@@ -96,12 +96,19 @@ class StrategyState(
             }
         } else {
             failureCount.incrementAndGet()
+            val penalty = when (obs.failureReason) {
+                FailureReason.TCP_RESET, FailureReason.SSL_HANDSHAKE_ERROR, FailureReason.CENSORSHIP_STALL, FailureReason.DNS_POISONED, FailureReason.PROTOCOL_ERROR -> 1000L // 1.0 weight
+                FailureReason.TIMEOUT, FailureReason.HANDSHAKE_TIMEOUT -> 500L // 0.5 weight
+                FailureReason.CONNECTION_REFUSED, FailureReason.MTU_EXCEEDED -> 200L // 0.2 weight
+                FailureReason.UNKNOWN, null -> 800L
+            }
+            weightedFailure.addAndGet(penalty)
         }
     }
 
     fun calculateBetaPosterior(priorAlpha: Double = 1.0, priorBeta: Double = 1.0): Pair<Double, Double> {
         val s = (weightedSuccess.get() / 1000.0).coerceAtLeast(0.0)
-        val f = failureCount.get().toDouble()
+        val f = (weightedFailure.get() / 1000.0).coerceAtLeast(0.0)
         
         val alpha = priorAlpha + s
         val beta = priorBeta + f

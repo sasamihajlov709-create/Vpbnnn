@@ -65,15 +65,11 @@ object DpiAnalyzer {
         Log.w("DpiAnalyzer", "SPOOFED TCP RST DETECTED for $host (RTT=${rttMs}ms). Active DPI middlebox injected packet.")
         val profileId = NetworkProfileManager.currentProfile.value.id
         DpiEngine.eventHistory.getOrPut(DpiEventKey(profileId, TransportType.TCP, DpiType.TCP_RESET)) { AtomicInteger(0) }.incrementAndGet()
-        
-        // Delegate DPI event policy response to Policy Engine
-        DpiPolicyEngine.onDpiEventDiagnosed(DpiType.TCP_RESET)
     }
 
     fun recordEvent(type: DpiType, transport: TransportType) {
         val profileId = NetworkProfileManager.currentProfile.value.id
         DpiEngine.eventHistory.getOrPut(DpiEventKey(profileId, transport, type)) { AtomicInteger(0) }.incrementAndGet()
-        DpiPolicyEngine.onDpiEventDiagnosed(type)
     }
 
     fun analyzeAndAdjust() {

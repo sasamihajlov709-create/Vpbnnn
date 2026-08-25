@@ -152,7 +152,7 @@ object RobustResolver {
 
         // 2. Try Smart Parallel Resolution (DoH, DoT, Shadow UDP)
         try {
-            val intensity = runCatching { ProxyStats.censorshipIntensity.value }.getOrDefault(0)
+            val intensity = runCatching { BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS) }.getOrDefault(0)
             if (intensity > 95) {
                 val cached = DnsCacheManager.getCached(host, type) ?: DnsCacheManager.getCachedOrStale(host, type)
                 if (cached != null) return cached
@@ -224,9 +224,9 @@ object RobustResolver {
     }
 
     private suspend fun performParallelResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> = coroutineScope {
-        val intensity = ProxyStats.censorshipIntensity.value
+        val intensity = BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS)
         // Obfuscation: send fake queries for popular domains to hide the real one
-        if (ProxyStats.censorshipIntensity.value > 40 && !host.contains("google") && !host.contains("facebook")) {
+        if (BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS) > 40 && !host.contains("google") && !host.contains("facebook")) {
             launch {
                 val shadows = listOf("google.com", "bing.com", "cloudflare.com", "apple.com", "microsoft.com", "amazon.com", "wikipedia.org", "netflix.com")
                 val rnd = java.util.concurrent.ThreadLocalRandom.current()

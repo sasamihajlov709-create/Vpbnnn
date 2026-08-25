@@ -94,7 +94,7 @@ object TcpTransportHandler {
             val writeMutex = Mutex()
             
             val rtt = BypassConfig.currentRttMs.value
-            val intensity = ProxyStats.censorshipIntensity.value
+            val intensity = BypassConfig.getIntensityForTransport(TransportType.TCP)
             val transportBufferSize = when {
                 intensity > 80 -> 4096
                 rtt > 500 -> 8192
@@ -113,7 +113,7 @@ object TcpTransportHandler {
                 remoteSocket = TcpTransportManager.connectToBestIp(resolved, targetPort, vpnService, config, targetHost)
             } else {
                 // Check if host has high failures or in panic mode - use multi-strategy race
-                val useRace = censorship > 40 || !CandidateEngine.isEligible(effectiveStrategy, CandidateEngine.SelectionContext(TransportType.TCP, host = targetHost)) || (ProxyStats.censorshipIntensity.value > 50)
+                val useRace = censorship > 40 || !CandidateEngine.isEligible(effectiveStrategy, CandidateEngine.SelectionContext(TransportType.TCP, host = targetHost)) || (BypassConfig.getIntensityForTransport(TransportType.TCP) > 50)
                 
                 if (useRace) {
                     val category = HostClassifier.classify(targetHost)

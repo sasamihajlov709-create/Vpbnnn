@@ -154,8 +154,8 @@ object DpiEngine {
         BypassConfig.setPanicMode(true)
     }
 
-    fun getRecommendedFragSize(): Int {
-        val intensity = ProxyStats.censorshipIntensity.value
+    fun getRecommendedFragSize(transport: TransportType = TransportType.TCP): Int {
+        val intensity = BypassConfig.getIntensityForTransport(transport)
         return when {
             intensity > 80 -> 10
             intensity > 50 -> 40
@@ -165,7 +165,7 @@ object DpiEngine {
     }
 
     fun getRecommendedDelay(transport: TransportType): Long {
-        val intensity = ProxyStats.censorshipIntensity.value
+        val intensity = BypassConfig.getIntensityForTransport(transport)
         if (intensity < 10) return 0L
         
         val history = rttHistory[transport]?.let { synchronized(it) { it.toList() } } ?: emptyList()

@@ -42,7 +42,7 @@ object DohRacingMesh {
         val activeEndpoints = getOptimizedEndpoints()
         val channel = Channel<List<InetAddress>>(activeEndpoints.size)
 
-        val intensity = ProxyStats.censorshipIntensity.value
+        val intensity = BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS)
         val topCandidates = if (intensity > 60) activeEndpoints.take(4) else activeEndpoints.take(3)
 
         // Launch concurrent racing queries

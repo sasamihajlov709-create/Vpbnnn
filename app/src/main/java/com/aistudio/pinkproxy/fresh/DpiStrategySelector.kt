@@ -32,7 +32,7 @@ object DpiStrategySelector {
         val now = System.currentTimeMillis()
         val profileId = NetworkProfileManager.currentProfile.value.id
 
-        if (BypassConfig.isPanicModeForTransport(transport) || ProxyStats.censorshipIntensity.value > 92) {
+        if (BypassConfig.isPanicModeForTransport(transport) || BypassConfig.getIntensityForTransport(transport) > 92) {
              return getBestExtremeStrategy(host, transport)
         }
 
@@ -44,7 +44,7 @@ object DpiStrategySelector {
             if (hostFails == 0) {
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strategy = lastMem.strategy
-                    val ctx = CandidateEngine.SelectionContext(transport, profileId, host, HostCategory.OTHER)
+                    val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
                     if (CandidateEngine.isEligible(strategy, ctx)) {
                         return strategy
                     }
@@ -56,7 +56,7 @@ object DpiStrategySelector {
                         currentStep = currentStep?.let { getFallbackStrategy(it, transport) }
                     }
                     if (currentStep != null) {
-                        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, HostCategory.OTHER)
+                        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
                         if (CandidateEngine.isEligible(currentStep, ctx)) {
                             return currentStep
                         }
@@ -73,7 +73,7 @@ object DpiStrategySelector {
             val maxAge = 6 * 3600 * 1000L
             if (ageMs < maxAge && mem.confidence >= 0.3) {
                 val strategy = mem.strategy
-                val ctx = CandidateEngine.SelectionContext(transport, profileId, host, HostCategory.OTHER)
+                val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
                 if (CandidateEngine.isEligible(strategy, ctx)) {
                     return strategy
                 }
@@ -103,7 +103,7 @@ object DpiStrategySelector {
         val profileId = NetworkProfileManager.currentProfile.value.id
         val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
 
-        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, HostCategory.OTHER)
+        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
         val extremeCandidates = CandidateEngine.getEligibleCandidates(ctx, BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME })
 
         if (extremeCandidates.isEmpty()) return getDefaultExtremeFallback(transport)

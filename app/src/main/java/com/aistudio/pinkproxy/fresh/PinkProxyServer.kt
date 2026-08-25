@@ -369,7 +369,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             readExactly(input, portBytes, 0, 2)
             val targetPort = ((portBytes[0].toInt() and 0xff) shl 8) or (portBytes[1].toInt() and 0xff)
             
-            val intensity = ProxyStats.censorshipIntensity.value
+            val intensity = BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.TCP)
             // 3. Adaptive SOCKS5 Handshake Jitter to defeat protocol timing analysis
             if (intensity > 60) {
                 val jitter = if (intensity > 90) ThreadLocalRandom.current().nextLong(20, 100) else ThreadLocalRandom.current().nextLong(5, 25)

@@ -92,7 +92,8 @@ object RuntimeCoordinator {
         transport: TransportType,
         reason: String,
         category: HostCategory = HostCategory.OTHER,
-        profileId: String = NetworkProfileManager.currentProfile.value.id
+        profileId: String = NetworkProfileManager.currentProfile.value.id,
+        host: String? = null
     ): BypassStrategy {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, null, category)
         val candidates = CandidateEngine.getEligibleCandidates(ctx)
@@ -113,7 +114,8 @@ object RuntimeCoordinator {
         transport: TransportType,
         reason: String = "Automated Rotation",
         category: HostCategory = HostCategory.OTHER,
-        profileId: String = NetworkProfileManager.currentProfile.value.id
+        profileId: String = NetworkProfileManager.currentProfile.value.id,
+        host: String? = null
     ): Job {
         val targetScope = sessionScope ?: coordinatorScope
         return targetScope.launch {

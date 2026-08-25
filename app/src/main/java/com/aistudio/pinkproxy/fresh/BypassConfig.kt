@@ -22,6 +22,10 @@ object BypassConfig {
     fun isPanicModeForTransport(transport: TransportType): Boolean {
         return DpiPolicyEngine.transportPolicies[transport]?.isPanicMode ?: isPanicModeFlow.value
     }
+    
+    fun getIntensityForTransport(transport: TransportType): Int {
+        return DpiPolicyEngine.transportPolicies[transport]?.calculatedIntensity ?: ProxyStats.censorshipIntensity.value
+    }
 
     private val _strategy = kotlinx.coroutines.flow.MutableStateFlow(BypassStrategy.SNI_SPLIT)
     private val _strat = MutableStateFlow(BypassStrategy.SNI_SPLIT)
@@ -130,14 +134,14 @@ object BypassConfig {
 
     fun startDeviceMonitoring(context: Context) = DeviceMonitor.startDeviceMonitoring(context)
 
-    fun isHostProbablyCensored(host: String): Boolean {
+    fun isHostProbablyCensored(host: String, transport: TransportType = TransportType.TCP): Boolean {
         if (hostLockTime[host]?.let { System.currentTimeMillis() - it < 300_000 } == true) return true
         val category = HostClassifier.classify(host)
         val categoryRisk = when(category) {
             HostCategory.SOCIAL, HostCategory.MESSENGER, HostCategory.STREAMING, HostCategory.AI -> true
             else -> false
         }
-        val intensity = ProxyStats.censorshipIntensity.value
+        val intensity = getIntensityForTransport(transport)
         return (censorHeuristic[host] ?: 0) >= 2 || (categoryRisk && intensity > 60)
     }
 
@@ -326,7 +330,7 @@ object BypassConfig {
 
     fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long, transport: TransportType): SessionConfig {
         val rnd = ThreadLocalRandom.current()
-        val intensity = ProxyStats.censorshipIntensity.value
+        val intensity = getIntensityForTransport(transport)
         var effectiveStrategy = if (isPanicModeForTransport(transport) && rnd.nextInt(100) < 80) BypassStrategy.BYEBYEDPI_HYBRID else strategy
         
         if (!DpiStrategySelector.isFamilyCompatible(effectiveStrategy.family, transport) ||

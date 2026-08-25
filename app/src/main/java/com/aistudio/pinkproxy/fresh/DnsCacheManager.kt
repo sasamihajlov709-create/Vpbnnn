@@ -125,7 +125,7 @@ object DnsCacheManager {
                     }
                 }
                 return getSortedIps(addresses)
-            } else if (runCatching { ProxyStats.censorshipIntensity.value > 60 || BypassConfig.censorshipLevel > 50 }.getOrDefault(false)) {
+            } else if (runCatching { BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS) > 60 || BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS) > 50 }.getOrDefault(false)) {
                 return getSortedIps(addresses)
             } else {
                 dnsCache.remove(cacheKey)
@@ -342,7 +342,7 @@ object DnsCacheManager {
     fun clear() = clearAll()
 
     fun ageHeatmap() {
-        val intensity = ProxyStats.censorshipIntensity.value
+        val intensity = BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS)
         val decay = if (intensity > 80) 0.99f else 0.96f
         val iterator = ipHeatmap.entries.iterator()
         while (iterator.hasNext()) {
@@ -369,7 +369,7 @@ object DnsCacheManager {
     }
 
     fun getDynamicTtl(): Long {
-        val intensity = ProxyStats.censorshipIntensity.value
+        val intensity = BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS)
         return if (intensity > 80) 3600 * 1000L else if (intensity > 50) 1800 * 1000L else CACHE_TTL_MS
     }
 

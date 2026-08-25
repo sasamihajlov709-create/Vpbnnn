@@ -128,7 +128,7 @@ object StrategyEscalationMatrix {
             }
         }
 
-        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, HostCategory.OTHER)
+        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category ?: (host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER))
         for (candidate in candidates) {
             if (candidate == failedStrategy) continue
             if (!CandidateEngine.isEligible(candidate, ctx)) continue

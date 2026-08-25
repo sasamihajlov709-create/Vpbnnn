@@ -19,7 +19,7 @@ object DpiPolicyEngine {
          totalObservations: Int,
          transport: TransportType
      ): PolicyDecision {
-         val currentIntensity = ProxyStats.censorshipIntensity.value
+         val currentIntensity = transportPolicies[transport]?.calculatedIntensity ?: 0
          val calculatedIntensity = when (transport) {
              TransportType.TCP -> (
                  fingerprint.rstRate * 60 + 
@@ -126,9 +126,7 @@ object DpiPolicyEngine {
             ProxyStats.updateCensorshipIntensity(globalIntensity)
         }
     }
-        fun onDpiEventDiagnosed(type: DpiType) {
-        // Obsolete globally. Left empty or implement proper context-based boost in the future.
-    }
+    
 
         fun resetProfileEngineStates(profileId: String) {
         Log.w("DpiPolicyEngine", "Executing state reset for profile $profileId due to critical network anomaly policy trigger.")
