@@ -60,6 +60,22 @@ object CandidateEngine {
     /**
      * Ranks the given eligible candidates using Bayesian Thompson Sampling based on the context.
      */
+    
+    /**
+     * Unified method for selecting the best strategy, replacing scattered logic.
+     */
+    fun selectBest(
+        context: SelectionContext,
+        excludeCurrent: BypassStrategy? = null,
+        ignoreHostBlacklist: Boolean = false
+    ): BypassStrategy? {
+        val candidates = getEligibleCandidates(context, ignoreHostBlacklist = ignoreHostBlacklist)
+        val filtered = if (excludeCurrent != null) candidates.filter { it != excludeCurrent } else candidates
+        if (filtered.isEmpty()) return null
+        val ranked = rankCandidatesBayesian(filtered, context)
+        return ranked.firstOrNull()
+    }
+
     fun rankCandidatesBayesian(candidates: List<BypassStrategy>, context: SelectionContext): List<BypassStrategy> {
         // Hierarchical Prior
         // Level 1: Host-specific memory

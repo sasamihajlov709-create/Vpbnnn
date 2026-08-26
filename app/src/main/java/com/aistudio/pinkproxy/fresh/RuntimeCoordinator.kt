@@ -95,11 +95,9 @@ object RuntimeCoordinator {
         profileId: String = NetworkProfileManager.currentProfile.value.id,
         host: String? = null
     ): BypassStrategy {
-        val ctx = CandidateEngine.SelectionContext(transport, profileId, null, category)
-        val candidates = CandidateEngine.getEligibleCandidates(ctx)
-        val fallback = DpiStrategySelector.getDefaultFallback(transport)
-        val ranked = CandidateEngine.rankCandidatesBayesian(candidates, ctx)
-        val best = ranked.firstOrNull() ?: fallback
+        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
+        val currentStrategy = BypassConfig.getBestStrategyForHost(host ?: "global", transport)
+        val best = CandidateEngine.selectBest(ctx, excludeCurrent = currentStrategy) ?: DpiStrategySelector.getDefaultFallback(transport)
         
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
         BypassConfig.applyInternalStrategy(best)
