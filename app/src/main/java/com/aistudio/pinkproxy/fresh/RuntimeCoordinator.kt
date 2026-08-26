@@ -117,7 +117,7 @@ object RuntimeCoordinator {
     ): Job {
         val targetScope = sessionScope ?: coordinatorScope
         return targetScope.launch {
-            rotateGlobalStrategy(transport, reason, category, profileId)
+            rotateGlobalStrategy(transport, reason, category, profileId, host)
         }
     }
 

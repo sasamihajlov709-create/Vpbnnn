@@ -90,7 +90,7 @@ object ProactiveAutoTuner {
         for (candidate in candidates) {
             val success = testCandidate(ips, port, host, candidate, dummyClientHello, vpnService)
             if (success) {
-                Log.i("ProactiveAutoTuner", "Discovered viable candidate strategy $candidate for $host proactively!")
+                Log.i("ProactiveAutoTuner", "Discovered candidate strategy $candidate for $host proactively! (Phase: ${ObservationQuality.TLS_RECORD_RECEIVED.label})")
                 break
             }
         }

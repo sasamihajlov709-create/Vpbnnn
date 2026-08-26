@@ -107,7 +107,7 @@ class StrategyState(
                 // Network / Local Failures (Ignore or tiny penalty to preserve strategy rating)
                 FailureReason.NETWORK_LOST, FailureReason.LOCAL_SOCKET_ERROR -> 0L // 0 weight
                 
-                FailureReason.UNKNOWN, null -> 200L // Reduced from 800L
+                FailureReason.UNKNOWN, null -> 0L // Zero penalty to protect ratings from local user internet drops
             }
             weightedFailure.addAndGet(penalty)
         }

@@ -26,17 +26,34 @@ enum class RecoveryState {
  * Strongly-typed event signals published by health monitors and network observers.
  */
 sealed class RecoverySignal {
-    data class DpiDetected(val type: DpiType, val host: String? = null, val transport: TransportType) : RecoverySignal()
-    data class TunnelStall(val durationMs: Long, val activeConnections: Int, val transport: TransportType) : RecoverySignal()
-    data class TcpStall(val host: String, val strategy: BypassStrategy, val transport: TransportType) : RecoverySignal()
-    data class SslStall(val host: String, val strategy: BypassStrategy, val transport: TransportType) : RecoverySignal()
-    data class DnsFailure(val domain: String, val isPoisoned: Boolean, val transport: TransportType = TransportType.DNS) : RecoverySignal()
-    data class ProxyUnresponsive(val reason: String, val transport: TransportType) : RecoverySignal()
-    data class MemoryPressure(val usedPercent: Int) : RecoverySignal()
-    data class ExtremeLatency(val latencyMs: Long, val transport: TransportType) : RecoverySignal()
-    data class HealthDegraded(val details: String, val transport: TransportType) : RecoverySignal()
-    data class NetworkLost(val networkType: String) : RecoverySignal()
-    object ManualReset : RecoverySignal()
+    abstract val transport: TransportType?
+
+    interface HostLevelRecoverySignal {
+        val host: String?
+        val category: HostCategory
+    }
+
+    interface TunnelLevelRecoverySignal
+
+    data class DpiDetected(val type: DpiType, override val host: String? = null, override val transport: TransportType, override val category: HostCategory = HostCategory.OTHER) : RecoverySignal(), HostLevelRecoverySignal
+    data class TunnelStall(val durationMs: Long, val activeConnections: Int, override val transport: TransportType) : RecoverySignal(), TunnelLevelRecoverySignal
+    data class TcpStall(override val host: String, val strategy: BypassStrategy, override val transport: TransportType, override val category: HostCategory = HostCategory.OTHER) : RecoverySignal(), HostLevelRecoverySignal
+    data class SslStall(override val host: String, val strategy: BypassStrategy, override val transport: TransportType, override val category: HostCategory = HostCategory.OTHER) : RecoverySignal(), HostLevelRecoverySignal
+    data class DnsFailure(val domain: String, val isPoisoned: Boolean, override val transport: TransportType = TransportType.DNS, override val category: HostCategory = HostCategory.OTHER) : RecoverySignal(), HostLevelRecoverySignal {
+        override val host: String get() = domain
+    }
+    data class ProxyUnresponsive(val reason: String, override val transport: TransportType) : RecoverySignal(), TunnelLevelRecoverySignal
+    data class MemoryPressure(val usedPercent: Int) : RecoverySignal() {
+        override val transport: TransportType? = null
+    }
+    data class ExtremeLatency(val latencyMs: Long, override val transport: TransportType) : RecoverySignal(), TunnelLevelRecoverySignal
+    data class HealthDegraded(val details: String, override val transport: TransportType) : RecoverySignal(), TunnelLevelRecoverySignal
+    data class NetworkLost(val networkType: String) : RecoverySignal() {
+        override val transport: TransportType? = null
+    }
+    object ManualReset : RecoverySignal() {
+        override val transport: TransportType? = null
+    }
 }
 
 /**
@@ -232,17 +249,10 @@ object RecoveryStateMachine {
 
     private suspend fun processSocketStall(signal: RecoverySignal) {
         _currentState.value = RecoveryState.DEGRADED
-        val transport = when (signal) {
-            is RecoverySignal.TcpStall -> signal.transport
-            is RecoverySignal.SslStall -> signal.transport
-            else -> TransportType.TCP
-        }
-        val targetHost = when (signal) {
-            is RecoverySignal.TcpStall -> signal.host
-            is RecoverySignal.SslStall -> signal.host
-            else -> null
-        }
-        val category = targetHost?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+        
+        val transport = signal.transport ?: TransportType.TCP
+        val targetHost = (signal as? RecoverySignal.HostLevelRecoverySignal)?.host
+        val category = (signal as? RecoverySignal.HostLevelRecoverySignal)?.category ?: HostCategory.OTHER
         
         RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Socket Stall Recovery", category, host = targetHost)
 

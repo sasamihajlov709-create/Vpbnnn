@@ -5,7 +5,8 @@ import java.util.concurrent.ConcurrentHashMap
 object HostClassifier {
     private val cache = ConcurrentHashMap<String, HostCategory>(512)
     
-    fun classify(host: String): HostCategory {
+    fun classify(host: String?): HostCategory {
+        if (host == null) return HostCategory.OTHER
         if (host.isEmpty()) return HostCategory.OTHER
         if (cache.size > 2000) cache.clear()
         

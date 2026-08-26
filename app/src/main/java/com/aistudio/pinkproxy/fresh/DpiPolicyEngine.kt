@@ -106,15 +106,14 @@ object DpiPolicyEngine {
             policy.isPanicMode = false
         }
         
-        // Aggregate global metrics based on transport policies
-        aggregateGlobalMetrics()
+
 
         if (decision.shouldReset) {
             resetProfileEngineStates(NetworkProfileManager.currentProfile.value.id)
         }
     }
 
-    private fun aggregateGlobalMetrics() {
+    fun aggregateGlobalMetrics() {
         val tcpIntensity = transportPolicies[TransportType.TCP]?.calculatedIntensity ?: 0
         val udpIntensity = transportPolicies[TransportType.UDP]?.calculatedIntensity ?: 0
         val dnsIntensity = transportPolicies[TransportType.DNS]?.calculatedIntensity ?: 0

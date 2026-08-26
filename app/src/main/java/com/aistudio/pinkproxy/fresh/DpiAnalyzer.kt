@@ -117,6 +117,9 @@ object DpiAnalyzer {
             DpiPolicyEngine.applyPolicyDecision(decision)
         }
 
+        // Update global UI metrics exactly once per cycle
+        DpiPolicyEngine.aggregateGlobalMetrics()
+
         val totalSuccess = tcpSuccess + udpSuccess + dnsSuccess
         val totalFailure = tcpFailure + udpFailure + dnsFailure
         

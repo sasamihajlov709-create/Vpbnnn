@@ -233,7 +233,7 @@ object BypassConfig {
         }
     }
 
-    fun getBestStrategyForHost(host: String, transport: TransportType): BypassStrategy {
+    fun getBestStrategyForHost(host: String?, transport: TransportType): BypassStrategy {
         val now = System.currentTimeMillis()
         if (!isAutoTuning) {
             val base = _strategy.value
