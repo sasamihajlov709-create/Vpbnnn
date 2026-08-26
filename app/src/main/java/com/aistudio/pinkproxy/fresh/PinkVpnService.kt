@@ -658,6 +658,8 @@ class PinkVpnService : VpnService() {
     override fun onDestroy() {
         super.onDestroy()
         val appContext = applicationContext
+        engineScope.cancel()
+        ProxyDispatcher.cancelAllBackgroundJobs()
         PrefetchManager.stop()
         healthMonitor?.stop()
         vpnNetworkMonitor?.stop()
@@ -682,6 +684,7 @@ class PinkVpnService : VpnService() {
             timeoutMs = 2000L,
             onComplete = {
                 engineScope.cancel()
+        ProxyDispatcher.cancelAllBackgroundJobs()
                 instance = null
                 BypassConfig.activeVpnService = null
                 ProxyDispatcher.context = null

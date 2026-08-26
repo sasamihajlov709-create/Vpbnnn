@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancelChildren
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -93,4 +94,8 @@ object ProxyDispatcher {
     }
 
     val mainScope = CoroutineScope(io + SupervisorJob() + globalHandler)
+
+    fun cancelAllBackgroundJobs() {
+        mainScope.coroutineContext[kotlinx.coroutines.Job]?.cancelChildren()
+    }
 }

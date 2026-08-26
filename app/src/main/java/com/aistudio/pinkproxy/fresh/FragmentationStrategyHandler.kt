@@ -144,7 +144,11 @@ object FragmentationStrategyHandler : StrategyExecutor {
             if (length > 44 && data[0] == 0x16.toByte() && data[5] == 0x01.toByte()) {
                 val sniPos = TlsParser.findSni(data, length)
                 if (sniPos > 0) {
-                    val split1 = if (config.frag1 in 1 until length) config.frag1 else (sniPos - rnd.nextInt(1, 3)).coerceIn(1, length - 1)
+                    // Smart SNI Split: Target the middle of the SNI domain name to break DPI signature matching
+                    val split1 = if (config.frag1 in 1 until length) config.frag1 else {
+                        // sniPos points to the first character of the hostname. Let's slice right into the middle of the domain.
+                        (sniPos + rnd.nextInt(2, 6)).coerceIn(1, length - 1)
+                    }
                     if (split1 > 0) {
                         output.write(data, 0, split1)
                         output.flush()

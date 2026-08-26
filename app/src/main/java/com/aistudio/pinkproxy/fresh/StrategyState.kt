@@ -143,13 +143,21 @@ class StrategyState(
 }
 
 object StrategyStateRepository {
+    private fun <K, V> createLruCache(maxSize: Int): MutableMap<K, V> {
+        return java.util.Collections.synchronizedMap(object : java.util.LinkedHashMap<K, V>(maxSize, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean {
+                return size > maxSize
+            }
+        })
+    }
+
     private val contextStates = ConcurrentHashMap<StrategyContextKey, StrategyState>()
     val networkStrategyMemory = ConcurrentHashMap<String, ConcurrentHashMap<HostCategory, NetworkMemory>>()
-    val contextualHostMemory = ConcurrentHashMap<HostContextKey, HostMemory>()
-    val consecutiveFailuresByHost = ConcurrentHashMap<HostFailureKey, AtomicInteger>()
+    val contextualHostMemory = createLruCache<HostContextKey, HostMemory>(2000)
+    val consecutiveFailuresByHost = createLruCache<HostFailureKey, AtomicInteger>(2000)
     val circuitBreakers = ConcurrentHashMap<CircuitBreakerKey, Long>()
     val consecutiveFailures = ConcurrentHashMap<CircuitBreakerKey, AtomicInteger>()
-    val hostStrategyBlacklist = ConcurrentHashMap<HostStrategyBlacklistKey, Long>()
+    val hostStrategyBlacklist = createLruCache<HostStrategyBlacklistKey, Long>(2000)
 
     fun recordObservation(obs: StrategyObservation) {
         val state = getStrategyState(obs.executedStrategy, obs.transport, obs.category, obs.profileId)

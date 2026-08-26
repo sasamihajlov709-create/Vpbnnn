@@ -104,7 +104,7 @@ object TlsParser {
     }
 
     fun isEchDetected(buffer: ByteArray, length: Int): Boolean {
-        if (length < 44) return false
+        if (length < 44 || length > buffer.size) return false
         if (buffer[0] != 0x16.toByte() || buffer[5] != 0x01.toByte()) return false
         
         try {
@@ -133,6 +133,7 @@ object TlsParser {
     fun findSni(buffer: ByteArray, length: Int): Int = findSniOffset(buffer, length)
 
     fun mangleSni(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
+        if (length > buffer.size) return buffer
         val offset = findSniOffset(buffer, length)
         if (offset == -1) return buffer.copyOf(length)
         val copy = buffer.copyOf(length)
@@ -151,6 +152,7 @@ object TlsParser {
     }
 
     fun addPadding(buffer: ByteArray, length: Int, padLen: Int): ByteArray {
+        if (length > buffer.size) return buffer
         return FakePacketHelper.injectTlsPadding(buffer, length, padLen)
     }
 
@@ -367,6 +369,7 @@ object TlsParser {
     }
 
     fun isTls13(buffer: ByteArray, length: Int, offset: Int = 0): Boolean {
+        if (length < 44 || offset < 0 || offset + length > buffer.size) return false
         if (!isClientHello(buffer, length, offset)) return false
         try {
             val sessionIdLen = buffer[offset + 43].toInt() and 0xFF
