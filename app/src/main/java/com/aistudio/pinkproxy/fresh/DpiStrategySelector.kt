@@ -207,7 +207,7 @@ object DpiStrategySelector {
         val blendedMean = (mean * (1.0 - priorWeight)) + (globalAverageMean * priorWeight)
         
         val p95 = state.getP95Latency()
-        val average = state.averageLatencyMs
+        val average = state.ewmaLatencyMs.get()
         val spikePenalty = if (average > 0 && p95 > average * 2) {
             0.8 + 0.2 * (average * 2.0 / p95).coerceAtLeast(0.1)
         } else {

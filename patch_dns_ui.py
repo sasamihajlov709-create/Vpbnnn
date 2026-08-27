@@ -1,30 +1,10 @@
-package com.aistudio.pinkproxy.fresh.ui
+import re
 
-import android.content.Context
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.aistudio.pinkproxy.fresh.BypassConfig
-import com.aistudio.pinkproxy.fresh.DnsType
-import com.aistudio.pinkproxy.fresh.R
-import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
-import com.aistudio.pinkproxy.fresh.ui.theme.GentleLightPink
-import com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink
+with open("app/src/main/java/com/aistudio/pinkproxy/fresh/ui/DnsSettingsCard.kt", "r") as f:
+    content = f.read()
 
-@Composable
-fun DnsSettingsCard(context: Context, onSettingsChanged: () -> Unit) {
-var dnsType by remember { mutableStateOf(BypassConfig.dnsType) }
+replacement = """
+    var dnsType by remember { mutableStateOf(BypassConfig.dnsType) }
     var customUrl by remember { mutableStateOf(BypassConfig.customDnsUrl) }
     var showDialog by remember { mutableStateOf(false) }
 
@@ -116,3 +96,9 @@ var dnsType by remember { mutableStateOf(BypassConfig.dnsType) }
         )
     }
 }
+"""
+
+content = re.sub(r'    var dnsType by remember \{ mutableStateOf\(BypassConfig.dnsType\) \}.*?\}\n\}\n', replacement.lstrip(), content, flags=re.DOTALL)
+
+with open("app/src/main/java/com/aistudio/pinkproxy/fresh/ui/DnsSettingsCard.kt", "w") as f:
+    f.write(content)

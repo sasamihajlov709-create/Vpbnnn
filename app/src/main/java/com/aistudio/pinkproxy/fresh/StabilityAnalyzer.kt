@@ -24,7 +24,17 @@ object StabilityAnalyzer {
     private val _dnsSuccessRate = MutableStateFlow(100)
     val dnsSuccessRate: StateFlow<Int> = _dnsSuccessRate.asStateFlow()
 
+    private val _tcpCensorshipIntensity = MutableStateFlow(0)
+    val tcpCensorshipIntensity: StateFlow<Int> = _tcpCensorshipIntensity.asStateFlow()
+    
+    private val _udpCensorshipIntensity = MutableStateFlow(0)
+    val udpCensorshipIntensity: StateFlow<Int> = _udpCensorshipIntensity.asStateFlow()
+    
+    private val _dnsCensorshipIntensity = MutableStateFlow(0)
+    val dnsCensorshipIntensity: StateFlow<Int> = _dnsCensorshipIntensity.asStateFlow()
+    
     private val _censorshipIntensity = MutableStateFlow(0)
+
     val censorshipIntensity: StateFlow<Int> = _censorshipIntensity.asStateFlow()
 
     private val _dpiEventHistory = MutableStateFlow(emptyList<DpiEvent>())
@@ -89,9 +99,22 @@ object StabilityAnalyzer {
         _signalQuality.value = (baseQual - stabPenalty - panicPenalty - intensityPenalty).coerceIn(0, 100)
     }
 
-    fun setCensorshipIntensity(value: Int) {
-        _censorshipIntensity.value = value.coerceIn(0, 100)
+    fun setCensorshipIntensity(newVal: Int) {
+        _censorshipIntensity.value = newVal.coerceIn(0, 100)
     }
+    
+    fun setTcpCensorshipIntensity(newVal: Int) {
+        _tcpCensorshipIntensity.value = newVal.coerceIn(0, 100)
+    }
+    
+    fun setUdpCensorshipIntensity(newVal: Int) {
+        _udpCensorshipIntensity.value = newVal.coerceIn(0, 100)
+    }
+    
+    fun setDnsCensorshipIntensity(newVal: Int) {
+        _dnsCensorshipIntensity.value = newVal.coerceIn(0, 100)
+    }
+
 
     fun setStabilityScore(value: Int) {
         _stabilityScore.value = value.coerceIn(0, 100)

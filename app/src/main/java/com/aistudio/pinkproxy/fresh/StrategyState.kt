@@ -92,6 +92,7 @@ class StrategyState(
                     recentLatencies[latencyIndex] = obs.latencyMs
                     latencyIndex = (latencyIndex + 1) % 100
                     if (latencyCount < 100) latencyCount++
+                    isP95Dirty = true
                 }
             }
         } else {
@@ -131,22 +132,25 @@ class StrategyState(
 
     fun calculateConfidence(): Double {
         return calculateBetaPosterior().second
-    }
+    }    private var cachedP95: Long = 0L
+    private var isP95Dirty: Boolean = false
 
     @Synchronized
     fun getP95Latency(): Long {
         synchronized(recentLatencies) {
+            if (!isP95Dirty && latencyCount > 0) return cachedP95
             if (latencyCount == 0) return 0L
             val copy = LongArray(latencyCount)
             System.arraycopy(recentLatencies, 0, copy, 0, latencyCount)
             copy.sort()
             val p95Index = (latencyCount * 0.95).toInt().coerceAtMost(latencyCount - 1)
-            return copy[p95Index]
+            cachedP95 = copy[p95Index]
+            isP95Dirty = false
+            return cachedP95
         }
     }
 
-    val averageLatencyMs: Long
-        get() = ewmaLatencyMs.get()
+
 }
 
 object StrategyStateRepository {
@@ -204,17 +208,17 @@ object StrategyStateRepository {
         val now = System.currentTimeMillis()
         val expiredThreshold = 7 * 24 * 60 * 60 * 1000L
         contextStates.entries.removeIf { it.key.profileId == profileId && (now - it.value.lastUsedTimestamp.get()) > expiredThreshold }
-        contextualHostMemory.entries.removeIf { it.key.profileId == profileId && (now - it.value.timestamp) > expiredThreshold }
     }
-
+    
     fun clearProfileState(profileId: String) {
         contextStates.entries.removeIf { it.key.profileId == profileId }
-        contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
         networkStrategyMemory.remove(profileId)
+        contextualHostMemory.entries.removeIf { it.key.profileId == profileId }
         hostStrategyBlacklist.entries.removeIf { it.key.profileId == profileId }
         circuitBreakers.entries.removeIf { it.key.profileId == profileId }
         consecutiveFailures.entries.removeIf { it.key.profileId == profileId }
         consecutiveFailuresByHost.entries.removeIf { it.key.profileId == profileId }
+        DpiEngine.eventHistory.entries.removeIf { it.key.profileId == profileId }
     }
 
     fun resetProfile(profileId: String) {
@@ -225,6 +229,7 @@ object StrategyStateRepository {
         circuitBreakers.entries.removeIf { it.key.profileId == profileId }
         consecutiveFailures.entries.removeIf { it.key.profileId == profileId }
         consecutiveFailuresByHost.entries.removeIf { it.key.profileId == profileId }
+        DpiEngine.eventHistory.entries.removeIf { it.key.profileId == profileId }
     }
 
     fun restoreStates(states: Map<StrategyContextKey, StrategyMetricState>) {

@@ -86,13 +86,23 @@ object ProactiveAutoTuner {
             diverseExtreme
         )
         val candidates = CandidateEngine.getEligibleCandidates(ctx, baseList).distinct().take(4)
-
+        
+        var bestCandidate: BypassStrategy? = null
+        var bestLatency = Long.MAX_VALUE
+        
         for (candidate in candidates) {
-            val success = testCandidate(ips, port, host, candidate, dummyClientHello, vpnService)
+            val (success, latency) = testCandidate(ips, port, host, candidate, dummyClientHello, vpnService)
             if (success) {
-                Log.i("ProactiveAutoTuner", "Discovered candidate strategy $candidate for $host proactively! (Phase: ${ObservationQuality.TLS_RECORD_RECEIVED.label})")
-                break
+                Log.i("ProactiveAutoTuner", "Discovered viable candidate strategy $candidate for $host proactively! (Latency: ${latency}ms)")
+                if (latency < bestLatency) {
+                    bestLatency = latency
+                    bestCandidate = candidate
+                }
             }
+        }
+        
+        if (bestCandidate != null) {
+            Log.i("ProactiveAutoTuner", "Selected optimal proactive candidate $bestCandidate for $host.")
         }
     }
 
@@ -103,11 +113,12 @@ object ProactiveAutoTuner {
         strategy: BypassStrategy,
         payload: ByteArray,
         vpnService: VpnService?
-    ): Boolean = withContext(ProxyDispatcher.io) {
+    ): Pair<Boolean, Long> = withContext(ProxyDispatcher.io) {
+
         val rtt = BypassConfig.currentRttMs.value
         val config = BypassConfig.getSessionConfig(host, strategy, rtt, TransportType.TCP)
         
-                try {
+        try {
             val socket = HappyEyeballsConnector.connectHappyEyeballs(ips, port, vpnService, host)
             if (socket != null) {
                 try {
@@ -124,15 +135,12 @@ object ProactiveAutoTuner {
                         val latency = System.currentTimeMillis() - startTime
                         val isTlsServerHello = read >= 5 && buf[0] == 0x16.toByte() && buf[1] == 0x03.toByte()
                         if (isTlsServerHello) {
-                            // Mitigate TCP RST injection by waiting to see if connection drops immediately
                             try {
                                 socket.soTimeout = 500
                                 inStream.read(buf)
                             } catch (e: java.net.SocketTimeoutException) {
-                                // Timeout is expected if server waits for our ClientKeyExchange. DPI RST would drop instantly.
                             } catch (e: Exception) {
-                                // RST caught!
-                                return@withContext false
+                                return@withContext Pair(false, 0L)
                             }
                             
                             DpiStrategySelector.recordResult(
@@ -144,7 +152,7 @@ object ProactiveAutoTuner {
                                 latencyMs = latency,
                                 quality = ObservationQuality.TLS_RECORD_RECEIVED
                             )
-                            return@withContext true
+                            return@withContext Pair(true, latency)
                         }
                     }
                 } finally {
@@ -152,7 +160,6 @@ object ProactiveAutoTuner {
                 }
             }
         } catch (e: Exception) {
-            // ignore
         }
         
         DpiStrategySelector.recordResult(
@@ -165,6 +172,6 @@ object ProactiveAutoTuner {
             reason = FailureReason.TIMEOUT,
             quality = ObservationQuality.CONNECT_ONLY
         )
-        return@withContext false
+        return@withContext Pair(false, 0L)
     }
 }

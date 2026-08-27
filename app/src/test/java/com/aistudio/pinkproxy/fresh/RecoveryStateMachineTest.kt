@@ -43,19 +43,24 @@ class RecoveryStateMachineTest {
         assertNotNull(BypassConfig.strategy.value)
     }
 
-    @Test
-    fun testTunnelStallSignalAdjustsMtuAndTtl() = runTest {
+    @Test    fun testTunnelStallSignalAdjustsMtuAndTtl() = runTest {
         RecoveryStateMachine.start(this)
         BypassConfig.setMtu(1400)
 
-        // First stall escalates and reconfigures MTU
+        // First stall escalates
         RecoveryStateMachine.handleSignal(RecoverySignal.TunnelStall(durationMs = 15000, activeConnections = 3, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP))
         assertEquals(RecoveryState.RECONFIGURING_MTU, RecoveryStateMachine.currentState.value)
 
-        // Second stall reduces MTU further
+        // Escalate level
+        // We cannot access escalationLevel since it is private. Instead we simulate more stalls.
         RecoveryStateMachine.handleSignal(RecoverySignal.TunnelStall(durationMs = 15000, activeConnections = 3, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP))
+        RecoveryStateMachine.handleSignal(RecoverySignal.TunnelStall(durationMs = 15000, activeConnections = 3, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP))
+        RecoveryStateMachine.handleSignal(RecoverySignal.TunnelStall(durationMs = 15000, activeConnections = 3, transport = com.aistudio.pinkproxy.fresh.TransportType.TCP))
+
         assertTrue(BypassConfig.currentMtu.value <= 1400)
     }
+
+
 
     @Test
     fun testDnsFailureSignalClearsCachesAndHandlesPoisoning() = runTest {

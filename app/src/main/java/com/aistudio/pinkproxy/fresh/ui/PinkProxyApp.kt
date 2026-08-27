@@ -154,6 +154,9 @@ fun DashboardTab(
     val currentMtu by BypassConfig.currentMtu.collectAsStateWithLifecycle(initialValue = 1400)
     val successRate by ProxyStats.successRate.collectAsStateWithLifecycle(initialValue = 100)
     val censorshipIntensity by ProxyStats.censorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
+    val tcpCensorshipIntensity by ProxyStats.tcpCensorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
+    val udpCensorshipIntensity by ProxyStats.udpCensorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
+    val dnsCensorshipIntensity by ProxyStats.dnsCensorshipIntensity.collectAsStateWithLifecycle(initialValue = 0)
 
     var sessionTime by remember { mutableStateOf(0L) }
     LaunchedEffect(isActive) {
@@ -282,7 +285,9 @@ fun DashboardTab(
                             signalQuality = signalQuality,
                             mtu = currentMtu,
                             isPanicMode = isPanicMode,
-                            censorshipIntensity = censorshipIntensity
+                            tcpIntensity = tcpCensorshipIntensity,
+                            udpIntensity = udpCensorshipIntensity,
+                            dnsIntensity = dnsCensorshipIntensity
                         )
                     }
                 }

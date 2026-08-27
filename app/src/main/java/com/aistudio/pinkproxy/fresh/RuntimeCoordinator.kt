@@ -93,16 +93,23 @@ object RuntimeCoordinator {
         reason: String,
         category: HostCategory = HostCategory.OTHER,
         profileId: String = NetworkProfileManager.currentProfile.value.id,
-        host: String? = null
+        host: String? = null,
+        failedStrategy: BypassStrategy? = null
     ): BypassStrategy {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
-        val currentStrategy = BypassConfig.getBestStrategyForHost(host ?: "global", transport)
-        val best = CandidateEngine.selectBest(ctx, excludeCurrent = currentStrategy) ?: DpiStrategySelector.getDefaultFallback(transport)
+        val strategyToExclude = failedStrategy ?: BypassConfig.getBestStrategyForHost(host ?: "global", transport)
+        val best = CandidateEngine.selectBest(ctx, excludeCurrent = strategyToExclude) ?: DpiStrategySelector.getDefaultFallback(transport)
         
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
-        BypassConfig.applyInternalStrategy(best)
-        VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
-        ProxyStats.logRecovery("Strategy rotated for $transport ($category): ${best.name} ($reason)")
+        
+        if (host == null) {
+            BypassConfig.applyInternalStrategy(best)
+            VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
+            ProxyStats.logRecovery("Global Strategy rotated for $transport ($category): ${best.name} ($reason)")
+        } else {
+            ProxyStats.logRecovery("Flow-level Strategy rotated for host=$host ($transport): ${best.name} ($reason)")
+        }
+        
         return best
     }
     /**
@@ -113,11 +120,12 @@ object RuntimeCoordinator {
         reason: String = "Automated Rotation",
         category: HostCategory = HostCategory.OTHER,
         profileId: String = NetworkProfileManager.currentProfile.value.id,
-        host: String? = null
+        host: String? = null,
+        failedStrategy: BypassStrategy? = null
     ): Job {
         val targetScope = sessionScope ?: coordinatorScope
         return targetScope.launch {
-            rotateGlobalStrategy(transport, reason, category, profileId, host)
+            rotateGlobalStrategy(transport, reason, category, profileId, host, failedStrategy)
         }
     }
 

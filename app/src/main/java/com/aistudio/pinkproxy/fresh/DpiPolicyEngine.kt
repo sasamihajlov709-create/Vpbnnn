@@ -118,16 +118,18 @@ object DpiPolicyEngine {
         val udpIntensity = transportPolicies[TransportType.UDP]?.calculatedIntensity ?: 0
         val dnsIntensity = transportPolicies[TransportType.DNS]?.calculatedIntensity ?: 0
         
+        ProxyStats.updateTcpCensorshipIntensity(tcpIntensity)
+        ProxyStats.updateUdpCensorshipIntensity(udpIntensity)
+        ProxyStats.updateDnsCensorshipIntensity(dnsIntensity)
+                
         // Aggregate censorship intensity (weighted towards TCP as the most common protocol)
         val globalIntensity = (tcpIntensity * 0.5 + udpIntensity * 0.3 + dnsIntensity * 0.2).toInt()
-        
+                
         if (Math.abs(globalIntensity - ProxyStats.censorshipIntensity.value) >= 1) {
             ProxyStats.updateCensorshipIntensity(globalIntensity)
         }
     }
-    
-
-        fun resetProfileEngineStates(profileId: String) {
+    fun resetProfileEngineStates(profileId: String) {
         Log.w("DpiPolicyEngine", "Executing state reset for profile $profileId due to critical network anomaly policy trigger.")
         StrategyStateRepository.resetProfile(profileId)
         // DpiEngine maps usually use strategy as key, so it might need some other clearance, but clear() affects everything.

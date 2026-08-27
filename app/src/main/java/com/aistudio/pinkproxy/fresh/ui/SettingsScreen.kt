@@ -44,6 +44,7 @@ fun SettingsScreen(
 
             item { StrategySettingsCard(context, onSettingsChanged) }
             item { DnsSettingsCard(context, onSettingsChanged) }
+            item { ProfileBackupCard(context, onSettingsChanged) }
             item { MtuSettingsCard(context) }
             item { AppFilterCard(context, onSettingsChanged) }
             item { AutoConnectCard(context) }

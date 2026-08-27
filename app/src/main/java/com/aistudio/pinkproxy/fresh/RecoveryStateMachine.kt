@@ -135,10 +135,11 @@ object RecoveryStateMachine {
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.TCP_COMBINED_NUCLEAR
-                RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "Active TCP Reset DPI detected")
                 if (targetHost != null) {
-                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost), host = targetHost)
-                    }
+                    RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
+                } else {
+                    RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "Active TCP Reset DPI detected")
+                }
                 enterPanic("Active TCP Reset DPI detected")
             }
             DpiType.TLS_SNI_BLOCK -> {
@@ -153,10 +154,11 @@ object RecoveryStateMachine {
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.SNI_SPLIT
-                RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "TLS SNI Block Detected")
                 if (targetHost != null) {
-                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost), host = targetHost)
-                    }
+                    RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
+                } else {
+                    RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "TLS SNI Block Detected")
+                }
             }
             DpiType.HTTP_BLOCK -> {
                 val candidates = listOf(
@@ -170,10 +172,11 @@ object RecoveryStateMachine {
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.HTTP_HOST_SPACE
-                RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "HTTP Block Detected")
                 if (targetHost != null) {
-                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost), host = targetHost)
-                    }
+                    RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
+                } else {
+                    RuntimeCoordinator.applyStrategyTransition(selected, TransportType.TCP, "HTTP Block Detected")
+                }
             }
             DpiType.CONNECTION_TIMEOUT -> {
                 val candidates = listOf(
@@ -185,10 +188,11 @@ object RecoveryStateMachine {
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, transport, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: DpiStrategySelector.getDefaultFallback(transport)
-                RuntimeCoordinator.applyStrategyTransition(selected, transport, "DPI Timeout Escalation")
                 if (targetHost != null) {
-                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost), host = targetHost)
-                    }
+                    RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
+                } else {
+                    RuntimeCoordinator.applyStrategyTransition(selected, transport, "DPI Timeout Escalation")
+                }
                 if (escalationLevel.get() >= 2) enterPanic("DPI Timeout Escalation")
             }
             DpiType.UDP_BLOCK -> {
@@ -202,10 +206,11 @@ object RecoveryStateMachine {
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.UDP, category, profileId) }
                         .thenBy { it.name.hashCode() }
                 ) ?: BypassStrategy.UDP_COMBINED_NUCLEAR
-                RuntimeCoordinator.applyStrategyTransition(selected, TransportType.UDP, "UDP Block Detected")
                 if (targetHost != null) {
-                        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostClassifier.classify(targetHost), host = targetHost)
-                    }
+                    RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
+                } else {
+                    RuntimeCoordinator.applyStrategyTransition(selected, TransportType.UDP, "UDP Block Detected")
+                }
             }
             else -> {
                 RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", HostCategory.OTHER, host = targetHost)
@@ -214,31 +219,29 @@ object RecoveryStateMachine {
 
         escalationLevel.set((escalationLevel.get() + 1).coerceAtMost(3))
         triggerActiveProbeAsync(3000L)
-    }
-
-    private fun processTunnelStall(durationMs: Long, activeConns: Int, transport: TransportType) {
+    }    private fun processTunnelStall(durationMs: Long, activeConns: Int, transport: TransportType) {
         val currentEsc = escalationLevel.get()
         if (currentEsc < 3) {
             _currentState.value = RecoveryState.RECONFIGURING_MTU
             RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Watchdog Tunnel Stall Rotation", HostCategory.OTHER)
 
-            if (currentEsc > 0) {
-                val currentMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
-                if (currentMtu > 1100) {
-                    val reduction = 80
-                    BypassConfig.setMtu(currentMtu - reduction)
-                    ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to tunnel stall")
-                }
-
-                // Dynamic TTL shifting
-                val nextTtl = when (BypassConfig.currentTtl) {
-                    3 -> 5
-                    5 -> 8
-                    8 -> 10
-                    else -> 3
-                }
-                BypassConfig.setTtl(nextTtl)
+            // Dynamic TTL shifting
+            val nextTtl = when (BypassConfig.currentTtl) {
+                3 -> 5
+                5 -> 8
+                8 -> 10
+                else -> 3
             }
+            BypassConfig.setTtl(nextTtl)
+
+            // Reduce MTU
+            val currentMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
+            if (currentMtu > 1100) {
+                val reduction = 80
+                BypassConfig.setMtu(currentMtu - reduction)
+                ProxyStats.logRecovery("Watchdog: Reducing MTU to ${currentMtu - reduction} due to tunnel stall")
+            }
+
             escalationLevel.incrementAndGet()
             triggerActiveProbeAsync(2000L)
         } else {
@@ -254,7 +257,19 @@ object RecoveryStateMachine {
         val targetHost = (signal as? RecoverySignal.HostLevelRecoverySignal)?.host
         val category = (signal as? RecoverySignal.HostLevelRecoverySignal)?.category ?: HostCategory.OTHER
         
-        RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Socket Stall Recovery", category, host = targetHost)
+        val failedStrategy = when (signal) {
+            is RecoverySignal.TcpStall -> signal.strategy
+            is RecoverySignal.SslStall -> signal.strategy
+            else -> null
+        }
+        
+        RuntimeCoordinator.requestGlobalStrategyRotation(
+            transport = transport, 
+            reason = "Socket Stall Recovery", 
+            category = category, 
+            host = targetHost,
+            failedStrategy = failedStrategy
+        )
 
         val currentMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
         if (currentMtu > 1100) {

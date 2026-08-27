@@ -150,41 +150,30 @@ object UdpStrategyHandler : StrategyExecutor {
                 }
             }
             BypassStrategy.UDP_DATA_FRAG, BypassStrategy.UDP_FRAGMENTATION, BypassStrategy.UDP_FRAGMENT_SKEW, BypassStrategy.QUIC_INITIAL_FRAGMENT, BypassStrategy.QUIC_INITIAL_FRAGMENTATION, BypassStrategy.QUIC_FORCE_FRAG -> {
-                val split = if (TlsParser.isClientHello(data, length, 0)) {
-                    (TlsParser.findSniOffset(data, length, 0) - 2).coerceIn(10, length - 10)
-                } else {
-                    length / 2
-                }
+                // Application-level fragmentation of UDP datagrams breaks the protocol (e.g., QUIC).
+                // Instead, we bypass DPI by sending a fake QUIC Initial or UDP noise packet to saturate/confuse the DPI state machine,
+                // followed by the real, unmodified datagram.
+                val fakeQuic = FakePacketHelper.buildQuicInitial()
+                val shouldReorder = rnd.nextInt(100) < 30
                 
-                if (length > 20) {
-                    val shouldReorder = rnd.nextInt(100) < 30
-                    if (shouldReorder) {
-                        socket.send(DatagramPacket(data.copyOfRange(split, length), length - split, address, port))
-                        delay(rnd.nextLong(1, 5))
-                        socket.send(DatagramPacket(data, split, address, port))
-                    } else {
-                        socket.send(DatagramPacket(data, split, address, port))
-                        delay(rnd.nextLong(1, 4))
-                        socket.send(DatagramPacket(data.copyOfRange(split, length), length - split, address, port))
-                    }
+                if (shouldReorder) {
+                    writeUdpWithFake(socket, address, port, fakeQuic, DatagramPacket(data, length, address, port), rnd.nextLong(1, 5))
                 } else {
-                    socket.send(DatagramPacket(data, length, address, port))
+                    writeUdpWithFake(socket, address, port, FakePacketHelper.getSmallNoise(rnd.nextInt(16, 64)), DatagramPacket(data, length, address, port), rnd.nextLong(1, 4))
                 }
             }
             BypassStrategy.UDP_STUTTER -> {
+                // Stuttering by splitting UDP payload breaks it. We stutter by sending multiple small noise packets before the real one.
                 val chunks = rnd.nextInt(2, 5)
-                var pos = 0
                 for (i in 0 until chunks) {
-                    val sz = if (i == chunks - 1) length - pos else (length / chunks)
-                    if (sz > 0) {
-                        socket.send(DatagramPacket(data, pos, sz, address, port))
-                        pos += sz
-                        delay(rnd.nextLong(2, 12))
-                    }
+                    val noise = FakePacketHelper.getSmallNoise(rnd.nextInt(8, 32))
+                    socket.send(DatagramPacket(noise, noise.size, address, port))
+                    delay(rnd.nextLong(1, 4))
                 }
+                socket.send(DatagramPacket(data, length, address, port))
             }
             BypassStrategy.UDP_PADDING_CHAOS -> {
-                val mtu = 1400 // Safe default MTU
+                val mtu = 1400
                 val targetSize = rnd.nextInt(mtu - 200, mtu - 40).coerceAtMost(1300)
                 if (length < targetSize) {
                     val padded = ByteArray(targetSize)

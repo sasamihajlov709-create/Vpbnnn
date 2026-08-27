@@ -188,24 +188,17 @@ fun MetricsCard(
     signalQuality: Int, 
     mtu: Int, 
     isPanicMode: Boolean, 
-    censorshipIntensity: Int
+    tcpIntensity: Int,
+    udpIntensity: Int,
+    dnsIntensity: Int
 ) {
     Column(modifier = Modifier.padding(20.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            MetricItem(stringResource(R.string.label_speed), speedText, GentleLightPink)
-            MetricItem(stringResource(R.string.label_data), bytesTransferred, GentleMediumPink)
-            MetricItem(stringResource(R.string.label_mtu), mtu.toString(), GentleMediumPink)
-            MetricItem(stringResource(R.string.label_time), sessionTime, GentleMediumPink)
-        }
-        Spacer(modifier = Modifier.height(20.dp))
-        HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.1f))
-        Spacer(modifier = Modifier.height(20.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MetricItem(stringResource(R.string.label_health), "$connectivityScore%", if (connectivityScore > 70) Color(0xFF81C784) else Color(0xFFFFB74D))
             MetricItem(stringResource(R.string.label_stability), "$stabilityScore%", if (stabilityScore > 80) Color(0xFF81C784) else if (stabilityScore > 50) Color(0xFFFFB74D) else Color(0xFFE57373))
-            MetricItem(stringResource(R.string.label_censorship), "$censorshipIntensity%", if (censorshipIntensity < 30) Color(0xFF81C784) else Color(0xFFE57373))
             MetricItem(stringResource(R.string.label_quality), "$signalQuality%", if (signalQuality > 70) Color(0xFF81C784) else Color(0xFFE57373))
         }
+
     }
 }
 

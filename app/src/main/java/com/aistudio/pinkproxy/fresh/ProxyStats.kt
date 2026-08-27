@@ -148,7 +148,15 @@ object ProxyStats {
     val errors: StateFlow<Long> = _errors.asStateFlow()
 
     val censorshipIntensity = StabilityAnalyzer.censorshipIntensity
+    val tcpCensorshipIntensity = StabilityAnalyzer.tcpCensorshipIntensity
+    val udpCensorshipIntensity = StabilityAnalyzer.udpCensorshipIntensity
+    val dnsCensorshipIntensity = StabilityAnalyzer.dnsCensorshipIntensity
+    
     fun updateCensorshipIntensity(newVal: Int) { StabilityAnalyzer.setCensorshipIntensity(newVal) }
+    fun updateTcpCensorshipIntensity(newVal: Int) { StabilityAnalyzer.setTcpCensorshipIntensity(newVal) }
+    fun updateUdpCensorshipIntensity(newVal: Int) { StabilityAnalyzer.setUdpCensorshipIntensity(newVal) }
+    fun updateDnsCensorshipIntensity(newVal: Int) { StabilityAnalyzer.setDnsCensorshipIntensity(newVal) }
+
     fun clearCensorshipHistory() { StabilityAnalyzer.reset() }
 
     fun recordCensorshipEvent(isFailure: Boolean, transport: TransportType) {
