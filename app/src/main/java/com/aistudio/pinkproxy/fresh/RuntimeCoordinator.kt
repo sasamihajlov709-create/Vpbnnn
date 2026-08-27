@@ -97,7 +97,7 @@ object RuntimeCoordinator {
         failedStrategy: BypassStrategy? = null
     ): BypassStrategy {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
-        val strategyToExclude = failedStrategy ?: BypassConfig.getBestStrategyForHost(host ?: "global", transport)
+        val strategyToExclude = failedStrategy
         val best = CandidateEngine.selectBest(ctx, excludeCurrent = strategyToExclude) ?: DpiStrategySelector.getDefaultFallback(transport)
         
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
@@ -107,6 +107,7 @@ object RuntimeCoordinator {
             VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
             ProxyStats.logRecovery("Global Strategy rotated for $transport ($category): ${best.name} ($reason)")
         } else {
+            FlowStrategyOverrideStore.putOverride(host, transport, profileId, best, reason)
             ProxyStats.logRecovery("Flow-level Strategy rotated for host=$host ($transport): ${best.name} ($reason)")
         }
         

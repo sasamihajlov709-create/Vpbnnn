@@ -28,8 +28,10 @@ object DpiStorage {
                     successCount = state.successCount.get(),
                     failureCount = state.failureCount.get(),
                     weightedSuccess = state.weightedSuccess.get(),
+                    weightedFailure = state.weightedFailure.get(),
                     verifiedSuccessCount = state.verifiedSuccessCount.get(),
                     totalLatencyMs = state.ewmaLatencyMs.get(),
+                    recentLatencies = state.getRecentLatencies(),
                     lastUsedTimestamp = state.lastUsedTimestamp.get()
                 )
             }

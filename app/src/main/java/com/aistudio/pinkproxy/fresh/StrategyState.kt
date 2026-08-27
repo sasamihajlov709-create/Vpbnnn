@@ -150,7 +150,29 @@ class StrategyState(
         }
     }
 
+    @Synchronized
+    fun getRecentLatencies(): List<Long> {
+        synchronized(recentLatencies) {
+            val list = mutableListOf<Long>()
+            for (i in 0 until latencyCount) {
+                list.add(recentLatencies[i])
+            }
+            return list
+        }
+    }
 
+    @Synchronized
+    fun restoreRecentLatencies(latencies: List<Long>) {
+        synchronized(recentLatencies) {
+            val count = latencies.size.coerceAtMost(100)
+            for (i in 0 until count) {
+                recentLatencies[i] = latencies[i]
+            }
+            latencyCount = count
+            latencyIndex = count % 100
+            isP95Dirty = true
+        }
+    }
 }
 
 object StrategyStateRepository {
@@ -239,9 +261,12 @@ object StrategyStateRepository {
             state.successCount.set(metric.successCount)
             state.failureCount.set(metric.failureCount)
             state.weightedSuccess.set(metric.weightedSuccess)
+            state.weightedFailure.set(metric.weightedFailure)
             state.sampleCount.set(metric.successCount + metric.failureCount)
             state.verifiedSuccessCount.set(metric.verifiedSuccessCount)
             state.ewmaLatencyMs.set(metric.totalLatencyMs)
+            state.restoreRecentLatencies(metric.recentLatencies)
+            state.lastUsedTimestamp.set(metric.lastUsedTimestamp)
         }
     }
 }

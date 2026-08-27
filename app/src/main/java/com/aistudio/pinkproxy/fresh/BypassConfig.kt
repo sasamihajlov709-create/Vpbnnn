@@ -234,6 +234,14 @@ object BypassConfig {
     }
 
     fun getBestStrategyForHost(host: String?, transport: TransportType): BypassStrategy {
+        if (host != null) {
+            val profileId = NetworkProfileManager.currentProfile.value.id
+            val override = FlowStrategyOverrideStore.getOverride(host, transport, profileId)
+            if (override != null) {
+                return override
+            }
+        }
+        
         val now = System.currentTimeMillis()
         if (!isAutoTuning) {
             val base = _strategy.value

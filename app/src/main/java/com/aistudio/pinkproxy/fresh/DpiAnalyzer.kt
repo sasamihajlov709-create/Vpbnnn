@@ -27,7 +27,8 @@ object DpiAnalyzer {
         val profileEvents = DpiEngine.eventHistory.filterKeys { it.profileId == currentProfileId && it.transport == transport }
         val total = profileEvents.filterKeys { it.type in relevantTypes }.values.sumOf { it.get() }.toDouble().coerceAtLeast(1.0)
         
-        val transportHistory = DpiEngine.rttHistory[transport]?.let { synchronized(it) { it.toList() } } ?: emptyList()
+        val rttKey = "${currentProfileId}|$transport"
+        val transportHistory = DpiEngine.rttHistory[rttKey]?.let { synchronized(it) { it.toList() } } ?: emptyList()
         val jitter = if (transportHistory.size > 2) {
             val diffs = transportHistory.zipWithNext { a, b -> Math.abs(a - b) }
             diffs.average()

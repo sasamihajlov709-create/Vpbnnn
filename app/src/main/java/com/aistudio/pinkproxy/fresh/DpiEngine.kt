@@ -28,7 +28,7 @@ object DpiEngine {
     val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
 
     val eventHistory = ConcurrentHashMap<DpiEventKey, AtomicInteger>()
-    val rttHistory = ConcurrentHashMap<TransportType, MutableList<Long>>()
+    val rttHistory = ConcurrentHashMap<String, MutableList<Long>>()
 
     init {
         initStrategyChains()
@@ -89,7 +89,8 @@ object DpiEngine {
 
     fun markSuccess(strat: BypassStrategy, transport: TransportType, host: String, latencyMs: Long = 0, quality: ObservationQuality) {
         if (latencyMs > 0) {
-            val list = rttHistory.getOrPut(transport) { java.util.Collections.synchronizedList(java.util.LinkedList<Long>()) }
+            val key = "${NetworkProfileManager.currentProfile.value.id}|$transport"
+            val list = rttHistory.getOrPut(key) { java.util.Collections.synchronizedList(java.util.LinkedList<Long>()) }
             list.add(latencyMs)
             if (list.size > 50) list.removeAt(0)
         }
@@ -156,19 +157,34 @@ object DpiEngine {
 
     fun getRecommendedFragSize(transport: TransportType = TransportType.TCP): Int {
         val intensity = BypassConfig.getIntensityForTransport(transport)
-        return when {
+        val rttKey = "${NetworkProfileManager.currentProfile.value.id}|$transport"
+        val history = rttHistory[rttKey]?.let { synchronized(it) { it.toList() } } ?: emptyList()
+        val avgRtt = if (history.isNotEmpty()) history.average() else 100.0
+
+        val baseSize = when {
             intensity > 80 -> 10
             intensity > 50 -> 40
             intensity > 20 -> 100
             else -> 500
         }
+        
+        val adjustedSize = if (avgRtt > 300.0 && baseSize < 100) {
+            baseSize * 2 
+        } else if (avgRtt < 50.0 && intensity > 50) {
+            (baseSize * 0.5).toInt().coerceAtLeast(5)
+        } else {
+            baseSize
+        }
+        
+        return adjustedSize
     }
 
     fun getRecommendedDelay(transport: TransportType): Long {
         val intensity = BypassConfig.getIntensityForTransport(transport)
         if (intensity < 10) return 0L
         
-        val history = rttHistory[transport]?.let { synchronized(it) { it.toList() } } ?: emptyList()
+        val key = "${NetworkProfileManager.currentProfile.value.id}|$transport"
+        val history = rttHistory[key]?.let { synchronized(it) { it.toList() } } ?: emptyList()
         val (avgRtt, jitter) = if (history.size > 2) {
             val avg = history.average()
             val diffs = history.zipWithNext { a, b -> Math.abs(a - b) }.average()
@@ -193,9 +209,7 @@ object DpiEngine {
         RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Trigger Recalibration", HostCategory.OTHER)
     }
     
-    fun clearTimeouts() {
-        }
-    
+
     fun recordEvent(type: DpiType, transport: TransportType) {
         DpiAnalyzer.recordEvent(type, transport)
     }

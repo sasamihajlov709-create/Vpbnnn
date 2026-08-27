@@ -150,7 +150,7 @@ object NetworkProfileManager {
             DnsOptimizer.forceRefresh()
             RobustResolver.clearCache()
             DnsCacheManager.clearAll()
-            DpiEngine.clearTimeouts()
+            // DpiEngine.clearTimeouts()
             profileChangeListeners.forEach { listener ->
                 try {
                     listener(oldProfile, newProfile)
