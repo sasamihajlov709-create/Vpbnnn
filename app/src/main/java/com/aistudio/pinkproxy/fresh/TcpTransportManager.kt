@@ -31,8 +31,9 @@ object TcpTransportManager {
     }
 
     suspend fun performSniGhosting(decoy: String, vpnService: VpnService?) {
+        var s: Socket? = null
         try {
-            val s = Socket()
+            s = Socket()
             vpnService?.protect(s)
             val resolved = RobustResolver.resolveDual(decoy, vpnService)
             if (resolved.isNotEmpty()) {
@@ -46,7 +47,6 @@ object TcpTransportManager {
                 out.write(hello)
                 out.flush()
                 kotlinx.coroutines.delay(10)
-                s.close()
             }
         } catch (e: CancellationException) {
             throw e
@@ -54,6 +54,8 @@ object TcpTransportManager {
             Log.v("TcpTransportManager", "SNI ghosting failed for $decoy: ${e.message}")
         } catch (e: Throwable) {
             Log.e("TcpTransportManager", "Critical SNI ghosting error", e)
+        } finally {
+            try { s?.close() } catch (ignored: Exception) {}
         }
     }
 

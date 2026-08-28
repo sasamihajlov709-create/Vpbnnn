@@ -187,39 +187,16 @@ object UdpStrategyHandler : StrategyExecutor {
                 }
             }
             BypassStrategy.UDP_IP_FRAG, BypassStrategy.UDP_IPv6_FRAG -> {
-                // Application-level fragmentation simulating MTU-split IP datagrams
-                if (length > 28) {
-                    val frag1 = (length / 2).coerceAtLeast(14)
-                    socket.send(DatagramPacket(data, 0, frag1, address, port))
-                    delay(rnd.nextLong(1, 3))
-                    socket.send(DatagramPacket(data, frag1, length - frag1, address, port))
-                } else {
-                    socket.send(DatagramPacket(data, length, address, port))
-                }
+                socket.send(DatagramPacket(data, length, address, port))
             }
             BypassStrategy.QUIC_MTU_PROBE, BypassStrategy.QUIC_INITIAL_PADDING_EXTREME -> {
-                val padded = data.copyOf(1200.coerceAtLeast(length))
-                if (padded.size > length) {
-                    val noise = ByteArray(padded.size - length)
-                    rnd.nextBytes(noise)
-                    System.arraycopy(noise, 0, padded, length, noise.size)
-                }
-                socket.send(DatagramPacket(padded, padded.size, address, port))
+                socket.send(DatagramPacket(data, length, address, port))
             }
             BypassStrategy.UDP_REORDER, BypassStrategy.UDP_SKEW_ADVANCED, BypassStrategy.UDP_SKEW_REVERSE -> {
-                if (length > 20) {
-                    val part = length / 2
-                    socket.send(DatagramPacket(data.copyOfRange(part, length), length - part, address, port))
-                    delay(rnd.nextLong(5, 15))
-                    socket.send(DatagramPacket(data, part, address, port))
-                } else {
-                    socket.send(DatagramPacket(data, length, address, port))
-                }
+                socket.send(DatagramPacket(data, length, address, port))
             }
             BypassStrategy.UDP_HEARTBEAT -> {
                 socket.send(DatagramPacket(data, length, address, port))
-                delay(rnd.nextLong(200, 500))
-                socket.send(DatagramPacket(ByteArray(1) { 0x00 }, 1, address, port))
             }
             BypassStrategy.UDP_REPLICATION -> {
                 repeat(2) {

@@ -59,10 +59,10 @@ class VpnTunnelManager(private val service: VpnService) {
 
                     if (tryIpv6) {
                         try {
+                            // Assigning a ULA IPv6 address
                             builder.addAddress("fd00::2", 64)
                             builder.addRoute("::", 0)
-                            builder.addDnsServer("2606:4700:4700::1111")
-                            builder.addDnsServer("2001:4860:4860::8888")
+                            // Note: We removed the hardcoded IPv6 DNS servers to respect user's DNS policy.
                             ipv6SetupSuccessful = true
                         } catch (e: Exception) {
                             Log.w("VpnTunnelManager", "Failed to setup IPv6: ${e.message}")

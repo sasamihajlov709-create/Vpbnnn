@@ -1,5 +1,7 @@
 package com.aistudio.pinkproxy.fresh
 
+import kotlinx.coroutines.async
+
 import android.net.VpnService
 import android.util.Log
 import java.net.InetAddress
@@ -116,14 +118,17 @@ object RobustResolver {
         }
     }
 
-    suspend fun resolveDual(host: String, vpnService: VpnService? = null): List<InetAddress> {
-        if (!BypassConfig.includeIpv6) return resolve(host, vpnService, 1)
+    suspend fun resolveDual(host: String, vpnService: VpnService? = null): List<InetAddress> = kotlinx.coroutines.coroutineScope {
+        if (!BypassConfig.includeIpv6) return@coroutineScope resolve(host, vpnService, 1)
 
-        val aResult = try { resolve(host, vpnService, 1) } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
-        val aaaaResult = try { resolve(host, vpnService, 28) } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
+        val aDeferred = async { try { resolve(host, vpnService, 1) } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; emptyList() } }
+        val aaaaDeferred = async { try { resolve(host, vpnService, 28) } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; emptyList() } }
+
+        val aResult = aDeferred.await()
+        val aaaaResult = aaaaDeferred.await()
 
         // Prefer AAAA if available, but return all for selection
-        return (aaaaResult + aResult).distinct()
+        (aaaaResult + aResult).distinct()
     }
 
     private suspend fun performResolution(host: String, vpnService: VpnService?, type: Int = 1): List<InetAddress> {

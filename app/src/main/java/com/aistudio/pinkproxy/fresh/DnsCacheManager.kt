@@ -125,8 +125,6 @@ object DnsCacheManager {
                     }
                 }
                 return getSortedIps(addresses)
-            } else if (runCatching { BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS) > 60 || BypassConfig.getIntensityForTransport(com.aistudio.pinkproxy.fresh.TransportType.DNS) > 50 }.getOrDefault(false)) {
-                return getSortedIps(addresses)
             } else {
                 dnsCache.remove(cacheKey)
             }
@@ -142,17 +140,12 @@ object DnsCacheManager {
         val cacheKey = if (type == 1) host else "$host:$type"
         val now = System.currentTimeMillis()
         dnsCache[cacheKey]?.let { (addresses, expiry) ->
-            if (now < expiry) {
-                return getSortedIps(addresses)
-            } else if (now < expiry + maxStaleMs) {
+            if (now < expiry + maxStaleMs) {
                 // Stale-While-Revalidate: Return stale cached IPs immediately, and trigger async background update
                 ProxyDispatcher.mainScope.launch {
                     try {
-                        Log.d("DnsCacheManager", "Stale DNS hit for $host. Triggering background revalidation...")
                         RobustResolver.resolve(host, null, type)
-                    } catch (e: Exception) {
-                        Log.v("DnsCacheManager", "Async revalidation failed for $host: ${e.message}")
-                    }
+                    } catch (e: Exception) {}
                 }
                 return getSortedIps(addresses)
             }
@@ -160,18 +153,14 @@ object DnsCacheManager {
         return getEmergencyFallback(host)
     }
 
-    fun put(host: String, ips: List<InetAddress>, ttlMs: Long = CACHE_TTL_MS, type: Int = 1) {
-        if (ips.isEmpty()) return
-        val cacheKey = if (type == 1) host else "$host:$type"
-        val isCriticalDomain = isCriticalHost(host)
-        val finalTtl = if (isCriticalDomain) Math.max(ttlMs, 2 * 3600 * 1000L) else ttlMs
-        dnsCache[cacheKey] = ips to (System.currentTimeMillis() + finalTtl)
-    }
 
-    private fun isCriticalHost(host: String): Boolean {
-        val lHost = host.lowercase()
-        val critical = listOf("youtube.com", "googlevideo.com", "google.com", "telegram.org", "t.me", "github.com", "instagram.com", "discord.com", "x.com", "twitter.com")
-        return critical.any { lHost == it || lHost.endsWith(".$it") }
+    fun put(host: String, addresses: List<InetAddress>, ttlMs: Long = getDynamicTtl(), type: Int = 1) {
+        if (addresses.isEmpty()) return
+        val cacheKey = if (type == 1) host else "$host:$type"
+        val expiry = System.currentTimeMillis() + ttlMs
+        dnsCache[cacheKey] = Pair(addresses, expiry)
+        negativeCache.remove(host)
+        ensureEfficiency()
     }
 
     fun getCachedDetailed(host: String, type: Int = 1): List<DnsPacketEngine.DnsRecord>? {
@@ -179,10 +168,12 @@ object DnsCacheManager {
         val now = System.currentTimeMillis()
         detailedDnsCache[cacheKey]?.let { (records, expiry) ->
             if (now < expiry) return records
-            else detailedDnsCache.remove(cacheKey)
+            detailedDnsCache.remove(cacheKey)
         }
         return null
     }
+
+
 
     fun putDetailed(host: String, records: List<DnsPacketEngine.DnsRecord>, type: Int = 1) {
         if (records.isEmpty()) return

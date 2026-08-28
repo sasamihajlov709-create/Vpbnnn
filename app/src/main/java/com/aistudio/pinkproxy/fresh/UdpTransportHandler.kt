@@ -223,12 +223,11 @@ object UdpTransportHandler {
                                 val endpointKey = "${inPacket.address.hostAddress}:${inPacket.port}"
                                 val sessionKey = UdpAssociationTable.findClientForKey(endpointKey)
                                 
-                                val (targetAddr, targetPort) = if (sessionKey != null) {
-                                    Pair(sessionKey.clientAddress, sessionKey.clientPort)
-                                } else {
-                                    // Fallback to latest registered client endpoint
-                                    clientEndpoints.values.firstOrNull() ?: continue
+                                if (sessionKey == null) {
+                                    continue // Strict UDP session routing. Drop packet if destination is unknown.
                                 }
+                                val targetAddr = sessionKey.clientAddress
+                                val targetPort = sessionKey.clientPort
                                 
                                 // Re-wrap into SOCKS5 UDP response
                                 val remoteAddr = inPacket.address.address
@@ -256,9 +255,7 @@ object UdpTransportHandler {
                                 udpSocket.send(DatagramPacket(fullResp, fullResp.size, targetAddr, targetPort))
                                 ProxyStats.recordStats("udp_inbound", 0, inPacket.length.toLong())
                                 
-                                if (sessionKey != null) {
-                                    UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())
-                                }
+                                UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())
 
                                 val matchedProbe = pendingUdpProbes.remove(endpointKey)
                                 if (matchedProbe != null) {

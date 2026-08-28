@@ -176,11 +176,9 @@ object TlsStrategyHandler : StrategyExecutor {
                 output.flush()
             }
             BypassStrategy.TLS_REHANDSHAKE_FAKE -> {
+                // Warning: Corrupting TLS payloads or faking cryptographic handshakes breaks application-level TLS context.
+                // Reverting to transparent forward.
                 output.write(data, 0, length)
-                output.flush()
-                delay(rnd.nextLong(10, 30))
-                val hello = FakePacketHelper.buildRealisticTlsHello(host)
-                output.write(hello)
                 output.flush()
             }
             BypassStrategy.TLS_CIPHER_SHUFFLE -> {
@@ -194,12 +192,8 @@ object TlsStrategyHandler : StrategyExecutor {
                 output.flush()
             }
             BypassStrategy.TLS_HELLO_JUNK, BypassStrategy.TLS_LEGACY_HELLOS -> {
-                val junk = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 30))
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(junk)
-                output.flush()
-                delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Corrupting TLS payloads or faking cryptographic handshakes breaks application-level TLS context.
+                // Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
             }
@@ -209,21 +203,14 @@ object TlsStrategyHandler : StrategyExecutor {
                 output.flush()
             }
             BypassStrategy.TLS_MULTI_SNI -> {
-                 val multiSni = TlsParser.addExtraSni(data, length, "decoy.org", rnd)
-                 output.write(multiSni)
-                 output.flush()
+                // Warning: Corrupting TLS payloads or faking cryptographic handshakes breaks application-level TLS context.
+                // Reverting to transparent forward.
+                output.write(data, 0, length)
+                output.flush()
             }
             BypassStrategy.TLS_CHROME_HELLO_FAKE, BypassStrategy.TLS_FIREFOX_HELLO_FAKE, BypassStrategy.TLS_13_HELLO_FAKE -> {
-                val fakeHello = when(strategy) {
-                    BypassStrategy.TLS_CHROME_HELLO_FAKE -> FakePacketHelper.buildChromeHello(host)
-                    BypassStrategy.TLS_FIREFOX_HELLO_FAKE -> FakePacketHelper.buildFirefoxHello(host)
-                    else -> FakePacketHelper.buildTls13Hello(host)
-                }
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(fakeHello)
-                output.flush()
-                delay(rnd.nextLong(2, 6))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Corrupting TLS payloads or faking cryptographic handshakes breaks application-level TLS context.
+                // Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
             }

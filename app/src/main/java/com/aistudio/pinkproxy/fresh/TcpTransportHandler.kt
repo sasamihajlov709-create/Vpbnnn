@@ -490,7 +490,17 @@ object TcpTransportHandler {
                     }
                 } ?: -1
 
-                if (readBytes > 0) {
+                val isTls = BypassApplier.isProbableTls(responseBuf, readBytes)
+                val isHttp = BypassApplier.isProbableHttp(responseBuf, readBytes)
+                val isSuccess = if (port == 443) {
+                    isTls && readBytes > 16
+                } else if (port == 80) {
+                    isHttp && readBytes > 10
+                } else {
+                    readBytes > 0
+                }
+
+                if (isSuccess) {
                     val latency = System.currentTimeMillis() - startTime
                     val quality = if (BypassApplier.isProbableTls(responseBuf, readBytes) || BypassApplier.isProbableHttp(responseBuf, readBytes)) {
                         ObservationQuality.HANDSHAKE_COMPLETE
@@ -538,6 +548,10 @@ object TcpTransportHandler {
                     currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
                 }
             } catch (e: Exception) {
+                if (e is CancellationException) {
+                    try { rs.close() } catch (ex: Exception) {}
+                    throw e
+                }
                 val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
                     FailureReason.TCP_RESET
                 } else {

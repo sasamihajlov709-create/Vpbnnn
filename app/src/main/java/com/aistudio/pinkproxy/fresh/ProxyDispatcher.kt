@@ -37,7 +37,7 @@ object ProxyDispatcher {
                 priority = Thread.NORM_PRIORITY + 1
             }
         },
-        ThreadPoolExecutor.DiscardOldestPolicy()
+        ThreadPoolExecutor.CallerRunsPolicy()
     ).asCoroutineDispatcher()
 
     // Dedicated TCP Egress Pool
@@ -52,7 +52,7 @@ object ProxyDispatcher {
                 priority = Thread.NORM_PRIORITY + 1
             }
         },
-        ThreadPoolExecutor.DiscardOldestPolicy()
+        ThreadPoolExecutor.CallerRunsPolicy()
     ).asCoroutineDispatcher()
 
     // Dedicated UDP Relay Pool
@@ -67,7 +67,7 @@ object ProxyDispatcher {
                 priority = Thread.NORM_PRIORITY + 2 // Slightly higher priority for low latency VoIP/Datagrams
             }
         },
-        ThreadPoolExecutor.DiscardOldestPolicy()
+        ThreadPoolExecutor.CallerRunsPolicy()
     ).asCoroutineDispatcher()
 
     // Dedicated DNS Resolver Pool
@@ -81,7 +81,7 @@ object ProxyDispatcher {
                 priority = Thread.NORM_PRIORITY
             }
         },
-        ThreadPoolExecutor.DiscardOldestPolicy()
+        ThreadPoolExecutor.CallerRunsPolicy()
     ).asCoroutineDispatcher()
 
     val scheduler = Executors.newSingleThreadScheduledExecutor { r ->

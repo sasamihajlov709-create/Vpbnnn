@@ -120,37 +120,24 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.SSH_HANDSHAKE_FAKE -> {
-                val sshBanner = "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6\r\n".toByteArray()
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(sshBanner)
-                output.flush()
-                delay(rnd.nextLong(3, 8))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.TCP_WINDOW_SCAN -> {
-                val winSizes = intArrayOf(512, 1024, 2048, 4096, 8192, 16384, 65535)
-                var pos = 0
-                var idx = 0
-                while (pos < length) {
-                    val sz = rnd.nextInt(1, 32).coerceAtMost(length - pos)
-                    TtlHelper.setWindowSize(socket, winSizes[idx % winSizes.size])
-                    output.write(data, pos, sz)
-                    output.flush()
-                    pos += sz
-                    idx++
-                    if (pos < length) delay(rnd.nextLong(1, 3))
-                }
-                TtlHelper.setWindowSize(socket, 65535)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
+                output.write(data, 0, length)
+                output.flush()
                 return
             }
             BypassStrategy.TCP_WINDOW_SIZE_JITTER -> {
-                TtlHelper.setWindowSize(socket, rnd.nextInt(512, 4096))
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
-                TtlHelper.setWindowSize(socket, 65535)
                 return
             }
             BypassStrategy.TCP_BYTE_FRAG -> {
@@ -165,34 +152,23 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                  return
             }
             BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.OOB_DESYNC -> {
-                val decoy = if (rnd.nextBoolean()) FakePacketHelper.buildRealisticTlsHello("decoy.security.internal") else FakePacketHelper.buildFakeHttpRequest("decoy.security.internal")
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(decoy)
-                output.flush()
-                delay(rnd.nextLong(2, 6))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.GHOST_PACKETS -> {
-                val ghost = FakePacketHelper.buildUdpNoise(rnd.nextInt(32, 128))
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(ghost)
-                output.flush()
-                delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.TCP_ZERO_WINDOW_STALL -> {
-                TtlHelper.setWindowSize(socket, 1)
-                output.write(data, 0, 1)
-                output.flush()
-                delay(rnd.nextLong(20, 80))
-                TtlHelper.setWindowSize(socket, 65535)
-                output.write(data, 1, length - 1)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
+                output.write(data, 0, length)
                 output.flush()
                 return
             }
@@ -240,62 +216,43 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.TCP_DATA_REPETITION -> {
-                val repeatLen = minOf(10, length)
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(data, 0, repeatLen)
-                output.flush()
-                delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.TCP_KEEP_ALIVE_FAKE, BypassStrategy.TCP_KEEPALIVE_SKEW -> {
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(ByteArray(0))
-                output.flush()
-                delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.WINDOW_SIZE_MANGLE, BypassStrategy.TCP_WINDOW_SIZE_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS, BypassStrategy.TCP_WINDOW_SIZE_OSCILLATION -> {
-                TtlHelper.setWindowSize(socket, rnd.nextInt(10, 100))
-                output.write(data, 0, length / 2)
-                output.flush()
-                delay(rnd.nextLong(5, 15))
-                TtlHelper.setWindowSize(socket, 65535)
-                output.write(data, length / 2, length - length / 2)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
+                output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.TCP_FAST_RETRANSMIT_SIM, BypassStrategy.TCP_RETRANS_FAKE -> {
-                output.write(data, 0, length)
-                output.flush()
-                delay(rnd.nextLong(2, 6))
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.TCP_FAST_OPEN_FAKE -> {
-                val fakeCookie = FakePacketHelper.buildUdpNoise(8)
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(fakeCookie)
-                output.flush()
-                delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.TCP_RST_FAKE, BypassStrategy.TCP_FAKE_FIN -> {
-                val rst = FakePacketHelper.buildUdpNoise(12)
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(rst)
-                output.flush()
-                delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -332,12 +289,8 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.TCP_GHOST_SKEW, BypassStrategy.TCP_SYN_FLOOD_FAKE -> {
-                val ghost = FakePacketHelper.buildUdpNoise(rnd.nextInt(10, 40))
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(ghost)
-                output.flush()
-                delay(rnd.nextLong(1, 4))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -389,12 +342,8 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.TCP_SEGMENT_DESYNC, BypassStrategy.TCP_DATA_DESYNC, BypassStrategy.TCP_DATA_DESYNC_OVERLAP, BypassStrategy.TCP_TRIPLE_DESYNC -> {
-                val decoy = FakePacketHelper.buildRealisticTlsHello("decoy.internal")
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(decoy)
-                output.flush()
-                delay(rnd.nextLong(1, 3))
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
@@ -414,41 +363,23 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.TCP_ZERO_WINDOW_DESYNC -> {
-                TtlHelper.setWindowSize(socket, 1)
-                output.write(data, 0, minOf(1, length))
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
+                output.write(data, 0, length)
                 output.flush()
-                delay(rnd.nextLong(30, 90))
-                TtlHelper.setWindowSize(socket, 65535)
-                if (length > 1) {
-                    output.write(data, 1, length - 1)
-                    output.flush()
-                }
                 return
             }
             BypassStrategy.TCP_OVERLAP, BypassStrategy.TCP_OVERLAP_SKEW, BypassStrategy.TCP_SEGMENT_OVERLAP -> {
-                val sniPos = if (length > 44 && data[0] == 0x16.toByte()) TlsParser.findSni(data, length) else 10
-                val splitPos = if (sniPos > 0 && sniPos < length) sniPos else (length / 2).coerceAtLeast(1)
-                
-                // 1. Send fake overlapping segment with short TTL to poison DPI middlebox state
-                val fakeOverlap = FakePacketHelper.getSmallNoise(splitPos)
-                TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
-                output.write(fakeOverlap)
-                output.flush()
-                delay(rnd.nextLong(1, 4))
-                
-                // 2. Send real payload with valid TTL
-                TtlHelper.setTtl(socket, BypassConfig.currentTtl)
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
                 output.flush()
                 return
             }
             BypassStrategy.TCP_WINDOW_SHAKE, BypassStrategy.TCP_WINDOW_RESIZE_PACING, BypassStrategy.TCP_WINDOW_SHRINK, BypassStrategy.TCP_WINDOW_STALL -> {
-                TtlHelper.setWindowSize(socket, 256)
-                output.write(data, 0, minOf(5, length))
-                output.flush()
-                delay(rnd.nextLong(5, 15))
-                TtlHelper.setWindowSize(socket, 65535)
-                output.write(data, minOf(5, length), length - minOf(5, length))
+                // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
+                // actually breaks protocol semantics. Reverting to transparent forward.
+                output.write(data, 0, length)
                 output.flush()
                 return
             }

@@ -363,8 +363,8 @@ class PinkVpnService : VpnService() {
                     prefixV4 = 24,
                     dnsServers = listOf("8.8.8.8"),
                     includeIpv6 = false,
-                    isExcludeMode = true,
-                    selectedPackages = emptySet(),
+                    isExcludeMode = isExcludeMode,
+                    selectedPackages = selectedPackages,
                     appPackageName = packageName,
                     allowBypass = !BypassConfig.isKillSwitchEnabled.value,
                     isBlocking = BypassConfig.isKillSwitchEnabled.value
@@ -480,6 +480,7 @@ class PinkVpnService : VpnService() {
             key.setProxy("socks5://$proxySecret:$proxySecret@127.0.0.1:$proxyPort")
             dupFd = vpnInterface.dup()
             rawFd = dupFd.detachFd()
+            try { vpnInterface.close() } catch (ignored: Exception) {} // Close original to prevent FD leak
             key.setDevice("fd://$rawFd")
             key.setLogLevel("error")
             engine.Engine.insert(key)

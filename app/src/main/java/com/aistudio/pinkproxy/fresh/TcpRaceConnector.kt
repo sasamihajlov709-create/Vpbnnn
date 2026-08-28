@@ -37,7 +37,11 @@ object TcpRaceConnector {
         val job1 = launch(ProxyDispatcher.io) {
             try {
                 val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize, requestedStrategy = requestedStrategy, effectiveStrategy = strat1)
-                if (res != null) resultChannel.send(res)
+                if (res != null) {
+                    if (!resultChannel.trySend(res).isSuccess) {
+                        try { res.socket.close() } catch (e: Exception) {}
+                    }
+                }
             } catch (e: Exception) {
                 Log.v("TcpRaceConnector", "Attempt 1 failed for $host with $strat1: ${e.message}")
             }
@@ -47,7 +51,11 @@ object TcpRaceConnector {
             try {
                 delay(200) // Priority delay
                 val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize, requestedStrategy = requestedStrategy, effectiveStrategy = strat2)
-                if (res != null) resultChannel.send(res)
+                if (res != null) {
+                    if (!resultChannel.trySend(res).isSuccess) {
+                        try { res.socket.close() } catch (e: Exception) {}
+                    }
+                }
             } catch (e: Exception) {
                 Log.v("TcpRaceConnector", "Attempt 2 failed for $host with $strat2: ${e.message}")
             }
@@ -121,7 +129,17 @@ object TcpRaceConnector {
                 }
             } ?: -1
             
-            if (readBytes > 0) {
+            val isTls = BypassApplier.isProbableTls(responseBuf, readBytes)
+            val isHttp = BypassApplier.isProbableHttp(responseBuf, readBytes)
+            val isSuccess = if (port == 443) {
+                isTls && readBytes > 16
+            } else if (port == 80) {
+                isHttp && readBytes > 10
+            } else {
+                readBytes > 0
+            }
+
+            if (isSuccess) {
                 val latency = System.currentTimeMillis() - startTime
                 val quality = if (BypassApplier.isProbableTls(responseBuf, readBytes) || BypassApplier.isProbableHttp(responseBuf, readBytes)) {
                     ObservationQuality.SERVER_HELLO_RECEIVED
@@ -172,6 +190,7 @@ object TcpRaceConnector {
                 effectiveStrategy = effectiveStrategy
             )
             try { rs.close() } catch (ex: Throwable) {}
+            if (e is CancellationException) throw e
             return null
         }
     }

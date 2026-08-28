@@ -106,8 +106,17 @@ object CandidateEngine {
                 alpha += boost
             }
 
-            val sampled = ThompsonSampler.sampleBeta(alpha, beta)
-            Pair(strategy, sampled)
+            val sampledProb = ThompsonSampler.sampleBeta(alpha, beta)
+            
+            // Stage 3 Utility Function Calibration
+            // Utility = (Probability of Success * Expected Bandwidth) - (Protocol Risk + Latency Penalty)
+            val expectedBandwidth = 10.0 - strategy.cost
+            val protocolRisk = strategy.risk.toDouble()
+            val latencyPenalty = strategy.cost.toDouble()
+            
+            val utility = (sampledProb * expectedBandwidth) - (protocolRisk * 0.5 + latencyPenalty * 0.5)
+            
+            Pair(strategy, utility)
         }
         return scored.sortedByDescending { it.second }.map { it.first }
     }
