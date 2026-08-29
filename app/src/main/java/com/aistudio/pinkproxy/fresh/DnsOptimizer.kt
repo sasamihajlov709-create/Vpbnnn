@@ -253,7 +253,7 @@ object DnsOptimizer {
                     if (index > 0) delay(index * 30L)
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDnsOverQuic(domain, server, vpnService) } } catch (e: Throwable) {
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDohOverQuic(domain, server, vpnService) } } catch (e: Throwable) {
                         if (e !is TimeoutCancellationException && e is CancellationException) throw e
                         emptyList()
                     }

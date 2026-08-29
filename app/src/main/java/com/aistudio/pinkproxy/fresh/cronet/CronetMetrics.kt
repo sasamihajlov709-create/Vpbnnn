@@ -7,7 +7,6 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Isolated metrics specifically for Cronet HTTP/3 operations.
- * Separate from standard TCP/UDP Bypass strategies.
  * Respects Network/Profile awareness.
  */
 object CronetMetrics {
@@ -33,7 +32,7 @@ object CronetMetrics {
     val http3RequestSuccessCount: Int get() = getStats().http3RequestSuccessCount.get()
     val requestTimeoutCount: Int get() = getStats().requestTimeoutCount.get()
     val fallbackToTcpCount: Int get() = getStats().fallbackToTcpCount.get()
-    val p95LatencyApproxMs: Long get() = getStats().ewmaLatencyMs.get()
+    val ewmaLatencyMs: Long get() = getStats().ewmaLatencyMs.get()
 
     fun recordAttempt() {
         getStats().cronetAttemptCount.incrementAndGet()

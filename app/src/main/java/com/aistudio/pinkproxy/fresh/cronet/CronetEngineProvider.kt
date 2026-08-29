@@ -8,6 +8,10 @@ import org.chromium.net.CronetEngine
 import org.chromium.net.CronetProvider
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Provides an isolated instance of CronetEngine.
@@ -20,10 +24,29 @@ object CronetEngineProvider {
     private var engine: CronetEngine? = null
     private val mutex = Mutex()
     private var isPlayServicesAvailable = false
+    private var initDeferred = CompletableDeferred<Boolean>()
+    
+    private var executor: ExecutorService? = null
+
+    @Synchronized
+    fun getExecutor(): ExecutorService {
+        if (executor == null || executor!!.isShutdown) {
+            executor = Executors.newCachedThreadPool()
+        }
+        return executor!!
+    }
 
     suspend fun initialize(context: Context): Boolean {
         mutex.withLock {
-            if (engine != null) return true
+            if (engine != null) {
+                if (!initDeferred.isCompleted) initDeferred.complete(true)
+                return true
+            }
+            
+            // Reset deferred if it was previously completed with failure or closed
+            if (initDeferred.isCompleted) {
+                initDeferred = CompletableDeferred()
+            }
 
             try {
                 // Install Google Play Services Cronet Provider
@@ -40,15 +63,24 @@ object CronetEngineProvider {
                 
                 val providers = CronetProvider.getAllProviders(context)
                 
+                // Strict priority: Play Services -> App Packaged -> Fallback
                 if (isPlayServicesAvailable) {
-                    val playServicesProvider = providers.find { it.name == CronetProvider.PROVIDER_NAME_APP_PACKAGED || it.name == CronetProvider.PROVIDER_NAME_FALLBACK || it.isEnabled }
+                    val playServicesProvider = providers.find { it.name == CronetProvider.PROVIDER_NAME_APP_PACKAGED }
                     if (playServicesProvider != null) {
                          builder = playServicesProvider.createBuilder()
+                         Log.i(TAG, "Using Play Services Cronet provider.")
                     }
                 }
                 
                 if (builder == null) {
-                    builder = CronetEngine.Builder(context)
+                    val fallbackProvider = providers.find { it.name == CronetProvider.PROVIDER_NAME_FALLBACK }
+                    if (fallbackProvider != null) {
+                        builder = fallbackProvider.createBuilder()
+                        Log.i(TAG, "Using Cronet Fallback provider.")
+                    } else {
+                        builder = CronetEngine.Builder(context)
+                        Log.i(TAG, "Using default Cronet Builder.")
+                    }
                 }
 
                 try {
@@ -59,21 +91,25 @@ object CronetEngineProvider {
                     Log.w(TAG, "Failed to enable QUIC/HTTP2/Brotli on Cronet Builder (likely using Java fallback)", e)
                 }
                        
-                // Configure specific QUIC hints if needed, e.g. for DoH endpoints
-                // builder.addQuicHint("dns.google", 443, 443)
-                // builder.addQuicHint("cloudflare-dns.com", 443, 443)
-
                 engine = builder.build()
                 Log.i(TAG, "CronetEngine initialized successfully. QUIC enabled: true")
+                initDeferred.complete(true)
                 return true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize CronetEngine", e)
+                initDeferred.complete(false)
                 return false
             }
         }
     }
 
-    fun getEngine(): CronetEngine? {
+    suspend fun getEngine(): CronetEngine? {
+        // Wait up to 3 seconds for initialization if it's currently pending
+        if (!initDeferred.isCompleted) {
+            withTimeoutOrNull(3000) {
+                initDeferred.await()
+            }
+        }
         return engine
     }
 
@@ -81,6 +117,14 @@ object CronetEngineProvider {
         mutex.withLock {
             engine?.shutdown()
             engine = null
+            if (!initDeferred.isCompleted) initDeferred.complete(false)
+            initDeferred = CompletableDeferred() // Reset for next start
+            
+            synchronized(this) {
+                executor?.shutdown()
+                executor = null
+            }
+            
             Log.i(TAG, "CronetEngine shutdown complete.")
         }
     }

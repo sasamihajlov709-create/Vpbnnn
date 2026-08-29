@@ -234,7 +234,7 @@ enum class BypassStrategy(
     TCP_SEGMENT_OVERLAP(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME, ImplementationStatus.NO_OP),
     UDP_QUIC_CHAOS(StrategyFamily.QUIC, 6, 5, StrategyGroup.EXTREME),
     TCP_SEGMENT_REVERSE(StrategyFamily.TCP, 5, 4, StrategyGroup.EXTREME),
-    DNS_OVER_QUIC(StrategyFamily.DNS, 4, 3, StrategyGroup.HEAVY, ImplementationStatus.SIMULATED),
+    DOH_OVER_QUIC(StrategyFamily.DNS, 4, 3, StrategyGroup.HEAVY, ImplementationStatus.SIMULATED),
     TCP_PULSE_FRAG(StrategyFamily.FRAGMENTATION, 5, 3, StrategyGroup.HEAVY),
     UDP_RACING(StrategyFamily.QUIC, 6, 5, StrategyGroup.EXTREME, ImplementationStatus.SIMULATED),
     UDP_FAKE_PACKET(StrategyFamily.UDP, 3, 3, StrategyGroup.HEAVY, ImplementationStatus.NO_OP),

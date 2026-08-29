@@ -254,7 +254,7 @@ object RobustResolver {
         val primaryDoT: suspend () -> List<InetAddress> = { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService, type) }
         val shadowUdp: suspend () -> List<InetAddress> = { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService, type) }
         val shadowTcp: suspend () -> List<InetAddress> = { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService, type) }
-        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDnsOverQuic(host, DnsOptimizer.bestDoqServer, vpnService, type) }
+        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDohOverQuic(host, DnsOptimizer.bestDoqServer, vpnService, type) }
         val echCheck: suspend () -> List<InetAddress> = {
             try {
                 val httpsRecords = DnsProtocols.queryHttpsRecord(host, vpnService)

@@ -43,7 +43,7 @@ class CronetIntegrationTest {
         
         CronetMetrics.recordSuccess(150L, wasQuic = true)
         assertEquals(1, CronetMetrics.http3RequestSuccessCount)
-        assertEquals(150L, CronetMetrics.p95LatencyApproxMs)
+        assertEquals(150L, CronetMetrics.ewmaLatencyMs)
         
         CronetMetrics.recordFallbackToTcp()
         assertEquals(1, CronetMetrics.fallbackToTcpCount)

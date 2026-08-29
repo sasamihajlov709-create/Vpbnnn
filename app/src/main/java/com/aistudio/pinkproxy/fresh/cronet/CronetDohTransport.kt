@@ -7,32 +7,29 @@ import org.chromium.net.UrlRequest
 import org.chromium.net.UrlResponseInfo
 import org.chromium.net.CronetException
 import java.nio.ByteBuffer
-import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class CronetDohTransport(private val engine: CronetEngine) {
-    private val executor = Executors.newSingleThreadExecutor()
-
+    
     suspend fun resolveDoH(url: String, dnsWireFormat: ByteArray): ByteArray? {
+        val executor = CronetEngineProvider.getExecutor()
         CronetMetrics.recordAttempt()
         
         return suspendCancellableCoroutine { continuation ->
             val callback = object : UrlRequest.Callback() {
                 private val responseData = mutableListOf<ByteBuffer>()
                 private var wasQuic = false
+                private val startTime = System.currentTimeMillis()
 
                 override fun onRedirectReceived(request: UrlRequest, info: UrlResponseInfo, newLocationUrl: String) {
-                    request.followRedirect()
+                    Log.w("CronetDohTransport", "DNS redirect blocked for security: $url -> $newLocationUrl")
+                    request.cancel()
                 }
 
                 override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
                     wasQuic = info.negotiatedProtocol.startsWith("h3") || info.negotiatedProtocol.startsWith("quic")
-                    if (wasQuic) {
-                        CronetMetrics.recordQuicHandshake()
-                    } else {
-                        CronetMetrics.recordFallbackToTcp()
-                    }
+                    // Metrics accounting moved to onSucceeded to reflect true business-level completion
                     val buffer = ByteBuffer.allocateDirect(1024)
                     request.read(buffer)
                 }
@@ -53,7 +50,13 @@ class CronetDohTransport(private val engine: CronetEngine) {
                         buffer.get(result, offset, remaining)
                         offset += remaining
                     }
-                    CronetMetrics.recordSuccess(100L /* To be measured properly */, wasQuic)
+                    
+                    val latencyMs = System.currentTimeMillis() - startTime
+                    if (wasQuic) {
+                        CronetMetrics.recordQuicHandshake()
+                    }
+                    CronetMetrics.recordSuccess(latencyMs, wasQuic)
+                    
                     continuation.resume(result)
                 }
 

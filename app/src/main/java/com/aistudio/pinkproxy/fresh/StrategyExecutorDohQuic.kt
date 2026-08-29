@@ -3,14 +3,14 @@ package com.aistudio.pinkproxy.fresh
 import java.net.DatagramPacket
 
 /**
- * StrategyExecutorDoq handles DNS-over-QUIC and QUIC-tunnel bypass strategies.
+ * StrategyExecutorDohQuic handles DNS-over-QUIC and QUIC-tunnel bypass strategies.
  */
-object StrategyExecutorDoq : StrategyExecutor {
-    override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.DNS_OVER_QUIC
+object StrategyExecutorDohQuic : StrategyExecutor {
+    override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.DOH_OVER_QUIC
     override val supportedTransports: Set<TransportType> = setOf(TransportType.DNS, TransportType.UDP)
 
     val supportedStrategies: Set<BypassStrategy> = setOf(
-        BypassStrategy.DNS_OVER_QUIC
+        BypassStrategy.DOH_OVER_QUIC
     )
 
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {

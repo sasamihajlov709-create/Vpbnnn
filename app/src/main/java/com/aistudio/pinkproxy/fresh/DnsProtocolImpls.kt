@@ -10,7 +10,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 
 object UdpDnsProtocols {
-    suspend fun queryDnsOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> {
+    suspend fun queryDohOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> {
         try {
             val dotRes = DotDnsProtocols.queryDot(host, dnsIp, vpnService, type)
             if (dotRes.isNotEmpty()) return dotRes
@@ -294,8 +294,13 @@ object DohDnsProtocols {
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w("DohDnsProtocols", "Cronet DoH failed, falling back to OkHttp: ${e.message}")
-                com.aistudio.pinkproxy.fresh.cronet.CronetMetrics.recordFallbackToTcp()
+                Log.w("DohDnsProtocols", "Cronet DoH failed or parse error, falling back to OkHttp: ${e.message}")
+                // If the error was from Cronet itself (network issue), we fallback to OkHttp TCP pipeline.
+                // CronetMetrics.recordFallbackToTcp() is already recorded in onResponseStarted if it negotiated HTTP/2.
+                // But if it's a total failure, we record fallback here.
+                if (e !is java.lang.IllegalArgumentException) { // Assuming parse errors are IllegalArg or similar
+                    com.aistudio.pinkproxy.fresh.cronet.CronetMetrics.recordFallbackToTcp()
+                }
             }
         }
 

@@ -55,7 +55,7 @@ object StrategyEscalationMatrix {
         BypassStrategy.DNS_NOISE,
         BypassStrategy.DNS_OVER_TCP,
         BypassStrategy.DNS_OVER_TCP_FORCE,
-        BypassStrategy.DNS_OVER_QUIC
+        BypassStrategy.DOH_OVER_QUIC
     )
 
     // 5. UDP / QUIC Disruption Escalation Chain

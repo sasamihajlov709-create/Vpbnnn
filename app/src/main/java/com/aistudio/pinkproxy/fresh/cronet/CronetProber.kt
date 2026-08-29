@@ -6,14 +6,12 @@ import org.chromium.net.UrlRequest
 import org.chromium.net.UrlResponseInfo
 import org.chromium.net.CronetException
 import java.nio.ByteBuffer
-import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 object CronetProber {
-    private val executor = Executors.newSingleThreadExecutor()
 
     /**
      * Probes an endpoint to see if HTTP/3 (QUIC) is viable.
@@ -21,12 +19,13 @@ object CronetProber {
      */
     suspend fun probeQuic(url: String): Boolean = withContext(Dispatchers.IO) {
         val engine = CronetEngineProvider.getEngine() ?: return@withContext false
+        val executor = CronetEngineProvider.getExecutor()
 
         return@withContext try {
             suspendCancellableCoroutine { continuation ->
                 val callback = object : UrlRequest.Callback() {
                     override fun onRedirectReceived(request: UrlRequest, info: UrlResponseInfo, newLocationUrl: String) {
-                        request.followRedirect()
+                        request.cancel()
                     }
 
                     override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
@@ -50,8 +49,6 @@ object CronetProber {
                     }
 
                     override fun onCanceled(request: UrlRequest, info: UrlResponseInfo?) {
-                        // Canceled normally means we canceled it in onResponseStarted, 
-                        // so it should already be completed.
                         if (!continuation.isCompleted) {
                             continuation.resume(false)
                         }
