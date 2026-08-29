@@ -46,8 +46,7 @@ object DnsOptimizer {
     @Volatile var bestDoqServer = "94.140.14.14"
     
     private var lastProbeTime = 0L
-    private val optimizerScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
-    
+        
     private val criticalDomains = listOf(
         "google.com", "dns.google", "cloudflare.com", "telegram.org", "github.com",
         "youtube.com", "googlevideo.com", "netflix.com", "openai.com", "chatgpt.com",
@@ -177,7 +176,7 @@ object DnsOptimizer {
 
     fun forceRefresh() {
         if (System.currentTimeMillis() - lastProbeTime < 30000) return
-        optimizerScope.launch {
+        (VpnSessionManager.currentSession?.learningScope ?: ProxyDispatcher.globalScope).launch {
              probeNow(null)
         }
     }

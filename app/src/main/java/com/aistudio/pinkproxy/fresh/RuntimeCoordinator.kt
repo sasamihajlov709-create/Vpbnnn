@@ -17,8 +17,7 @@ import kotlinx.coroutines.sync.withLock
 object RuntimeCoordinator {
     private const val TAG = "RuntimeCoordinator"
 
-    private val coordinatorScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
-    private val stateMutex = Mutex()
+        private val stateMutex = Mutex()
     private var sessionJob: CompletableJob? = null
     private var sessionScope: CoroutineScope? = null
 
@@ -27,7 +26,7 @@ object RuntimeCoordinator {
 
     fun initialize(context: Context): Job {
         _isEngineActive.value = true
-        return coordinatorScope.launch {
+        return (VpnSessionManager.currentSession?.controlPlaneScope ?: ProxyDispatcher.globalScope).launch {
             stateMutex.withLock {
                 if (sessionJob?.isActive == true) {
                     Log.d(TAG, "RuntimeCoordinator already initialized and active.")
@@ -45,7 +44,7 @@ object RuntimeCoordinator {
 
     fun shutdown(context: Context): Job {
         _isEngineActive.value = false
-        return coordinatorScope.launch {
+        return (VpnSessionManager.currentSession?.controlPlaneScope ?: ProxyDispatcher.globalScope).launch {
             stateMutex.withLock {
                 sessionScope?.cancel()
                 sessionScope = null
@@ -61,7 +60,7 @@ object RuntimeCoordinator {
      * Centralized transition to a new global bypass strategy with strict transport context and registry validation.
      */
     fun transitionGlobalStrategy(newStrategy: BypassStrategy, transport: TransportType, reason: String): Job {
-        val targetScope = sessionScope ?: coordinatorScope
+        val targetScope = sessionScope ?: (VpnSessionManager.currentSession?.controlPlaneScope ?: ProxyDispatcher.globalScope)
         return targetScope.launch {
             applyStrategyTransition(newStrategy, transport, reason)
         }
@@ -124,7 +123,7 @@ object RuntimeCoordinator {
         host: String? = null,
         failedStrategy: BypassStrategy? = null
     ): Job {
-        val targetScope = sessionScope ?: coordinatorScope
+        val targetScope = sessionScope ?: (VpnSessionManager.currentSession?.controlPlaneScope ?: ProxyDispatcher.globalScope)
         return targetScope.launch {
             rotateGlobalStrategy(transport, reason, category, profileId, host, failedStrategy)
         }

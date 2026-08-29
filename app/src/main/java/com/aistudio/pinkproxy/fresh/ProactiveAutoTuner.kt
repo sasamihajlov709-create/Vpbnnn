@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * as soon as a new network connects, finding the optimal strategy BEFORE the user opens the apps.
  */
 object ProactiveAutoTuner {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
     private val isTuningRunning = AtomicBoolean(false)
     private var tuningJob: Job? = null
 
@@ -35,7 +34,7 @@ object ProactiveAutoTuner {
         }
 
         tuningJob?.cancel()
-        tuningJob = scope.launch {
+        tuningJob = VpnSessionManager.currentSession?.learningScope?.launch {
             try {
                 Log.i("ProactiveAutoTuner", "Starting proactive background bypass tuning for network profile: ${NetworkProfileManager.currentProfile.value.displayName}")
                 

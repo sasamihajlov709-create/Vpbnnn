@@ -93,9 +93,9 @@ object ProxyDispatcher {
             .onFailure { throwable.printStackTrace() }
     }
 
-    val mainScope = CoroutineScope(io + SupervisorJob() + globalHandler)
+    val globalScope = CoroutineScope(io + SupervisorJob() + globalHandler)
 
     fun cancelAllBackgroundJobs() {
-        mainScope.coroutineContext[kotlinx.coroutines.Job]?.cancelChildren()
+        globalScope.coroutineContext[kotlinx.coroutines.Job]?.cancelChildren()
     }
 }

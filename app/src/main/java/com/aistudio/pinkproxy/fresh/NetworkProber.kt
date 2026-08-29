@@ -49,7 +49,7 @@ object NetworkProber {
                 if (conn is HttpsURLConnection) {
                     val sslContext = SSLContext.getInstance("TLS")
                     sslContext.init(null, null, null)
-                    PinkVpnService.instance?.let { vpn ->
+                    VpnSessionManager.currentSession?.vpnService.let { vpn ->
                         conn.sslSocketFactory = ProtectedSSLSocketFactory(sslContext.socketFactory, vpn)
                     }
                 }
@@ -72,7 +72,7 @@ object NetworkProber {
     suspend fun checkProxyReachable(proxyPort: Int): Boolean {
         return try {
             val sock = java.net.Socket()
-            try { PinkVpnService.instance?.protect(sock) } catch (e: Throwable) {}
+            try { VpnSessionManager.currentSession?.vpnService?.protect(sock) } catch (e: Throwable) {}
             sock.connect(InetSocketAddress("127.0.0.1", proxyPort), 1000)
             sock.close()
             true

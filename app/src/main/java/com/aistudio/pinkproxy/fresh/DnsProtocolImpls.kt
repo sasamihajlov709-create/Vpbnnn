@@ -277,9 +277,31 @@ object TcpDnsProtocols {
 
 object DohDnsProtocols {
     suspend fun queryDohDetailed(host: String, dohUrl: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val queryCtx = DnsPacketEngine.buildQueryContext(host, type)
+        
+        // 1. Try Cronet (QUIC/HTTP3) if available
+        val engine = com.aistudio.pinkproxy.fresh.cronet.CronetEngineProvider.getEngine()
+        if (engine != null) {
+            try {
+                val transport = com.aistudio.pinkproxy.fresh.cronet.CronetDohTransport(engine)
+                val body = transport.resolveDoH(dohUrl, queryCtx.rawBytes)
+                if (body != null) {
+                    val records = DnsPacketEngine.parseDnsResponseDetailed(body, body.size, expectedId = queryCtx.id, expectedHost = queryCtx.host)
+                    if (records.isNotEmpty()) {
+                        DnsOptimizer.recordDohSuccess(dohUrl)
+                        return@withContext records
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.w("DohDnsProtocols", "Cronet DoH failed, falling back to OkHttp: ${e.message}")
+                com.aistudio.pinkproxy.fresh.cronet.CronetMetrics.recordFallbackToTcp()
+            }
+        }
+
+        // 2. Fallback to existing OkHttp pipeline (HTTP/2 / TCP)
         try {
             val client = DnsProtocols.getProtectedClient(vpnService)
-            val queryCtx = DnsPacketEngine.buildQueryContext(host, type)
             val request = Request.Builder()
                 .url(dohUrl)
                 .post(queryCtx.rawBytes.toRequestBody("application/dns-message".toMediaTypeOrNull()))

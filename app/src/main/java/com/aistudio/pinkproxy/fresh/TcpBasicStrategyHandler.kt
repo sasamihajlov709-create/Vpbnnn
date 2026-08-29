@@ -15,7 +15,7 @@ object TcpBasicStrategyHandler : StrategyExecutor {
         BypassStrategy.TCP_OOB_DESYNC,
         BypassStrategy.OOB_DESYNC,
         BypassStrategy.GHOST_PACKETS,
-        BypassStrategy.WINDOW_SIZE_MANGLE,
+        BypassStrategy.SOCKET_BUFFER_MANGLE,
         BypassStrategy.TCP_ZERO_WINDOW_STALL,
         BypassStrategy.TCP_MSS_CLAMP,
         BypassStrategy.TCP_FAST_RETRANSMIT_SIM,
@@ -30,7 +30,7 @@ object TcpBasicStrategyHandler : StrategyExecutor {
         BypassStrategy.TCP_WINDOW_SCAN,
         BypassStrategy.TCP_REORDER_DESYNC,
         BypassStrategy.TCP_URGENT_SKEW,
-        BypassStrategy.TCP_WINDOW_SIZE_SKEW,
+        BypassStrategy.SOCKET_BUFFER_SKEW,
         BypassStrategy.TCP_DATA_REPETITION,
         BypassStrategy.TCP_WINDOW_CLAMPING,
         BypassStrategy.TCP_GHOST_SKEW,
@@ -50,7 +50,7 @@ object TcpBasicStrategyHandler : StrategyExecutor {
         BypassStrategy.TCP_SEGMENT_DESYNC,
         BypassStrategy.TCP_ACK_SKEW,
         BypassStrategy.TCP_ZERO_WINDOW_DESYNC,
-        BypassStrategy.TCP_WINDOW_SIZE_CHAOS,
+        BypassStrategy.SOCKET_BUFFER_CHAOS,
         BypassStrategy.TCP_OOB_SEGMENTATION,
         BypassStrategy.TCP_OVERLAP,
         BypassStrategy.TCP_WINDOW_SHAKE,
@@ -66,9 +66,9 @@ object TcpBasicStrategyHandler : StrategyExecutor {
         BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
         BypassStrategy.TCP_FRAGMENT_REORDER,
         BypassStrategy.TCP_RETRANS_FAKE,
-        BypassStrategy.TCP_WINDOW_SIZE_JITTER,
+        BypassStrategy.SOCKET_BUFFER_JITTER,
         BypassStrategy.TCP_TLS_SESSION_DESYNC,
-        BypassStrategy.TCP_WINDOW_SIZE_OSCILLATION,
+        BypassStrategy.SOCKET_BUFFER_OSCILLATION,
         BypassStrategy.TCP_SACK_PANIC,
         BypassStrategy.TCP_SACK_SKEW,
         BypassStrategy.TCP_TRIPLE_DESYNC,
@@ -133,7 +133,7 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 output.flush()
                 return
             }
-            BypassStrategy.TCP_WINDOW_SIZE_JITTER -> {
+            BypassStrategy.SOCKET_BUFFER_JITTER -> {
                 // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
                 // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)
@@ -229,7 +229,7 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 output.flush()
                 return
             }
-            BypassStrategy.WINDOW_SIZE_MANGLE, BypassStrategy.TCP_WINDOW_SIZE_SKEW, BypassStrategy.TCP_WINDOW_SIZE_CHAOS, BypassStrategy.TCP_WINDOW_SIZE_OSCILLATION -> {
+            BypassStrategy.SOCKET_BUFFER_MANGLE, BypassStrategy.SOCKET_BUFFER_SKEW, BypassStrategy.SOCKET_BUFFER_CHAOS, BypassStrategy.SOCKET_BUFFER_OSCILLATION -> {
                 // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
                 // actually breaks protocol semantics. Reverting to transparent forward.
                 output.write(data, 0, length)

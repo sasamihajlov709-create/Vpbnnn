@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong
 object ProxyStats {
     private val _activeFlows = MutableStateFlow<Map<String, ActiveFlow>>(emptyMap())
     val activeFlows: StateFlow<List<ActiveFlow>> = _activeFlows.map { it.values.toList().sortedByDescending { f -> f.startTime } }
-        .stateIn(ProxyDispatcher.mainScope, SharingStarted.Eagerly, emptyList())
+        .stateIn(ProxyDispatcher.globalScope, SharingStarted.Eagerly, emptyList())
 
     fun registerFlow(id: String, host: String, type: String, strategy: BypassStrategy, reasoning: String = "") {
         val transport = when (type.uppercase()) {
@@ -58,7 +58,7 @@ object ProxyStats {
 
     fun closeFlow(id: String) {
         updateFlow(id, status = "CLOSED")
-        ProxyDispatcher.mainScope.launch {
+        ProxyDispatcher.globalScope.launch {
             delay(5000)
             removeFlow(id)
         }

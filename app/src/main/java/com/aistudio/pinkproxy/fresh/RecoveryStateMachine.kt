@@ -89,7 +89,7 @@ object RecoveryStateMachine {
      * Dispatch an event to the state machine asynchronously.
      */
     fun postSignal(signal: RecoverySignal): Job {
-        val scope = machineScope ?: PinkVpnService.instance?.getServiceScope() ?: ProxyDispatcher.mainScope
+        val scope = machineScope ?: VpnSessionManager.currentSession?.recoveryScope ?: ProxyDispatcher.globalScope
         return scope.launch(ProxyDispatcher.io) {
             handleSignal(signal)
         }
@@ -182,7 +182,7 @@ object RecoveryStateMachine {
                 val candidates = listOf(
                     BypassStrategy.TLS_REC_SPLIT, 
                     BypassStrategy.TCP_ACK_SKEW, 
-                    BypassStrategy.TCP_WINDOW_SIZE_CHAOS
+                    BypassStrategy.SOCKET_BUFFER_CHAOS
                 ).filter { StrategyExecutionRegistry.isExecutorSupported(it, transport) }
                 val selected = candidates.maxWithOrNull(
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, transport, category, profileId) }
@@ -321,7 +321,7 @@ object RecoveryStateMachine {
             _currentState.value = RecoveryState.RESTARTING_PROXY
             escalationLevel.incrementAndGet()
             Log.w(TAG, "Proxy unresponsive ($reason), restarting internal server (escalation ${currentEsc + 1})")
-            PinkVpnService.instance?.restartProxyServer()
+            (VpnSessionManager.currentSession?.vpnService as? PinkVpnService)?.restartProxyServer()
         } else {
             escalationLevel.set(3)
             enterPanic("Proxy server unreachable")
@@ -395,15 +395,15 @@ object RecoveryStateMachine {
         escalationLevel.set(0)
 
         Log.e(TAG, "Executing coordinated tunnel restart: $reason")
-        val context = PinkVpnService.instance ?: ProxyDispatcher.context ?: return
+        val context = (VpnSessionManager.currentSession?.vpnService as? PinkVpnService) ?: ProxyDispatcher.context ?: return
         VpnRecoveryCoordinator(context).triggerRestart()
     }
 
     private fun triggerActiveProbeAsync(delayMs: Long) {
-        val scope = machineScope ?: PinkVpnService.instance?.getServiceScope() ?: ProxyDispatcher.mainScope
+        val scope = machineScope ?: VpnSessionManager.currentSession?.recoveryScope ?: ProxyDispatcher.globalScope
         scope.launch(ProxyDispatcher.io) {
             delay(delayMs)
-            val ctx = PinkVpnService.instance ?: ProxyDispatcher.context
+            val ctx = (VpnSessionManager.currentSession?.vpnService as? PinkVpnService) ?: ProxyDispatcher.context
             if (ctx != null) {
                 _currentState.value = RecoveryState.PROBING
                 ServiceChecker.runActiveProbing(ctx)

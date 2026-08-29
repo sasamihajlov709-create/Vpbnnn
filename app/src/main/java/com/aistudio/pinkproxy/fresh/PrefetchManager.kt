@@ -10,8 +10,7 @@ import java.net.Socket
 import java.net.InetSocketAddress
 
 object PrefetchManager {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
-    private var prefetchJob: Job? = null
+        private var prefetchJob: Job? = null
 
     private val topDomains = listOf(
         "google.com", "dns.google", "cloudflare.com", "telegram.org", "github.com",
@@ -21,7 +20,7 @@ object PrefetchManager {
 
     fun start(context: Context, vpnService: VpnService?) {
         prefetchJob?.cancel()
-        prefetchJob = scope.launch {
+        prefetchJob = (VpnSessionManager.currentSession?.learningScope ?: ProxyDispatcher.globalScope).launch {
             while (isActive) {
                 try {
                     // Ждем благоприятных условий

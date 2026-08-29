@@ -192,7 +192,7 @@ object TtlHelper {
     fun setLowTtlTemporary(socket: Socket, lowTtl: Int, delayMs: Long) {
         val originalTtl = getSocketTtl(socket)
         setTtl(socket, lowTtl)
-        ProxyDispatcher.mainScope.launch {
+        ProxyDispatcher.globalScope.launch {
             delay(delayMs)
             setTtl(socket, originalTtl)
         }

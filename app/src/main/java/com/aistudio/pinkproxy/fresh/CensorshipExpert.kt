@@ -11,8 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Orchestrates DpiEngine, BypassConfig, and RobustResolver for maximum bypass effectiveness.
  */
 object CensorshipExpert {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
-    private val isRunning = AtomicBoolean(false)
+        private val isRunning = AtomicBoolean(false)
     
     private var lastIntelligenceUpdate = 0L
     private const val UPDATE_INTERVAL_MS = 60_000L // 1 minute
@@ -23,7 +22,7 @@ object CensorshipExpert {
     fun start() {
         if (isRunning.getAndSet(true)) return
         
-        analysisJob = scope.launch {
+        analysisJob = (VpnSessionManager.currentSession?.learningScope ?: ProxyDispatcher.globalScope).launch {
             while (isActive) {
                 try {
                     performDeepAnalysis()
@@ -41,7 +40,7 @@ object CensorshipExpert {
         }
         
         // Listen to global DPI events to trigger immediate reactions
-        eventsJob = scope.launch {
+        eventsJob = (VpnSessionManager.currentSession?.learningScope ?: ProxyDispatcher.globalScope).launch {
             var lastExtremeTriggerTime = 0L
             ProxyStats.censorshipIntensity.collect { intensity ->
                 if (intensity > 90) {
@@ -117,7 +116,7 @@ object CensorshipExpert {
             BypassStrategy.TCP_ZERO_WINDOW_DESYNC,
             BypassStrategy.TCP_DATA_DESYNC,
             BypassStrategy.TCP_COMBINED_NUCLEAR,
-            BypassStrategy.TCP_WINDOW_SIZE_SKEW
+            BypassStrategy.SOCKET_BUFFER_SKEW
         ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
         
         coroutineScope {
@@ -220,7 +219,7 @@ object CensorshipExpert {
 
         // 5. CDN Warmup: If success rate is dropping, warm up common CDN paths
         if (successRate < 60 && ProxyStats.activeConnections.value > 0) {
-            scope.launch { performCdnGhostingWarmup() }
+            (VpnSessionManager.currentSession?.learningScope ?: ProxyDispatcher.globalScope).launch { performCdnGhostingWarmup() }
         }
         
         // 6. Panic Mode Prediction (Early Warning System)
@@ -328,7 +327,7 @@ object CensorshipExpert {
         // DpiEngine.boostStrategyFamily
         
         // Pro-actively pre-resolve critical domains using Nuclear methods
-        scope.launch {
+        (VpnSessionManager.currentSession?.learningScope ?: ProxyDispatcher.globalScope).launch {
             val critical = listOf("dns.google", "cloudflare-dns.com", "api.telegram.org", "www.youtube.com")
             critical.forEach { host ->
                 try {

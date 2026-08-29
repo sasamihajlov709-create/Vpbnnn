@@ -61,10 +61,9 @@ class PinkVpnService : VpnService() {
         }
     }
 
-    val engineScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
+    val serviceScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
     private var sessionScope: CoroutineScope? = null
 
-    fun getServiceScope(): CoroutineScope = engineScope
 
     private lateinit var notificationController: VpnNotificationController
     private lateinit var recoveryCoordinator: VpnRecoveryCoordinator
@@ -82,7 +81,6 @@ class PinkVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
         BypassConfig.activeVpnService = this
         ProxyDispatcher.context = this.applicationContext
 
@@ -119,7 +117,7 @@ class PinkVpnService : VpnService() {
 
         registerNetworkMonitor()
 
-        engineScope.launch {
+        serviceScope.launch {
             var lastMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
             BypassConfig.isPanicModeFlow.collect { _ ->
                 val newMtu = BypassConfig.getMtuForTransport(TransportType.TCP)
@@ -158,7 +156,7 @@ class PinkVpnService : VpnService() {
                     ProactiveAutoTuner.startProactiveTune(this, this)
 
                     if (_isRunning.value) {
-                        engineScope.launch {
+                        serviceScope.launch {
                             delay(1500)
                             if (_isRunning.value) {
                                 ProxyStats.logRecovery("Network transition detected. Refreshing VPN tunnel.")
@@ -201,7 +199,7 @@ class PinkVpnService : VpnService() {
         val action = intent?.action
         if (action == "STOP") {
             saveVpnState(this, false)
-            engineScope.launch {
+            serviceScope.launch {
                 serviceLock.withLock {
                     try {
                         stopVpnInternal()
@@ -219,7 +217,7 @@ class PinkVpnService : VpnService() {
         }
 
         if (action == "CHANGE_STRATEGY") {
-            engineScope.launch {
+            serviceScope.launch {
                 try {
                     ProxyStats.logRecovery("Strategy Changed: Applied dynamically & instantly")
                     notificationController.showNotification()
@@ -233,7 +231,7 @@ class PinkVpnService : VpnService() {
         }
 
         if (action == "RESTART") {
-            engineScope.launch {
+            serviceScope.launch {
                 serviceLock.withLock {
                     try {
                         ProxyStats.logRecovery("Core System Re-Started")
@@ -253,7 +251,7 @@ class PinkVpnService : VpnService() {
 
         saveVpnState(this, true)
         VpnRuntimeState.updateState(VpnLifecycleState.STARTING)
-        engineScope.launch {
+        serviceScope.launch {
             serviceLock.withLock {
                 try {
                     startVpnInternal()
@@ -270,7 +268,7 @@ class PinkVpnService : VpnService() {
     }
 
     private fun startVpn() {
-        engineScope.launch {
+        serviceScope.launch {
             serviceLock.withLock {
                 try {
                     startVpnInternal()
@@ -288,6 +286,13 @@ class PinkVpnService : VpnService() {
         isStopping = false
         Log.i("PinkVpnService", "Starting VPN internal sequence...")
 
+        val session = VpnSessionManager.startSession(this@PinkVpnService)
+
+        // Try to initialize Cronet (background)
+        session.controlPlaneScope.launch {
+            com.aistudio.pinkproxy.fresh.cronet.CronetEngineProvider.initialize(this@PinkVpnService)
+        }
+
         try {
             ProxyStats.reset(false)
             ServiceChecker.proxyPort = PROXY_PORT
@@ -295,8 +300,8 @@ class PinkVpnService : VpnService() {
 
             // 1. Initialize DNS
             VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Initializing DNS resolver...")
-            RobustResolver.initialize(engineScope)
-            RobustResolver.startDnsOptimizer(engineScope, this@PinkVpnService)
+            RobustResolver.initialize(session.dnsScope)
+            RobustResolver.startDnsOptimizer(session.dnsScope, this@PinkVpnService)
 
             // 2. Start Proxy Server
             VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Starting SOCKS5/HTTP core proxy...")
@@ -371,7 +376,7 @@ class PinkVpnService : VpnService() {
                 ) ?: throw e
             }
 
-            AutoTtlProber.startProbing(engineScope, this@PinkVpnService)
+            AutoTtlProber.startProbing(session.learningScope, this@PinkVpnService)
 
             try {
                 wakeLock?.acquire(24 * 60 * 60 * 1000L)
@@ -400,9 +405,9 @@ class PinkVpnService : VpnService() {
 
             // 7. Now that proxy & tun2socks are fully running, start health checkers & monitors
             RuntimeCoordinator.initialize(this@PinkVpnService)
-            RecoveryStateMachine.start(engineScope)
-            ServiceChecker.startChecking(engineScope, this@PinkVpnService)
-            healthMonitor?.start(engineScope)
+            RecoveryStateMachine.start(session.recoveryScope)
+            ServiceChecker.startChecking(session.controlPlaneScope, this@PinkVpnService)
+            healthMonitor?.start(session.controlPlaneScope)
 
             startSessionWarmup()
 
@@ -460,7 +465,7 @@ class PinkVpnService : VpnService() {
     }
 
     private fun startSessionWarmup() {
-        engineScope.launch {
+        VpnSessionManager.currentSession?.controlPlaneScope?.launch {
             delay(5000)
             ServiceChecker.runActiveProbing(this@PinkVpnService)
         }
@@ -486,7 +491,7 @@ class PinkVpnService : VpnService() {
             engine.Engine.insert(key)
             
             val startAck = CompletableDeferred<Unit>()
-            engineScope.launch {
+            serviceScope.launch {
                 try {
                     // Launch native engine start
                     val startJob = launch(Dispatchers.IO) {
@@ -556,7 +561,7 @@ class PinkVpnService : VpnService() {
     }
 
     private fun stopVpn() {
-        engineScope.launch {
+        serviceScope.launch {
             serviceLock.withLock {
                 try {
                     stopVpnInternal()
@@ -601,6 +606,8 @@ class PinkVpnService : VpnService() {
             RuntimeCoordinator.shutdown(this@PinkVpnService)
             DeviceMonitor.stopDeviceMonitoring(this@PinkVpnService)
 
+            com.aistudio.pinkproxy.fresh.cronet.CronetEngineProvider.close()
+
             vpnNetworkMonitor?.stop()
             vpnNetworkMonitor = null
 
@@ -637,7 +644,7 @@ class PinkVpnService : VpnService() {
     }
 
     fun restartProxyServer() {
-        engineScope.launch(ProxyDispatcher.io) {
+        serviceScope.launch(ProxyDispatcher.io) {
             serviceLock.withLock {
                 if (isStopping || !_isRunning.value) return@withLock
                 try {
@@ -659,7 +666,7 @@ class PinkVpnService : VpnService() {
     override fun onDestroy() {
         super.onDestroy()
         val appContext = applicationContext
-        engineScope.cancel()
+        serviceScope.cancel()
         ProxyDispatcher.cancelAllBackgroundJobs()
         PrefetchManager.stop()
         healthMonitor?.stop()
@@ -684,9 +691,8 @@ class PinkVpnService : VpnService() {
             },
             timeoutMs = 2000L,
             onComplete = {
-                engineScope.cancel()
+                serviceScope.cancel()
         ProxyDispatcher.cancelAllBackgroundJobs()
-                instance = null
                 BypassConfig.activeVpnService = null
                 ProxyDispatcher.context = null
             }

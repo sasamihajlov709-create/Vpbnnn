@@ -35,30 +35,7 @@ class UdpAssociationTableTest {
         assertEquals(250L, session.bytesReceived)
     }
 
-    @Test
-    fun testSessionEndpointMapping() {
-        val clientIp = InetAddress.getByName("127.0.0.1")
-        val clientPort = 49152
-        val targetHost = "93.184.216.34"
-        val targetPort = 443
-
-        UdpAssociationTable.clear()
-
-        val session = UdpAssociationTable.getOrCreateSession(
-            clientAddress = clientIp,
-            clientPort = clientPort,
-            destinationHost = targetHost,
-            destinationPort = targetPort,
-            strategy = BypassStrategy.DIRECT
-        )
-
-        val endpointKey = "93.184.216.34:443"
-        UdpAssociationTable.bindEndpoint(endpointKey, session.key)
-
-        val foundKey = UdpAssociationTable.findClientForKey(endpointKey)
-        assertNotNull(foundKey)
-        assertEquals(clientPort, foundKey?.clientPort)
-    }
+    
 
     @Test
     fun testQuicPacketDetection() {

@@ -20,6 +20,9 @@ object CandidateEngine {
     fun isEligible(strategy: BypassStrategy, context: SelectionContext, ignoreHostBlacklist: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
         
+        // 0. Implementation Status (Skip SIMULATED and NO_OP in dynamic selection)
+        if (strategy.status == ImplementationStatus.SIMULATED || strategy.status == ImplementationStatus.NO_OP) return false
+        
         // 1. Check Family Compatibility
         if (!DpiStrategySelector.isFamilyCompatible(strategy.family, context.transport)) return false
         

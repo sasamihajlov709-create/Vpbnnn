@@ -32,7 +32,10 @@ object UdpTransportHandler {
             output.write(resp)
             output.flush()
             
-            // Client association address & port pair mapping
+            // Local session state mapping (IP Pinning & Routing)
+            val sessionToTargetInet = ConcurrentHashMap<String, InetAddress>()
+            val remoteIpPortToClient = ConcurrentHashMap<String, UdpSessionKey>()
+            
             val clientEndpoints = ConcurrentHashMap<String, Pair<InetAddress, Int>>()
             data class UdpPendingProbe(val host: String, val strategy: BypassStrategy, val sentTime: Long)
             val pendingUdpProbes = ConcurrentHashMap<String, UdpPendingProbe>()
@@ -173,17 +176,28 @@ object UdpTransportHandler {
                                 ProxyStats.registerFlow("udp_$sessionKey", host, "UDP", udpStrat, reasoning)
                                 VpnRuntimeState.updateStrategy(udpStrat.name, reasoning)
                                 
-                                val resolved = RobustResolver.resolveDual(host, vpnService)
-                                if (resolved.isNotEmpty()) {
-                                    val targetInet = resolved.random()
+                                // IP Pinning logic
+                                var targetInet = sessionToTargetInet[sessionKey]
+                                if (targetInet == null) {
+                                    val resolved = RobustResolver.resolveDual(host, vpnService)
+                                    if (resolved.isNotEmpty()) {
+                                        targetInet = resolved.random()
+                                        sessionToTargetInet[sessionKey] = targetInet
+                                    }
+                                }
+                                
+                                if (targetInet != null) {
                                     val outPacket = DatagramPacket(payload, payload.size, targetInet, port)
                                     val workerIdx = (host.hashCode() and 0x7FFFFFFF) % 8
                                     
                                     val config = BypassConfig.getSessionConfig(host, udpStrat, BypassConfig.currentRttMs.value, TransportType.UDP)
                                     
                                     val endpointKey = "${targetInet.hostAddress}:$port"
-                                    pendingUdpProbes[endpointKey] = UdpPendingProbe(host, udpStrat, System.currentTimeMillis())
-                                    UdpAssociationTable.bindEndpoint(endpointKey, sessionEntry.key)
+                                    // Use FlowID + Sequence/Time as unique probe key
+                                    val probeId = "${sessionEntry.key.hashCode()}_${System.nanoTime()}"
+                                    pendingUdpProbes[probeId] = UdpPendingProbe(host, udpStrat, System.currentTimeMillis())
+                                    
+                                    remoteIpPortToClient[endpointKey] = sessionEntry.key
 
                                     // Use BypassApplier for all UDP evasion
                                     launch(ProxyDispatcher.udpRelay) {
@@ -221,7 +235,7 @@ object UdpTransportHandler {
                                 inSocket.receive(inPacket)
                                 
                                 val endpointKey = "${inPacket.address.hostAddress}:${inPacket.port}"
-                                val sessionKey = UdpAssociationTable.findClientForKey(endpointKey)
+                                val sessionKey = remoteIpPortToClient[endpointKey]
                                 
                                 if (sessionKey == null) {
                                     continue // Strict UDP session routing. Drop packet if destination is unknown.
@@ -257,8 +271,12 @@ object UdpTransportHandler {
                                 
                                 UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())
 
-                                val matchedProbe = pendingUdpProbes.remove(endpointKey)
-                                if (matchedProbe != null) {
+                                // Just clear any probe matching the host/strategy for this flow
+                                // (in a real ML setup, we'd need to match Sequence ID if it existed, but here we just take the first matching pending probe for this flow)
+                                val matchedProbeEntry = pendingUdpProbes.entries.find { it.key.startsWith("${sessionKey.hashCode()}_") }
+                                if (matchedProbeEntry != null) {
+                                    val matchedProbe = matchedProbeEntry.value
+                                    pendingUdpProbes.remove(matchedProbeEntry.key)
                                     val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
                                     DpiStrategySelector.recordResult(
                                         host = matchedProbe.host,

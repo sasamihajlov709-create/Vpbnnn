@@ -169,9 +169,22 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             val target = parts[1]
             
             if (method == "CONNECT") {
-                val hostPort = target.split(":")
-                host = hostPort[0]
-                port = if (hostPort.size > 1) hostPort[1].toIntOrNull() ?: 443 else 443
+                val lastColon = target.lastIndexOf(':')
+                if (target.startsWith("[") && target.contains("]")) {
+                    val closingBracket = target.indexOf(']')
+                    host = target.substring(1, closingBracket)
+                    if (lastColon > closingBracket) {
+                        port = target.substring(lastColon + 1).toIntOrNull() ?: 443
+                    } else {
+                        port = 443
+                    }
+                } else if (lastColon > 0 && target.indexOf(':') == lastColon) { // Only one colon (IPv4 or Domain)
+                    host = target.substring(0, lastColon)
+                    port = target.substring(lastColon + 1).toIntOrNull() ?: 443
+                } else { // Fallback
+                    host = target
+                    port = 443
+                }
                 
                 // Consume remaining headers with a hard limit to prevent OOM
                 var totalRead = 0

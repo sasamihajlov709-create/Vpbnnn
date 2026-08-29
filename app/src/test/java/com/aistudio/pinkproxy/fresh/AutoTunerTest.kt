@@ -45,18 +45,18 @@ class AutoTunerTest {
         val host1 = "youtube.com"
         val host2 = "discord.com"
 
-        // Simulate recovery on youtube.com falling back to TLS_RECORD_SPLIT
+        // Simulate recovery on youtube.com falling back to TLS_REC_SPLIT
         FlowStrategyOverrideStore.putOverride(
             host = host1,
             transport = TransportType.TCP,
             profileId = profileId,
-            strategy = BypassStrategy.TLS_RECORD_SPLIT,
+            strategy = BypassStrategy.TLS_REC_SPLIT,
             reason = "Test Stall"
         )
 
         // Ensure we retrieve the override for youtube.com
         val overrideYoutube = FlowStrategyOverrideStore.getOverride(host1, TransportType.TCP, profileId)
-        assertEquals(BypassStrategy.TLS_RECORD_SPLIT, overrideYoutube)
+        assertEquals(BypassStrategy.TLS_REC_SPLIT, overrideYoutube)
 
         // Ensure discord.com does NOT get the override
         val overrideDiscord = FlowStrategyOverrideStore.getOverride(host2, TransportType.TCP, profileId)

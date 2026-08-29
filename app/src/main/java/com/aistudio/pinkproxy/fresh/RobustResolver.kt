@@ -22,7 +22,7 @@ object RobustResolver {
         resolverScope = scope
     }
 
-    private fun getScope(): CoroutineScope = resolverScope ?: ProxyDispatcher.mainScope
+    private fun getScope(): CoroutineScope = resolverScope ?: VpnSessionManager.currentSession?.dnsScope ?: ProxyDispatcher.globalScope
 
     fun loadDnsSettings(context: android.content.Context) {
         BypassConfig.loadTuningSettings(context)

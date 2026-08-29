@@ -20,8 +20,7 @@ data class DpiEventKey(
 )
 
 object DpiEngine {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
-
+    
     private val _currentDpiLevel = MutableStateFlow(0)
     val currentDpiLevel = _currentDpiLevel.asStateFlow()
 
@@ -55,7 +54,7 @@ object DpiEngine {
         DpiStorage.loadScores(ctx)
         NetworkProfileManager.addListener(profileChangeListener)
         
-        optimizerJob = scope.launch {
+        optimizerJob = (VpnSessionManager.currentSession?.learningScope ?: ProxyDispatcher.globalScope).launch {
             while (isActive) {
                 delay(15000)
                 DpiAnalyzer.analyzeAndAdjust()

@@ -45,6 +45,9 @@ tun2socks = "1.0.4"
 mockk = "1.13.12"
 
 
+cronetApi = "119.6045.31"
+cronetPlayServices = "18.0.1"
+kotlinxCoroutinesPlayServices = "1.10.2"
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -104,6 +107,9 @@ mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
 
 
+cronet-api = { group = "org.chromium.net", name = "cronet-api", version.ref = "cronetApi" }
+cronet-play-services = { group = "com.google.android.gms", name = "play-services-cronet", version.ref = "cronetPlayServices" }
+kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "kotlinxCoroutinesPlayServices" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

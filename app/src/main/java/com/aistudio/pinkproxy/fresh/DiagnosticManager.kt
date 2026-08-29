@@ -8,8 +8,7 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicInteger
 
 object DiagnosticManager {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
-    
+        
     data class HealthStatus(
         val dnsOk: Boolean,
         val tcpOk: Boolean,

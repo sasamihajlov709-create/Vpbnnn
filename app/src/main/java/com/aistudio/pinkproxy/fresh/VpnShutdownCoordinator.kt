@@ -8,8 +8,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 object VpnShutdownCoordinator {
-    private val scope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
-    private val isShuttingDown = AtomicBoolean(false)
+        private val isShuttingDown = AtomicBoolean(false)
     private val cleanupTasks = ConcurrentLinkedQueue<() -> Unit>()
 
     fun registerCleanup(task: () -> Unit) {
@@ -23,7 +22,7 @@ object VpnShutdownCoordinator {
         onComplete: () -> Unit = {}
     ): Job {
         onBeforeAsync()
-        return scope.launch {
+        return (VpnSessionManager.currentSession?.controlPlaneScope ?: ProxyDispatcher.globalScope).launch {
             try {
                 withTimeout(timeoutMs) {
                     executeCleanup(context)

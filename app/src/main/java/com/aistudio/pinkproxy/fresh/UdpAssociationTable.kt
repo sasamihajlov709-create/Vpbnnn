@@ -34,7 +34,6 @@ data class UdpSessionEntry(
  */
 object UdpAssociationTable {
     private val sessions = ConcurrentHashMap<UdpSessionKey, UdpSessionEntry>()
-    private val endpointToClientMap = ConcurrentHashMap<String, UdpSessionKey>()
 
     fun getOrCreateSession(
         clientAddress: InetAddress,
@@ -49,14 +48,6 @@ object UdpAssociationTable {
         }.also {
             it.lastActivity = System.currentTimeMillis()
         }
-    }
-
-    fun bindEndpoint(endpoint: String, key: UdpSessionKey) {
-        endpointToClientMap[endpoint] = key
-    }
-
-    fun findClientForKey(endpoint: String): UdpSessionKey? {
-        return endpointToClientMap[endpoint]
     }
 
     fun touchSession(key: UdpSessionKey, sentBytes: Long = 0L, receivedBytes: Long = 0L) {
@@ -83,15 +74,11 @@ object UdpAssociationTable {
                 removedCount++
             }
         }
-        endpointToClientMap.entries.removeIf { (_, sessionKey) ->
-            !sessions.containsKey(sessionKey)
-        }
         return removedCount
     }
 
     fun clear() {
         sessions.clear()
-        endpointToClientMap.clear()
     }
 
     val activeCount: Int get() = sessions.size

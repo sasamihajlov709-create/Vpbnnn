@@ -224,7 +224,7 @@ object DpiStrategySelector {
     }
 
     fun getStrategyMetrics(profileId: String = NetworkProfileManager.currentProfile.value.id): List<StrategyMetric> {
-        return BypassStrategy.entries.map { strategy ->
+        return BypassStrategy.entries.filter { it.status == ImplementationStatus.VALIDATED || it.status == ImplementationStatus.EXPERIMENTAL }.map { strategy ->
             val states = StrategyStateRepository.getStates(strategy = strategy, profileId = profileId)
             val successes = states.sumOf { it.successCount.get().toLong() }
             val failures = states.sumOf { it.failureCount.get().toLong() }
