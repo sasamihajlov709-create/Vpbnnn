@@ -22,6 +22,7 @@ import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aistudio.pinkproxy.fresh.*
 import com.aistudio.pinkproxy.fresh.R
+import com.aistudio.pinkproxy.fresh.QuicBypassMode
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleLightPink
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink
@@ -36,6 +37,7 @@ fun ExpertSettingsCard(
 
     var isAutoTuning by remember { mutableStateOf(BypassConfig.isAutoTuning) }
     var isDiagnosticModeState by remember { mutableStateOf(BypassConfig.isDiagnosticMode) }
+    val quicBypassMode by BypassConfig.quicBypassMode.collectAsStateWithLifecycle()
     var autoConnect by remember { mutableStateOf(context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE).getBoolean("auto_connect_on_launch", false)) }
 
     val customServices by ServiceChecker.customServices.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -304,6 +306,28 @@ fun ExpertSettingsCard(
                 ) {
                     Text("ДОБАВИТЬ СЕРВИС В ПРОВЕРКУ", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
                 }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("UDP QUIC BYPASS MODE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    QuicBypassMode.entries.forEach { mode ->
+                        val isSelected = mode == quicBypassMode
+                        Button(
+                            onClick = { BypassConfig.setQuicBypassMode(mode) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) GentleDarkPink else GentleMediumPink.copy(alpha = 0.2f)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f).height(32.dp),
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text(mode.name.replace("_", " "), fontSize = 9.sp, color = GentleLightPink)
+                        }
+                    }
+                }
+
 
                 if (customServices.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))

@@ -49,6 +49,7 @@ fun SettingsScreen(
             item { AppFilterCard(context, onSettingsChanged) }
             item { AutoConnectCard(context) }
             item { BatteryOptimizationInfoCard(context) }
+            item { TestingStrategiesSelectionCard() }
             item { ExpertSettingsCard(context, isVpnActive) }
 
             item {

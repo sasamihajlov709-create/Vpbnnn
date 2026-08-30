@@ -75,7 +75,7 @@ object TlsParser {
                 }
                 pos += extLen
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             // Brute force search as last resort if structured parsing fails
             if (host != null && host.isNotEmpty()) {
                 val offset = findHostInPayload(buffer, length, host)
@@ -92,7 +92,7 @@ object TlsParser {
             val nameLen = ((buffer[offset - 2].toInt() and 0xFF) shl 8) or (buffer[offset - 1].toInt() and 0xFF)
             if (offset + nameLen > length) return null
             return String(buffer, offset, nameLen, java.nio.charset.StandardCharsets.US_ASCII)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             return null
         }
     }
@@ -126,7 +126,7 @@ object TlsParser {
                 if (extType == 0xfe0d || extType == 0xff0d || extType == 0x1102) return true
                 pos += 4 + extLen
             }
-        } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
         return false
     }
 
@@ -190,7 +190,7 @@ object TlsParser {
                 pos += 4 + extLen
             }
             return copy
-        } catch (e: Throwable) { return buffer.copyOf(length) }
+        } catch (e: Exception) { return buffer.copyOf(length) }
     }
 
     fun shuffleCiphers(buffer: ByteArray, length: Int, rnd: java.util.concurrent.ThreadLocalRandom): ByteArray {
@@ -225,7 +225,7 @@ object TlsParser {
                 copy[idx + 1] = ciphers[i].second
             }
             return copy
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             return buffer.copyOf(length)
         }
     }
@@ -287,7 +287,7 @@ object TlsParser {
             // If ALPN not present, inject ALPN extension
             val fakeAlpn = byteArrayOf(0x00, 0x0c, 0x02, 'h'.code.toByte(), '2'.code.toByte(), 0x08, 'h'.code.toByte(), 't'.code.toByte(), 't'.code.toByte(), 'p'.code.toByte(), '/'.code.toByte(), '1'.code.toByte(), '.'.code.toByte(), '1'.code.toByte())
             return TlsPacketBuilder.injectExtension(buffer, length, 0x0010, fakeAlpn)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             return buffer.copyOf(length)
         }
     }
@@ -317,7 +317,7 @@ object TlsParser {
                 if (extType == 0xfe0d || extType == 0xff0d || extType == 0x1102 || extType == 0x0037 || (extType in 0xfe08..0xfe0d)) return pos
                 pos += 4 + extLen
             }
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
         return -1
     }
 
@@ -345,7 +345,7 @@ object TlsParser {
                 val newSniExt = TlsPacketBuilder.buildSniExtension(newSni)
                 return TlsPacketBuilder.replaceOrInjectExtension(buffer, length, 0x0000, newSniExt)
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             return buffer.copyOf(length)
         }
     }
@@ -403,7 +403,7 @@ object TlsParser {
                 }
                 pos += 4 + extLen
             }
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
         return false
     }
 
@@ -492,7 +492,7 @@ object TlsParser {
             }
             
             return result
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             return buffer.copyOf(length)
         }
     }

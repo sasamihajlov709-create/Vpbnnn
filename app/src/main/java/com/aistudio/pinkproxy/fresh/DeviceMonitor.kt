@@ -46,7 +46,7 @@ object DeviceMonitor {
                     BypassConfig.thermalStatus = status
                     Log.i("DeviceMonitor", "Thermal status changed: $status")
                 }
-            } catch (e: Throwable) {}
+            } catch (e: Exception) {}
         }
 
         val filter = IntentFilter().apply {

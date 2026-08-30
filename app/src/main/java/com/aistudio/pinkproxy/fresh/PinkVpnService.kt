@@ -1,4 +1,6 @@
 package com.aistudio.pinkproxy.fresh
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 
 import android.content.ComponentName
 import android.content.Context
@@ -76,7 +78,33 @@ class PinkVpnService : VpnService() {
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     private val serviceLock = Mutex()
-    @Volatile private var isStopping = false
+    @Volatile     private var notificationJob: Job? = null
+    
+    private fun startDynamicNotification() {
+        notificationJob?.cancel()
+        notificationJob = serviceScope.launch {
+            kotlinx.coroutines.flow.combine(
+                BypassConfig.strategy,
+                ProxyStats.activeFlows,
+                ProxyStats.censorshipIntensity
+            ) { strat, flows, intensity ->
+                val activeCount = flows.size
+                val panic = if (intensity > 50) " | PANIC" else ""
+                val subtext = "Str: ${strat.name} | Active: $activeCount$panic"
+                subtext
+            }.collectLatest { subtext ->
+                if (_isRunning.value) {
+                    notificationController.showNotification("Engine Active", subtext)
+                }
+            }
+        }
+    }
+    
+    private fun stopDynamicNotification() {
+        notificationJob?.cancel()
+        notificationJob = null
+    }
+    private var isStopping = false
     private var activeNetworkProfile: NetworkProfile = NetworkProfile.UNKNOWN
 
     override fun onCreate() {
@@ -284,6 +312,8 @@ class PinkVpnService : VpnService() {
     private suspend fun startVpnInternal() = withContext(ProxyDispatcher.io) {
         if (_isRunning.value) return@withContext
         isStopping = false
+        startDynamicNotification()
+        startDynamicNotification()
         Log.i("PinkVpnService", "Starting VPN internal sequence...")
 
         val session = VpnSessionManager.startSession(this@PinkVpnService)
@@ -577,6 +607,7 @@ class PinkVpnService : VpnService() {
     private suspend fun stopVpnInternal() = withContext(ProxyDispatcher.io) {
         if (isStopping) return@withContext
         isStopping = true
+        stopDynamicNotification()
         Log.d("PinkVpnService", "Executing synchronized stop sequence...")
 
         try {
@@ -625,6 +656,7 @@ class PinkVpnService : VpnService() {
             VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
         } finally {
             isStopping = false
+        startDynamicNotification()
         }
     }
 

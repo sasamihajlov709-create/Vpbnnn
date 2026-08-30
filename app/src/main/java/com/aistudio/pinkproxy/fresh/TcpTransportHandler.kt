@@ -244,7 +244,7 @@ object TcpTransportHandler {
                                     if (!clientSocket.isClosed && !clientSocket.isOutputShutdown) {
                                         clientSocket.shutdownOutput()
                                     }
-                                } catch (ignored: Throwable) {}
+                                } catch (ignored: Exception) {}
                                 break
                             }
                             lastActivity.set(System.currentTimeMillis())
@@ -296,7 +296,7 @@ object TcpTransportHandler {
                                 if (!finalRemoteSocket.isClosed && !finalRemoteSocket.isOutputShutdown) {
                                     finalRemoteSocket.shutdownOutput()
                                 }
-                            } catch (ignored: Throwable) {}
+                            } catch (ignored: Exception) {}
                             break
                         }
                         lastActivity.set(System.currentTimeMillis())
@@ -325,7 +325,7 @@ object TcpTransportHandler {
                             try {
                                 if (isSecondaryTlsOrHttp && effectiveStrategy != BypassStrategy.DIRECT) {
                                     Log.v("TcpTransport", "Detected secondary TLS/HTTP payload in packet #$packetIndex for $targetHost - applying evasion")
-                                    BypassApplier.applyBypass(finalRemoteSocket, finalRemoteOut, clientBuffer, read, config, targetHost)
+                                    BypassApplier.applyBypass(finalRemoteSocket, finalRemoteOut, clientBuffer, read, config, targetHost, isFirstPacket = false)
                                 } else {
                                     finalRemoteOut.write(clientBuffer, 0, read)
                                     finalRemoteOut.flush()
@@ -363,7 +363,7 @@ object TcpTransportHandler {
         } catch (e: Exception) {
             Log.e("TcpTransport", "Unexpected session error for $targetHost: ${e.message}", e)
             onConnectFailure?.invoke(e.message ?: "UNKNOWN")
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("TcpTransport", "Critical session error for $targetHost", e)
         } finally {
             try { clientSocket.close() } catch (e: java.io.IOException) {

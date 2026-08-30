@@ -8,7 +8,7 @@ import java.util.concurrent.ThreadLocalRandom
 
 object BypassApplier {
 
-    suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) {
+    suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String, isFirstPacket: Boolean = true) {
         val rnd = ThreadLocalRandom.current()
         val strategy = config.strategy
         if (strategy == BypassStrategy.DIRECT) {
@@ -72,7 +72,8 @@ object BypassApplier {
             strategy = strategy,
             config = config,
             effectiveDelayMs = effectiveDelay,
-            random = rnd
+            random = rnd,
+            isFirstPacket = isFirstPacket
         )
         executor.executeTcp(tcpContext)
     }

@@ -19,7 +19,8 @@ data class TcpExecutionContext(
     val strategy: BypassStrategy,
     val config: SessionConfig,
     val effectiveDelayMs: Long,
-    val random: ThreadLocalRandom = ThreadLocalRandom.current()
+    val random: ThreadLocalRandom = ThreadLocalRandom.current(),
+    val isFirstPacket: Boolean = true
 )
 
 /**
@@ -34,7 +35,8 @@ data class UdpExecutionContext(
     val host: String,
     val strategy: BypassStrategy,
     val config: SessionConfig,
-    val random: ThreadLocalRandom = ThreadLocalRandom.current()
+    val random: ThreadLocalRandom = ThreadLocalRandom.current(),
+    val isFirstPacket: Boolean = true
 )
 
 class UnsupportedStrategyException(

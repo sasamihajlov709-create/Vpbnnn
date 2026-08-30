@@ -8,8 +8,8 @@ import javax.net.ssl.SSLSocketFactory
 
 class ProtectedSocketFactory(private val vpnService: VpnService?) : SocketFactory() {
     override fun createSocket(): Socket {
-        val s = Socket()
-        try { vpnService?.protect(s) } catch (e: Throwable) {}
+        val s = Socket();
+        if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
         return s
     }
     override fun createSocket(host: String?, port: Int): Socket = createSocket().apply { connect(java.net.InetSocketAddress(host, port)) }
@@ -23,8 +23,8 @@ class ProtectedSSLSocketFactory(private val base: SSLSocketFactory, private val 
     override fun getSupportedCipherSuites(): Array<String> = base.supportedCipherSuites
     override fun createSocket(s: Socket?, host: String?, port: Int, autoClose: Boolean): Socket = base.createSocket(s, host, port, autoClose)
     override fun createSocket(): Socket {
-        val s = Socket()
-        try { vpnService?.protect(s) } catch (e: Throwable) {}
+        val s = Socket();
+        if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
         return base.createSocket(s, null, 0, true)
     }
     override fun createSocket(host: String?, port: Int): Socket = base.createSocket(createSocket(), host, port, true)
@@ -49,10 +49,10 @@ class BootstrapDns : okhttp3.Dns {
             "doh.opendns.com" to listOf("208.67.222.222", "208.67.220.220"),
             "doh.mullvad.net" to listOf("194.242.2.2")
         )
-        known[hostname.lowercase()]?.let { ips -> return ips.mapNotNull { try { InetAddress.getByName(it) } catch(e: Throwable) { null } } }
+        known[hostname.lowercase()]?.let { ips -> return ips.mapNotNull { try { InetAddress.getByName(it) } catch (e: Exception) { null } } }
         return try {
             DnsCacheManager.getCached(hostname) ?: InetAddress.getAllByName(hostname).toList()
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             emptyList()
         }
     }

@@ -169,7 +169,7 @@ object AutoTtlProber {
         } catch (e: Exception) {
             Log.v("AutoTtlProber", "MTU probe failed for $host: ${e.message}")
             return 1400
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("AutoTtlProber", "Critical MTU probe error for $host", e)
             return 1400
         } finally {
@@ -182,7 +182,7 @@ object AutoTtlProber {
             var socket: Socket? = null
             try {
                 socket = Socket()
-                vpnService?.protect(socket)
+                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
                 TtlHelper.tuneSocket(socket)
                 TtlHelper.setMss(socket, (mtu - 40).coerceAtLeast(512))
                 socket.connect(InetSocketAddress(addr, port), 1000)
@@ -248,7 +248,7 @@ object AutoTtlProber {
         } catch (e: Exception) {
             Log.v("AutoTtlProber", "TTL probe failed for $host: ${e.message}")
             return 64
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("AutoTtlProber", "Critical TTL probe error for $host", e)
             return 64
         } finally {
@@ -269,7 +269,7 @@ object AutoTtlProber {
             var socket: java.net.DatagramSocket? = null
             try {
                 socket = java.net.DatagramSocket()
-                vpnService?.protect(socket)
+                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
                 TtlHelper.setUdpTtl(socket, ttl, addr is java.net.Inet6Address)
                 socket.soTimeout = 1000
                 val data = if (port == 53) DnsPacketEngine.buildDnsQuery("google.com", 1, 123) else ByteArray(16)
@@ -277,10 +277,10 @@ object AutoTtlProber {
                 val buffer = ByteArray(512)
                 socket.receive(java.net.DatagramPacket(buffer, buffer.size))
                 true
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 false
             } finally {
-                try { socket?.close() } catch (e: Throwable) {}
+                try { socket?.close() } catch (e: Exception) {}
             }
         }
     }
@@ -325,7 +325,7 @@ object AutoTtlProber {
                 var socket: Socket? = null
                 try {
                     socket = Socket()
-                    vpnService?.protect(socket)
+                    if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
                     TtlHelper.setTtl(socket, ttl)
                     socket.connect(InetSocketAddress(addr, port), 800)
                     
@@ -342,7 +342,7 @@ object AutoTtlProber {
                     
                     val buffer = ByteArray(512)
                     socket.soTimeout = 600
-                    val read = try { input.read(buffer) } catch(e: Throwable) { -2 }
+                    val read = try { input.read(buffer) } catch (e: Exception) { -2 }
                     
                     if (read > 0) {
                         val content = String(buffer, 0, read.coerceAtMost(64), Charsets.US_ASCII).lowercase()
@@ -352,11 +352,11 @@ object AutoTtlProber {
                     }
                 } catch (e: java.net.SocketTimeoutException) {
                     // No response within TTL is normal for non-censor hop
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     val msg = e.message?.lowercase() ?: ""
                     if (msg.contains("reset") || msg.contains("closed") || msg.contains("pipe")) return@withContext true
                 } finally {
-                    try { socket?.close() } catch (e: Throwable) {}
+                    try { socket?.close() } catch (e: Exception) {}
                 }
                 delay(ThreadLocalRandom.current().nextLong(10, 50))
             }
@@ -397,7 +397,7 @@ object AutoTtlProber {
                 editor.putInt("mtu_$host", mtu)
             }
             editor.apply()
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("AutoTtlProber", "saveTtlMtuState error: ${e.message}")
         }
     }
@@ -423,7 +423,7 @@ object AutoTtlProber {
                     }
                 }
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("AutoTtlProber", "loadTtlMtuState error: ${e.message}")
         }
     }
@@ -433,14 +433,14 @@ object AutoTtlProber {
             var socket: Socket? = null
             try {
                 socket = Socket()
-                vpnService?.protect(socket)
+                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
                 TtlHelper.setTtl(socket, ttl)
                 socket.connect(InetSocketAddress(addr, port), 1200)
                 true
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 false
             } finally {
-                try { socket?.close() } catch (e: Throwable) {}
+                try { socket?.close() } catch (e: Exception) {}
             }
         }
     }

@@ -63,7 +63,7 @@ object RobustResolver {
                 throw e
             } catch (e: Exception) {
                 Log.v("RobustResolver", "Unexpected error in DnsOverTcp for $host: ${e.message}")
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 Log.e("RobustResolver", "Critical DnsOverTcp error", e)
             }
         }
@@ -243,7 +243,7 @@ object RobustResolver {
                     throw e
                 } catch (e: Exception) {
                     Log.v("RobustResolver", "Fake query error: ${e.message}")
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     Log.v("RobustResolver", "Critical fake query error: ${e.message}")
                 }
                 }
@@ -254,7 +254,7 @@ object RobustResolver {
         val primaryDoT: suspend () -> List<InetAddress> = { DnsProtocols.queryDot(host, DnsOptimizer.bestDotServer, vpnService, type) }
         val shadowUdp: suspend () -> List<InetAddress> = { DnsProtocols.queryUdpDnsShadow(host, "1.1.1.1", vpnService, type) }
         val shadowTcp: suspend () -> List<InetAddress> = { DnsProtocols.queryTcpDnsShadow(host, "8.8.8.8", vpnService, type) }
-        val dnsQuic: suspend () -> List<InetAddress> = { DnsProtocols.queryDohOverQuic(host, DnsOptimizer.bestDoqServer, vpnService, type) }
+        val dnsDoh3: suspend () -> List<InetAddress> = { DnsProtocols.queryDohOverQuic(host, DnsOptimizer.bestDoh3Server, vpnService, type) }
         val echCheck: suspend () -> List<InetAddress> = {
             try {
                 val httpsRecords = DnsProtocols.queryHttpsRecord(host, vpnService)
@@ -265,7 +265,7 @@ object RobustResolver {
                 throw e
             } catch (e: Exception) {
                 Log.v("RobustResolver", "ECH check error: ${e.message}")
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 Log.v("RobustResolver", "Critical ECH check error: ${e.message}")
             }
             emptyList()
@@ -304,7 +304,7 @@ object RobustResolver {
         queries.add(primaryDoT)
         queries.add(shadowUdp)
         queries.add(shadowTcp)
-        queries.add(dnsQuic)
+        queries.add(dnsDoh3)
         queries.add(echCheck)
 
         if (intensity > 60) {
@@ -324,9 +324,9 @@ object RobustResolver {
         val firstGroup = if (customDnsQuery != null) listOf(customDnsQuery, primaryDoH) else listOf(primaryDoH, shadowUdp)
         val queryGroups = listOf(
             firstGroup,
-            listOf(primaryDoT, dnsQuic),
+            listOf(primaryDoT, dnsDoh3),
             listOf(shadowTcp, echCheck),
-            queries.filter { it !in firstGroup && it !in listOf(primaryDoT, dnsQuic, shadowTcp, echCheck) }
+            queries.filter { it !in firstGroup && it !in listOf(primaryDoT, dnsDoh3, shadowTcp, echCheck) }
         )
 
         val staggerDelay = if (BypassConfig.isPowerSaveMode || BypassConfig.batteryLevel < 15) 600L else 250L // 250ms delay between groups if no result yet
@@ -340,16 +340,11 @@ object RobustResolver {
                             throw e
                         } catch (e: Exception) {
                             emptyList()
-                        } catch (e: Throwable) {
-                            Log.e("RobustResolver", "Critical query failure", e)
-                            emptyList()
                         }
                         try { channel.send(res) } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
                             Log.v("RobustResolver", "Failed to send result to channel: ${e.message}")
-                        } catch (e: Throwable) {
-                            Log.v("RobustResolver", "Critical error sending result to channel: ${e.message}")
                         }
                     }
                 }
@@ -363,12 +358,8 @@ object RobustResolver {
                     throw e
                 } catch (e: Exception) {
                     emptyList()
-                } catch (e: Throwable) {
-                    emptyList()
                 }
                 try { channel.send(res) } catch (e: Exception) {
-                    Log.v("RobustResolver", "Failed to send fallback result to channel: ${e.message}")
-                } catch (e: Throwable) {
                     Log.v("RobustResolver", "Critical error sending fallback result to channel: ${e.message}")
                 }
             }
@@ -384,8 +375,6 @@ object RobustResolver {
                     if (e !is TimeoutCancellationException) throw e
                     emptyList()
                 } catch (e: Exception) {
-                    emptyList()
-                } catch (e: Throwable) {
                     emptyList()
                 }
                 if (res.isNotEmpty()) {

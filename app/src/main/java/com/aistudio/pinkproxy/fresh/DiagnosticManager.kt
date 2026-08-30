@@ -41,9 +41,9 @@ object DiagnosticManager {
                         BypassConfig.activeVpnService?.protect(socket)
                         socket.connect(InetSocketAddress(ips.first(), 443), 3000)
                         tcpSuccess.incrementAndGet()
-                    } catch (e: Throwable) {
+                    } catch (e: Exception) {
                     } finally {
-                        try { socket.close() } catch (e: Throwable) {}
+                        try { socket.close() } catch (e: Exception) {}
                     }
                 }
             }

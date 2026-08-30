@@ -27,7 +27,7 @@ object DnsUtils {
                 return ParsedDnsQuery(sb.toString(), qtype)
             }
             return ParsedDnsQuery(sb.toString(), 1)
-        } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}"); return null }
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}"); return null }
     }
 
     fun buildDnsReply(query: ByteArray, queryOffset: Int, queryLength: Int, ips: List<String>, isIpv6: Boolean): ByteArray {
@@ -37,7 +37,7 @@ object DnsUtils {
                 if (isIpv6 && addr is java.net.Inet6Address) addr
                 else if (!isIpv6 && addr is java.net.Inet4Address) addr
                 else null
-            } catch (e: Throwable) { null }
+            } catch (e: Exception) { null }
         }
 
         val bos = java.io.ByteArrayOutputStream()

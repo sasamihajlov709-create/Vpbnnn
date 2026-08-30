@@ -78,11 +78,12 @@ object TlsStrategyHandler : StrategyExecutor {
             length = context.length,
             rnd = context.random,
             host = context.host,
-            strategy = context.strategy
+            strategy = context.strategy,
+            isFirstPacket = context.isFirstPacket
         )
     }
 
-    suspend fun handleTlsStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
+    suspend fun handleTlsStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, isFirstPacket: Boolean = true) {
         if (strategy == BypassStrategy.DIRECT) {
             output.write(data, 0, length)
             output.flush()
@@ -162,8 +163,10 @@ object TlsStrategyHandler : StrategyExecutor {
             }
             BypassStrategy.FRAGMENT_MULTI, BypassStrategy.TLS_MULTI_FRAG, BypassStrategy.TLS_RECORD_FRAGMENTATION -> {
                 var pos = 0
+                val minSz = if (length > 200) 16 else 5
+                val maxSz = if (length > 200) 64 else 50
                 while (pos < length) {
-                    val sz = rnd.nextInt(5, 50).coerceAtMost(length - pos)
+                    val sz = rnd.nextInt(minSz, maxSz).coerceAtMost(length - pos)
                     output.write(data, pos, sz)
                     output.flush()
                     pos += sz
@@ -227,11 +230,18 @@ object TlsStrategyHandler : StrategyExecutor {
                 }
             }
             BypassStrategy.TLS_CLIENT_HELLO_CHOP -> {
+                if (!isFirstPacket) {
+                    output.write(data, 0, length)
+                    output.flush()
+                    return
+                }
                 var pos = 0
                 while (pos < length) {
-                    output.write(data, pos, 1)
+                    val sz = if (length > 200) rnd.nextInt(4, 16) else 1
+                    val chunk = sz.coerceAtMost(length - pos)
+                    output.write(data, pos, chunk)
                     output.flush()
-                    pos++
+                    pos += chunk
                     if (pos < length) delay(rnd.nextLong(1, 3))
                 }
             }
@@ -257,9 +267,11 @@ object TlsStrategyHandler : StrategyExecutor {
             BypassStrategy.TLS_0RTT_FAKE -> {
                 output.write(data, 0, length)
                 output.flush()
-                val fake0Rtt = FakePacketHelper.buildUdpNoise(rnd.nextInt(50, 150))
-                output.write(fake0Rtt)
-                output.flush()
+                if (isFirstPacket) {
+                    val fake0Rtt = FakePacketHelper.buildUdpNoise(rnd.nextInt(50, 150))
+                    output.write(fake0Rtt)
+                    output.flush()
+                }
             }
             BypassStrategy.TLS_ECH_FAKE -> {
                 val greased = TlsParser.addFakeEch(data, length, rnd)

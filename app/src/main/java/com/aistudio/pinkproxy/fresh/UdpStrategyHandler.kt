@@ -127,7 +127,7 @@ object UdpStrategyHandler : StrategyExecutor {
             }
             BypassStrategy.UDP_ZERO_LEN_SKEW -> {
                 val empty = DatagramPacket(ByteArray(0), 0, address, port)
-                try { socket.send(empty) } catch (e: Throwable) { android.util.Log.v("UdpStrategy", "Zero-len packet failed: ${e.message}") }
+                try { socket.send(empty) } catch (e: Exception) { android.util.Log.v("UdpStrategy", "Zero-len packet failed: ${e.message}") }
                 delay(rnd.nextLong(1, 3))
                 socket.send(DatagramPacket(data, length, address, port))
             }
@@ -223,7 +223,7 @@ object UdpStrategyHandler : StrategyExecutor {
                 val fakePkt = DatagramPacket(ghost, ghost.size, address, port)
                 val isIpv6 = address is java.net.Inet6Address
                 TtlHelper.setUdpTtl(socket, 1, isIpv6)
-                try { socket.send(fakePkt) } catch (_: Throwable) {}
+                try { socket.send(fakePkt) } catch (_: Exception) {}
                 TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl, isIpv6)
                 socket.send(DatagramPacket(data, length, address, port))
             }
@@ -290,7 +290,7 @@ object UdpStrategyHandler : StrategyExecutor {
         val discoveredTtl = AutoTtlProber.getDiscoveredTtl(targetAddr.hostAddress ?: "") ?: 3
         val isIpv6 = targetAddr is java.net.Inet6Address
         TtlHelper.setUdpTtl(socket, discoveredTtl, isIpv6)
-        try { socket.send(ghost) } catch (e: Throwable) { android.util.Log.v("UdpStrategy", "Fake UDP send failed: ${e.message}") }
+        try { socket.send(ghost) } catch (e: Exception) { android.util.Log.v("UdpStrategy", "Fake UDP send failed: ${e.message}") }
         TtlHelper.setUdpTtl(socket, BypassConfig.currentTtl, isIpv6)
         delay(delayMs)
         socket.send(realPacket)

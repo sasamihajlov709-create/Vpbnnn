@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
             PinkVpnService.loadFilterSettings(this)
             BypassConfig.loadTuningSettings(this)
             RobustResolver.loadDnsSettings(this)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("MainActivity", "Error loading initial settings", e)
         }
         
@@ -81,7 +81,7 @@ class MainActivity : ComponentActivity() {
                                     action = "RESTART"
                                 }
                                 androidx.core.content.ContextCompat.startForegroundService(this@MainActivity, intent)
-                            } catch (e: Throwable) {
+                            } catch (e: Exception) {
                                 Log.e("MainActivity", "Quick restart failed: ${e.message}")
                             }
                         }
@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
                 }
                 startActivity(intent)
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("MainActivity", "Failed to request battery optimization exemption", e)
         }
     }
@@ -134,7 +134,7 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, PinkVpnService::class.java)
         try {
             androidx.core.content.ContextCompat.startForegroundService(this, intent)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("MainActivity", "Failed to start VPN service: ${e.message}")
         }
     }
@@ -145,7 +145,7 @@ class MainActivity : ComponentActivity() {
         }
         try {
             androidx.core.content.ContextCompat.startForegroundService(this, intent)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("MainActivity", "Failed to stop VPN service: ${e.message}")
         }
     }

@@ -80,7 +80,7 @@ object ServiceChecker {
             throw e
         } catch (e: Exception) {
             Log.e("ServiceChecker", "Check failed: ${e.message}")
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("ServiceChecker", "Critical checker error", e)
         } finally {
             isProbing.set(false)

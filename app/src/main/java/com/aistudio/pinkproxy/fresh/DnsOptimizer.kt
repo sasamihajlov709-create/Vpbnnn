@@ -35,7 +35,7 @@ object DnsOptimizer {
         "45.90.28.0", "8.8.4.4", "1.0.0.1", "185.222.222.222"
     )
 
-    private val doqServers = listOf(
+    private val doh3Servers = listOf(
         "94.140.14.14", "94.140.15.15", "45.90.28.0", "176.103.130.130", "1.1.1.1"
     )
 
@@ -43,7 +43,7 @@ object DnsOptimizer {
     private val providerFailures = ConcurrentHashMap<String, Int>()
     @Volatile var bestDohUrl = "https://dns.google/dns-query"
     @Volatile var bestDotServer = "8.8.8.8"
-    @Volatile var bestDoqServer = "94.140.14.14"
+    @Volatile var bestDoh3Server = "94.140.14.14"
     
     private var lastProbeTime = 0L
         
@@ -75,7 +75,7 @@ object DnsOptimizer {
         return withContext(ProxyDispatcher.io) {
             val socket = java.net.Socket()
             try {
-                try { vpnService?.protect(socket) } catch(e: Throwable) { Log.v("DnsOptimizer", "Socket protection failed: ${e.message}") }
+                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
                 socket.tcpNoDelay = true
                 // We use a very short timeout for verification to avoid blocking the resolver
                 socket.connect(java.net.InetSocketAddress(ip, 443), 1200)
@@ -86,12 +86,12 @@ object DnsOptimizer {
                 // For critical domains (AI, Finance), we are stricter.
                 val cat = HostClassifier.classify(domain)
                 cat != HostCategory.AI && cat != HostCategory.FINANCE && cat != HostCategory.SECURITY
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 // Connection refused or reset is a strong signal of poisoning or blocking
                 Log.d("DnsOptimizer", "IP verification failed for $domain ($ip): ${e.message}")
                 false
             } finally {
-                try { socket.close() } catch (e: Throwable) { Log.v("DnsOptimizer", "Socket close failed: ${e.message}") }
+                try { socket.close() } catch (e: Exception) { Log.v("DnsOptimizer", "Socket close failed: ${e.message}") }
             }
         }
     }
@@ -155,21 +155,21 @@ object DnsOptimizer {
         }
     }
 
-    fun recordDoqSuccess(server: String) {
-        val key = if (server.startsWith("doq://")) server else "doq://$server"
+    fun recordDoh3Success(server: String) {
+        val key = if (server.startsWith("doh3://")) server else "doh3://$server"
         providerFailures[key] = ((providerFailures[key] ?: 1) - 1).coerceAtLeast(0)
         DnsCacheManager.reportResolverResult(key, true)
     }
 
-    fun recordDoqFailure(server: String) {
-        val key = if (server.startsWith("doq://")) server else "doq://$server"
+    fun recordDoh3Failure(server: String) {
+        val key = if (server.startsWith("doh3://")) server else "doh3://$server"
         val f = (providerFailures[key] ?: 0) + 1
         providerFailures[key] = f
         if (f > 5) {
             providerBlacklist[key] = System.currentTimeMillis() + 600000L
         }
         DnsCacheManager.reportResolverResult(key, false)
-        if ((server == bestDoqServer || key == "doq://$bestDoqServer") && f > 3) {
+        if ((server == bestDoh3Server || key == "doh3://$bestDoh3Server") && f > 3) {
             forceRefresh()
         }
     }
@@ -217,7 +217,7 @@ object DnsOptimizer {
                     if (index > 0) delay(index * 30L) // 30ms stagger
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh(domain, url, vpnService) } } catch (e: Throwable) { 
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDoh(domain, url, vpnService) } } catch (e: Exception) { 
                         if (e !is TimeoutCancellationException && e is CancellationException) throw e
                         emptyList() 
                     }
@@ -235,7 +235,7 @@ object DnsOptimizer {
                     if (index > 0) delay(index * 30L) // 30ms stagger
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDot(domain, server, vpnService) } } catch (e: Throwable) { 
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDot(domain, server, vpnService) } } catch (e: Exception) { 
                         if (e !is TimeoutCancellationException && e is CancellationException) throw e
                         emptyList() 
                     }
@@ -248,33 +248,33 @@ object DnsOptimizer {
                     }
                 }
             }
-            val doqJobs = doqServers.mapIndexed { index, server ->
+            val doh3Jobs = doh3Servers.mapIndexed { index, server ->
                 async {
                     if (index > 0) delay(index * 30L)
                     val start = System.currentTimeMillis()
                     val domain = testDomains.random()
-                    val res = try { withTimeout(4000) { DnsProtocols.queryDohOverQuic(domain, server, vpnService) } } catch (e: Throwable) {
+                    val res = try { withTimeout(4000) { DnsProtocols.queryDohOverQuic(domain, server, vpnService) } } catch (e: Exception) {
                         if (e !is TimeoutCancellationException && e is CancellationException) throw e
                         emptyList()
                     }
                     if (res.isNotEmpty()) {
-                        providerLatencies["doq://$server"] = System.currentTimeMillis() - start
-                        providerFailures["doq://$server"] = 0
+                        providerLatencies["doh3://$server"] = System.currentTimeMillis() - start
+                        providerFailures["doh3://$server"] = 0
                     } else {
-                        providerLatencies["doq://$server"] = 9999L
-                        providerFailures["doq://$server"] = (providerFailures["doq://$server"] ?: 0) + 1
+                        providerLatencies["doh3://$server"] = 9999L
+                        providerFailures["doh3://$server"] = (providerFailures["doh3://$server"] ?: 0) + 1
                     }
                 }
             }
             dohJobs.awaitAll()
             dotJobs.awaitAll()
-            doqJobs.awaitAll()
+            doh3Jobs.awaitAll()
             
             bestDohUrl = providerLatencies.filterKeys { it.startsWith("https") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: currentDohUrls[0]
-            bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") && !it.startsWith("doq://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dotServers[0]
-            bestDoqServer = providerLatencies.filterKeys { it.startsWith("doq://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key?.substringAfter("doq://") ?: doqServers[0]
+            bestDotServer = providerLatencies.filterKeys { !it.startsWith("https") && !it.startsWith("doh3://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key ?: dotServers[0]
+            bestDoh3Server = providerLatencies.filterKeys { it.startsWith("doh3://") }.minByOrNull { it.value + (providerFailures[it.key] ?: 0) * 100L }?.key?.substringAfter("doh3://") ?: doh3Servers[0]
             
-            Log.i("DnsOptimizer", "Probing completed. Best DoH: $bestDohUrl, Best DoT: $bestDotServer, Best DoQ: $bestDoqServer")
+            Log.i("DnsOptimizer", "Probing completed. Best DoH: $bestDohUrl, Best DoT: $bestDotServer, Best DoH3: $bestDoh3Server")
         }
     }
 

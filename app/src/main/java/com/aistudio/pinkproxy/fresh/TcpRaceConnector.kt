@@ -66,7 +66,7 @@ object TcpRaceConnector {
             winner = withTimeoutOrNull(6000) {
                 resultChannel.receive()
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TcpRaceConnector", "Race timeout for $host")
         } finally {
             job1.cancel()
@@ -82,7 +82,7 @@ object TcpRaceConnector {
                             other.output.close()
                             try { other.socket.setSoLinger(true, 0) } catch (ignored: Exception) {}
                             other.socket.close() 
-                        } catch (e: Throwable) {
+                        } catch (e: Exception) {
                             Log.v("TcpRaceConnector", "Failed to close loser socket: ${e.message}")
                         }
                     }
@@ -169,10 +169,10 @@ object TcpRaceConnector {
                     requestedStrategy = requestedStrategy,
                     effectiveStrategy = effectiveStrategy
                 )
-                try { rs.close() } catch (e: Throwable) {}
+                try { rs.close() } catch (e: Exception) {}
                 return null
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
                 FailureReason.TCP_RESET
             } else {
@@ -189,7 +189,7 @@ object TcpRaceConnector {
                 requestedStrategy = requestedStrategy,
                 effectiveStrategy = effectiveStrategy
             )
-            try { rs.close() } catch (ex: Throwable) {}
+            try { rs.close() } catch (ex: Exception) {}
             if (e is CancellationException) throw e
             return null
         }

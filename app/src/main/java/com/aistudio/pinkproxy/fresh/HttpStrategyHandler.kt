@@ -86,7 +86,7 @@ object HttpStrategyHandler : StrategyExecutor {
 
         
 
-        if (strategy == BypassStrategy.TCP_REARRANGE_CHUNKS) {
+        if (strategy == BypassStrategy.TCP_REARRANGE_CHUNKS) { // Deprecated/Not in enum, kept for legacy logic
             if (length > 100) {
                 val c1Size = length / 3
                 val c2Size = length / 3
@@ -124,9 +124,11 @@ object HttpStrategyHandler : StrategyExecutor {
         if (strategy == BypassStrategy.HTTP_FRAGMENT) {
             var pos = 0
             while (pos < length) {
-                output.write(data, pos, 1)
+                val sz = if (length > 200) rnd.nextInt(4, 16) else 1
+                val chunk = sz.coerceAtMost(length - pos)
+                output.write(data, pos, chunk)
                 output.flush()
-                pos += 1
+                pos += chunk
                 if (pos < length) delay(rnd.nextLong(1, 5))
             }
             return

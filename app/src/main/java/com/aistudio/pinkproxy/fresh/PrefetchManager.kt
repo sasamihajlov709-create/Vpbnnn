@@ -36,7 +36,7 @@ object PrefetchManager {
                     }
                 } catch (e: CancellationException) {
                     break
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     Log.e("PrefetchManager", "Prefetch error", e)
                     delay(60000)
                 }
@@ -68,16 +68,16 @@ object PrefetchManager {
             withContext(ProxyDispatcher.io) {
                 val s = Socket()
                 try {
-                    vpnService?.protect(s)
+                    if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
                     TtlHelper.tuneSocket(s)
                     TtlHelper.applyMssClamping(s, host)
                     // Пытаемся просто открыть соединение на 443 порт
                     s.connect(InetSocketAddress(ips.first(), 443), 3000)
                     // Если успешно, сразу закрываем. Это "прогревает" маршруты и кэши в сети оператора.
                     Log.d("PrefetchManager", "Warmed up connection to $host")
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                 } finally {
-                    try { s.close() } catch (e: Throwable) {}
+                    try { s.close() } catch (e: Exception) {}
                 }
             }
         }

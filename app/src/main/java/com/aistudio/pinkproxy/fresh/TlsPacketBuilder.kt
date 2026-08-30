@@ -273,7 +273,7 @@ object TlsPacketBuilder {
                     for (i in 0 until sidLen) copy[sidLenOffset + 1 + i] = rnd.nextInt(256).toByte()
                 }
             }
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
         return copy
     }
 

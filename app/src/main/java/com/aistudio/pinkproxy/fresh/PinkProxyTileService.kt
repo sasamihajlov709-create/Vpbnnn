@@ -21,8 +21,13 @@ class PinkProxyTileService : TileService() {
         super.onStartListening()
         listenJob?.cancel()
         listenJob = scope.launch {
-            PinkVpnService.isRunning.collectLatest { running ->
-                updateTile(running)
+            kotlinx.coroutines.flow.combine(
+                PinkVpnService.isRunning,
+                BypassConfig.strategy
+            ) { running, strat ->
+                Pair(running, strat)
+            }.collectLatest { (running, strat) ->
+                updateTile(running, strat.name)
             }
         }
     }
@@ -38,7 +43,7 @@ class PinkProxyTileService : TileService() {
         try {
             listenJob?.cancel()
             scope.cancel()
-        } catch (e: Throwable) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
+        } catch (e: Exception) { android.util.Log.v("PinkProxy", "Ignored: ${e.message}") }
     }
 
     override fun onClick() {
@@ -50,7 +55,7 @@ class PinkProxyTileService : TileService() {
             }
             try {
                 androidx.core.content.ContextCompat.startForegroundService(this, intent)
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 android.util.Log.e("PinkProxyTileService", "Failed to start service: ${e.message}")
             }
         } else {
@@ -59,7 +64,7 @@ class PinkProxyTileService : TileService() {
                 val intent = Intent(this, PinkVpnService::class.java)
                 try {
                     androidx.core.content.ContextCompat.startForegroundService(this, intent)
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     android.util.Log.e("PinkProxyTileService", "Failed to start service: ${e.message}")
                     // Fallback to opening the app if we can't start the service in background
                     val appIntent = Intent(this, MainActivity::class.java).apply {
@@ -90,14 +95,14 @@ class PinkProxyTileService : TileService() {
                 }
             }
         }
-        updateTile(PinkVpnService.isRunning.value)
+        updateTile(PinkVpnService.isRunning.value, BypassConfig.strategy.value.name)
     }
 
-    private fun updateTile(isActive: Boolean) {
+    private fun updateTile(isActive: Boolean, strat: String = "Active") {
         val tile = qsTile ?: return
         tile.state = if (isActive) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = "PinkProxy"
-        tile.subtitle = if (isActive) "Active" else "Inactive"
+        tile.subtitle = if (isActive) strat else "Inactive"
         tile.updateTile()
     }
 }

@@ -110,7 +110,7 @@ object DnsCacheManager {
     fun getCached(host: String, type: Int = 1): List<InetAddress>? {
         ensureEfficiency()
         if (isIpAddress(host)) {
-            return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { null }
+            return try { listOf(InetAddress.getByName(host)) } catch (e: Exception) { null }
         }
         val cacheKey = if (type == 1) host else "$host:$type"
         val now = System.currentTimeMillis()
@@ -135,7 +135,7 @@ object DnsCacheManager {
     fun getCachedOrStale(host: String, type: Int = 1, maxStaleMs: Long = 24 * 3600 * 1000L): List<InetAddress>? {
         ensureEfficiency()
         if (isIpAddress(host)) {
-            return try { listOf(InetAddress.getByName(host)) } catch (e: Throwable) { null }
+            return try { listOf(InetAddress.getByName(host)) } catch (e: Exception) { null }
         }
         val cacheKey = if (type == 1) host else "$host:$type"
         val now = System.currentTimeMillis()
@@ -189,7 +189,7 @@ object DnsCacheManager {
         val lHost = host.lowercase()
         for ((domain, ips) in emergencyFallback) {
             if (lHost == domain || lHost.endsWith(".$domain")) {
-                return ips.mapNotNull { try { InetAddress.getByName(it) } catch(e: Throwable) { null } }
+                return ips.mapNotNull { try { InetAddress.getByName(it) } catch (e: Exception) { null } }
             }
         }
         return null
@@ -355,7 +355,7 @@ object DnsCacheManager {
 
     fun getStaticIps(host: String): List<InetAddress>? {
         return staticIps[host]?.mapNotNull { 
-            try { InetAddress.getByName(it) } catch (e: Throwable) { null }
+            try { InetAddress.getByName(it) } catch (e: Exception) { null }
         }
     }
 

@@ -271,7 +271,7 @@ object CensorshipExpert {
                     s.close()
                 }
             }
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
     }
 
     

@@ -21,7 +21,7 @@ object CandidateEngine {
         val now = System.currentTimeMillis()
         
         // 0. Implementation Status (Skip SIMULATED and NO_OP in dynamic selection)
-        if (strategy.status == ImplementationStatus.SIMULATED || strategy.status == ImplementationStatus.NO_OP) return false
+        if (strategy.status == ImplementationStatus.SIMULATED || strategy.status == ImplementationStatus.NO_OP || strategy.status == ImplementationStatus.UNSUPPORTED) return false
         
         // 1. Check Family Compatibility
         if (!DpiStrategySelector.isFamilyCompatible(strategy.family, context.transport)) return false

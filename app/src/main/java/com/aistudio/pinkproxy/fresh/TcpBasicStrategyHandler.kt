@@ -99,11 +99,12 @@ object TcpBasicStrategyHandler : StrategyExecutor {
             length = context.length,
             rnd = context.random,
             host = context.host,
-            strategy = context.strategy
+            strategy = context.strategy,
+            isFirstPacket = context.isFirstPacket
         )
     }
 
-    suspend fun handleTcpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy) {
+    suspend fun handleTcpStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, isFirstPacket: Boolean) {
         when (strategy) {
             BypassStrategy.PROTOCOL_CONFUSION_BITTORRENT, BypassStrategy.PROTOCOL_CONFUSION_MEMCACHED, 
             BypassStrategy.PROTOCOL_CONFUSION_REDIS, BypassStrategy.PROTOCOL_CONFUSION_SSH,
@@ -203,7 +204,7 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.TCP_WINDOW_RESTRICT, BypassStrategy.TCP_WINDOW_CLAMPING -> {
-            try { socket.sendBufferSize = 256 } catch (e: Throwable) { Log.v("TcpBasicStrategy", "Failed to set small send buffer: ${e.message}") }
+            try { socket.sendBufferSize = 256 } catch (e: Exception) { Log.v("TcpBasicStrategy", "Failed to set small send buffer: ${e.message}") }
             var pos = 0
             while (pos < length) {
                 val sz = rnd.nextInt(8, 32).coerceAtMost(length - pos)
@@ -212,7 +213,7 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 pos += sz
                 if (pos < length) delay(rnd.nextLong(1, 3))
             }
-            try { socket.sendBufferSize = 64 * 1024 } catch (e: Throwable) { Log.v("TcpBasicStrategy", "Failed to restore send buffer: ${e.message}") }
+            try { socket.sendBufferSize = 64 * 1024 } catch (e: Exception) { Log.v("TcpBasicStrategy", "Failed to restore send buffer: ${e.message}") }
                 return
             }
             BypassStrategy.TCP_DATA_REPETITION -> {
@@ -297,8 +298,10 @@ object TcpBasicStrategyHandler : StrategyExecutor {
             }
             BypassStrategy.TCP_SMALL_CHUNKS, BypassStrategy.TCP_RANDOM_PADDING -> {
                 var pos = 0
+                val minSz = if (length > 200) 16 else 4
+                val maxSz = if (length > 200) 48 else 12
                 while (pos < length) {
-                    val sz = rnd.nextInt(4, 12).coerceAtMost(length - pos)
+                    val sz = rnd.nextInt(minSz, maxSz).coerceAtMost(length - pos)
                     output.write(data, pos, sz)
                     output.flush()
                     pos += sz
@@ -332,8 +335,10 @@ object TcpBasicStrategyHandler : StrategyExecutor {
             }
             BypassStrategy.TCP_SACK_FAKE, BypassStrategy.TCP_SACK_PANIC, BypassStrategy.TCP_SACK_SKEW -> {
                 var pos = 0
+                val minSz = if (length > 300) 32 else 10
+                val maxSz = if (length > 300) 128 else 30
                 while (pos < length) {
-                    val sz = rnd.nextInt(10, 30).coerceAtMost(length - pos)
+                    val sz = rnd.nextInt(minSz, maxSz).coerceAtMost(length - pos)
                     output.write(data, pos, sz)
                     output.flush()
                     pos += sz
@@ -384,6 +389,11 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.TCP_FOOL_DPI -> {
+                if (!isFirstPacket) {
+                    output.write(data, 0, length)
+                    output.flush()
+                    return
+                }
                 val fake = FakePacketHelper.buildFakeHttpRequest("decoy.org")
                 TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
                 output.write(fake)
@@ -409,6 +419,11 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.TCP_TLS_SESSION_DESYNC -> {
+                if (!isFirstPacket) {
+                    output.write(data, 0, length)
+                    output.flush()
+                    return
+                }
                 val fake = FakePacketHelper.buildRealisticTlsHello("decoy.internal")
                 TtlHelper.setTtl(socket, StrategyUtils.getFakeTtl(host, rnd))
                 output.write(fake)
@@ -421,8 +436,10 @@ object TcpBasicStrategyHandler : StrategyExecutor {
             }
             BypassStrategy.TCP_TIMING_CHAOS -> {
                 var pos = 0
+                val minSz = if (length > 100) 16 else 1
+                val maxSz = if (length > 100) 64 else 5
                 while (pos < length) {
-                    val sz = rnd.nextInt(1, 5).coerceAtMost(length - pos)
+                    val sz = rnd.nextInt(minSz, maxSz).coerceAtMost(length - pos)
                     output.write(data, pos, sz)
                     output.flush()
                     pos += sz

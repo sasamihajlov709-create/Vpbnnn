@@ -34,6 +34,8 @@ object StabilityAnalyzer {
     val dnsCensorshipIntensity: StateFlow<Int> = _dnsCensorshipIntensity.asStateFlow()
     
     private val _censorshipIntensity = MutableStateFlow(0)
+    private val _fingerprint = MutableStateFlow(DpiAnalyzer.CensorshipFingerprint(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, TransportType.TCP))
+    val fingerprint: StateFlow<DpiAnalyzer.CensorshipFingerprint> = _fingerprint.asStateFlow()
 
     val censorshipIntensity: StateFlow<Int> = _censorshipIntensity.asStateFlow()
 

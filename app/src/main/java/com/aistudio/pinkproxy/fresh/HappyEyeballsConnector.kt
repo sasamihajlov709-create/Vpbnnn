@@ -33,7 +33,7 @@ object HappyEyeballsConnector {
         if (ips.size == 1) {
             val single = Socket()
             try {
-                vpnService?.protect(single)
+                if (vpnService?.protect(single) == false) throw java.io.IOException("protect failed")
                 TcpTransportManager.configureSocket(single)
                 TtlHelper.tuneSocket(single)
                 TtlHelper.applyMssClamping(single, host)
@@ -76,7 +76,7 @@ object HappyEyeballsConnector {
                     if (initialDelay > 0) {
                         delay(initialDelay)
                     }
-                    vpnService?.protect(s)
+                    if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
                     TcpTransportManager.configureSocket(s)
                     TtlHelper.tuneSocket(s)
                     TtlHelper.applyMssClamping(s, host)

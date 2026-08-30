@@ -16,7 +16,7 @@ object TtlHelper {
                 org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("")
                 Log.v("TtlHelper", "Successfully bypassed hidden API restrictions")
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("TtlHelper", "Failed to bypass hidden API restrictions", e)
         }
     }
@@ -33,17 +33,17 @@ object TtlHelper {
             if (fd != null && fd.valid()) {
                 block(fd)
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TtlHelper", "withFd error: ${e.message}")
         } finally {
-            try { pfd?.close() } catch (e: Throwable) {}
+            try { pfd?.close() } catch (e: Exception) {}
         }
     }
 
     private fun setsockoptInt(fd: FileDescriptor, level: Int, option: Int, value: Int) {
         try {
             android.system.Os.setsockoptInt(fd, level, option, value)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TtlHelper", "setsockoptInt failed: ${e.message}")
         }
     }
@@ -60,10 +60,10 @@ object TtlHelper {
                 else -> 64 * 1024 to 128 * 1024
             }
             
-            try { socket.sendBufferSize = sndBuf } catch (e: Throwable) {
+            try { socket.sendBufferSize = sndBuf } catch (e: Exception) {
                 Log.v("TtlHelper", "Failed to set send buffer: ${e.message}")
             }
-            try { socket.receiveBufferSize = rcvBuf } catch (e: Throwable) {
+            try { socket.receiveBufferSize = rcvBuf } catch (e: Exception) {
                 Log.v("TtlHelper", "Failed to set receive buffer: ${e.message}")
             }
             
@@ -74,7 +74,7 @@ object TtlHelper {
             if (networkType == NetworkType.MOBILE) {
                 setKeepAliveParams(socket, 20, 5, 3) // 20s idle, 5s interval, 3 probes
             }
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
     }
 
     fun setIpTos(socket: Any, tos: Int) {
@@ -95,7 +95,7 @@ object TtlHelper {
                 setsockoptInt(fd, 6, 4, idle)     // TCP_KEEPIDLE = 4
                 setsockoptInt(fd, 6, 5, interval) // TCP_KEEPINTVL = 5
                 setsockoptInt(fd, 6, 6, count)    // TCP_KEEPCNT = 6
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 Log.v("TtlHelper", "setKeepAliveParams failed: ${e.message}")
             }
         }
@@ -142,7 +142,7 @@ object TtlHelper {
             // Clamp MSS between 512 and (effectiveMtu - overhead)
             val clampedMss = (effectiveMtu - overhead).coerceIn(512, 1460)
             setMss(socket, clampedMss)
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
     }
 
     fun setWindowSize(socket: Any, size: Int) {
@@ -150,7 +150,7 @@ object TtlHelper {
             val safeSize = if (size <= 0) 1 else size
             if (socket is Socket) socket.receiveBufferSize = safeSize
             else if (socket is DatagramSocket) socket.receiveBufferSize = safeSize
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
     }
 
     fun setNoFrag(socket: Any, noFrag: Boolean) {
@@ -172,10 +172,10 @@ object TtlHelper {
                 val osObj = osField.get(null)
                 val method = osObj.javaClass.getMethod("getsockoptInt", FileDescriptor::class.java, Int::class.java, Int::class.java)
                 method.invoke(osObj, fd, level, option) as Int
-            } catch (e2: Throwable) {
+            } catch (e2: Exception) {
                 BypassConfig.currentTtl
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TtlHelper", "getsockoptInt failed: ${e.message}")
             BypassConfig.currentTtl
         }

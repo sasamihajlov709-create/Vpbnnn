@@ -24,7 +24,7 @@ object TcpTransportManager {
             }
         } catch (e: Exception) {
             Log.v("TcpTransportManager", "Failed to configure socket: ${e.message}")
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
              // Critical errors or OOM, just log and continue if possible
              Log.e("TcpTransportManager", "Critical socket configuration error", e)
         }
@@ -34,7 +34,7 @@ object TcpTransportManager {
         var s: Socket? = null
         try {
             s = Socket()
-            vpnService?.protect(s)
+            if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
             val resolved = RobustResolver.resolveDual(decoy, vpnService)
             if (resolved.isNotEmpty()) {
                 s.connect(InetSocketAddress(resolved.random(), 443), 2000)
@@ -52,7 +52,7 @@ object TcpTransportManager {
             throw e
         } catch (e: Exception) {
             Log.v("TcpTransportManager", "SNI ghosting failed for $decoy: ${e.message}")
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e("TcpTransportManager", "Critical SNI ghosting error", e)
         } finally {
             try { s?.close() } catch (ignored: Exception) {}
@@ -68,7 +68,7 @@ object TcpTransportManager {
                 rnd.nextInt(32768, 65536)
         } catch (e: Exception) {
             Log.v("TcpTransportManager", "Window oscillation failed: ${e.message}")
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TcpTransportManager", "Critical oscillation error: ${e.message}")
         }
     }
@@ -83,7 +83,7 @@ object TcpTransportManager {
             throw e
         } catch (e: Exception) {
             Log.v("TcpTransportManager", "Window pulse failed: ${e.message}")
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.v("TcpTransportManager", "Critical pulse error: ${e.message}")
         }
     }

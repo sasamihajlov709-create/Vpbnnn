@@ -60,10 +60,10 @@ object NetworkProber {
                     internetUp = true
                     break
                 }
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 Log.v("NetworkProber", "Baseline probe failed for $domain: ${e.message}")
             } finally {
-                try { conn?.disconnect() } catch (e: Throwable) {}
+                try { conn?.disconnect() } catch (e: Exception) {}
             }
         }
         return internetUp
@@ -71,12 +71,12 @@ object NetworkProber {
 
     suspend fun checkProxyReachable(proxyPort: Int): Boolean {
         return try {
-            val sock = java.net.Socket()
-            try { VpnSessionManager.currentSession?.vpnService?.protect(sock) } catch (e: Throwable) {}
+            val sock = java.net.Socket();
+            if (VpnSessionManager.currentSession?.vpnService?.protect(sock) == false) throw java.io.IOException("protect failed")
             sock.connect(InetSocketAddress("127.0.0.1", proxyPort), 1000)
             sock.close()
             true
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             false
         }
     }
@@ -127,13 +127,13 @@ object NetworkProber {
                         isUp = false 
                     }
                 }
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 isUp = false
             } finally {
                 if (strategyName != null) {
                     ProxyAuthenticator.credentials.remove()
                 }
-                try { connection?.disconnect() } catch (e: Throwable) {}
+                try { connection?.disconnect() } catch (e: Exception) {}
             }
             if (!isUp && attempt < 2) kotlinx.coroutines.delay(1000)
         }

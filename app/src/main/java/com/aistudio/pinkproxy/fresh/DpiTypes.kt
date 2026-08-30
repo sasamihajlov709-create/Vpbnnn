@@ -46,7 +46,7 @@ enum class DnsResolverTransport(val defaultPort: Int, val isSecure: Boolean) {
     PLAIN_TCP(53, false),
     DOH(443, true),
     DOT(853, true),
-    DOQ(853, true)
+    DOH3(853, true)
 }
 
 data class DpiEvent(val type: DpiType, val timestamp: Long = System.currentTimeMillis())

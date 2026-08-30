@@ -36,7 +36,8 @@ object AdaptiveStrategyHandler : StrategyExecutor {
             rnd = context.random,
             host = context.host,
             strategy = context.strategy,
-            config = context.config
+            config = context.config,
+            isFirstPacket = context.isFirstPacket
         )
     }
 
@@ -56,7 +57,7 @@ object AdaptiveStrategyHandler : StrategyExecutor {
         )
     }
 
-    suspend fun handleAdaptiveStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, config: SessionConfig) {
+    suspend fun handleAdaptiveStrategies(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, strategy: BypassStrategy, config: SessionConfig, isFirstPacket: Boolean) {
         when (strategy) {
             BypassStrategy.TCP_COMBINED_NUCLEAR, BypassStrategy.TCP_COMBINED_HYBRID -> {
                 handleNuclearStrategy(socket, output, data, length, rnd, host, config)
@@ -67,7 +68,11 @@ object AdaptiveStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.BYEBYEDPI_EXTREME, BypassStrategy.BYEBYEDPI_HYBRID -> {
-                handleByeByeDpiExtreme(socket, output, data, length, rnd, host, config)
+                if (isFirstPacket) {
+                    handleByeByeDpiExtreme(socket, output, data, length, rnd, host, config)
+                } else {
+                    handleAdaptiveChunk(socket, output, data, length, rnd, host, config)
+                }
                 return
             }
             BypassStrategy.BYEBYEDPI_SIM -> {
@@ -79,11 +84,19 @@ object AdaptiveStrategyHandler : StrategyExecutor {
                 return
             }
             BypassStrategy.CHAOS -> {
-                handleChaosStrategy(socket, output, data, length, rnd, host, config)
+                if (isFirstPacket) {
+                    handleChaosStrategy(socket, output, data, length, rnd, host, config)
+                } else {
+                    handleAdaptiveChunk(socket, output, data, length, rnd, host, config)
+                }
                 return
             }
             BypassStrategy.ZAPRET_EXTREME -> {
-                CompositePipelineApplier.applyZapretTriplePipeline(socket, output, data, length, host, config, rnd)
+                if (isFirstPacket) {
+                    CompositePipelineApplier.applyZapretTriplePipeline(socket, output, data, length, host, config, rnd)
+                } else {
+                    handleAdaptiveChunk(socket, output, data, length, rnd, host, config)
+                }
                 return
             }
             else -> {}
@@ -153,7 +166,7 @@ object AdaptiveStrategyHandler : StrategyExecutor {
                 delay(rnd.nextLong(1, 4))
             }
             TtlHelper.setTtl(socket, 64)
-        } catch (e: Throwable) {}
+        } catch (e: Exception) {}
     }
 
     private suspend fun handleByeByeDpiExtreme(socket: Socket, output: OutputStream, data: ByteArray, length: Int, rnd: ThreadLocalRandom, host: String, config: SessionConfig) {

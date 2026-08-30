@@ -3,7 +3,7 @@ package com.aistudio.pinkproxy.fresh
 import kotlinx.coroutines.delay
 
 /**
- * StrategyExecutorDns handles DNS-specific bypass strategies (DNS over TCP / DoQ routing).
+ * StrategyExecutorDns handles DNS-specific bypass strategies (DNS over TCP / DoH3 routing).
  */
 object StrategyExecutorDns : StrategyExecutor {
     override val executorType: StrategyExecutionRegistry.ExecutorType = StrategyExecutionRegistry.ExecutorType.DNS_OVER_TCP

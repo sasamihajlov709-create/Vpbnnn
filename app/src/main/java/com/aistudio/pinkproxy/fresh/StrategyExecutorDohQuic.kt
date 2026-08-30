@@ -28,8 +28,8 @@ object StrategyExecutorDohQuic : StrategyExecutor {
         val data = context.data
         val length = context.length
 
-        // Frame query with realistic QUIC / DoQ padding and initial header skew
-        val doqPacket = if (length < 1200) {
+        // Frame query with realistic QUIC / DoH3 padding and initial header skew
+        val doh3Packet = if (length < 1200) {
             val padded = ByteArray(1200)
             System.arraycopy(data, 0, padded, 0, length)
             val noise = NoiseGenerator.buildUdpNoise(1200 - length)
@@ -39,7 +39,7 @@ object StrategyExecutorDohQuic : StrategyExecutor {
             data.copyOf(length)
         }
 
-        socket.send(DatagramPacket(doqPacket, doqPacket.size, address, port))
+        socket.send(DatagramPacket(doh3Packet, doh3Packet.size, address, port))
     }
 }
 

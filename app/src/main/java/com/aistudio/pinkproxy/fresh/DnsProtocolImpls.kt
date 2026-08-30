@@ -12,6 +12,21 @@ import kotlinx.coroutines.channels.Channel
 object UdpDnsProtocols {
     suspend fun queryDohOverQuic(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> {
         try {
+            val engine = com.aistudio.pinkproxy.fresh.cronet.CronetEngineProvider.getEngine()
+            if (engine != null) {
+                val transport = com.aistudio.pinkproxy.fresh.cronet.CronetDohTransport(engine)
+                val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
+                val query = DnsPacketEngine.buildDnsQuery(host, type, id = queryId)
+                
+                // Construct DoH URL from dnsIp or use default
+                val url = if (dnsIp.startsWith("http")) dnsIp else "https://$dnsIp/dns-query"
+                
+                val responseBytes = transport.resolveDoH(url, query)
+                if (responseBytes != null && responseBytes.isNotEmpty()) {
+                    return DnsPacketEngine.parseDnsResponse(responseBytes, responseBytes.size, expectedId = queryId, expectedHost = host)
+                }
+            }
+            // Fallback if Cronet is not available or fails
             val dotRes = DotDnsProtocols.queryDot(host, dnsIp, vpnService, type)
             if (dotRes.isNotEmpty()) return dotRes
             return DohDnsProtocols.queryDohRacing(host, vpnService, type)
@@ -24,7 +39,7 @@ object UdpDnsProtocols {
         var socket: java.net.DatagramSocket? = null
         try {
             socket = java.net.DatagramSocket()
-            vpnService?.protect(socket)
+            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
             socket.soTimeout = 3000
             
             val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
@@ -48,7 +63,7 @@ object UdpDnsProtocols {
         var socket: java.net.DatagramSocket? = null
         try {
             socket = java.net.DatagramSocket()
-            vpnService?.protect(socket)
+            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
             socket.soTimeout = 3000
             
             val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
@@ -78,7 +93,7 @@ object UdpDnsProtocols {
         var socket: java.net.DatagramSocket? = null
         try {
             socket = java.net.DatagramSocket()
-            vpnService?.protect(socket)
+            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
             socket.soTimeout = 3000
             
             val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
@@ -131,7 +146,7 @@ object UdpDnsProtocols {
         var socket: java.net.DatagramSocket? = null
         try {
             socket = java.net.DatagramSocket()
-            vpnService?.protect(socket)
+            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
             socket.soTimeout = 3000
             
             // Send shadow packet with low TTL or fake query first to desync stateful firewall state
@@ -174,7 +189,7 @@ object TcpDnsProtocols {
         var socket: java.net.Socket? = null
         try {
             socket = java.net.Socket()
-            vpnService?.protect(socket)
+            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
             socket.tcpNoDelay = true
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 4000)
             socket.soTimeout = 4000
@@ -242,7 +257,7 @@ object TcpDnsProtocols {
         var socket: java.net.Socket? = null
         try {
             socket = java.net.Socket()
-            vpnService?.protect(socket)
+            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
             socket.tcpNoDelay = true
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 5000)
             socket.soTimeout = 5000
@@ -434,7 +449,7 @@ object DotDnsProtocols {
         var socket: java.net.Socket? = null
         try {
             val plainSocket = java.net.Socket()
-            vpnService?.protect(plainSocket)
+            if (vpnService?.protect(plainSocket) == false) throw java.io.IOException("protect failed")
             plainSocket.tcpNoDelay = true
             plainSocket.connect(java.net.InetSocketAddress(dotIp, 853), 4000)
             

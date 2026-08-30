@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aistudio.pinkproxy.fresh.*
 import com.aistudio.pinkproxy.fresh.R
+import com.aistudio.pinkproxy.fresh.ui.components.CensorshipFingerprintCard
+
 import com.aistudio.pinkproxy.fresh.ui.components.*
 import com.aistudio.pinkproxy.fresh.ui.*
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
@@ -372,7 +374,10 @@ fun BypassTab(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Strategy Config Summary
+                        val fingerprint by com.aistudio.pinkproxy.fresh.StabilityAnalyzer.fingerprint.collectAsStateWithLifecycle()
+                CensorshipFingerprintCard(fingerprint)
+                Spacer(modifier = Modifier.height(16.dp))
+                // Strategy Config Summary
         ExpandableSection(
             title = "CURRENT PARAMETERS",
             icon = Icons.Default.Settings,
