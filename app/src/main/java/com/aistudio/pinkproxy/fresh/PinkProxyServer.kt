@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.io.*
 class PinkProxyServer(private val vpnService: VpnService, private val port: Int, val sessionSecret: String = "") {
+    private var scope: CoroutineScope? = null
     private var serverJob: Job? = null
     private var serverSocket: ServerSocket? = null
     private val maxConnections = 256
@@ -26,12 +27,14 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         private val SOCKS5_CONNECT_SUCCESS = byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0)
     }
 
-    fun start() {
+    fun start(parentJobParam: kotlinx.coroutines.Job? = null) {
         if (serverJob?.isActive == true) return
         
-        val parentJob = SupervisorJob()
-        val scope = CoroutineScope(ProxyDispatcher.io + parentJob + ProxyDispatcher.globalHandler)
-        serverJob = parentJob
+        val newJob = kotlinx.coroutines.SupervisorJob(parentJobParam)
+        serverJob = newJob
+        val newScope = CoroutineScope(ProxyDispatcher.io + newJob + ProxyDispatcher.globalHandler)
+        this.scope = newScope
+        val scope = newScope
         
         ProxyStats.startSpeedMonitor(scope)
         
@@ -131,6 +134,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
 
     fun stop() {
         serverJob?.cancel()
+        scope?.cancel(kotlinx.coroutines.CancellationException("PinkProxyServer stopped"))
         try { serverSocket?.close() } catch (e: Exception) { Log.v("PinkProxy", "Stop socket close error: ${e.message}") }
         serverSocket = null
     }

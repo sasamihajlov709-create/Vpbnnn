@@ -296,7 +296,7 @@ fun StrategySelectionDialog(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(BypassStrategy.entries.filter { it.status == ImplementationStatus.VALIDATED || it.status == ImplementationStatus.EXPERIMENTAL }) { strategy ->
+                    items(BypassStrategy.entries.filter { it.implementationStatus == ImplementationStatus.IMPLEMENTED || it.implementationStatus == ImplementationStatus.EXPERIMENTAL }) { strategy ->
                         val isSelected = strategy == currentStrategy
                         val color = when (strategy.group) {
                             StrategyGroup.LIGHT -> Color(0xFF81C784)

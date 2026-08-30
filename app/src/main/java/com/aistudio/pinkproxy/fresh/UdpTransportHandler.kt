@@ -22,14 +22,14 @@ object UdpTransportHandler {
         output: java.io.OutputStream,
         vpnService: VpnService,
         scope: CoroutineScope
-    ) {
+    ) = kotlinx.coroutines.coroutineScope {
         val udpSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         val localPort = udpSocket.localPort
 
         val activeSessions = ConcurrentHashMap<UdpSessionKey, SessionState>()
 
         data class UdpPendingProbe(val host: String, val strategy: BypassStrategy, val sentTime: Long)
-        val pendingUdpProbes = ConcurrentHashMap<String, UdpPendingProbe>()
+        val pendingUdpProbes = ConcurrentHashMap<UdpSessionKey, UdpPendingProbe>()
 
         try {
             val resp = ByteArray(10)
@@ -147,10 +147,8 @@ object UdpTransportHandler {
 
                                                 UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())
 
-                                                val matchedProbeEntry = pendingUdpProbes.entries.find { it.key.startsWith("${sessionKey.hashCode()}_") }
-                                                if (matchedProbeEntry != null) {
-                                                    val matchedProbe = matchedProbeEntry.value
-                                                    pendingUdpProbes.remove(matchedProbeEntry.key)
+                                                val matchedProbe = pendingUdpProbes.remove(sessionKey)
+                                                if (matchedProbe != null) {
                                                     val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
                                                     DpiStrategySelector.recordResult(
                                                         strategy = matchedProbe.strategy,
@@ -177,9 +175,8 @@ object UdpTransportHandler {
                                 val udpStrat = DpiStrategySelector.getBestStrategy(HostClassifier.classify(host), host, TransportType.UDP)
                                 val sessionEntry = UdpAssociationTable.getOrCreateSession(clientAddr, clientPort, host, port, udpStrat)
 
-                                if (udpStrat != BypassStrategy.DIRECT && udpStrat.status != ImplementationStatus.UNSUPPORTED && udpStrat.status != ImplementationStatus.SIMULATED) {
-                                    val probeId = "${sessionKey.hashCode()}_${System.nanoTime()}"
-                                    pendingUdpProbes[probeId] = UdpPendingProbe(host, udpStrat, System.currentTimeMillis())
+                                if (udpStrat != BypassStrategy.DIRECT && udpStrat.implementationStatus != ImplementationStatus.UNSUPPORTED && udpStrat.implementationStatus != ImplementationStatus.SIMULATED) {
+                                    pendingUdpProbes[sessionKey] = UdpPendingProbe(host, udpStrat, System.currentTimeMillis())
 
                                     launch(ProxyDispatcher.udpRelay) {
                                         try {
@@ -190,7 +187,7 @@ object UdpTransportHandler {
                                             ProxyStats.recordStats("udp_outbound", 0, payload.size.toLong())
                                         } catch (e: Exception) {
                                             if (e !is CancellationException) Log.v("UdpTransport", "UDP Strategy execution failed: ${e.message}")
-                                            pendingUdpProbes.remove(probeId)
+                                            pendingUdpProbes.remove(sessionKey)
                                             DpiStrategySelector.recordResult(
                                                 strategy = udpStrat,
                                                 success = false,

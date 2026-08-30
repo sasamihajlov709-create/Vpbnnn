@@ -64,7 +64,7 @@ class PinkVpnService : VpnService() {
     }
 
     val serviceScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob() + ProxyDispatcher.globalHandler)
-    private var sessionScope: CoroutineScope? = null
+    
 
 
     private lateinit var notificationController: VpnNotificationController
@@ -313,7 +313,6 @@ class PinkVpnService : VpnService() {
         if (_isRunning.value) return@withContext
         isStopping = false
         startDynamicNotification()
-        startDynamicNotification()
         Log.i("PinkVpnService", "Starting VPN internal sequence...")
 
         val session = VpnSessionManager.startSession(this@PinkVpnService)
@@ -339,15 +338,14 @@ class PinkVpnService : VpnService() {
             proxyServer = null
             delay(150)
             val newProxy = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
-            newProxy.start()
+            newProxy.start(VpnSessionManager.currentSession?.dataPlaneScope?.coroutineContext?.get(kotlinx.coroutines.Job))
             proxyServer = newProxy
 
             // 3. Start DPI Engine & Censorship Expert
             DpiEngine.start(this@PinkVpnService)
             CensorshipExpert.start()
 
-            sessionScope?.cancel()
-            sessionScope = CoroutineScope(ProxyDispatcher.io + SupervisorJob())
+            
 
             val systemDnsIps = try {
                 val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
@@ -616,8 +614,7 @@ class PinkVpnService : VpnService() {
 
             healthMonitor?.stop()
 
-            sessionScope?.cancel()
-            sessionScope = null
+            
 
             DnsCacheManager.save(this@PinkVpnService)
 
@@ -656,7 +653,6 @@ class PinkVpnService : VpnService() {
             VpnRuntimeState.updateState(VpnLifecycleState.IDLE)
         } finally {
             isStopping = false
-        startDynamicNotification()
         }
     }
 
@@ -684,7 +680,7 @@ class PinkVpnService : VpnService() {
                     proxyServer = null
                     delay(250)
                     proxyServer = PinkProxyServer(this@PinkVpnService, PROXY_PORT, proxySecret)
-                    proxyServer?.start()
+                    proxyServer?.start(VpnSessionManager.currentSession?.dataPlaneScope?.coroutineContext?.get(kotlinx.coroutines.Job))
                     ProxyStats.logRecovery("Proxy server restarted successfully")
                 } catch (e: CancellationException) {
                     throw e

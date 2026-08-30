@@ -16,7 +16,6 @@ object StrategyExecutionRegistry {
         TIMING_HANDLER,
         UDP_HANDLER,
         DNS_OVER_TCP,
-        DOH_OVER_QUIC
     }
 
     private val strategyExecutorMap: Map<BypassStrategy, Pair<ExecutorType, Set<TransportType>>> = mapOf(
@@ -262,7 +261,6 @@ object StrategyExecutionRegistry {
         BypassStrategy.DNS_CASE_MANGLE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
         BypassStrategy.UDP_DNS_REORDER_HYBRID to (ExecutorType.UDP_HANDLER to setOf(TransportType.DNS)),
         BypassStrategy.DNS_OVER_TCP_FORCE to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
-        BypassStrategy.DOH_OVER_QUIC to (ExecutorType.DOH_OVER_QUIC to setOf(TransportType.DNS))
     )
 
     private val executorsByType: Map<ExecutorType, StrategyExecutor> = mapOf(
@@ -274,8 +272,7 @@ object StrategyExecutionRegistry {
         ExecutorType.ADAPTIVE_HANDLER to AdaptiveStrategyHandler,
         ExecutorType.TIMING_HANDLER to TimingStrategyHandler,
         ExecutorType.UDP_HANDLER to UdpStrategyHandler,
-        ExecutorType.DNS_OVER_TCP to StrategyExecutorDns,
-        ExecutorType.DOH_OVER_QUIC to StrategyExecutorDohQuic
+        ExecutorType.DNS_OVER_TCP to StrategyExecutorDns
     )
 
     fun getExecutor(strategy: BypassStrategy): StrategyExecutor {

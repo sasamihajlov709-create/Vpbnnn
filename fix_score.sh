@@ -1,1 +1,0 @@
-sed -i 's/class StrategyState(/class StrategyState(\n    val score: java.util.concurrent.atomic.AtomicInteger = java.util.concurrent.atomic.AtomicInteger(0),/' app/src/main/java/com/aistudio/pinkproxy/fresh/StrategyState.kt

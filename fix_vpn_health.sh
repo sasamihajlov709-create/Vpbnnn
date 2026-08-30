@@ -1,4 +1,0 @@
-sed -i 's/RecoverySignal.ProxyUnresponsive(e.message ?: "io_error")/RecoverySignal.ProxyUnresponsive(e.message ?: "io_error", transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/VpnHealthMonitor.kt
-sed -i 's/RecoverySignal.ExtremeLatency(currentRtt)/RecoverySignal.ExtremeLatency(currentRtt, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/VpnHealthMonitor.kt
-sed -i 's/RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value)/RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/VpnHealthMonitor.kt
-sed -i 's/RecoverySignal.TunnelStall((stallCounter \* checkInterval).toLong(), activeConns)/RecoverySignal.TunnelStall((stallCounter \* checkInterval).toLong(), activeConns, transport = TransportType.TCP)/' app/src/main/java/com/aistudio/pinkproxy/fresh/VpnHealthMonitor.kt

@@ -1,2 +1,0 @@
-sed -i 's/fun getCensorshipFingerprint(transport: TransportType = TransportType.TCP)/fun getCensorshipFingerprint(transport: TransportType)/' app/src/main/java/com/aistudio/pinkproxy/fresh/DpiAnalyzer.kt
-sed -i 's/val profileEvents = DpiEngine.eventHistory.filterKeys { it.profileId == currentProfileId && it.transport == transport }/val profileEvents = DpiEngine.eventHistory.filterKeys { it.profileId == currentProfileId \&\& it.transport == transport }/' app/src/main/java/com/aistudio/pinkproxy/fresh/DpiAnalyzer.kt
