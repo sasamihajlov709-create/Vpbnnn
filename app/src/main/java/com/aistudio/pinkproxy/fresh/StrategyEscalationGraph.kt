@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap
  * Dynamically maps failures (TCP Resets, SNI-based silent drops, Handshake corruption, DNS poisoning)
  * to domain-specific, highly resistant bypass escalation chains.
  */
-object StrategyEscalationMatrix {
+object StrategyEscalationGraph {
 
     // 1. TCP Reset / Active Injection Escalation Chain (OOB, SEQ Overlap, Fake FIN, Desync, Combined Nuclear)
     val tcpResetChain: List<BypassStrategy> = listOf(
@@ -83,21 +83,21 @@ object StrategyEscalationMatrix {
         BypassStrategy.TCP_COMBINED_NUCLEAR
     )
 
-    fun initializeChains(targetMap: ConcurrentHashMap<BypassStrategy, BypassStrategy>) {
-        targetMap.clear()
-        
+    val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
+    
+    init {
         // Link default chain
         for (i in 0 until defaultTcpChain.size - 1) {
-            targetMap[defaultTcpChain[i]] = defaultTcpChain[i + 1]
+            strategyChains[defaultTcpChain[i]] = defaultTcpChain[i + 1]
         }
         
         // Extra linkages
-        targetMap[BypassStrategy.TCP_FOOL_DPI] = BypassStrategy.ZAPRET_EXTREME
-        targetMap[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.TCP_FOOL_DPI] = BypassStrategy.ZAPRET_EXTREME
+        strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
         
-        targetMap[BypassStrategy.UDP_NOISE_CHAOS] = BypassStrategy.UDP_BURST_CHAOS
-        targetMap[BypassStrategy.UDP_BURST_CHAOS] = BypassStrategy.UDP_COMBINED_NUCLEAR
-        targetMap[BypassStrategy.UDP_COMBINED_HYBRID] = BypassStrategy.UDP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.UDP_NOISE_CHAOS] = BypassStrategy.UDP_BURST_CHAOS
+        strategyChains[BypassStrategy.UDP_BURST_CHAOS] = BypassStrategy.UDP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.UDP_COMBINED_HYBRID] = BypassStrategy.UDP_COMBINED_NUCLEAR
     }
 
     /**
@@ -120,7 +120,7 @@ object StrategyEscalationMatrix {
             chain.subList(index + 1, chain.size)
         } else {
             // If not directly in chain, look at fallback from targetMap or tail of chain
-            val nextDirect = DpiEngine.strategyChains[failedStrategy]
+            val nextDirect = StrategyEscalationGraph.strategyChains[failedStrategy]
             if (nextDirect != null) {
                 listOf(nextDirect) + chain
             } else {

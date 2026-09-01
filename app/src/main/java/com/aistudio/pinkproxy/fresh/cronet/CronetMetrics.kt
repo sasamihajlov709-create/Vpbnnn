@@ -13,7 +13,6 @@ object CronetMetrics {
     
     class ProfileStats {
         val cronetAttemptCount = AtomicInteger(0)
-        val quicHandshakeSuccessCount = AtomicInteger(0)
         val http3RequestSuccessCount = AtomicInteger(0)
         val requestTimeoutCount = AtomicInteger(0)
         val fallbackToTcpCount = AtomicInteger(0)
@@ -28,7 +27,6 @@ object CronetMetrics {
     }
 
     val cronetAttemptCount: Int get() = getStats().cronetAttemptCount.get()
-    val quicHandshakeSuccessCount: Int get() = getStats().quicHandshakeSuccessCount.get()
     val http3RequestSuccessCount: Int get() = getStats().http3RequestSuccessCount.get()
     val requestTimeoutCount: Int get() = getStats().requestTimeoutCount.get()
     val fallbackToTcpCount: Int get() = getStats().fallbackToTcpCount.get()
@@ -38,9 +36,6 @@ object CronetMetrics {
         getStats().cronetAttemptCount.incrementAndGet()
     }
 
-    fun recordQuicHandshake() {
-        getStats().quicHandshakeSuccessCount.incrementAndGet()
-    }
 
     fun recordSuccess(latencyMs: Long, wasQuic: Boolean) {
         val stats = getStats()

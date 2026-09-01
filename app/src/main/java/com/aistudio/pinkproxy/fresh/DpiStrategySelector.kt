@@ -113,7 +113,7 @@ object DpiStrategySelector {
     }
 
     fun getFallbackStrategy(strategy: BypassStrategy, transport: TransportType): BypassStrategy {
-        return DpiEngine.strategyChains[strategy] 
+        return StrategyEscalationGraph.strategyChains[strategy] 
             ?.takeIf { CandidateEngine.isEligible(it, CandidateEngine.SelectionContext(transport)) } 
             ?: getDefaultFallback(transport)
     }

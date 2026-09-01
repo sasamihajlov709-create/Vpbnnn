@@ -396,7 +396,7 @@ object BypassConfig {
         category: HostCategory? = null
     ): BypassStrategy {
         if (reason != null && host != null && category != null) {
-            val esc = StrategyEscalationMatrix.getEscalatedStrategy(
+            val esc = StrategyEscalationGraph.getEscalatedStrategy(
                 failedStrategy = current,
                 reason = reason,
                 transport = transport,

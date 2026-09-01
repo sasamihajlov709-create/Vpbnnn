@@ -75,7 +75,20 @@ object BypassApplier {
             random = rnd,
             isFirstPacket = isFirstPacket
         )
-        executor.executeTcp(tcpContext)
+        try {
+            executor.executeTcp(tcpContext)
+        } catch (e: Exception) {
+            if (e is UnsupportedStrategyException) throw e
+            if (e is java.net.ConnectException || e is java.net.NoRouteToHostException) {
+                throw TransportException("Transport failed during TCP strategy", e)
+            }
+            val reason = if (e.message?.contains("reset", true) == true || e.message?.contains("broken pipe", true) == true) {
+                FailureReason.TCP_RESET
+            } else {
+                FailureReason.CENSORSHIP_STALL
+            }
+            throw StrategyException("Strategy execution failed for $strategy: ${e.message}", reason, e)
+        }
     }
 
     suspend fun applyUdpBypass(socket: DatagramSocket, packet: DatagramPacket, config: SessionConfig, host: String) {
@@ -101,7 +114,15 @@ object BypassApplier {
             config = config,
             random = rnd
         )
-        executor.executeUdp(udpContext)
+        try {
+            executor.executeUdp(udpContext)
+        } catch (e: Exception) {
+            if (e is UnsupportedStrategyException) throw e
+            if (e is java.net.PortUnreachableException || e is java.net.NoRouteToHostException) {
+                throw TransportException("Transport failed during UDP strategy", e)
+            }
+            throw StrategyException("Strategy execution failed for $strategy: ${e.message}", FailureReason.CENSORSHIP_STALL, e)
+        }
     }
 
     fun isProbableHttp(data: ByteArray, length: Int): Boolean {

@@ -1,4 +1,8 @@
-package com.aistudio.pinkproxy.fresh
+import re
+
+# Rewrite UdpAssociationTable.kt
+with open("app/src/main/java/com/aistudio/pinkproxy/fresh/UdpAssociationTable.kt", "w") as f:
+    f.write("""package com.aistudio.pinkproxy.fresh
 
 import java.net.InetAddress
 import java.net.DatagramSocket
@@ -112,3 +116,5 @@ object UdpAssociationTable {
     
     val activeCount: Int get() = sessions.size
 }
+""")
+

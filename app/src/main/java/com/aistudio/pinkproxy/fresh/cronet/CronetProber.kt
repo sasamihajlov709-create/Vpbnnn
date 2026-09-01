@@ -17,7 +17,7 @@ object CronetProber {
      * Probes an endpoint to see if HTTP/3 (QUIC) is viable.
      * Returns true if the handshake succeeds and protocol negotiated is QUIC/H3.
      */
-    suspend fun probeQuic(url: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun probeHttp3Negotiation(url: String): Boolean = withContext(Dispatchers.IO) {
         val engine = CronetEngineProvider.getEngine() ?: return@withContext false
         val executor = CronetEngineProvider.getExecutor()
 
@@ -30,10 +30,10 @@ object CronetProber {
 
                     override fun onResponseStarted(request: UrlRequest, info: UrlResponseInfo) {
                         val wasQuic = info.negotiatedProtocol.startsWith("h3") || info.negotiatedProtocol.startsWith("quic")
-                        request.cancel() // We just need to know it started
                         if (!continuation.isCompleted) {
                             continuation.resume(wasQuic)
                         }
+                        try { request.cancel() } catch(e:Exception){}
                     }
 
                     override fun onReadCompleted(request: UrlRequest, info: UrlResponseInfo, byteBuffer: ByteBuffer) {}

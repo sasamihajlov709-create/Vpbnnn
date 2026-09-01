@@ -24,14 +24,10 @@ object DpiEngine {
     private val _currentDpiLevel = MutableStateFlow(0)
     val currentDpiLevel = _currentDpiLevel.asStateFlow()
 
-    val strategyChains = ConcurrentHashMap<BypassStrategy, BypassStrategy>()
 
     val eventHistory = ConcurrentHashMap<DpiEventKey, AtomicInteger>()
     val rttHistory = ConcurrentHashMap<String, MutableList<Long>>()
 
-    init {
-        initStrategyChains()
-    }
 
     private var lastGlobalReset = System.currentTimeMillis()
     private var lastPanicTime = 0L
@@ -50,7 +46,6 @@ object DpiEngine {
         stop()
         val ctx = context.applicationContext
         appContext = ctx
-        initStrategyChains()
         DpiStorage.loadScores(ctx)
         NetworkProfileManager.addListener(profileChangeListener)
         
@@ -143,12 +138,6 @@ object DpiEngine {
     }
 
 
-    fun initStrategyChains() {
-        // strategyChains[BypassStrategy.TCP_SPLIT_2] = BypassStrategy.TCP_SPLIT_3
-        // strategyChains[BypassStrategy.TCP_SPLIT_3] = BypassStrategy.TCP_SPLIT_5
-        // strategyChains[BypassStrategy.TLS_SNI_EXT_MANGLE] = BypassStrategy.TLS_RECORD_SPLIT
-        // strategyChains[BypassStrategy.HTTP_SPACE_MANGLE] = BypassStrategy.HTTP_MIXED_CASE
-    }
 
     fun enterPanicMode() {
         BypassConfig.setPanicMode(true)

@@ -461,7 +461,7 @@ object TcpTransportHandler {
             attemptedStrategies.add(currentStrategy)
             val config = BypassConfig.getSessionConfig(targetHost, currentStrategy, rtt, TransportType.TCP)
             val rs = TcpTransportManager.connectToBestIp(resolved, port, vpnService, config, targetHost) ?: run {
-                val nextStrat = StrategyEscalationMatrix.getEscalatedStrategy(
+                val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
                     failedStrategy = currentStrategy,
                     reason = FailureReason.CONNECTION_REFUSED,
                     transport = TransportType.TCP,
@@ -538,7 +538,7 @@ object TcpTransportHandler {
                     Log.w("TcpTransport", "Watchdog triggered for $targetHost with $currentStrategy (attempt #${attemptIndex + 1}). Fast failover to next strategy.")
                     try { rs.close() } catch (e: Exception) {}
 
-                    val nextStrat = StrategyEscalationMatrix.getEscalatedStrategy(
+                    val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
                         failedStrategy = currentStrategy,
                         reason = failureReason,
                         transport = TransportType.TCP,
@@ -552,26 +552,42 @@ object TcpTransportHandler {
                     try { rs.close() } catch (ex: Exception) {}
                     throw e
                 }
-                val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
-                    FailureReason.TCP_RESET
-                } else {
-                    FailureReason.TIMEOUT
+                
+                if (e is DnsException || e is java.net.UnknownHostException) {
+                    android.util.Log.w("TcpTransport", "DNS error for $targetHost, skipping strategy penalty.")
+                    try { rs.close() } catch (ex: Exception) {}
+                    return null 
                 }
-                DpiStrategySelector.recordResult(
-                    host = targetHost,
-                    strategy = currentStrategy,
-                    success = false,
-                    transport = TransportType.TCP,
-                    quality = ObservationQuality.CONNECT_ONLY,
-                    latencyMs = 0,
-                    reason = reason,
-                    requestedStrategy = requestedStrategy,
-                    effectiveStrategy = primaryStrategy
-                )
-                Log.w("TcpTransport", "Connection error on strategy $currentStrategy for $targetHost: ${e.message}. Rescuing with fallback.")
+                
+                val reason = when {
+                    e is StrategyException -> e.reason
+                    e is TransportException -> FailureReason.TARGET_UNAVAILABLE
+                    e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true -> FailureReason.TCP_RESET
+                    e is java.net.ConnectException -> FailureReason.CONNECTION_REFUSED
+                    else -> FailureReason.TIMEOUT
+                }
+                
+                // Пенализируем только если это не TransportException
+                if (e !is TransportException) {
+                    DpiStrategySelector.recordResult(
+                        host = targetHost,
+                        strategy = currentStrategy,
+                        success = false,
+                        transport = TransportType.TCP,
+                        quality = ObservationQuality.CONNECT_ONLY,
+                        latencyMs = 0,
+                        reason = reason,
+                        requestedStrategy = requestedStrategy,
+                        effectiveStrategy = primaryStrategy
+                    )
+                } else {
+                    android.util.Log.d("TcpTransport", "TransportException: not penalizing strategy $currentStrategy")
+                }
+                
+                android.util.Log.w("TcpTransport", "Connection error on strategy $currentStrategy for $targetHost: ${e.message}. Rescuing with fallback.")
                 try { rs.close() } catch (ex: Exception) {}
 
-                val nextStrat = StrategyEscalationMatrix.getEscalatedStrategy(
+                val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
                     failedStrategy = currentStrategy,
                     reason = reason,
                     transport = TransportType.TCP,

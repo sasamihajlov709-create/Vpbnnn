@@ -52,9 +52,6 @@ class CronetDohTransport(private val engine: CronetEngine) {
                     }
                     
                     val latencyMs = System.currentTimeMillis() - startTime
-                    if (wasQuic) {
-                        CronetMetrics.recordQuicHandshake()
-                    }
                     CronetMetrics.recordSuccess(latencyMs, wasQuic)
                     
                     continuation.resume(result)
