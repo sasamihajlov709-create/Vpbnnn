@@ -61,14 +61,34 @@ object CronetEngineProvider {
             try {
                 var builder: CronetEngine.Builder? = null
                 
-                val providers = CronetProvider.getAllProviders(context)
+                val providers = CronetProvider.getAllProviders(context).filter { it.isEnabled }
                 
-                // Strict priority: Play Services -> App Packaged -> Fallback
+                // Strict priority: Google Play Services -> App Packaged -> System Default Builder -> Fallback
                 if (isPlayServicesAvailable) {
-                    val playServicesProvider = providers.find { it.name == CronetProvider.PROVIDER_NAME_APP_PACKAGED }
+                    val playServicesProvider = providers.find { 
+                        it.name.contains("Google-Play-Services", ignoreCase = true) || 
+                        it.name.contains("Play-Services", ignoreCase = true) 
+                    }
                     if (playServicesProvider != null) {
                          builder = playServicesProvider.createBuilder()
-                         Log.i(TAG, "Using Play Services Cronet provider.")
+                         Log.i(TAG, "Using Play Services Cronet provider: ${playServicesProvider.name}")
+                    }
+                }
+                
+                if (builder == null) {
+                    val appPackagedProvider = providers.find { it.name == CronetProvider.PROVIDER_NAME_APP_PACKAGED }
+                    if (appPackagedProvider != null) {
+                        builder = appPackagedProvider.createBuilder()
+                        Log.i(TAG, "Using App Packaged native Cronet provider.")
+                    }
+                }
+
+                if (builder == null) {
+                    try {
+                        builder = CronetEngine.Builder(context)
+                        Log.i(TAG, "Using default context Cronet Builder.")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Default Cronet Builder creation failed: ${e.message}")
                     }
                 }
                 
@@ -77,10 +97,11 @@ object CronetEngineProvider {
                     if (fallbackProvider != null) {
                         builder = fallbackProvider.createBuilder()
                         Log.i(TAG, "Using Cronet Fallback provider.")
-                    } else {
-                        builder = CronetEngine.Builder(context)
-                        Log.i(TAG, "Using default Cronet Builder.")
                     }
+                }
+
+                if (builder == null) {
+                    throw IllegalStateException("No viable Cronet provider found")
                 }
 
                 try {

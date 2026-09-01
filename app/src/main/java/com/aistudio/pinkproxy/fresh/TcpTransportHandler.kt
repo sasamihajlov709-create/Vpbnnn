@@ -363,8 +363,6 @@ object TcpTransportHandler {
         } catch (e: Exception) {
             Log.e("TcpTransport", "Unexpected session error for $targetHost: ${e.message}", e)
             onConnectFailure?.invoke(e.message ?: "UNKNOWN")
-        } catch (e: Exception) {
-            Log.e("TcpTransport", "Critical session error for $targetHost", e)
         } finally {
             try { clientSocket.close() } catch (e: java.io.IOException) {
                 Log.v("TcpTransport", "Failed to close client socket: ${e.message}")

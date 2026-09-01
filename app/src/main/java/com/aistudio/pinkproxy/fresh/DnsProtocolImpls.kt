@@ -142,8 +142,7 @@ object UdpDnsProtocols {
     suspend fun queryUdpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.DatagramSocket? = null
         try {
-            socket = java.net.DatagramSocket()
-            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+            socket = ProtectedSocketFactory.createProtectedDatagramSocket(vpnService)
             socket.soTimeout = 3000
             
             // Send shadow packet with low TTL or fake query first to desync stateful firewall state

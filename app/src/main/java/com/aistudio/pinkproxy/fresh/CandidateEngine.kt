@@ -109,6 +109,15 @@ object CandidateEngine {
                 alpha += boost
             }
 
+            // STABLE mode prior boost for device verified strategies
+            val isStableMode = BypassConfig.autoTuningMode == AutoTuningMode.STABLE
+            val verificationBonus = if (strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED || (state.successCount.get() > 5 && state.failureCount.get() == 0)) {
+                if (isStableMode) 40.0 else 10.0
+            } else if (isStableMode && strategy.validationStatus == ValidationStatus.UNVERIFIED && state.successCount.get() == 0) {
+                // Penalize unverified strategies in stable mode
+                -25.0
+            } else 0.0
+
             val sampledProb = ThompsonSampler.sampleBeta(alpha, beta)
             
             // Stage 3 Utility Function Calibration
@@ -126,7 +135,7 @@ object CandidateEngine {
             } else 0.0
 
             val expectedBandwidth = (10.0 - dynamicCost).coerceAtLeast(1.0)
-            val utility = (sampledProb * 100.0) + hostMemoryBonus + (expectedBandwidth * 0.5) - (dynamicRisk * 0.2 + dynamicCost * 0.2)
+            val utility = (sampledProb * 100.0) + hostMemoryBonus + verificationBonus + (expectedBandwidth * 0.5) - (dynamicRisk * 0.2 + dynamicCost * 0.2)
             
             Pair(strategy, utility)
         }

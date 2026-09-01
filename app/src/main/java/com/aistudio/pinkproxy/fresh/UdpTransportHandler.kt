@@ -143,7 +143,8 @@ object UdpTransportHandler {
                                                 
                                                 UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())
                                                 
-                                                val matchedProbe = association.popProbe()
+                                                val correlationKey = extractCorrelationKey(inPacket.data, inPacket.offset, inPacket.length, port)
+                                                val matchedProbe = association.popMatchingProbe(correlationKey)
                                                 if (matchedProbe != null) {
                                                     val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
                                                     DpiStrategySelector.recordResult(
@@ -167,7 +168,14 @@ object UdpTransportHandler {
                                 }
                                 
                                 if (udpStrat != BypassStrategy.DIRECT && udpStrat.implementationStatus != ImplementationStatus.UNSUPPORTED && udpStrat.implementationStatus != ImplementationStatus.SIMULATED) {
-                                    association.addProbe(UdpPendingProbe(host, udpStrat, System.currentTimeMillis()))
+                                    val correlationKey = extractCorrelationKey(payload, 0, payload.size, port)
+                                    val pendingProbe = UdpPendingProbe(
+                                        host = host,
+                                        strategy = udpStrat,
+                                        sentTime = System.currentTimeMillis(),
+                                        correlationKey = correlationKey
+                                    )
+                                    association.addProbe(pendingProbe)
                                     
                                     launch(ProxyDispatcher.udpRelay) {
                                         try {
@@ -178,7 +186,7 @@ object UdpTransportHandler {
                                             ProxyStats.recordStats("udp_outbound", 0, payload.size.toLong())
                                         } catch (e: Exception) {
                                             if (e !is CancellationException) Log.v("UdpTransport", "UDP Strategy execution failed: ${e.message}")
-                                            association.popProbe()
+                                            association.removeProbe(pendingProbe)
                                             if (e !is TransportException && e !is DnsException && e !is java.net.UnknownHostException) {
                                                 DpiStrategySelector.recordResult(
                                                     strategy = udpStrat,
@@ -206,16 +214,17 @@ object UdpTransportHandler {
                 }
 
                 // Wait until client TCP control connection closes
-                launch(ProxyDispatcher.io) {
+                val controlJob = launch(ProxyDispatcher.io) {
                     try {
                         val input = clientSocket.getInputStream()
                         while (input.read() != -1) { /* Just wait */ }
                     } catch (e: Exception) {
                         if (e !is CancellationException) Log.v("UdpTransport", "Client control connection closed: ${e.message}")
                     } finally {
-                        this@coroutineScope.cancel()
+                        try { udpSocket.close() } catch (ignored: Exception) {}
                     }
                 }
+                controlJob.join()
             }
         } finally {
             try { udpSocket.close() } catch(e:Exception){}
@@ -228,14 +237,32 @@ object UdpTransportHandler {
         UdpAssociationTable.clear()
     }
 
-    internal fun isStunPacket(payload: ByteArray): Boolean {
-        if (payload.size < 20) return false
-        val msgTypeHigh = payload[0].toInt() and 0xC0
+    internal fun extractCorrelationKey(payload: ByteArray, offset: Int, length: Int, port: Int): String? {
+        if (length < 2) return null
+        if (port == 53 || length >= 12 && payload[offset + 2].toInt() and 0x80 != 0) { // DNS packet
+            val txId = ((payload[offset].toInt() and 0xFF) shl 8) or (payload[offset + 1].toInt() and 0xFF)
+            return "dns:$txId"
+        }
+        if (isStunPacket(payload, offset, length)) {
+            val sb = java.lang.StringBuilder("stun:")
+            for (i in 8 until 20) {
+                if (offset + i < payload.size) {
+                    sb.append("%02x".format(payload[offset + i]))
+                }
+            }
+            return sb.toString()
+        }
+        return null
+    }
+
+    internal fun isStunPacket(payload: ByteArray, offset: Int = 0, length: Int = payload.size): Boolean {
+        if (length < 20 || offset + 20 > payload.size) return false
+        val msgTypeHigh = payload[offset].toInt() and 0xC0
         if (msgTypeHigh != 0) return false
-        return payload[4] == 0x21.toByte() &&
-               payload[5] == 0x12.toByte() &&
-               payload[6] == 0xA4.toByte() &&
-               payload[7] == 0x42.toByte()
+        return payload[offset + 4] == 0x21.toByte() &&
+               payload[offset + 5] == 0x12.toByte() &&
+               payload[offset + 6] == 0xA4.toByte() &&
+               payload[offset + 7] == 0x42.toByte()
     }
 
     internal fun shouldBlockQuicForHost(host: String, port: Int, payload: ByteArray): Boolean {

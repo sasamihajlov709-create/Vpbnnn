@@ -91,6 +91,11 @@ object BypassConfig {
 
     @Volatile var isAutoTuning = true
     @Volatile var isDiagnosticMode = false
+    private val _autoTuningMode = MutableStateFlow(AutoTuningMode.STABLE)
+    val autoTuningModeFlow: StateFlow<AutoTuningMode> = _autoTuningMode.asStateFlow()
+    var autoTuningMode: AutoTuningMode
+        get() = _autoTuningMode.value
+        set(value) { _autoTuningMode.value = value }
     @Volatile var frag1 = 1
     @Volatile var frag2 = 0
     @Volatile var frag3 = 0
@@ -195,6 +200,8 @@ object BypassConfig {
     fun loadTuningSettings(context: Context) {
         val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
         isAutoTuning = prefs.getBoolean("is_auto_tuning", true)
+        val savedMode = prefs.getString("auto_tuning_mode", AutoTuningMode.STABLE.name)
+        autoTuningMode = try { AutoTuningMode.valueOf(savedMode ?: AutoTuningMode.STABLE.name) } catch (e: Exception) { AutoTuningMode.STABLE }
         blockQuic = prefs.getBoolean("block_quic", false)
         filterEch = prefs.getBoolean("filter_ech", true)
         frag1 = prefs.getInt("frag1", 1)
@@ -224,6 +231,7 @@ object BypassConfig {
         val prefs = context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE)
         prefs.edit {
             putBoolean("is_auto_tuning", isAutoTuning)
+            putString("auto_tuning_mode", autoTuningMode.name)
             putBoolean("block_quic", blockQuic)
             putBoolean("filter_ech", filterEch)
             putInt("frag1", frag1)

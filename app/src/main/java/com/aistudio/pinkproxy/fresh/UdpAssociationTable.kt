@@ -16,7 +16,9 @@ data class UdpSessionKey(
 data class UdpPendingProbe(
     val host: String,
     val strategy: BypassStrategy,
-    val sentTime: Long
+    val sentTime: Long = System.currentTimeMillis(),
+    val probeId: String = java.util.UUID.randomUUID().toString(),
+    val correlationKey: String? = null
 )
 
 class UdpAssociation(
@@ -35,13 +37,56 @@ class UdpAssociation(
     var readerJob: Job? = null
     
     private val pendingProbes = ConcurrentLinkedQueue<UdpPendingProbe>()
+    private val correlatedProbes = ConcurrentHashMap<String, UdpPendingProbe>()
     
     fun addProbe(probe: UdpPendingProbe) {
+        if (probe.correlationKey != null) {
+            correlatedProbes[probe.correlationKey] = probe
+        }
         pendingProbes.offer(probe)
+        cleanExpiredProbes()
+    }
+
+    fun popMatchingProbe(correlationKey: String? = null): UdpPendingProbe? {
+        cleanExpiredProbes()
+        if (correlationKey != null) {
+            val probe = correlatedProbes.remove(correlationKey)
+            if (probe != null) {
+                pendingProbes.remove(probe)
+                return probe
+            }
+        }
+        val probe = pendingProbes.poll()
+        if (probe?.correlationKey != null) {
+            correlatedProbes.remove(probe.correlationKey)
+        }
+        return probe
     }
     
     fun popProbe(): UdpPendingProbe? {
-        return pendingProbes.poll()
+        return popMatchingProbe(null)
+    }
+
+    fun removeProbe(probe: UdpPendingProbe?) {
+        if (probe == null) return
+        pendingProbes.remove(probe)
+        if (probe.correlationKey != null) {
+            correlatedProbes.remove(probe.correlationKey)
+        }
+    }
+
+    private fun cleanExpiredProbes(maxAgeMs: Long = 10_000L) {
+        val now = System.currentTimeMillis()
+        val it = pendingProbes.iterator()
+        while (it.hasNext()) {
+            val p = it.next()
+            if (now - p.sentTime > maxAgeMs) {
+                it.remove()
+                if (p.correlationKey != null) {
+                    correlatedProbes.remove(p.correlationKey)
+                }
+            }
+        }
     }
 
     fun close() {
@@ -52,6 +97,7 @@ class UdpAssociation(
         } catch (e: Exception) {}
         outSocket = null
         pendingProbes.clear()
+        correlatedProbes.clear()
     }
 }
 

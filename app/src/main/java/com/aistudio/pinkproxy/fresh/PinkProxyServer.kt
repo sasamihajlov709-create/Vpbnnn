@@ -104,8 +104,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                             throw e
                         } catch (e: Exception) {
                             Log.e("PinkProxy", "Error handling client: ${e.message}")
-                        } catch (e: Exception) {
-                            Log.e("PinkProxy", "Critical client handling error", e)
                         } finally {
                             try { client.close() } catch (e: Exception) { Log.v("PinkProxy", "Close error: ${e.message}") }
                             ProxyStats.updateConnections(-1)
@@ -119,11 +117,6 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 if (isActive) {
                     Log.e("PinkProxy", "Server loop error", e)
                     VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Internal proxy server error: ${e.localizedMessage}")
-                }
-            } catch (e: Exception) {
-                if (isActive) {
-                    Log.e("PinkProxy", "Critical server error", e)
-                    VpnRuntimeState.updateState(VpnLifecycleState.ERROR, "Critical proxy server failure")
                 }
             } finally {
                 try { serverSocket?.close() } catch (e: Exception) { Log.v("PinkProxy", "Socket close error: ${e.message}") }

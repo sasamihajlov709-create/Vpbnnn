@@ -163,6 +163,55 @@ fun ExpertSettingsCard(
                     )
                 }
 
+                var autoTuningMode by remember { mutableStateOf(BypassConfig.autoTuningMode) }
+
+                LaunchedEffect(isAutoTuning) {
+                    autoTuningMode = BypassConfig.autoTuningMode
+                }
+
+                if (isAutoTuning) {
+                    Text(
+                        text = "Режим авто-тюнера:",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = GentleLightPink.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AutoTuningMode.entries.forEach { mode ->
+                            val isSelected = autoTuningMode == mode
+                            val label = when (mode) {
+                                AutoTuningMode.STABLE -> "Стабильный"
+                                AutoTuningMode.EXPLORATION -> "Поиск"
+                                AutoTuningMode.DIAGNOSTIC -> "Диагностика"
+                            }
+                            Button(
+                                onClick = {
+                                    autoTuningMode = mode
+                                    BypassConfig.autoTuningMode = mode
+                                    BypassConfig.saveTuningSettings(context)
+                                },
+                                modifier = Modifier.weight(1f).height(32.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isSelected) GentleDarkPink else Color.Black.copy(alpha = 0.4f)
+                                ),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) GentleLightPink else GentleLightPink.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 if (!isAutoTuning) {
                     var frag1 by remember { mutableStateOf(BypassConfig.frag1.toFloat()) }
                     var frag2 by remember { mutableStateOf(BypassConfig.frag2.toFloat()) }
