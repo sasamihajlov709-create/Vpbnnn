@@ -22,7 +22,7 @@ object VpnShutdownCoordinator {
         onComplete: () -> Unit = {}
     ): Job {
         onBeforeAsync()
-        return (VpnSessionManager.currentSession?.controlPlaneScope ?: ProxyDispatcher.globalScope).launch {
+        return ProxyDispatcher.globalScope.launch {
             try {
                 withTimeout(timeoutMs) {
                     executeCleanup(context)

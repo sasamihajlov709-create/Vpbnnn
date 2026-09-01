@@ -71,8 +71,7 @@ object NetworkProber {
 
     suspend fun checkProxyReachable(proxyPort: Int): Boolean {
         return try {
-            val sock = java.net.Socket();
-            if (VpnSessionManager.currentSession?.vpnService?.protect(sock) == false) throw java.io.IOException("protect failed")
+            val sock = ProtectedSocketFactory.createProtectedSocket()
             sock.connect(InetSocketAddress("127.0.0.1", proxyPort), 1000)
             sock.close()
             true

@@ -2,7 +2,12 @@ package com.aistudio.pinkproxy.fresh
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE)
 class AllStrategiesExecutorCoverageTest {
 
     @Test
@@ -63,10 +68,9 @@ class AllStrategiesExecutorCoverageTest {
         assertTrue(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.UDP_STUN_FAKE, TransportType.UDP))
         assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.UDP_STUN_FAKE, TransportType.TCP))
 
-        // DNS_OVER_QUIC supports DNS pipeline
-        assertTrue(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.DNS))
-        assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.TCP))
-        assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.DNS_OVER_QUIC, TransportType.UDP))
+        // UDP_DNS_REORDER_HYBRID supports DNS pipeline
+        assertTrue(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.UDP_DNS_REORDER_HYBRID, TransportType.DNS))
+        assertFalse(StrategyExecutionRegistry.isExecutorSupported(BypassStrategy.UDP_DNS_REORDER_HYBRID, TransportType.TCP))
     }
 
     @Test
@@ -91,21 +95,20 @@ class AllStrategiesExecutorCoverageTest {
         assertTrue("TCP DNS should frame and write data", written.isNotEmpty())
         assertEquals(testQuery.size, written.size)
 
-        // Test DoQ execution
+        // Test UDP DNS execution
         val mockUdpSocket = java.net.DatagramSocket()
         val udpCtx = UdpExecutionContext(
             socket = mockUdpSocket,
             address = java.net.InetAddress.getByName("127.0.0.1"),
-            port = 8853,
+            port = 53,
             data = testQuery,
             length = testQuery.size,
             host = "example.com",
-            strategy = BypassStrategy.DNS_OVER_QUIC,
-            config = SessionConfig(strategy = BypassStrategy.DNS_OVER_QUIC, frag1 = 2, delay1 = 2L, fakeTtl = 0)
+            strategy = BypassStrategy.UDP_DNS_REORDER_HYBRID,
+            config = SessionConfig(strategy = BypassStrategy.UDP_DNS_REORDER_HYBRID, frag1 = 2, delay1 = 2L, fakeTtl = 0)
         )
 
-
-        StrategyExecutorDoq.executeUdp(udpCtx)
+        UdpStrategyHandler.executeUdp(udpCtx)
         mockUdpSocket.close()
     }
 }

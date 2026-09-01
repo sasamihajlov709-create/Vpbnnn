@@ -21,6 +21,7 @@ data class UdpPendingProbe(
 
 class UdpAssociation(
     val key: UdpSessionKey,
+    val socksSessionId: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     @Volatile var lastActivity: Long = System.currentTimeMillis(),
     @Volatile var packetsSent: Long = 0L,
@@ -42,12 +43,23 @@ class UdpAssociation(
     fun popProbe(): UdpPendingProbe? {
         return pendingProbes.poll()
     }
+
+    fun close() {
+        readerJob?.cancel()
+        readerJob = null
+        try {
+            outSocket?.close()
+        } catch (e: Exception) {}
+        outSocket = null
+        pendingProbes.clear()
+    }
 }
 
 object UdpAssociationTable {
     private val sessions = ConcurrentHashMap<UdpSessionKey, UdpAssociation>()
 
     fun getOrCreateSession(
+        sessionId: String,
         clientAddress: InetAddress,
         clientPort: Int,
         destinationHost: String,
@@ -56,7 +68,7 @@ object UdpAssociationTable {
     ): UdpAssociation {
         val key = UdpSessionKey(clientAddress, clientPort, destinationHost, destinationPort)
         return sessions.computeIfAbsent(key) {
-            UdpAssociation(key = it, strategy = strategy)
+            UdpAssociation(key = it, socksSessionId = sessionId, strategy = strategy)
         }.also {
             it.lastActivity = System.currentTimeMillis()
         }
@@ -65,10 +77,21 @@ object UdpAssociationTable {
     fun getSession(key: UdpSessionKey): UdpAssociation? = sessions[key]
 
     fun removeSession(key: UdpSessionKey) {
-        sessions.remove(key)?.let {
-            it.readerJob?.cancel()
-            try { it.outSocket?.close() } catch (e: Exception) {}
+        sessions.remove(key)?.close()
+    }
+
+    fun removeSessionsForSocksSession(sessionId: String): Int {
+        var removedCount = 0
+        val iterator = sessions.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.value.socksSessionId == sessionId) {
+                entry.value.close()
+                iterator.remove()
+                removedCount++
+            }
         }
+        return removedCount
     }
 
     fun touchSession(key: UdpSessionKey, sentBytes: Long = 0L, receivedBytes: Long = 0L) {
@@ -91,8 +114,7 @@ object UdpAssociationTable {
         while (iterator.hasNext()) {
             val entry = iterator.next()
             if (now - entry.value.lastActivity > maxIdleDurationMs) {
-                entry.value.readerJob?.cancel()
-                try { entry.value.outSocket?.close() } catch (e: Exception) {}
+                entry.value.close()
                 iterator.remove()
                 removedCount++
             }
@@ -102,8 +124,7 @@ object UdpAssociationTable {
 
     fun clear() {
         sessions.values.forEach {
-            it.readerJob?.cancel()
-            try { it.outSocket?.close() } catch (e: Exception) {}
+            it.close()
         }
         sessions.clear()
     }

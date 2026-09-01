@@ -109,6 +109,7 @@ class PinkVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         BypassConfig.activeVpnService = this
         ProxyDispatcher.context = this.applicationContext
 
@@ -634,6 +635,8 @@ class PinkVpnService : VpnService() {
             RuntimeCoordinator.shutdown(this@PinkVpnService)
             DeviceMonitor.stopDeviceMonitoring(this@PinkVpnService)
 
+            VpnSessionManager.stopSession()
+
             com.aistudio.pinkproxy.fresh.cronet.CronetEngineProvider.close()
 
             vpnNetworkMonitor?.stop()
@@ -693,6 +696,7 @@ class PinkVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         val appContext = applicationContext
         serviceScope.cancel()
         ProxyDispatcher.cancelAllBackgroundJobs()
@@ -719,8 +723,9 @@ class PinkVpnService : VpnService() {
             },
             timeoutMs = 2000L,
             onComplete = {
+                VpnSessionManager.stopSession()
                 serviceScope.cancel()
-        ProxyDispatcher.cancelAllBackgroundJobs()
+                ProxyDispatcher.cancelAllBackgroundJobs()
                 BypassConfig.activeVpnService = null
                 ProxyDispatcher.context = null
             }

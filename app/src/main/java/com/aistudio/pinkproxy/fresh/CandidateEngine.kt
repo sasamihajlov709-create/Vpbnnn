@@ -20,8 +20,8 @@ object CandidateEngine {
     fun isEligible(strategy: BypassStrategy, context: SelectionContext, ignoreHostBlacklist: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
         
-        // 0. Implementation Status (Skip SIMULATED and NO_OP in dynamic selection)
-        if (strategy.implementationStatus == ImplementationStatus.SIMULATED || strategy.implementationStatus == ImplementationStatus.STUB || strategy.implementationStatus == ImplementationStatus.UNSUPPORTED) return false
+        // 0. Implementation Status (Skip STUB in dynamic selection)
+        if (strategy.implementationStatus == ImplementationStatus.STUB) return false
         
         // 1. Check Family Compatibility
         if (!DpiStrategySelector.isFamilyCompatible(strategy.family, context.transport)) return false
@@ -121,8 +121,12 @@ object CandidateEngine {
             val normalizedLatency = (observedLatency / 200.0).coerceIn(0.0, 5.0)
             val dynamicCost = strategy.cost.toDouble() + normalizedLatency
 
-            val expectedBandwidth = 10.0 - dynamicCost
-            val utility = (sampledProb * expectedBandwidth) - (dynamicRisk * 0.5 + dynamicCost * 0.5)
+            val hostMemoryBonus = if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0) {
+                150.0 * hostMemory.confidence
+            } else 0.0
+
+            val expectedBandwidth = (10.0 - dynamicCost).coerceAtLeast(1.0)
+            val utility = (sampledProb * 100.0) + hostMemoryBonus + (expectedBandwidth * 0.5) - (dynamicRisk * 0.2 + dynamicCost * 0.2)
             
             Pair(strategy, utility)
         }

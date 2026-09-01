@@ -78,9 +78,9 @@ class VpnHealthMonitor(
                         ProxyStats.logRecovery("Watchdog: Proxy server missing! Restarting...")
                         restartProxyServer()
                     } else if (isScreenOn && System.currentTimeMillis() % 300000 < delayMs) {
-                        val socket = Socket()
+                        var socket: Socket? = null
                         try {
-                            protectSocket(socket)
+                            socket = ProtectedSocketFactory.createProtectedSocket()
                             socket.connect(InetSocketAddress("127.0.0.1", proxyPort), 1000)
                             socket.close()
 
@@ -106,7 +106,7 @@ class VpnHealthMonitor(
                         } catch (e: Exception) {
                             Log.e("VpnHealthMonitor", "Watchdog diagnostic error", e)
                         } finally {
-                            try { socket.close() } catch (e: Exception) {}
+                            try { socket?.close() } catch (e: Exception) {}
                         }
                     }
 

@@ -36,14 +36,14 @@ object DiagnosticManager {
             launch {
                 val ips = RobustResolver.resolve(domain, BypassConfig.activeVpnService)
                 if (ips.isNotEmpty()) {
-                    val socket = Socket()
+                    var socket: Socket? = null
                     try {
-                        BypassConfig.activeVpnService?.protect(socket)
+                        socket = ProtectedSocketFactory.createProtectedSocket()
                         socket.connect(InetSocketAddress(ips.first(), 443), 3000)
                         tcpSuccess.incrementAndGet()
                     } catch (e: Exception) {
                     } finally {
-                        try { socket.close() } catch (e: Exception) {}
+                        try { socket?.close() } catch (e: Exception) {}
                     }
                 }
             }

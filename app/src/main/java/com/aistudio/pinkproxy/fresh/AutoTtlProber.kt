@@ -181,8 +181,7 @@ object AutoTtlProber {
         return withContext(ProxyDispatcher.io) {
             var socket: Socket? = null
             try {
-                socket = Socket()
-                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+                socket = ProtectedSocketFactory.createProtectedSocket(vpnService)
                 TtlHelper.tuneSocket(socket)
                 TtlHelper.setMss(socket, (mtu - 40).coerceAtLeast(512))
                 socket.connect(InetSocketAddress(addr, port), 1000)
@@ -268,8 +267,7 @@ object AutoTtlProber {
         return withContext(ProxyDispatcher.io) {
             var socket: java.net.DatagramSocket? = null
             try {
-                socket = java.net.DatagramSocket()
-                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+                socket = ProtectedSocketFactory.createProtectedDatagramSocket(vpnService)
                 TtlHelper.setUdpTtl(socket, ttl, addr is java.net.Inet6Address)
                 socket.soTimeout = 1000
                 val data = if (port == 53) DnsPacketEngine.buildDnsQuery("google.com", 1, 123) else ByteArray(16)
@@ -324,8 +322,7 @@ object AutoTtlProber {
             repeat(2) { // Double check to avoid false negatives due to packet loss
                 var socket: Socket? = null
                 try {
-                    socket = Socket()
-                    if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+                    socket = ProtectedSocketFactory.createProtectedSocket(vpnService)
                     TtlHelper.setTtl(socket, ttl)
                     socket.connect(InetSocketAddress(addr, port), 800)
                     
@@ -432,8 +429,7 @@ object AutoTtlProber {
         return withContext(ProxyDispatcher.io) {
             var socket: Socket? = null
             try {
-                socket = Socket()
-                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+                socket = ProtectedSocketFactory.createProtectedSocket(vpnService)
                 TtlHelper.setTtl(socket, ttl)
                 socket.connect(InetSocketAddress(addr, port), 1200)
                 true

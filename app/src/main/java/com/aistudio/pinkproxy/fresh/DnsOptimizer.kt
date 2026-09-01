@@ -73,9 +73,9 @@ object DnsOptimizer {
         // If it's a real IP for a global domain, it should usually respond.
         // If it's a poisoned IP, it either won't respond or will reset.
         return withContext(ProxyDispatcher.io) {
-            val socket = java.net.Socket()
+            var socket: java.net.Socket? = null
             try {
-                if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+                socket = ProtectedSocketFactory.createProtectedSocket(vpnService)
                 socket.tcpNoDelay = true
                 // We use a very short timeout for verification to avoid blocking the resolver
                 socket.connect(java.net.InetSocketAddress(ip, 443), 1200)
@@ -91,7 +91,7 @@ object DnsOptimizer {
                 Log.d("DnsOptimizer", "IP verification failed for $domain ($ip): ${e.message}")
                 false
             } finally {
-                try { socket.close() } catch (e: Exception) { Log.v("DnsOptimizer", "Socket close failed: ${e.message}") }
+                try { socket?.close() } catch (e: Exception) { Log.v("DnsOptimizer", "Socket close failed: ${e.message}") }
             }
         }
     }

@@ -7,9 +7,46 @@ import javax.net.SocketFactory
 import javax.net.ssl.SSLSocketFactory
 
 class ProtectedSocketFactory(private val vpnService: VpnService?) : SocketFactory() {
+    companion object {
+        fun resolveVpnService(override: VpnService? = null): VpnService? {
+            return override ?: BypassConfig.activeVpnService ?: VpnSessionManager.currentSession?.vpnService
+        }
+
+        fun createProtectedSocket(vpnService: VpnService? = null): Socket {
+            val vpn = resolveVpnService(vpnService)
+            val s = Socket()
+            if (vpn != null && !vpn.protect(s)) {
+                try { s.close() } catch (ignored: Exception) {}
+                throw java.io.IOException("VpnService.protect() failed for TCP socket")
+            }
+            return s
+        }
+
+        fun createProtectedDatagramSocket(vpnService: VpnService? = null): java.net.DatagramSocket {
+            val vpn = resolveVpnService(vpnService)
+            val s = java.net.DatagramSocket()
+            if (vpn != null && !vpn.protect(s)) {
+                try { s.close() } catch (ignored: Exception) {}
+                throw java.io.IOException("VpnService.protect() failed for DatagramSocket")
+            }
+            return s
+        }
+
+        fun protectSocket(s: Socket, vpnService: VpnService? = null): Boolean {
+            val vpn = resolveVpnService(vpnService)
+            return vpn?.protect(s) ?: true
+        }
+
+        fun protectDatagramSocket(s: java.net.DatagramSocket, vpnService: VpnService? = null): Boolean {
+            val vpn = resolveVpnService(vpnService)
+            return vpn?.protect(s) ?: true
+        }
+    }
+
     override fun createSocket(): Socket {
-        val s = Socket();
-        if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
+        val s = Socket()
+        val vpn = resolveVpnService(vpnService)
+        if (vpn?.protect(s) == false) throw java.io.IOException("protect failed")
         return s
     }
     override fun createSocket(host: String?, port: Int): Socket = createSocket().apply { connect(java.net.InetSocketAddress(host, port)) }

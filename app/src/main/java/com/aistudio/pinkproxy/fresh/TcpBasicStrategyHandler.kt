@@ -152,9 +152,20 @@ object TcpBasicStrategyHandler : StrategyExecutor {
                  }
                  return
             }
-            BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.OOB_DESYNC -> {
+            BypassStrategy.FAKE_PACKET -> {
                 // Warning: Attempting L4 packet manipulation or payload corruption over standard Java Sockets
                 // actually breaks protocol semantics. Reverting to transparent forward.
+                output.write(data, 0, length)
+                output.flush()
+                return
+            }
+            BypassStrategy.TCP_OOB_DESYNC, BypassStrategy.OOB_DESYNC -> {
+                if (isFirstPacket) {
+                    val decoy = byteArrayOf(0x00)
+                    output.write(decoy)
+                    output.flush()
+                    delay(rnd.nextLong(1, 3))
+                }
                 output.write(data, 0, length)
                 output.flush()
                 return

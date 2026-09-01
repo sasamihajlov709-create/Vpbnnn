@@ -118,7 +118,8 @@ object DnsCacheManager {
             if (now < expiry) {
                 // If cache is about to expire (in <20% of TTL), trigger background refresh early
                 if (expiry - now < CACHE_TTL_MS / 5) {
-                    VpnSessionManager.currentSession?.dnsScope ?: ProxyDispatcher.globalScope.launch {
+                    val scope = VpnSessionManager.currentSession?.dnsScope ?: ProxyDispatcher.globalScope
+                    scope.launch {
                         try {
                             RobustResolver.resolve(host, null, type)
                         } catch (e: Exception) {}
@@ -142,7 +143,8 @@ object DnsCacheManager {
         dnsCache[cacheKey]?.let { (addresses, expiry) ->
             if (now < expiry + maxStaleMs) {
                 // Stale-While-Revalidate: Return stale cached IPs immediately, and trigger async background update
-                VpnSessionManager.currentSession?.dnsScope ?: ProxyDispatcher.globalScope.launch {
+                val scope = VpnSessionManager.currentSession?.dnsScope ?: ProxyDispatcher.globalScope
+                scope.launch {
                     try {
                         RobustResolver.resolve(host, null, type)
                     } catch (e: Exception) {}

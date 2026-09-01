@@ -38,8 +38,7 @@ object UdpDnsProtocols {
     suspend fun queryUdpDnsDetailed(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<DnsPacketEngine.DnsRecord> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.DatagramSocket? = null
         try {
-            socket = java.net.DatagramSocket()
-            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+            socket = ProtectedSocketFactory.createProtectedDatagramSocket(vpnService)
             socket.soTimeout = 3000
             
             val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
@@ -62,8 +61,7 @@ object UdpDnsProtocols {
     suspend fun queryUdpDnsReorder(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.DatagramSocket? = null
         try {
-            socket = java.net.DatagramSocket()
-            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+            socket = ProtectedSocketFactory.createProtectedDatagramSocket(vpnService)
             socket.soTimeout = 3000
             
             val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
@@ -92,8 +90,7 @@ object UdpDnsProtocols {
     suspend fun queryUdpDns(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.DatagramSocket? = null
         try {
-            socket = java.net.DatagramSocket()
-            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+            socket = ProtectedSocketFactory.createProtectedDatagramSocket(vpnService)
             socket.soTimeout = 3000
             
             val queryId = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000)
@@ -188,8 +185,7 @@ object TcpDnsProtocols {
     suspend fun queryTcpDnsShadow(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.Socket? = null
         try {
-            socket = java.net.Socket()
-            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+            socket = ProtectedSocketFactory.createProtectedSocket(vpnService)
             socket.tcpNoDelay = true
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 4000)
             socket.soTimeout = 4000
@@ -256,8 +252,7 @@ object TcpDnsProtocols {
     suspend fun queryDnsOverTcp(host: String, dnsIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.Socket? = null
         try {
-            socket = java.net.Socket()
-            if (vpnService?.protect(socket) == false) throw java.io.IOException("protect failed")
+            socket = ProtectedSocketFactory.createProtectedSocket(vpnService)
             socket.tcpNoDelay = true
             socket.connect(java.net.InetSocketAddress(dnsIp, 53), 5000)
             socket.soTimeout = 5000
@@ -448,8 +443,7 @@ object DotDnsProtocols {
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         var socket: java.net.Socket? = null
         try {
-            val plainSocket = java.net.Socket()
-            if (vpnService?.protect(plainSocket) == false) throw java.io.IOException("protect failed")
+            val plainSocket = ProtectedSocketFactory.createProtectedSocket(vpnService)
             plainSocket.tcpNoDelay = true
             plainSocket.connect(java.net.InetSocketAddress(dotIp, 853), 4000)
             

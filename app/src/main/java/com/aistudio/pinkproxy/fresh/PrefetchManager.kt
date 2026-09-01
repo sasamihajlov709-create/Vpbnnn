@@ -66,9 +66,9 @@ object PrefetchManager {
         val strategy = BypassConfig.getBestStrategyForHost(host, TransportType.TCP)
         if (strategy.group == StrategyGroup.LIGHT || strategy.group == StrategyGroup.MEDIUM) {
             withContext(ProxyDispatcher.io) {
-                val s = Socket()
+                var s: Socket? = null
                 try {
-                    if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
+                    s = ProtectedSocketFactory.createProtectedSocket(vpnService)
                     TtlHelper.tuneSocket(s)
                     TtlHelper.applyMssClamping(s, host)
                     // Пытаемся просто открыть соединение на 443 порт
@@ -77,7 +77,7 @@ object PrefetchManager {
                     Log.d("PrefetchManager", "Warmed up connection to $host")
                 } catch (e: Exception) {
                 } finally {
-                    try { s.close() } catch (e: Exception) {}
+                    try { s?.close() } catch (e: Exception) {}
                 }
             }
         }

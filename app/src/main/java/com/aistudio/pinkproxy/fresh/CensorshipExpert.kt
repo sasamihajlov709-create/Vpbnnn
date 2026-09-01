@@ -132,8 +132,7 @@ object CensorshipExpert {
                                 val config = BypassConfig.getSessionConfig(testHost, strategy, 100, transport = TransportType.TCP)
                                 val hello = FakePacketHelper.buildRealisticTlsHello(testHost)
                                 
-                                probeSocket = Socket()
-                                BypassConfig.activeVpnService?.protect(probeSocket)
+                                probeSocket = ProtectedSocketFactory.createProtectedSocket()
                                 probeSocket.soTimeout = 3500
                                 probeSocket.connect(InetSocketAddress(targetAddr, 443), 2500)
                                 
@@ -257,8 +256,7 @@ object CensorshipExpert {
         try {
             val ips = RobustResolver.resolve(host)
             if (ips.isNotEmpty()) {
-                val s = Socket()
-                BypassConfig.activeVpnService?.protect(s)
+                val s = ProtectedSocketFactory.createProtectedSocket()
                 s.soTimeout = 3000
                 withContext(Dispatchers.IO) {
                     s.connect(InetSocketAddress(ips.random(), 443), 2000)

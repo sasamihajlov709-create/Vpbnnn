@@ -55,7 +55,8 @@ class PerFlowStrategyIsolationTest {
             category = HostCategory.OTHER,
             host = discordHost,
             latencyMs = 50,
-            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED
+            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+            profileId = profileId
         )
         
         // Ensure Discord uses TCP_REORDER

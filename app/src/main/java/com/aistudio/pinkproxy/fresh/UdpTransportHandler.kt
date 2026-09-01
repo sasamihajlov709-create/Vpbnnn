@@ -17,6 +17,7 @@ object UdpTransportHandler {
         vpnService: VpnService,
         scope: CoroutineScope
     ) = kotlinx.coroutines.coroutineScope {
+        val socksSessionId = java.util.UUID.randomUUID().toString()
         val udpSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         val localPort = udpSocket.localPort
         
@@ -102,7 +103,7 @@ object UdpTransportHandler {
                                         continue
                                     }
                                     
-                                    association = UdpAssociationTable.getOrCreateSession(clientAddr, clientPort, host, port, udpStrat)
+                                    association = UdpAssociationTable.getOrCreateSession(socksSessionId, clientAddr, clientPort, host, port, udpStrat)
                                     val outSocket = UdpTransportManager.createProtectedSocket(vpnService)
                                     association.outSocket = outSocket
                                     association.targetInet = targetInet
@@ -218,7 +219,7 @@ object UdpTransportHandler {
             }
         } finally {
             try { udpSocket.close() } catch(e:Exception){}
-            UdpAssociationTable.clear()
+            UdpAssociationTable.removeSessionsForSocksSession(socksSessionId)
             try { clientSocket.close() } catch (e: Exception) {}
         }
     }

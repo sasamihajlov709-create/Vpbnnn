@@ -137,7 +137,7 @@ class AllStrategiesExecutionPipelineTest {
             val config = SessionConfig(strategy = strat, frag1 = 0, delay1 = 0L, fakeTtl = 0)
 
             try {
-                if (executor.executorType == StrategyExecutionRegistry.ExecutorType.DNS_OVER_QUIC || executor.executorType == StrategyExecutionRegistry.ExecutorType.UDP_HANDLER) {
+                if (executor.executorType == StrategyExecutionRegistry.ExecutorType.UDP_HANDLER) {
                     val context = UdpExecutionContext(
                         socket = dummyUdpSocket,
                         address = loopback,

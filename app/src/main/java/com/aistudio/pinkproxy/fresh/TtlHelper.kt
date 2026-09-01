@@ -13,11 +13,15 @@ object TtlHelper {
     init {
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("")
-                Log.v("TtlHelper", "Successfully bypassed hidden API restrictions")
+                try {
+                    org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("")
+                    Log.v("TtlHelper", "Successfully bypassed hidden API restrictions")
+                } catch (t: Throwable) {
+                    Log.d("TtlHelper", "HiddenApiBypass not supported in current runtime: ${t.message}")
+                }
             }
-        } catch (e: Exception) {
-            Log.e("TtlHelper", "Failed to bypass hidden API restrictions", e)
+        } catch (t: Throwable) {
+            Log.d("TtlHelper", "Failed to bypass hidden API restrictions: ${t.message}")
         }
     }
 
@@ -25,26 +29,26 @@ object TtlHelper {
         var pfd: ParcelFileDescriptor? = null
         try {
             pfd = when (socket) {
-                is Socket -> ParcelFileDescriptor.fromSocket(socket)
-                is DatagramSocket -> ParcelFileDescriptor.fromDatagramSocket(socket)
+                is Socket -> try { ParcelFileDescriptor.fromSocket(socket) } catch (t: Throwable) { null }
+                is DatagramSocket -> try { ParcelFileDescriptor.fromDatagramSocket(socket) } catch (t: Throwable) { null }
                 else -> null
             }
             val fd = pfd?.fileDescriptor
             if (fd != null && fd.valid()) {
                 block(fd)
             }
-        } catch (e: Exception) {
-            Log.v("TtlHelper", "withFd error: ${e.message}")
+        } catch (t: Throwable) {
+            // Gracefully ignore in non-Android or unsupported environments
         } finally {
-            try { pfd?.close() } catch (e: Exception) {}
+            try { pfd?.close() } catch (t: Throwable) {}
         }
     }
 
     private fun setsockoptInt(fd: FileDescriptor, level: Int, option: Int, value: Int) {
         try {
             android.system.Os.setsockoptInt(fd, level, option, value)
-        } catch (e: Exception) {
-            Log.v("TtlHelper", "setsockoptInt failed: ${e.message}")
+        } catch (t: Throwable) {
+            // Gracefully ignore
         }
     }
 

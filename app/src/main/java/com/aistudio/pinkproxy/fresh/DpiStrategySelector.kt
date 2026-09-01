@@ -128,9 +128,9 @@ object DpiStrategySelector {
         host: String? = null,
         quality: ObservationQuality,
         requestedStrategy: BypassStrategy? = null,
-        effectiveStrategy: BypassStrategy? = null
+        effectiveStrategy: BypassStrategy? = null,
+        profileId: String = NetworkProfileManager.currentProfile.value.id
     ) {
-        val profileId = NetworkProfileManager.currentProfile.value.id
         val obs = StrategyObservation(
             executedStrategy = strategy,
             transport = transport,

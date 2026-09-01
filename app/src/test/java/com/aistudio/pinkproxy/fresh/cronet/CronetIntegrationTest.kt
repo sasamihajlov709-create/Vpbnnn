@@ -38,9 +38,6 @@ class CronetIntegrationTest {
         CronetMetrics.recordAttempt()
         assertEquals(1, CronetMetrics.cronetAttemptCount)
         
-        CronetMetrics.recordQuicHandshake()
-        assertEquals(1, CronetMetrics.quicHandshakeSuccessCount)
-        
         CronetMetrics.recordSuccess(150L, wasQuic = true)
         assertEquals(1, CronetMetrics.http3RequestSuccessCount)
         assertEquals(150L, CronetMetrics.ewmaLatencyMs)

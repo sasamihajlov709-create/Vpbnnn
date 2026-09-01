@@ -13,7 +13,8 @@ object StrategyExecutorDns : StrategyExecutor {
         BypassStrategy.DNS_OVER_TCP,
         BypassStrategy.DNS_NOISE,
         BypassStrategy.DNS_CASE_MANGLE,
-        BypassStrategy.DNS_OVER_TCP_FORCE
+        BypassStrategy.DNS_OVER_TCP_FORCE,
+        BypassStrategy.DOH_OVER_QUIC
     )
 
     override fun supportsStrategy(strategy: BypassStrategy): Boolean {

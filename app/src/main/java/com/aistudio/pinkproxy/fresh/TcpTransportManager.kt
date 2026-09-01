@@ -33,8 +33,7 @@ object TcpTransportManager {
     suspend fun performSniGhosting(decoy: String, vpnService: VpnService?) {
         var s: Socket? = null
         try {
-            s = Socket()
-            if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
+            s = ProtectedSocketFactory.createProtectedSocket(vpnService)
             val resolved = RobustResolver.resolveDual(decoy, vpnService)
             if (resolved.isNotEmpty()) {
                 s.connect(InetSocketAddress(resolved.random(), 443), 2000)

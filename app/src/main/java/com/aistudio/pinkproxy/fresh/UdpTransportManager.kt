@@ -8,19 +8,13 @@ import java.net.InetAddress
 import java.util.concurrent.ThreadLocalRandom
 
 object UdpTransportManager {
-    fun createProtectedSocket(vpnService: VpnService): DatagramSocket {
-        val s = DatagramSocket()
+    fun createProtectedSocket(vpnService: VpnService? = null): DatagramSocket {
+        val s = ProtectedSocketFactory.createProtectedDatagramSocket(vpnService)
         try {
-            if (!vpnService.protect(s)) {
-                s.close()
-                throw IllegalStateException("VpnService.protect() failed for UDP socket")
-            }
             s.receiveBufferSize = 256 * 1024
             s.sendBufferSize = 256 * 1024
         } catch (e: Exception) {
-            Log.e("UdpTransportManager", "Failed to configure UDP socket: ${e.message}")
-            try { s.close() } catch (ignored: Exception) {}
-            throw e
+            Log.e("UdpTransportManager", "Failed to configure UDP socket buffer size: ${e.message}")
         }
         return s
     }

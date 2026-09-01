@@ -16,6 +16,7 @@ class UdpAssociationTableTest {
         UdpAssociationTable.clear()
 
         val session = UdpAssociationTable.getOrCreateSession(
+            sessionId = "session-1",
             clientAddress = clientIp,
             clientPort = clientPort,
             destinationHost = targetHost,
@@ -33,6 +34,41 @@ class UdpAssociationTableTest {
         assertEquals(120L, session.bytesSent)
         assertEquals(1L, session.packetsReceived)
         assertEquals(250L, session.bytesReceived)
+    }
+
+    @Test
+    fun testFlowLevelSessionIsolation() {
+        UdpAssociationTable.clear()
+        val clientIp = InetAddress.getByName("127.0.0.1")
+        
+        // Session A (Telegram)
+        val sessionA = UdpAssociationTable.getOrCreateSession(
+            sessionId = "client-telegram",
+            clientAddress = clientIp,
+            clientPort = 10001,
+            destinationHost = "telegram.org",
+            destinationPort = 443,
+            strategy = BypassStrategy.UDP_STUN_FAKE
+        )
+        
+        // Session B (Game)
+        val sessionB = UdpAssociationTable.getOrCreateSession(
+            sessionId = "client-game",
+            clientAddress = clientIp,
+            clientPort = 10002,
+            destinationHost = "game.server",
+            destinationPort = 7777,
+            strategy = BypassStrategy.UDP_STUN_FAKE
+        )
+        
+        assertEquals(2, UdpAssociationTable.activeCount)
+        
+        // Closing Session A must NOT affect Session B
+        val removed = UdpAssociationTable.removeSessionsForSocksSession("client-telegram")
+        assertEquals(1, removed)
+        assertEquals(1, UdpAssociationTable.activeCount)
+        assertNull(UdpAssociationTable.getSession(sessionA.key))
+        assertNotNull(UdpAssociationTable.getSession(sessionB.key))
     }
 
     

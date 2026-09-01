@@ -31,16 +31,16 @@ object HappyEyeballsConnector {
     ): Socket? = coroutineScope {
         if (ips.isEmpty()) return@coroutineScope null
         if (ips.size == 1) {
-            val single = Socket()
+            var single: Socket? = null
             try {
-                if (vpnService?.protect(single) == false) throw java.io.IOException("protect failed")
+                single = ProtectedSocketFactory.createProtectedSocket(vpnService)
                 TcpTransportManager.configureSocket(single)
                 TtlHelper.tuneSocket(single)
                 TtlHelper.applyMssClamping(single, host)
                 single.connect(InetSocketAddress(ips[0], port), timeoutMs)
                 return@coroutineScope single
             } catch (e: Exception) {
-                try { single.close() } catch (ignored: Exception) {}
+                try { single?.close() } catch (ignored: Exception) {}
                 return@coroutineScope null
             }
         }
@@ -71,12 +71,12 @@ object HappyEyeballsConnector {
 
         candidateList.forEach { (ip, initialDelay) ->
             launch(ProxyDispatcher.io) {
-                val s = Socket()
+                var s: Socket? = null
                 try {
                     if (initialDelay > 0) {
                         delay(initialDelay)
                     }
-                    if (vpnService?.protect(s) == false) throw java.io.IOException("protect failed")
+                    s = ProtectedSocketFactory.createProtectedSocket(vpnService)
                     TcpTransportManager.configureSocket(s)
                     TtlHelper.tuneSocket(s)
                     TtlHelper.applyMssClamping(s, host)
@@ -88,10 +88,10 @@ object HappyEyeballsConnector {
                         try { s.close() } catch (ignored: Exception) {}
                     }
                 } catch (e: CancellationException) {
-                    try { s.close() } catch (ignored: Exception) {}
+                    try { s?.close() } catch (ignored: Exception) {}
                     throw e
                 } catch (e: Exception) {
-                    try { s.close() } catch (ignored: Exception) {}
+                    try { s?.close() } catch (ignored: Exception) {}
                 } finally {
                     if (completedCount.incrementAndGet() == candidateList.size) {
                         channel.close()
