@@ -63,6 +63,8 @@ class RecoveryHostContextTest {
         
         // Artificially boost the success count massively so it's guaranteed to win
         val state = StrategyStateRepository.getStrategyState(expectedStrategy, transport, HostCategory.OTHER, profileId)
+        state.verifiedSuccessCount.set(50)
+        state.successCount.set(50)
         state.weightedSuccess.addAndGet(500000L) 
 
         // Penalize all other strategies so they don't get picked by random sampling

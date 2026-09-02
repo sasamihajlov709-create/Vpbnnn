@@ -23,6 +23,16 @@ object CandidateEngine {
         // 0. Implementation Status (Skip STUB in dynamic selection)
         if (strategy.implementationStatus == ImplementationStatus.STUB) return false
         
+        // 0.1 Strict Mode Gatekeeper for AutoTuningMode.STABLE
+        if (BypassConfig.isAutoTuning && BypassConfig.autoTuningMode == AutoTuningMode.STABLE) {
+            val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)
+            val isVerified = strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED
+            val hasHighConfidenceEvidence = (state.verifiedSuccessCount.get() >= 5 || state.successCount.get() >= 10) && state.failureCount.get() == 0
+            if (!isVerified && !hasHighConfidenceEvidence) {
+                return false
+            }
+        }
+        
         // 1. Check Family Compatibility
         if (!DpiStrategySelector.isFamilyCompatible(strategy.family, context.transport)) return false
         
@@ -111,9 +121,9 @@ object CandidateEngine {
 
             // STABLE mode prior boost for device verified strategies
             val isStableMode = BypassConfig.autoTuningMode == AutoTuningMode.STABLE
-            val verificationBonus = if (strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED || (state.successCount.get() > 5 && state.failureCount.get() == 0)) {
+            val verificationBonus = if (strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED || (state.verifiedSuccessCount.get() >= 5 && state.failureCount.get() == 0)) {
                 if (isStableMode) 40.0 else 10.0
-            } else if (isStableMode && strategy.validationStatus == ValidationStatus.UNVERIFIED && state.successCount.get() == 0) {
+            } else if (isStableMode && strategy.validationStatus == ValidationStatus.UNVERIFIED && state.verifiedSuccessCount.get() == 0) {
                 // Penalize unverified strategies in stable mode
                 -25.0
             } else 0.0

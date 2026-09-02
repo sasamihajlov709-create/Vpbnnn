@@ -75,41 +75,47 @@ class HappyEyeballsAndRaceConnectorTest {
 
     @Test
     fun testDynamicEscalationAndRescueFallbackIntegration() {
-        // Test fallback strategy with reason routing
-        val rstFallback = BypassConfig.getFallbackStrategy(
-            current = BypassStrategy.SNI_SPLIT,
-            transport = TransportType.TCP,
-            reason = FailureReason.TCP_RESET,
-            host = "blocked-target.org",
-            category = HostCategory.SOCIAL
-        )
-        assertNotNull(rstFallback)
-        assertTrue(rstFallback == BypassStrategy.TLS_SNI_FRAGMENT || rstFallback == BypassStrategy.TCP_SEGMENT_OVERLAP)
+        val prevMode = BypassConfig.autoTuningMode
+        try {
+            BypassConfig.autoTuningMode = AutoTuningMode.EXPLORATION
+            // Test fallback strategy with reason routing
+            val rstFallback = BypassConfig.getFallbackStrategy(
+                current = BypassStrategy.SNI_SPLIT,
+                transport = TransportType.TCP,
+                reason = FailureReason.TCP_RESET,
+                host = "blocked-target.org",
+                category = HostCategory.SOCIAL
+            )
+            assertNotNull(rstFallback)
+            assertTrue(rstFallback == BypassStrategy.TLS_SNI_FRAGMENT || rstFallback == BypassStrategy.TCP_SEGMENT_OVERLAP)
 
-        val stallFallback = BypassConfig.getFallbackStrategy(
-            current = BypassStrategy.TLS_SNI_FRAGMENT,
-            transport = TransportType.TCP,
-            reason = FailureReason.CENSORSHIP_STALL,
-            host = "blocked-video.com",
-            category = HostCategory.STREAMING
-        )
-        assertNotNull(stallFallback)
-        assertTrue(stallFallback == BypassStrategy.TLS_SNI_JITTER_SPLIT || stallFallback == BypassStrategy.TLS_CLIENT_HELLO_CHOP)
+            val stallFallback = BypassConfig.getFallbackStrategy(
+                current = BypassStrategy.TLS_SNI_FRAGMENT,
+                transport = TransportType.TCP,
+                reason = FailureReason.CENSORSHIP_STALL,
+                host = "blocked-video.com",
+                category = HostCategory.STREAMING
+            )
+            assertNotNull(stallFallback)
+            assertTrue(stallFallback == BypassStrategy.TLS_SNI_JITTER_SPLIT || stallFallback == BypassStrategy.TLS_CLIENT_HELLO_CHOP)
 
-        val udpFallback = BypassConfig.getFallbackStrategy(
-            current = BypassStrategy.UDP_FRAGMENT_SKEW,
-            transport = TransportType.UDP,
-            reason = FailureReason.TIMEOUT,
-            host = "quic-host.net",
-            category = HostCategory.GAMING
-        )
-        assertNotNull(udpFallback)
-        assertTrue(
-            udpFallback == BypassStrategy.UDP_NOISE_PAD ||
-            udpFallback == BypassStrategy.UDP_DATA_FRAG ||
-            udpFallback == BypassStrategy.UDP_NOISE_CHAOS ||
-            udpFallback == BypassStrategy.UDP_BURST_CHAOS ||
-            udpFallback == BypassStrategy.UDP_COMBINED_HYBRID
-        )
+            val udpFallback = BypassConfig.getFallbackStrategy(
+                current = BypassStrategy.UDP_FRAGMENT_SKEW,
+                transport = TransportType.UDP,
+                reason = FailureReason.TIMEOUT,
+                host = "quic-host.net",
+                category = HostCategory.GAMING
+            )
+            assertNotNull(udpFallback)
+            assertTrue(
+                udpFallback == BypassStrategy.UDP_NOISE_PAD ||
+                udpFallback == BypassStrategy.UDP_DATA_FRAG ||
+                udpFallback == BypassStrategy.UDP_NOISE_CHAOS ||
+                udpFallback == BypassStrategy.UDP_BURST_CHAOS ||
+                udpFallback == BypassStrategy.UDP_COMBINED_HYBRID
+            )
+        } finally {
+            BypassConfig.autoTuningMode = prevMode
+        }
     }
 }

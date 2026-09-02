@@ -55,12 +55,20 @@ class UdpAssociation(
                 pendingProbes.remove(probe)
                 return probe
             }
+            // Strict correlation: if a key was provided but did not match any probe, return null.
+            // Do NOT fall back to polling FIFO probe to avoid misattributing Bayesian stats.
+            return null
         }
-        val probe = pendingProbes.poll()
-        if (probe?.correlationKey != null) {
-            correlatedProbes.remove(probe.correlationKey)
+        // If no correlation key is available for this protocol, only pop if there is a probe without correlation key
+        val it = pendingProbes.iterator()
+        while (it.hasNext()) {
+            val p = it.next()
+            if (p.correlationKey == null) {
+                it.remove()
+                return p
+            }
         }
-        return probe
+        return null
     }
     
     fun popProbe(): UdpPendingProbe? {

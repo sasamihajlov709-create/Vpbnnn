@@ -332,12 +332,20 @@ object RecoveryStateMachine {
     private fun processMemoryPressure(usedPercent: Int) {
         Log.w(TAG, "Handling memory pressure: $usedPercent%")
         DnsCacheManager.clearAll()
-        UdpTransportHandler.clearBuffers()
         ProxyStats.releaseAllPools()
 
-        if (usedPercent > 92) {
+        if (usedPercent > 90) {
+            // Emergency global recovery: wipe all UDP association buffers
+            Log.e(TAG, "GLOBAL_RECOVERY: Wiping all UDP associations due to critical memory pressure ($usedPercent%)")
+            UdpTransportHandler.clearBuffers()
             _currentState.value = RecoveryState.DEGRADED
-            requestTunnelRestart("Emergency memory exhaustion cleanup ($usedPercent%)")
+            if (usedPercent > 95) {
+                requestTunnelRestart("Emergency memory exhaustion cleanup ($usedPercent%)")
+            }
+        } else {
+            // Moderate memory pressure: selectively prune idle/stale UDP sessions without dropping active flows
+            val pruned = UdpAssociationTable.cleanupExpiredSessions(maxIdleDurationMs = 30_000L)
+            Log.i(TAG, "Memory recovery: pruned $pruned stale UDP associations (used=$usedPercent%)")
         }
     }
 

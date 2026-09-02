@@ -13,5 +13,6 @@ enum class FailureReason {
     NETWORK_LOST,
     TARGET_UNAVAILABLE,
     LOCAL_SOCKET_ERROR,
+    DNS_RESOLUTION_FAILED,
     UNKNOWN
 }

@@ -151,6 +151,63 @@ class Stage4ResilienceAndCorrelationTest {
     }
 
     @Test
+    fun testStableModeGatekeeperStrictlyFiltersUnverifiedCandidates() {
+        val context = CandidateEngine.SelectionContext(
+            transport = TransportType.TCP,
+            profileId = "default",
+            host = "example.com",
+            category = HostCategory.SEARCH
+        )
+
+        val verifiedStrategy = BypassStrategy.TLS_RECORD_FRAGMENTATION
+        val unverifiedStrategy = BypassStrategy.TCP_PULSE_FRAG
+
+        BypassConfig.isAutoTuning = true
+        BypassConfig.autoTuningMode = AutoTuningMode.STABLE
+
+        // Unverified strategy with 0 observations MUST be filtered out by isEligible in STABLE mode
+        assertFalse(CandidateEngine.isEligible(unverifiedStrategy, context))
+        assertTrue(CandidateEngine.isEligible(verifiedStrategy, context))
+
+        val eligibleStable = CandidateEngine.getEligibleCandidates(context, listOf(unverifiedStrategy, verifiedStrategy))
+        assertEquals(listOf(verifiedStrategy), eligibleStable)
+
+        // In EXPLORATION mode, unverified strategy is eligible
+        BypassConfig.autoTuningMode = AutoTuningMode.EXPLORATION
+        assertTrue(CandidateEngine.isEligible(unverifiedStrategy, context))
+    }
+
+    @Test
+    fun testUdpStrictCorrelationRejectsMismatchedKeyWithoutPollFallback() {
+        val clientIp = InetAddress.getByName("127.0.0.1")
+        val session = UdpAssociationTable.getOrCreateSession(
+            sessionId = "mismatch-session",
+            clientAddress = clientIp,
+            clientPort = 44558,
+            destinationHost = "8.8.8.8",
+            destinationPort = 53,
+            strategy = BypassStrategy.DIRECT
+        )
+
+        val probe = UdpPendingProbe(
+            host = "8.8.8.8",
+            strategy = BypassStrategy.UDP_QUIC_PAD,
+            sentTime = System.currentTimeMillis(),
+            correlationKey = "dns:5555"
+        )
+        session.addProbe(probe)
+
+        // If an incoming packet has unknown/unmatched key "dns:7777", it should NOT pop probe "dns:5555"
+        val mismatched = session.popMatchingProbe("dns:7777")
+        assertNull(mismatched)
+
+        // The correct probe should still remain and be pop-able with its exact key
+        val matched = session.popMatchingProbe("dns:5555")
+        assertNotNull(matched)
+        assertEquals("dns:5555", matched?.correlationKey)
+    }
+
+    @Test
     fun testProtectedSocketFactorySafeCreationWithoutVpn() {
         // When VPN service is not active (null), creation should safely succeed without throwing
         val socket: Socket = ProtectedSocketFactory.createProtectedSocket(null)
@@ -162,5 +219,58 @@ class Stage4ResilienceAndCorrelationTest {
         assertNotNull(datagramSocket)
         assertFalse(datagramSocket.isClosed)
         datagramSocket.close()
+    }
+
+    @Test
+    fun testDnsResolutionFailureDoesNotPenalizeStrategyScore() {
+        val strategy = BypassStrategy.TLS_RECORD_FRAGMENTATION
+        val transport = TransportType.TCP
+        val profileId = "default"
+        val state = StrategyStateRepository.getStrategyState(strategy, transport, HostCategory.OTHER, profileId)
+        
+        val initialWeightedFailure = state.weightedFailure.get()
+
+        val dnsFailObs = StrategyObservation(
+            executedStrategy = strategy,
+            transport = transport,
+            quality = ObservationQuality.CONNECT_ONLY,
+            profileId = profileId,
+            success = false,
+            failureReason = FailureReason.DNS_RESOLUTION_FAILED
+        )
+
+        state.recordObservation(dnsFailObs)
+
+        // DNS resolution failure should increment failure count for telemetry, but apply 0 weight penalty to strategy rating
+        assertEquals(initialWeightedFailure, state.weightedFailure.get())
+    }
+
+    @Test
+    fun testUdpAssociationPrunesStaleSessionsSelectively() {
+        val clientIp = InetAddress.getByName("127.0.0.1")
+        val sessionActive = UdpAssociationTable.getOrCreateSession(
+            sessionId = "active-socks",
+            clientAddress = clientIp,
+            clientPort = 50001,
+            destinationHost = "1.1.1.1",
+            destinationPort = 53,
+            strategy = BypassStrategy.DIRECT
+        )
+        sessionActive.lastActivity = System.currentTimeMillis()
+
+        val sessionStale = UdpAssociationTable.getOrCreateSession(
+            sessionId = "stale-socks",
+            clientAddress = clientIp,
+            clientPort = 50002,
+            destinationHost = "8.8.8.8",
+            destinationPort = 53,
+            strategy = BypassStrategy.DIRECT
+        )
+        sessionStale.lastActivity = System.currentTimeMillis() - 120_000L // 2 minutes old
+
+        val pruned = UdpAssociationTable.cleanupExpiredSessions(maxIdleDurationMs = 60_000L)
+        assertTrue(pruned >= 1)
+        assertNull(UdpAssociationTable.getSession(sessionStale.key))
+        assertNotNull(UdpAssociationTable.getSession(sessionActive.key))
     }
 }

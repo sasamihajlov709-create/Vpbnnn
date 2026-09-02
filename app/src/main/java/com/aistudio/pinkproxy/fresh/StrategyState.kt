@@ -106,7 +106,7 @@ class StrategyState(
                 FailureReason.CONNECTION_REFUSED, FailureReason.MTU_EXCEEDED, FailureReason.TARGET_UNAVAILABLE -> 100L // 0.1 weight
                 
                 // Network / Local Failures (Ignore or tiny penalty to preserve strategy rating)
-                FailureReason.NETWORK_LOST, FailureReason.LOCAL_SOCKET_ERROR -> 0L // 0 weight
+                FailureReason.NETWORK_LOST, FailureReason.LOCAL_SOCKET_ERROR, FailureReason.DNS_RESOLUTION_FAILED -> 0L // 0 weight
                 
                 FailureReason.UNKNOWN, null -> 0L // Zero penalty to protect ratings from local user internet drops
             }

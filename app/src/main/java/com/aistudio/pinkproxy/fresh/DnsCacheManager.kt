@@ -133,7 +133,7 @@ object DnsCacheManager {
         return null
     }
 
-    fun getCachedOrStale(host: String, type: Int = 1, maxStaleMs: Long = 24 * 3600 * 1000L): List<InetAddress>? {
+    fun getCachedOrStale(host: String, type: Int = 1, maxStaleMs: Long = 15 * 60 * 1000L): List<InetAddress>? {
         ensureEfficiency()
         if (isIpAddress(host)) {
             return try { listOf(InetAddress.getByName(host)) } catch (e: Exception) { null }
