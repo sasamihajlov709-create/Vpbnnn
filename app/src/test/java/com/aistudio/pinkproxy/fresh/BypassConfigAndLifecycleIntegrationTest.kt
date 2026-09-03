@@ -19,7 +19,7 @@ class BypassConfigAndLifecycleIntegrationTest {
     fun testStrictBypassModeStrategyOverride() {
         BypassConfig.isStrictBypassMode = true
         BypassConfig.isAutoTuning = false
-        BypassConfig.setStrategy(BypassStrategy.DIRECT, com.aistudio.pinkproxy.fresh.TransportType.TCP)
+        BypassConfig.applyInternalStrategy(BypassStrategy.DIRECT)
 
         try {
             // TCP

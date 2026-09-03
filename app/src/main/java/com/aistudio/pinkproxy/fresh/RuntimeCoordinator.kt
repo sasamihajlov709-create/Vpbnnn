@@ -71,17 +71,13 @@ object RuntimeCoordinator {
      */
 
     suspend fun applyStrategyTransition(newStrategy: BypassStrategy, transport: TransportType, reason: String): Boolean = stateMutex.withLock {
-        // Validate transport and registry executor compatibility
-        val isFamilyValid = DpiStrategySelector.isFamilyCompatible(newStrategy.family, transport)
-        val isExecutorValid = StrategyExecutionRegistry.isExecutorSupported(newStrategy, transport)
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        val context = CandidateEngine.SelectionContext(transport = transport, profileId = profileId)
 
-        val targetStrategy = if (isFamilyValid && isExecutorValid) {
-            newStrategy
-        } else {
-            DpiStrategySelector.getDefaultFallback(transport)
-        }
+        // Route through centralized StrategyPolicyGate to enforce STABLE mode, validation status, and circuit breakers
+        val targetStrategy = StrategyPolicyGate.resolveOrFallback(newStrategy, context)
 
-        Log.i(TAG, "Transitioning strategy for $transport to $targetStrategy. Reason: $reason")
+        Log.i(TAG, "Transitioning strategy for $transport to $targetStrategy. Reason: $reason (requested: ${newStrategy.name})")
         BypassConfig.applyInternalStrategy(targetStrategy)
         VpnRuntimeState.updateStrategy(targetStrategy.name, DpiStrategySelector.getSelectionReasoning(targetStrategy))
         return true

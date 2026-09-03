@@ -242,37 +242,33 @@ object BypassConfig {
     }
 
     fun getBestStrategyForHost(host: String?, transport: TransportType): BypassStrategy {
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        val category = host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+        val context = CandidateEngine.SelectionContext(
+            transport = transport,
+            profileId = profileId,
+            host = host,
+            category = category
+        )
+
         if (host != null) {
-            val profileId = NetworkProfileManager.currentProfile.value.id
             val override = FlowStrategyOverrideStore.getOverride(host, transport, profileId)
-            if (override != null) {
+            if (override != null && StrategyPolicyGate.isAllowed(override, context)) {
                 return override
             }
         }
         
-        val now = System.currentTimeMillis()
         if (!isAutoTuning) {
             val base = _strategy.value
-            val ctx = CandidateEngine.SelectionContext(transport)
-            if (CandidateEngine.isEligible(base, ctx)) {
-                return if (isStrictBypassMode && base == BypassStrategy.DIRECT) {
-                    DpiStrategySelector.getDefaultFallback(transport)
-                } else {
-                    base
-                }
-            } else {
-                return DpiStrategySelector.getDefaultFallback(transport)
-            }
+            return StrategyPolicyGate.resolveOrFallback(base, context)
         }
         
-        var best = DpiStrategySelector.getBestStrategy(HostClassifier.classify(host), host, transport)
-        if (isStrictBypassMode && best == BypassStrategy.DIRECT) {
-            best = DpiStrategySelector.getDefaultFallback(transport)
-        }
+        val best = DpiStrategySelector.getBestStrategy(category, host, transport)
+        val resolved = StrategyPolicyGate.resolveOrFallback(best, context)
         
-        VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best, host))
+        VpnRuntimeState.updateStrategy(resolved.name, DpiStrategySelector.getSelectionReasoning(resolved, host))
         
-        return best
+        return resolved
     }
 
     fun rotateGlobalStrategy(transport: TransportType) {
@@ -345,16 +341,18 @@ object BypassConfig {
     fun getSessionConfig(host: String, strategy: BypassStrategy, rtt: Long, transport: TransportType): SessionConfig {
         val rnd = ThreadLocalRandom.current()
         val intensity = getIntensityForTransport(transport)
-        var effectiveStrategy = if (isPanicModeForTransport(transport) && rnd.nextInt(100) < 80) BypassStrategy.BYEBYEDPI_HYBRID else strategy
-        
-        if (!DpiStrategySelector.isFamilyCompatible(effectiveStrategy.family, transport) ||
-            !StrategyExecutionRegistry.isExecutorSupported(effectiveStrategy, transport)) {
-            effectiveStrategy = DpiStrategySelector.getDefaultFallback(transport)
-        }
+        val profileId = NetworkProfileManager.currentProfile.value.id
+        val category = HostClassifier.classify(host)
+        val context = CandidateEngine.SelectionContext(
+            transport = transport,
+            profileId = profileId,
+            host = host,
+            category = category
+        )
 
-        if (isStrictBypassMode && effectiveStrategy == BypassStrategy.DIRECT) {
-            effectiveStrategy = DpiStrategySelector.getDefaultFallback(transport)
-        }
+        var candidate = if (isPanicModeForTransport(transport) && rnd.nextInt(100) < 80) BypassStrategy.BYEBYEDPI_HYBRID else strategy
+        val effectiveStrategy = StrategyPolicyGate.resolveOrFallback(candidate, context)
+
         val f1 = if (frag1 > 0) frag1 else DpiEngine.getRecommendedFragSize()
         val f2 = if (frag2 > 0) frag2 else (f1 + rnd.nextInt(1, 4))
         val f3 = if (frag3 > 0) frag3 else (f2 + rnd.nextInt(1, 4))

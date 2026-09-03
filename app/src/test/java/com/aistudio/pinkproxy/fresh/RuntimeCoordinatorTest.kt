@@ -16,6 +16,7 @@ class RuntimeCoordinatorTest {
 
     @Before
     fun setUp() {
+        BypassConfig.isAutoTuning = false
         BypassConfig.setPanicMode(false)
         BypassConfig.setMtu(1400)
     }

@@ -123,18 +123,27 @@ object RecoveryStateMachine {
         val transport = signal.transport
         val profileId = NetworkProfileManager.currentProfile.value.id
         val category = targetHost?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER
+        val selectionContext = CandidateEngine.SelectionContext(
+            transport = transport,
+            profileId = profileId,
+            host = targetHost,
+            category = category
+        )
+
         when (type) {
             DpiType.TCP_RESET -> {
-                val candidates = listOf(
+                val candidateList = listOf(
                     BypassStrategy.TCP_COMBINED_NUCLEAR,
                     BypassStrategy.TCP_COMBINED_HYBRID,
                     BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
                     BypassStrategy.OOB_DESYNC
-                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
-                val selected = candidates.maxWithOrNull(
+                )
+                val eligibleCandidates = candidateList.filter { StrategyPolicyGate.isAllowed(it, selectionContext) }
+                val selected = eligibleCandidates.maxWithOrNull(
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
-                ) ?: BypassStrategy.TCP_COMBINED_NUCLEAR
+                ) ?: StrategyPolicyGate.getEligibleFallback(selectionContext)
+
                 if (targetHost != null) {
                     RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
                 } else {
@@ -143,17 +152,19 @@ object RecoveryStateMachine {
                 enterPanic("Active TCP Reset DPI detected")
             }
             DpiType.TLS_SNI_BLOCK -> {
-                val candidates = listOf(
+                val candidateList = listOf(
                     BypassStrategy.TCP_COMBINED_NUCLEAR,
                     BypassStrategy.BYEBYEDPI_EXTREME,
                     BypassStrategy.ZAPRET_EXTREME,
                     BypassStrategy.SNI_SPLIT,
                     BypassStrategy.TLS_CLIENT_HELLO_CHOP
-                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
-                val selected = candidates.maxWithOrNull(
+                )
+                val eligibleCandidates = candidateList.filter { StrategyPolicyGate.isAllowed(it, selectionContext) }
+                val selected = eligibleCandidates.maxWithOrNull(
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
-                ) ?: BypassStrategy.SNI_SPLIT
+                ) ?: StrategyPolicyGate.getEligibleFallback(selectionContext)
+
                 if (targetHost != null) {
                     RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
                 } else {
@@ -161,17 +172,19 @@ object RecoveryStateMachine {
                 }
             }
             DpiType.HTTP_BLOCK -> {
-                val candidates = listOf(
+                val candidateList = listOf(
                     BypassStrategy.HTTP_HOST_SPACE,
                     BypassStrategy.HTTP_HOST_CASE_MANGLE,
                     BypassStrategy.HTTP_HOST_TAB_MANGLE,
                     BypassStrategy.HTTP_METHOD_CASE_MANGLE,
                     BypassStrategy.HTTP_HOST_REORDER
-                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
-                val selected = candidates.maxWithOrNull(
+                )
+                val eligibleCandidates = candidateList.filter { StrategyPolicyGate.isAllowed(it, selectionContext) }
+                val selected = eligibleCandidates.maxWithOrNull(
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.TCP, category, profileId) }
                         .thenBy { it.name.hashCode() }
-                ) ?: BypassStrategy.HTTP_HOST_SPACE
+                ) ?: StrategyPolicyGate.getEligibleFallback(selectionContext)
+
                 if (targetHost != null) {
                     RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
                 } else {
@@ -179,15 +192,17 @@ object RecoveryStateMachine {
                 }
             }
             DpiType.CONNECTION_TIMEOUT -> {
-                val candidates = listOf(
+                val candidateList = listOf(
                     BypassStrategy.TLS_REC_SPLIT, 
                     BypassStrategy.TCP_ACK_SKEW, 
                     BypassStrategy.SOCKET_BUFFER_CHAOS
-                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, transport) }
-                val selected = candidates.maxWithOrNull(
+                )
+                val eligibleCandidates = candidateList.filter { StrategyPolicyGate.isAllowed(it, selectionContext) }
+                val selected = eligibleCandidates.maxWithOrNull(
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, transport, category, profileId) }
                         .thenBy { it.name.hashCode() }
-                ) ?: DpiStrategySelector.getDefaultFallback(transport)
+                ) ?: StrategyPolicyGate.getEligibleFallback(selectionContext)
+
                 if (targetHost != null) {
                     RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
                 } else {
@@ -196,16 +211,18 @@ object RecoveryStateMachine {
                 if (escalationLevel.get() >= 2) enterPanic("DPI Timeout Escalation")
             }
             DpiType.UDP_BLOCK -> {
-                val candidates = listOf(
+                val candidateList = listOf(
                     BypassStrategy.UDP_COMBINED_NUCLEAR,
                     BypassStrategy.UDP_COMBINED_HYBRID,
                     BypassStrategy.UDP_QUIC_SMART_SHADOW,
                     BypassStrategy.QUIC_INITIAL_FRAGMENTATION
-                ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.UDP) }
-                val selected = candidates.maxWithOrNull(
+                )
+                val eligibleCandidates = candidateList.filter { StrategyPolicyGate.isAllowed(it, selectionContext) }
+                val selected = eligibleCandidates.maxWithOrNull(
                     compareBy<BypassStrategy> { DpiStrategySelector.getScore(it, TransportType.UDP, category, profileId) }
                         .thenBy { it.name.hashCode() }
-                ) ?: BypassStrategy.UDP_COMBINED_NUCLEAR
+                ) ?: StrategyPolicyGate.getEligibleFallback(selectionContext)
+
                 if (targetHost != null) {
                     RuntimeCoordinator.requestGlobalStrategyRotation(transport, "DPI Signal Escalation", category, host = targetHost)
                 } else {
