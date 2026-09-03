@@ -128,13 +128,17 @@ object UdpDnsProtocols {
             }
         }
         var result = emptyList<InetAddress>()
-        repeat(resolvers.size) {
-            val res = channel.receive()
-            if (res.isNotEmpty() && result.isEmpty()) {
-                result = res
-                coroutineContext.cancelChildren()
-                return@coroutineScope result
+        try {
+            repeat(resolvers.size) {
+                val res = channel.receive()
+                if (res.isNotEmpty() && result.isEmpty()) {
+                    result = res
+                    coroutineContext.cancelChildren()
+                    return@coroutineScope result
+                }
             }
+        } finally {
+            channel.close()
         }
         result
     }
@@ -235,13 +239,17 @@ object TcpDnsProtocols {
             }
         }
         var result = emptyList<InetAddress>()
-        repeat(resolvers.size) {
-            val res = channel.receive()
-            if (res.isNotEmpty() && result.isEmpty()) {
-                result = res
-                coroutineContext.cancelChildren()
-                return@coroutineScope result
+        try {
+            repeat(resolvers.size) {
+                val res = channel.receive()
+                if (res.isNotEmpty() && result.isEmpty()) {
+                    result = res
+                    coroutineContext.cancelChildren()
+                    return@coroutineScope result
+                }
             }
+        } finally {
+            channel.close()
         }
         result
     }
@@ -391,13 +399,17 @@ object DohDnsProtocols {
             }
         }
         var result = emptyList<InetAddress>()
-        repeat(extremeEndpoints.size) {
-            val res = channel.receive()
-            if (res.isNotEmpty() && result.isEmpty()) {
-                result = res
-                coroutineContext.cancelChildren()
-                return@coroutineScope result
+        try {
+            repeat(extremeEndpoints.size) {
+                val res = channel.receive()
+                if (res.isNotEmpty() && result.isEmpty()) {
+                    result = res
+                    coroutineContext.cancelChildren()
+                    return@coroutineScope result
+                }
             }
+        } finally {
+            channel.close()
         }
         result
     }
@@ -415,13 +427,13 @@ object DohDnsProtocols {
                 .build()
             
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext queryDohRacing(host, vpnService, type)
+                if (!response.isSuccessful) return@withContext emptyList()
                 val body = response.body?.bytes() ?: return@withContext emptyList()
                 return@withContext DnsPacketEngine.parseDnsResponse(body, body.size, expectedId = queryCtx.id, expectedHost = queryCtx.host)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            queryDohRacing(host, vpnService, type)
+            emptyList()
         }
     }
 }
@@ -440,13 +452,15 @@ object DotDnsProtocols {
     }
 
     suspend fun queryDot(host: String, dotIp: String, vpnService: VpnService?, type: Int): List<InetAddress> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var plainSocket: java.net.Socket? = null
         var socket: java.net.Socket? = null
         try {
-            val plainSocket = ProtectedSocketFactory.createProtectedSocket(vpnService)
+            plainSocket = ProtectedSocketFactory.createProtectedSocket(vpnService)
             plainSocket.tcpNoDelay = true
             plainSocket.connect(java.net.InetSocketAddress(dotIp, 853), 4000)
             
             socket = socketFactory.createSocket(plainSocket, dotIp, 853, true)
+            plainSocket = null // Ownership transferred to SSLSocket with autoClose = true
             socket.soTimeout = 4000
             
             val queryCtx = DnsPacketEngine.buildQueryContextTcp(host, type)
@@ -476,7 +490,8 @@ object DotDnsProtocols {
             Log.v("DotDnsProtocols", "DoT query failed for $host via $dotIp: ${e.message}")
             emptyList()
         } finally {
-            try { socket?.close() } catch (e: Exception) {}
+            try { plainSocket?.close() } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
         }
     }
 

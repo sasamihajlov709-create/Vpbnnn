@@ -219,6 +219,10 @@ object DnsCacheManager {
         negativeCache[host] = System.currentTimeMillis() + ttlMs
     }
 
+    fun clearNegative(host: String) {
+        negativeCache.remove(host)
+    }
+
     fun isNegative(host: String): Boolean {
         val expiry = negativeCache[host] ?: return false
         if (System.currentTimeMillis() > expiry) {

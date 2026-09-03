@@ -13,11 +13,12 @@ object StrategyEscalationGraph {
     val tcpResetChain: List<BypassStrategy> = listOf(
         BypassStrategy.SNI_SPLIT,
         BypassStrategy.TLS_SNI_FRAGMENT,
-        BypassStrategy.TCP_SEGMENT_OVERLAP,
+        BypassStrategy.TCP_SMALL_CHUNKS,
         BypassStrategy.TCP_REARRANGE_CHUNKS,
         BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
-        BypassStrategy.TCP_TRIPLE_DESYNC,
-        BypassStrategy.TCP_FAKE_FIN,
+        BypassStrategy.OOB_DESYNC,
+        BypassStrategy.BYEBYEDPI_HYBRID,
+        BypassStrategy.ZAPRET_EXTREME,
         BypassStrategy.TCP_COMBINED_HYBRID,
         BypassStrategy.TCP_COMBINED_NUCLEAR
     )
@@ -44,9 +45,11 @@ object StrategyEscalationGraph {
         BypassStrategy.TLS_APP_DATA_SPLIT,
         BypassStrategy.TLS_REC_SPLIT,
         BypassStrategy.TLS_0RTT_FAKE,
+        BypassStrategy.TLS_CLIENT_HELLO_CHOP,
         BypassStrategy.BYEBYEDPI_HYBRID,
         BypassStrategy.ZAPRET_EXTREME,
-        BypassStrategy.CHAOS
+        BypassStrategy.CHAOS,
+        BypassStrategy.TCP_COMBINED_NUCLEAR
     )
 
     // 4. DNS Poisoning Escalation Chain
@@ -60,11 +63,14 @@ object StrategyEscalationGraph {
 
     // 5. UDP / QUIC Disruption Escalation Chain
     val udpDisruptionChain: List<BypassStrategy> = listOf(
+        BypassStrategy.UDP_QUIC_PAD,
+        BypassStrategy.QUIC_INITIAL_FRAGMENT,
         BypassStrategy.UDP_FRAGMENT_SKEW,
         BypassStrategy.UDP_NOISE_PAD,
         BypassStrategy.UDP_DATA_FRAG,
+        BypassStrategy.UDP_QUIC_SMART_SHADOW,
+        BypassStrategy.QUIC_INITIAL_FRAGMENTATION,
         BypassStrategy.UDP_NOISE_CHAOS,
-        BypassStrategy.UDP_BURST_CHAOS,
         BypassStrategy.UDP_COMBINED_HYBRID,
         BypassStrategy.UDP_COMBINED_NUCLEAR
     )
@@ -73,13 +79,13 @@ object StrategyEscalationGraph {
     val defaultTcpChain: List<BypassStrategy> = listOf(
         BypassStrategy.SNI_SPLIT,
         BypassStrategy.TLS_SNI_FRAGMENT,
+        BypassStrategy.TCP_SMALL_CHUNKS,
         BypassStrategy.TLS_APP_DATA_SPLIT,
         BypassStrategy.BYEBYEDPI_HYBRID,
-        BypassStrategy.TCP_SEGMENT_OVERLAP,
         BypassStrategy.TCP_REARRANGE_CHUNKS,
         BypassStrategy.TCP_DATA_DESYNC_OVERLAP,
-        BypassStrategy.TCP_TRIPLE_DESYNC,
-        BypassStrategy.TCP_FAKE_FIN,
+        BypassStrategy.OOB_DESYNC,
+        BypassStrategy.ZAPRET_EXTREME,
         BypassStrategy.TCP_COMBINED_NUCLEAR
     )
 
@@ -90,13 +96,23 @@ object StrategyEscalationGraph {
         for (i in 0 until defaultTcpChain.size - 1) {
             strategyChains[defaultTcpChain[i]] = defaultTcpChain[i + 1]
         }
+
+        // Link UDP disruption chain
+        for (i in 0 until udpDisruptionChain.size - 1) {
+            strategyChains[udpDisruptionChain[i]] = udpDisruptionChain[i + 1]
+        }
+
+        // Link DNS escalation chain
+        for (i in 0 until dnsEscalationChain.size - 1) {
+            strategyChains[dnsEscalationChain[i]] = dnsEscalationChain[i + 1]
+        }
         
         // Extra linkages
         strategyChains[BypassStrategy.TCP_FOOL_DPI] = BypassStrategy.ZAPRET_EXTREME
         strategyChains[BypassStrategy.ZAPRET_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
-        
-        strategyChains[BypassStrategy.UDP_NOISE_CHAOS] = BypassStrategy.UDP_BURST_CHAOS
-        strategyChains[BypassStrategy.UDP_BURST_CHAOS] = BypassStrategy.UDP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.BYEBYEDPI_EXTREME] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.CHAOS] = BypassStrategy.TCP_COMBINED_NUCLEAR
+        strategyChains[BypassStrategy.UDP_NOISE_CHAOS] = BypassStrategy.UDP_COMBINED_HYBRID
         strategyChains[BypassStrategy.UDP_COMBINED_HYBRID] = BypassStrategy.UDP_COMBINED_NUCLEAR
     }
 

@@ -70,6 +70,36 @@ class UdpAssociation(
         }
         return null
     }
+
+    fun popMatchingQuicShortHeader(payload: ByteArray, offset: Int, length: Int): UdpPendingProbe? {
+        if (length < 5 || offset + length > payload.size) return null
+        val first = payload[offset].toInt() and 0xFF
+        // Short Header: Header Form (0x80) == 0, Fixed Bit (0x40) != 0
+        if ((first and 0x80) != 0 || (first and 0x40) == 0) return null
+        cleanExpiredProbes()
+        for ((key, probe) in correlatedProbes) {
+            if (key.startsWith("quic:")) {
+                val hexCid = key.substring(5)
+                val cidLen = hexCid.length / 2
+                if (cidLen in 4..20 && length >= 1 + cidLen) {
+                    var matches = true
+                    for (i in 0 until cidLen) {
+                        val byteVal = hexCid.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+                        if (payload[offset + 1 + i] != byteVal) {
+                            matches = false
+                            break
+                        }
+                    }
+                    if (matches) {
+                        correlatedProbes.remove(key)
+                        pendingProbes.remove(probe)
+                        return probe
+                    }
+                }
+            }
+        }
+        return null
+    }
     
     fun popProbe(): UdpPendingProbe? {
         return popMatchingProbe(null)

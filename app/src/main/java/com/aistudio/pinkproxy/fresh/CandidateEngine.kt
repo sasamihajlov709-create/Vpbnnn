@@ -11,7 +11,8 @@ object CandidateEngine {
         val transport: TransportType,
         val profileId: String = NetworkProfileManager.currentProfile.value.id,
         val host: String? = null,
-        val category: HostCategory = HostCategory.OTHER
+        val category: HostCategory = HostCategory.OTHER,
+        val currentStrategy: BypassStrategy? = null
     )
 
     /**
@@ -96,6 +97,11 @@ object CandidateEngine {
         val hostMemory = context.host?.let { 
             StrategyStateRepository.contextualHostMemory[HostContextKey(it, context.transport, context.profileId)] 
         }
+        val hostFails = context.host?.let {
+            StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(context.profileId, it)]?.get()
+        } ?: 0
+
+        val currentActive = context.currentStrategy ?: BypassConfig.strategy.value
 
         val scored = candidates.map { strategy ->
             // Level 3: Global Prior for this transport + profile (aggregate across all categories)
@@ -112,8 +118,8 @@ object CandidateEngine {
             alpha += (state.weightedSuccess.get() / 1000.0)
             beta += (state.weightedFailure.get() / 1000.0) 
             
-            // Level 1: Apply Host Memory bonus if the strategy matches the known best host strategy
-            if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0) {
+            // Level 1: Apply Host Memory bonus if the strategy matches the known best host strategy and no active host failures
+            if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0 && hostFails == 0) {
                 val decay = Math.max(0.1, 1.0 - (System.currentTimeMillis() - hostMemory.timestamp) / (24.0 * 3600.0 * 1000.0))
                 val boost = Math.min(50.0, hostMemory.successCount * hostMemory.confidence * 5.0) * decay
                 alpha += boost
@@ -140,12 +146,27 @@ object CandidateEngine {
             val normalizedLatency = (observedLatency / 200.0).coerceIn(0.0, 5.0)
             val dynamicCost = strategy.cost.toDouble() + normalizedLatency
 
-            val hostMemoryBonus = if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0) {
+            // Host memory bonus if healthy, or penalty if currently failing for this host
+            val hostMemoryBonus = if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0 && hostFails == 0) {
                 150.0 * hostMemory.confidence
+            } else if (hostFails > 0 && hostMemory?.strategy == strategy) {
+                -50.0 * hostFails
+            } else 0.0
+
+            // Anti-Flapping / Hysteresis:
+            // Prefer the currently active strategy if it is healthy, avoiding gratuitous churn across flows
+            val isCurrent = strategy == currentActive
+            val stateFailures = state.failureCount.get()
+            val hysteresisBonus = if (isCurrent && hostFails == 0 && stateFailures == 0) {
+                when (BypassConfig.autoTuningMode) {
+                    AutoTuningMode.STABLE -> 15.0
+                    AutoTuningMode.EXPLORATION -> 5.0
+                    AutoTuningMode.DIAGNOSTIC -> 0.0
+                }
             } else 0.0
 
             val expectedBandwidth = (10.0 - dynamicCost).coerceAtLeast(1.0)
-            val utility = (sampledProb * 100.0) + hostMemoryBonus + verificationBonus + (expectedBandwidth * 0.5) - (dynamicRisk * 0.2 + dynamicCost * 0.2)
+            val utility = (sampledProb * 100.0) + hostMemoryBonus + verificationBonus + hysteresisBonus + (expectedBandwidth * 0.5) - (dynamicRisk * 0.2 + dynamicCost * 0.2)
             
             Pair(strategy, utility)
         }

@@ -143,8 +143,11 @@ object UdpTransportHandler {
                                                 
                                                 UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())
                                                 
-                                                val correlationKey = extractCorrelationKey(inPacket.data, inPacket.offset, inPacket.length, port)
-                                                val matchedProbe = association.popMatchingProbe(correlationKey)
+                                                val correlationKey = extractCorrelationKey(inPacket.data, inPacket.offset, inPacket.length, port, isOutbound = false)
+                                                var matchedProbe = association.popMatchingProbe(correlationKey)
+                                                if (matchedProbe == null && correlationKey == null) {
+                                                    matchedProbe = association.popMatchingQuicShortHeader(inPacket.data, inPacket.offset, inPacket.length)
+                                                }
                                                 if (matchedProbe != null) {
                                                     val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
                                                     DpiStrategySelector.recordResult(
@@ -168,7 +171,7 @@ object UdpTransportHandler {
                                 }
                                 
                                 if (udpStrat != BypassStrategy.DIRECT && udpStrat.implementationStatus != ImplementationStatus.UNSUPPORTED && udpStrat.implementationStatus != ImplementationStatus.SIMULATED) {
-                                    val correlationKey = extractCorrelationKey(payload, 0, payload.size, port)
+                                    val correlationKey = extractCorrelationKey(payload, 0, payload.size, port, isOutbound = true)
                                     val pendingProbe = UdpPendingProbe(
                                         host = host,
                                         strategy = udpStrat,
@@ -237,12 +240,16 @@ object UdpTransportHandler {
         UdpAssociationTable.clear()
     }
 
-    internal fun extractCorrelationKey(payload: ByteArray, offset: Int, length: Int, port: Int): String? {
-        if (length < 2) return null
-        if (port == 53 || length >= 12 && payload[offset + 2].toInt() and 0x80 != 0) { // DNS packet
+    internal fun extractCorrelationKey(payload: ByteArray, offset: Int, length: Int, port: Int, isOutbound: Boolean = false): String? {
+        if (length < 2 || offset + length > payload.size) return null
+        
+        // 1. DNS: matches port 53, 5353, or standard DNS headers
+        if (port == 53 || port == 5353 || isDnsPacket(payload, offset, length)) {
             val txId = ((payload[offset].toInt() and 0xFF) shl 8) or (payload[offset + 1].toInt() and 0xFF)
             return "dns:$txId"
         }
+        
+        // 2. STUN: RFC 5389 magic cookie 0x2112A442
         if (isStunPacket(payload, offset, length)) {
             val sb = java.lang.StringBuilder("stun:")
             for (i in 8 until 20) {
@@ -252,7 +259,60 @@ object UdpTransportHandler {
             }
             return sb.toString()
         }
+        
+        // 3. QUIC: RFC 9000
+        if (length >= 7) {
+            val first = payload[offset].toInt() and 0xFF
+            val isLongHeader = (first and 0x80) != 0
+            val isFixedBit = (first and 0x40) != 0
+            if (isLongHeader && isFixedBit) {
+                val dcil = payload[offset + 5].toInt() and 0xFF
+                if (dcil in 0..20 && length >= 6 + dcil) {
+                    val scilOffset = offset + 6 + dcil
+                    if (length >= scilOffset + 1) {
+                        val scil = payload[scilOffset].toInt() and 0xFF
+                        if (scil in 0..20 && length >= scilOffset + 1 + scil) {
+                            if (isOutbound) {
+                                // Outbound Client Initial/Handshake: client is identified by SCID (or DCID if SCID empty)
+                                if (scil > 0) {
+                                    val sb = java.lang.StringBuilder("quic:")
+                                    for (i in 0 until scil) {
+                                        sb.append("%02x".format(payload[scilOffset + 1 + i]))
+                                    }
+                                    return sb.toString()
+                                } else if (dcil > 0) {
+                                    val sb = java.lang.StringBuilder("quic:")
+                                    for (i in 0 until dcil) {
+                                        sb.append("%02x".format(payload[offset + 6 + i]))
+                                    }
+                                    return sb.toString()
+                                }
+                            } else {
+                                // Inbound Server Response: Server DCID corresponds to client SCID
+                                if (dcil > 0) {
+                                    val sb = java.lang.StringBuilder("quic:")
+                                    for (i in 0 until dcil) {
+                                        sb.append("%02x".format(payload[offset + 6 + i]))
+                                    }
+                                    return sb.toString()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return null
+    }
+
+    internal fun isDnsPacket(payload: ByteArray, offset: Int, length: Int): Boolean {
+        if (length < 12 || offset + 12 > payload.size) return false
+        val flags = ((payload[offset + 2].toInt() and 0xFF) shl 8) or (payload[offset + 3].toInt() and 0xFF)
+        val opcode = (flags shr 11) and 0x0F
+        val isResponse = (flags and 0x8000) != 0
+        val qdcount = ((payload[offset + 4].toInt() and 0xFF) shl 8) or (payload[offset + 5].toInt() and 0xFF)
+        val ancount = ((payload[offset + 6].toInt() and 0xFF) shl 8) or (payload[offset + 7].toInt() and 0xFF)
+        return opcode == 0 && (isResponse || qdcount in 1..10 || ancount in 1..50)
     }
 
     internal fun isStunPacket(payload: ByteArray, offset: Int = 0, length: Int = payload.size): Boolean {

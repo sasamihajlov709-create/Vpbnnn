@@ -12,20 +12,35 @@ object DpiStrategySelector {
         }
     }
 
-    fun getDefaultFallback(transport: TransportType): BypassStrategy {
-        return when (transport) {
+    fun getDefaultFallback(transport: TransportType, context: CandidateEngine.SelectionContext? = null): BypassStrategy {
+        val target = when (transport) {
             TransportType.TCP -> BypassStrategy.SNI_SPLIT
             TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
             TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
         }
+        val effectiveContext = context ?: CandidateEngine.SelectionContext(transport)
+        if (CandidateEngine.isEligible(target, effectiveContext)) {
+            return target
+        }
+        val candidates = CandidateEngine.getEligibleCandidates(effectiveContext)
+        return candidates.firstOrNull() ?: BypassStrategy.DIRECT
     }
 
-    fun getDefaultExtremeFallback(transport: TransportType): BypassStrategy {
-        return when (transport) {
+    fun getDefaultExtremeFallback(transport: TransportType, context: CandidateEngine.SelectionContext? = null): BypassStrategy {
+        val target = when (transport) {
             TransportType.TCP -> BypassStrategy.ZAPRET_EXTREME
             TransportType.UDP -> BypassStrategy.UDP_COMBINED_NUCLEAR
             TransportType.DNS -> BypassStrategy.DNS_OVER_TCP_FORCE
         }
+        val effectiveContext = context ?: CandidateEngine.SelectionContext(transport)
+        if (CandidateEngine.isEligible(target, effectiveContext)) {
+            return target
+        }
+        val extremeCandidates = CandidateEngine.getEligibleCandidates(
+            effectiveContext,
+            BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
+        )
+        return extremeCandidates.firstOrNull() ?: getDefaultFallback(transport, effectiveContext)
     }
 
     fun getBestStrategy(category: HostCategory, host: String? = null, transport: TransportType): BypassStrategy {
@@ -44,24 +59,25 @@ object DpiStrategySelector {
             if (hostFails == 0) {
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strategy = lastMem.strategy
-                    val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
+                    val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category, currentStrategy = strategy)
                     if (CandidateEngine.isEligible(strategy, ctx)) {
                         return strategy
                     }
                 }
-            } else if (hostFails > 2) {
-                if (lastMem != null) {
-                    var currentStep: BypassStrategy? = lastMem.strategy
-                    for (i in 0 until (hostFails - 2)) {
-                        currentStep = currentStep?.let { getFallbackStrategy(it, transport) }
-                    }
-                    if (currentStep != null) {
-                        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
-                        if (CandidateEngine.isEligible(currentStep, ctx)) {
-                            return currentStep
-                        }
-                    }
+            } else if (hostFails in 1..3) {
+                val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
+                val baseStrategy = lastMem?.strategy ?: getDefaultFallback(transport, ctx)
+                val escalated = StrategyEscalationGraph.getEscalatedStrategy(
+                    failedStrategy = baseStrategy,
+                    reason = FailureReason.CENSORSHIP_STALL,
+                    transport = transport,
+                    host = host,
+                    category = category
+                )
+                if (escalated != null && CandidateEngine.isEligible(escalated, ctx)) {
+                    return escalated
                 }
+            } else if (hostFails > 3) {
                 return getBestExtremeStrategy(host, transport)
             }
         }
@@ -90,12 +106,12 @@ object DpiStrategySelector {
                 }
             }
             StrategyStateRepository.circuitBreakers.entries.removeIf { it.value < now }
-            return getDefaultFallback(transport)
+            return getDefaultFallback(transport, ctx)
         }
 
         // Bayesian Top-K Candidate Selection (Thompson Sampling)
         val ranked = CandidateEngine.rankCandidatesBayesian(validStrategies, ctx)
-        return ranked.firstOrNull() ?: getDefaultFallback(transport)
+        return ranked.firstOrNull() ?: getDefaultFallback(transport, ctx)
     }
 
     fun getBestExtremeStrategy(host: String? = null, transport: TransportType): BypassStrategy {
@@ -106,16 +122,21 @@ object DpiStrategySelector {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
         val extremeCandidates = CandidateEngine.getEligibleCandidates(ctx, BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME })
 
-        if (extremeCandidates.isEmpty()) return getDefaultExtremeFallback(transport)
+        if (extremeCandidates.isEmpty()) return getDefaultExtremeFallback(transport, ctx)
 
         val ranked = CandidateEngine.rankCandidatesBayesian(extremeCandidates, ctx)
-        return ranked.firstOrNull() ?: getDefaultExtremeFallback(transport)
+        return ranked.firstOrNull() ?: getDefaultExtremeFallback(transport, ctx)
     }
 
-    fun getFallbackStrategy(strategy: BypassStrategy, transport: TransportType): BypassStrategy {
+    fun getFallbackStrategy(
+        strategy: BypassStrategy, 
+        transport: TransportType,
+        context: CandidateEngine.SelectionContext? = null
+    ): BypassStrategy {
+        val ctx = context ?: CandidateEngine.SelectionContext(transport)
         return StrategyEscalationGraph.strategyChains[strategy] 
-            ?.takeIf { CandidateEngine.isEligible(it, CandidateEngine.SelectionContext(transport)) } 
-            ?: getDefaultFallback(transport)
+            ?.takeIf { CandidateEngine.isEligible(it, ctx) } 
+            ?: getDefaultFallback(transport, ctx)
     }
 
     fun recordResult(
@@ -126,7 +147,7 @@ object DpiStrategySelector {
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality,
+        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null,
         profileId: String = NetworkProfileManager.currentProfile.value.id
@@ -187,12 +208,19 @@ object DpiStrategySelector {
                 StrategyStateRepository.circuitBreakers[CircuitBreakerKey(profileId, transport, strategy)] = now + duration
                 StrategyStateRepository.consecutiveFailures.remove(CircuitBreakerKey(profileId, transport, strategy))
             }
-            if (host != null && (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL)) {
-                val blKey = HostStrategyBlacklistKey(host, transport, profileId, strategy)
-                val currentLevel = StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L
-                val waitTime = if (now > currentLevel) 900_000L else 3_600_000L
-                StrategyStateRepository.hostStrategyBlacklist[blKey] = now + waitTime
-                StrategyStateRepository.consecutiveFailuresByHost.getOrPut(HostFailureKey(profileId, host)) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+            if (host != null) {
+                val hostFailCount = StrategyStateRepository.consecutiveFailuresByHost.getOrPut(HostFailureKey(profileId, host)) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+                if (hostFailCount >= 2) {
+                    val ctxKey = HostContextKey(host, transport, profileId)
+                    StrategyStateRepository.contextualHostMemory.remove(ctxKey)
+                }
+
+                if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) {
+                    val blKey = HostStrategyBlacklistKey(host, transport, profileId, strategy)
+                    val currentLevel = StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L
+                    val waitTime = if (now > currentLevel) 900_000L else 3_600_000L
+                    StrategyStateRepository.hostStrategyBlacklist[blKey] = now + waitTime
+                }
             }
         }
     }

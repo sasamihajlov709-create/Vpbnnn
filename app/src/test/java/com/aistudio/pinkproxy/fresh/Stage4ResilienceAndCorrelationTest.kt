@@ -273,4 +273,92 @@ class Stage4ResilienceAndCorrelationTest {
         assertNull(UdpAssociationTable.getSession(sessionStale.key))
         assertNotNull(UdpAssociationTable.getSession(sessionActive.key))
     }
+
+    @Test
+    fun testUdpCorrelationKeyExtractionQuicLongHeader() {
+        // Outbound client Initial packet:
+        // Byte 0: 0xC0 (Long Header, Initial)
+        // Bytes 1..4: Version (0x00000001)
+        // Byte 5: DCIL (4 bytes)
+        // Bytes 6..9: DCID (0x11, 0x22, 0x33, 0x44)
+        // Byte 10: SCIL (4 bytes)
+        // Bytes 11..14: SCID (0xAA, 0xBB, 0xCC, 0xDD)
+        val clientPacket = ByteArray(30)
+        clientPacket[0] = 0xC0.toByte()
+        clientPacket[1] = 0x00; clientPacket[2] = 0x00; clientPacket[3] = 0x00; clientPacket[4] = 0x01
+        clientPacket[5] = 4 // DCIL
+        clientPacket[6] = 0x11.toByte(); clientPacket[7] = 0x22.toByte(); clientPacket[8] = 0x33.toByte(); clientPacket[9] = 0x44.toByte()
+        clientPacket[10] = 4 // SCIL
+        clientPacket[11] = 0xAA.toByte(); clientPacket[12] = 0xBB.toByte(); clientPacket[13] = 0xCC.toByte(); clientPacket[14] = 0xDD.toByte()
+
+        val clientKey = UdpTransportHandler.extractCorrelationKey(clientPacket, 0, clientPacket.size, 443, isOutbound = true)
+        assertEquals("quic:aabbccdd", clientKey)
+
+        // Inbound server Initial/Handshake packet:
+        // Server addresses client, so server DCID == client SCID
+        val serverPacket = ByteArray(30)
+        serverPacket[0] = 0xC0.toByte()
+        serverPacket[1] = 0x00; serverPacket[2] = 0x00; serverPacket[3] = 0x00; serverPacket[4] = 0x01
+        serverPacket[5] = 4 // DCIL
+        serverPacket[6] = 0xAA.toByte(); serverPacket[7] = 0xBB.toByte(); serverPacket[8] = 0xCC.toByte(); serverPacket[9] = 0xDD.toByte() // Server DCID == client SCID
+
+        val serverKey = UdpTransportHandler.extractCorrelationKey(serverPacket, 0, serverPacket.size, 443, isOutbound = false)
+        assertEquals("quic:aabbccdd", serverKey)
+        assertEquals(clientKey, serverKey)
+    }
+
+    @Test
+    fun testUdpQuicShortHeaderProbeMatching() {
+        val clientIp = InetAddress.getByName("127.0.0.1")
+        val session = UdpAssociationTable.getOrCreateSession(
+            sessionId = "quic-session",
+            clientAddress = clientIp,
+            clientPort = 49152,
+            destinationHost = "example.com",
+            destinationPort = 443,
+            strategy = BypassStrategy.UDP_QUIC_PAD
+        )
+
+        val probe = UdpPendingProbe(
+            host = "example.com",
+            strategy = BypassStrategy.UDP_QUIC_PAD,
+            sentTime = System.currentTimeMillis() - 50,
+            correlationKey = "quic:11223344"
+        )
+        session.addProbe(probe)
+
+        // Server sends 1-RTT Short Header packet:
+        // Byte 0: 0x43 (Header Form = 0, Fixed Bit = 1)
+        // Bytes 1..4: DCID (0x11, 0x22, 0x33, 0x44)
+        val shortHeaderPacket = ByteArray(20)
+        shortHeaderPacket[0] = 0x43.toByte()
+        shortHeaderPacket[1] = 0x11.toByte()
+        shortHeaderPacket[2] = 0x22.toByte()
+        shortHeaderPacket[3] = 0x33.toByte()
+        shortHeaderPacket[4] = 0x44.toByte()
+
+        val matched = session.popMatchingQuicShortHeader(shortHeaderPacket, 0, shortHeaderPacket.size)
+        assertNotNull(matched)
+        assertEquals(BypassStrategy.UDP_QUIC_PAD, matched?.strategy)
+        assertEquals("quic:11223344", matched?.correlationKey)
+    }
+
+    @Test
+    fun testBootstrapDnsLookupAndRecursionSafety() {
+        val bootstrapDns = BootstrapDns()
+        
+        // 1. IP literal resolution (no network query)
+        val ipRes = bootstrapDns.lookup("1.1.1.1")
+        assertEquals(1, ipRes.size)
+        assertEquals("1.1.1.1", ipRes[0].hostAddress)
+
+        // 2. Known DoH providers
+        val googleDns = bootstrapDns.lookup("dns.google")
+        assertTrue(googleDns.isNotEmpty())
+        assertTrue(googleDns.any { it.hostAddress == "8.8.8.8" || it.hostAddress == "8.8.4.4" })
+
+        // 3. Unknown host fallback does not throw or loop infinitely
+        val fallback = bootstrapDns.lookup("nonexistent.invalid.domain")
+        assertNotNull(fallback)
+    }
 }

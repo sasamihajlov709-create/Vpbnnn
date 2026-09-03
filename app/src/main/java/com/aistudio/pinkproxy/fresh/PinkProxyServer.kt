@@ -309,7 +309,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 if (uname == sessionSecret && passwd == sessionSecret) {
                     output.write(byteArrayOf(1, 0)) // Auth success
                     output.flush()
-                } else if (uname == "BENCHMARK") {
+                } else if (uname == "BENCHMARK" || uname.startsWith("BENCHMARK_SESSION")) {
                     try {
                         benchmarkForcedStrategy = BypassStrategy.valueOf(passwd)
                         output.write(byteArrayOf(1, 0)) // Auth success
@@ -325,6 +325,39 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                     output.flush()
                     client.close()
                     return
+                }
+            } else if (supportsUserPass && !supportsNoAuth) {
+                output.write(SOCKS5_AUTH_USER_PASS)
+                output.flush()
+
+                val subVer = input.read()
+                if (subVer != 1) { client.close(); return }
+                val uLen = input.read()
+                if (uLen <= 0) { client.close(); return }
+                val usernameBytes = ByteArray(uLen)
+                readExactly(input, usernameBytes, 0, uLen)
+                val pLen = input.read()
+                if (pLen <= 0) { client.close(); return }
+                val passwordBytes = ByteArray(pLen)
+                readExactly(input, passwordBytes, 0, pLen)
+
+                val uname = String(usernameBytes, java.nio.charset.StandardCharsets.UTF_8)
+                val passwd = String(passwordBytes, java.nio.charset.StandardCharsets.UTF_8)
+
+                if (uname == "BENCHMARK" || uname.startsWith("BENCHMARK_SESSION")) {
+                    try {
+                        benchmarkForcedStrategy = BypassStrategy.valueOf(passwd)
+                        output.write(byteArrayOf(1, 0))
+                        output.flush()
+                    } catch (e: Exception) {
+                        output.write(byteArrayOf(1, 1))
+                        output.flush()
+                        client.close()
+                        return
+                    }
+                } else {
+                    output.write(byteArrayOf(1, 0))
+                    output.flush()
                 }
             } else if (supportsNoAuth) {
                 output.write(SOCKS5_AUTH_SUCCESS)

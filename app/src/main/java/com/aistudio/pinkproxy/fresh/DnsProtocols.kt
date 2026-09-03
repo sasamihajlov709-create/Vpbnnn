@@ -139,9 +139,11 @@ object DnsProtocols {
 
     fun clearPool() {
         synchronized(clientLock) {
+            try { cachedProtectedClient?.connectionPool?.evictAll() } catch (_: Exception) {}
             cachedProtectedClient = null
             lastVpnServiceRef = null
         }
+        try { baseOkHttpClient.connectionPool.evictAll() } catch (_: Exception) {}
         DotDnsProtocols.clearPool()
         DnsCacheManager.clearAll()
     }
@@ -170,13 +172,17 @@ object DnsProtocols {
             }
         }
         var result = emptyList<InetAddress>()
-        repeat(resolvers.size) {
-            val res = channel.receive()
-            if (res.isNotEmpty() && result.isEmpty()) {
-                result = res
-                coroutineContext.cancelChildren()
-                return@coroutineScope result
+        try {
+            repeat(resolvers.size) {
+                val res = channel.receive()
+                if (res.isNotEmpty() && result.isEmpty()) {
+                    result = res
+                    coroutineContext.cancelChildren()
+                    return@coroutineScope result
+                }
             }
+        } finally {
+            channel.close()
         }
         result
     }
