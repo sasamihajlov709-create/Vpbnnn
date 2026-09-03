@@ -28,7 +28,7 @@ object CandidateEngine {
         if (BypassConfig.isAutoTuning && BypassConfig.autoTuningMode == AutoTuningMode.STABLE) {
             val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)
             val isVerified = strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED
-            val hasHighConfidenceEvidence = (state.verifiedSuccessCount.get() >= 5 || state.successCount.get() >= 10) && state.failureCount.get() == 0
+            val hasHighConfidenceEvidence = state.verifiedSuccessCount.get() >= 5 && state.failureCount.get() == 0
             if (!isVerified && !hasHighConfidenceEvidence) {
                 return false
             }
@@ -128,10 +128,10 @@ object CandidateEngine {
             // STABLE mode prior boost for device verified strategies
             val isStableMode = BypassConfig.autoTuningMode == AutoTuningMode.STABLE
             val verificationBonus = if (strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED || (state.verifiedSuccessCount.get() >= 5 && state.failureCount.get() == 0)) {
-                if (isStableMode) 40.0 else 10.0
+                if (isStableMode) 100.0 else 10.0
             } else if (isStableMode && strategy.validationStatus == ValidationStatus.UNVERIFIED && state.verifiedSuccessCount.get() == 0) {
-                // Penalize unverified strategies in stable mode
-                -25.0
+                // Penalize unverified strategies heavily in stable mode
+                -100.0
             } else 0.0
 
             val sampledProb = ThompsonSampler.sampleBeta(alpha, beta)

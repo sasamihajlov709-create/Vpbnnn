@@ -149,7 +149,7 @@ fun DashboardTab(
     val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
     
     val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
-    val testingStrategies by BypassConfig.testingStrategies.collectAsStateWithLifecycle(initialValue = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.FAKE_PACKET, BypassStrategy.TCP_OOB_DESYNC))
+    val testingStrategies by BypassConfig.testingStrategies.collectAsStateWithLifecycle(initialValue = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.SNI_TRIPLE, BypassStrategy.BYEBYEDPI_SIM))
     val signalQuality by ProxyStats.signalQuality.collectAsStateWithLifecycle(initialValue = 100)
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
     val stabilityScore by ProxyStats.stabilityScore.collectAsStateWithLifecycle(initialValue = 100)

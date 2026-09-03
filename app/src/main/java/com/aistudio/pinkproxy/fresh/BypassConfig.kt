@@ -48,8 +48,8 @@ object BypassConfig {
     private val _testingStrategies = MutableStateFlow<List<BypassStrategy>>(
         listOf(
             BypassStrategy.SNI_SPLIT,
-            BypassStrategy.FAKE_PACKET,
-            BypassStrategy.TCP_OOB_DESYNC,
+            BypassStrategy.SNI_TRIPLE,
+            BypassStrategy.BYEBYEDPI_SIM,
             BypassStrategy.BYEBYEDPI_HYBRID,
             BypassStrategy.ZAPRET_EXTREME
         )

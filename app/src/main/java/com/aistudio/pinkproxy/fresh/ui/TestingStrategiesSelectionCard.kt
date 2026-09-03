@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aistudio.pinkproxy.fresh.BypassConfig
 import com.aistudio.pinkproxy.fresh.BypassStrategy
+import com.aistudio.pinkproxy.fresh.ImplementationStatus
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleDarkPink
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleLightPink
 import com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink
@@ -73,7 +74,11 @@ fun TestingStrategiesSelectionCard() {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    BypassStrategy.entries.filter { it != BypassStrategy.DIRECT }.forEach { strategy ->
+                    BypassStrategy.entries.filter { 
+                        it != BypassStrategy.DIRECT && 
+                        it.implementationStatus != ImplementationStatus.UNSUPPORTED && 
+                        it.implementationStatus != ImplementationStatus.STUB 
+                    }.forEach { strategy ->
                         val isSelected = testingStrategies.contains(strategy)
                         Surface(
                             shape = RoundedCornerShape(8.dp),

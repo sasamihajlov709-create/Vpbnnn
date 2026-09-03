@@ -73,7 +73,7 @@ class StrategyState(
 
         if (obs.success) {
             successCount.incrementAndGet()
-            if (obs.quality >= ObservationQuality.HANDSHAKE_COMPLETE) {
+            if (obs.quality >= ObservationQuality.APPLICATION_DATA_EXCHANGED) {
                 verifiedSuccessCount.incrementAndGet()
             }
             

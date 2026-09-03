@@ -23,7 +23,30 @@ object DpiStrategySelector {
             return target
         }
         val candidates = CandidateEngine.getEligibleCandidates(effectiveContext)
-        return candidates.firstOrNull() ?: BypassStrategy.DIRECT
+        val firstEligible = candidates.firstOrNull()
+        if (firstEligible != null) {
+            return firstEligible
+        }
+
+        // In Strict Bypass Mode, DIRECT is strictly forbidden by policy
+        if (BypassConfig.isStrictBypassMode) {
+            val safeNonDirect = BypassStrategy.entries.firstOrNull { s ->
+                s != BypassStrategy.DIRECT &&
+                isFamilyCompatible(s.family, transport) &&
+                s.implementationStatus != ImplementationStatus.UNSUPPORTED &&
+                s.implementationStatus != ImplementationStatus.STUB
+            }
+            if (safeNonDirect != null) {
+                return safeNonDirect
+            }
+            return when (transport) {
+                TransportType.TCP -> BypassStrategy.SNI_SPLIT
+                TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
+                TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
+            }
+        }
+
+        return BypassStrategy.DIRECT
     }
 
     fun getDefaultExtremeFallback(transport: TransportType, context: CandidateEngine.SelectionContext? = null): BypassStrategy {
@@ -40,7 +63,12 @@ object DpiStrategySelector {
             effectiveContext,
             BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
         )
-        return extremeCandidates.firstOrNull() ?: getDefaultFallback(transport, effectiveContext)
+        val firstExtreme = extremeCandidates.firstOrNull()
+        if (firstExtreme != null) {
+            return firstExtreme
+        }
+
+        return getDefaultFallback(transport, effectiveContext)
     }
 
     fun getBestStrategy(category: HostCategory, host: String? = null, transport: TransportType): BypassStrategy {
@@ -147,7 +175,7 @@ object DpiStrategySelector {
         reason: FailureReason? = null, 
         latencyMs: Long = 0, 
         host: String? = null,
-        quality: ObservationQuality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY,
+        quality: ObservationQuality = if (success) ObservationQuality.HANDSHAKE_COMPLETE else ObservationQuality.CONNECT_ONLY,
         requestedStrategy: BypassStrategy? = null,
         effectiveStrategy: BypassStrategy? = null,
         profileId: String = NetworkProfileManager.currentProfile.value.id
