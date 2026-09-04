@@ -91,6 +91,19 @@ object ProactiveAutoTuner {
         
         for (candidate in candidates) {
             val (success, latency) = testCandidate(ips, port, host, candidate, dummyClientHello, vpnService)
+            
+            // Record result for bayesian state
+            DpiStrategySelector.recordResult(
+                strategy = candidate,
+                success = success,
+                host = host,
+                transport = TransportType.TCP,
+                profileId = ctx.profileId,
+                category = ctx.category,
+                latencyMs = if (success) latency else 5000L,
+                quality = if (success) ObservationQuality.APPLICATION_DATA_EXCHANGED else ObservationQuality.CONNECT_ONLY // Use a valid non-null enum for failure if required by signature, or we can check signature.
+            )
+            
             if (success) {
                 Log.i("ProactiveAutoTuner", "Discovered viable candidate strategy $candidate for $host proactively! (Latency: ${latency}ms)")
                 if (latency < bestLatency) {
@@ -142,15 +155,6 @@ object ProactiveAutoTuner {
                                 return@withContext Pair(false, 0L)
                             }
                             
-                            DpiStrategySelector.recordResult(
-                                strategy = strategy,
-                                success = true,
-                                transport = TransportType.TCP,
-                                category = HostClassifier.classify(host),
-                                host = host,
-                                latencyMs = latency,
-                                quality = ObservationQuality.TLS_RECORD_RECEIVED
-                            )
                             return@withContext Pair(true, latency)
                         }
                     }
@@ -161,16 +165,6 @@ object ProactiveAutoTuner {
         } catch (e: Exception) {
         }
         
-        DpiStrategySelector.recordResult(
-            strategy = strategy,
-            success = false,
-            transport = TransportType.TCP,
-            category = HostClassifier.classify(host),
-            host = host,
-            latencyMs = 0L,
-            reason = FailureReason.TIMEOUT,
-            quality = ObservationQuality.CONNECT_ONLY
-        )
         return@withContext Pair(false, 0L)
     }
 }

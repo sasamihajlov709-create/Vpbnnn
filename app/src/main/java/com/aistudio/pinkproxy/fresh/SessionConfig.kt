@@ -10,5 +10,6 @@ data class SessionConfig(
     val frag2: Int = 0,
     val frag3: Int = 0,
     val delay2: Long = 0,
-    val mss: Int = 1300
+    val mss: Int = 1300,
+    val selectionContext: CandidateEngine.SelectionContext? = null
 )

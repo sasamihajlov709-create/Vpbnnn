@@ -12,13 +12,14 @@ object CandidateEngine {
         val profileId: String = NetworkProfileManager.currentProfile.value.id,
         val host: String? = null,
         val category: HostCategory = HostCategory.OTHER,
-        val currentStrategy: BypassStrategy? = null
+        val currentStrategy: BypassStrategy? = null,
+        val isDiagnosticMode: Boolean = false
     )
 
     /**
      * Evaluates whether a strategy is currently allowed to execute under the given context.
      */
-    fun isEligible(strategy: BypassStrategy, context: SelectionContext, ignoreHostBlacklist: Boolean = false): Boolean {
+    fun isEligible(strategy: BypassStrategy, context: SelectionContext): Boolean {
         val now = System.currentTimeMillis()
         
         // 0.1 Strict Mode Gatekeeper for AutoTuningMode.STABLE
@@ -49,7 +50,7 @@ object CandidateEngine {
         if ((StrategyStateRepository.circuitBreakers[cbKey] ?: 0L) > now) return false
         
         // 6. Host-Specific Blacklists
-        if (!ignoreHostBlacklist && context.host != null) {
+        if (!context.isDiagnosticMode && context.host != null) {
             val blKey = HostStrategyBlacklistKey(context.host, context.transport, context.profileId, strategy)
             if ((StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L) > now) return false
         }
@@ -62,10 +63,9 @@ object CandidateEngine {
      */
     fun getEligibleCandidates(
         context: SelectionContext, 
-        baseList: List<BypassStrategy> = BypassStrategy.entries, 
-        ignoreHostBlacklist: Boolean = false
+        baseList: List<BypassStrategy> = BypassStrategy.entries
     ): List<BypassStrategy> {
-        return baseList.filter { isEligible(it, context, ignoreHostBlacklist) }
+        return baseList.filter { isEligible(it, context) }
     }
     
     /**
@@ -77,10 +77,9 @@ object CandidateEngine {
      */
     fun selectBest(
         context: SelectionContext,
-        excludeCurrent: BypassStrategy? = null,
-        ignoreHostBlacklist: Boolean = false
+        excludeCurrent: BypassStrategy? = null
     ): BypassStrategy? {
-        val candidates = getEligibleCandidates(context, ignoreHostBlacklist = ignoreHostBlacklist)
+        val candidates = getEligibleCandidates(context)
         val filtered = if (excludeCurrent != null) candidates.filter { it != excludeCurrent } else candidates
         if (filtered.isEmpty()) return null
         val ranked = rankCandidatesBayesian(filtered, context)

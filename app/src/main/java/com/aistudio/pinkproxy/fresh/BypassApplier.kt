@@ -14,7 +14,7 @@ object BypassApplier {
         // Final policy invariant: Never execute a strategy without explicit PolicyGate approval.
         StrategyPolicyGate.requireAllowed(
             strategy,
-            CandidateEngine.SelectionContext(
+            config.selectionContext ?: CandidateEngine.SelectionContext(
                 host = host,
                 transport = TransportType.TCP,
                 profileId = NetworkProfileManager.currentProfile.value.id
@@ -108,7 +108,7 @@ object BypassApplier {
         // Final policy invariant: Never execute a strategy without explicit PolicyGate approval.
         StrategyPolicyGate.requireAllowed(
             strategy,
-            CandidateEngine.SelectionContext(
+            config.selectionContext ?: CandidateEngine.SelectionContext(
                 host = host,
                 transport = TransportType.UDP,
                 profileId = NetworkProfileManager.currentProfile.value.id

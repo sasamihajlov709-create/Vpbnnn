@@ -124,10 +124,11 @@ object CensorshipExpert {
                 val context = CandidateEngine.SelectionContext(
                     host = testHost,
                     transport = TransportType.TCP,
-                    profileId = NetworkProfileManager.currentProfile.value.id
+                    profileId = NetworkProfileManager.currentProfile.value.id,
+                    isDiagnosticMode = true
                 )
                 val eligibleStrategies = strategiesToTest.filter {
-                    StrategyPolicyGate.isAllowed(it, context, ignoreHostBlacklist = true)
+                    StrategyPolicyGate.isAllowed(it, context)
                 }
                 
                 eligibleStrategies.shuffled().take(5).forEach { strategy ->

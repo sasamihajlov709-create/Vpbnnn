@@ -368,7 +368,8 @@ object BypassConfig {
             delay1 = d1,
             fakeTtl = ttl,
             useIPv6 = host.contains(":"),
-            mss = if (intensity > 75) rnd.nextInt(512, 1000) else 1440
+            mss = if (intensity > 75) rnd.nextInt(512, 1000) else 1440,
+            selectionContext = context
         )
     }
 

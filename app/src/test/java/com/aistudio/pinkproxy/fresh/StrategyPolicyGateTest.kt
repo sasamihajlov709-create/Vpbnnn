@@ -98,4 +98,30 @@ class StrategyPolicyGateTest {
             DpiStrategySelector.isFamilyCompatible(resolved.family, TransportType.TCP)
         )
     }
+
+    @Test
+    fun testStrictModeNeverReturnsUnverifiedFallbackWhenNoEligibleCandidates() {
+        BypassConfig.isStrictBypassMode = true
+        BypassConfig.isAutoTuning = true
+        BypassConfig.autoTuningMode = AutoTuningMode.STABLE
+        
+        val context = CandidateEngine.SelectionContext(
+            transport = TransportType.TCP,
+            host = "super-blocked-target.com"
+        )
+        
+        BypassStrategy.entries.forEach {
+            val cbKey = CircuitBreakerKey(context.profileId, context.transport, it)
+            StrategyStateRepository.circuitBreakers[cbKey] = System.currentTimeMillis() + 100000L
+        }
+
+        try {
+            StrategyPolicyGate.resolveOrFallback(BypassStrategy.DIRECT, context)
+            fail("Should have thrown NoEligibleStrategyException when no eligible candidates exist in strict mode")
+        } catch (e: NoEligibleStrategyException) {
+            // Success
+        } finally {
+            StrategyStateRepository.circuitBreakers.clear()
+        }
+    }
 }

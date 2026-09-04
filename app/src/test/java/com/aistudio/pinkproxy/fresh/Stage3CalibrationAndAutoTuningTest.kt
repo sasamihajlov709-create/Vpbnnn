@@ -110,7 +110,9 @@ class Stage3CalibrationAndAutoTuningTest {
         val candidates = listOf(competitorStrategy, activeStrategy)
         val ranked = CandidateEngine.rankCandidatesBayesian(candidates, ctx)
 
-        // Due to hysteresis bonus (+15.0 in STABLE mode), activeStrategy should be preferred
+        // Due to hysteresis bonus (+15.0 in STABLE mode) + STABLE verification bonus
+        // Both are verified (since verifiedSuccessCount=10), so they get equal verification bonus.
+        // Hysteresis gives activeStrategy the edge.
         assertEquals(activeStrategy, ranked.first())
     }
 
