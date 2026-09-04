@@ -147,7 +147,7 @@ object StrategyEscalationGraph {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category ?: (host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER))
         for (candidate in candidates) {
             if (candidate == failedStrategy) continue
-            if (!CandidateEngine.isEligible(candidate, ctx)) continue
+            if (!StrategyPolicyGate.isAllowed(candidate, ctx)) continue
             
             // Check host-specific blacklist
             if (host != null) {
@@ -160,7 +160,8 @@ object StrategyEscalationGraph {
         }
 
         // Fallback to diverse extreme strategy if all chain members are exhausted or blocked
-        return DpiStrategySelector.getFallbackStrategy(failedStrategy, transport)
+        val fallback = DpiStrategySelector.getFallbackStrategy(failedStrategy, transport)
+        return if (StrategyPolicyGate.isAllowed(fallback, ctx)) fallback else null
     }
 
     private fun selectChainForContext(reason: FailureReason?, transport: TransportType): List<BypassStrategy> {

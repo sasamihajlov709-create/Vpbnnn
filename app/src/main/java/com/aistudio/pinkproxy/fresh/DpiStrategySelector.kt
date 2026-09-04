@@ -162,9 +162,10 @@ object DpiStrategySelector {
         context: CandidateEngine.SelectionContext? = null
     ): BypassStrategy {
         val ctx = context ?: CandidateEngine.SelectionContext(transport)
-        return StrategyEscalationGraph.strategyChains[strategy] 
-            ?.takeIf { CandidateEngine.isEligible(it, ctx) } 
+        val fallback = StrategyEscalationGraph.strategyChains[strategy]
+            ?.takeIf { StrategyPolicyGate.isAllowed(it, ctx) }
             ?: getDefaultFallback(transport, ctx)
+        return if (StrategyPolicyGate.isAllowed(fallback, ctx)) fallback else StrategyPolicyGate.getEligibleFallback(ctx)
     }
 
     fun recordResult(

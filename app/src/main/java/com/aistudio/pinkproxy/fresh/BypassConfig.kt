@@ -411,7 +411,7 @@ object BypassConfig {
             )
             if (esc != null) return esc
         }
-        return DpiStrategySelector.getFallbackStrategy(strategy = current, transport = transport) ?: when (transport) {
+        val fallback = DpiStrategySelector.getFallbackStrategy(strategy = current, transport = transport) ?: when (transport) {
             TransportType.TCP -> when (current.family) {
                 StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
                 StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE
@@ -422,6 +422,12 @@ object BypassConfig {
             TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
             TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
         }
+        val ctx = CandidateEngine.SelectionContext(
+            host = host,
+            transport = transport,
+            profileId = NetworkProfileManager.currentProfile.value.id
+        )
+        return if (StrategyPolicyGate.isAllowed(fallback, ctx)) fallback else StrategyPolicyGate.getEligibleFallback(ctx)
     }
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) = 
         BypassApplier.applyBypass(socket, output, data, length, config, host)

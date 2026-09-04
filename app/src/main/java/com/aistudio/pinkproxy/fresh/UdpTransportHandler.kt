@@ -145,21 +145,31 @@ object UdpTransportHandler {
                                                 
                                                 val correlationKey = extractCorrelationKey(inPacket.data, inPacket.offset, inPacket.length, port, isOutbound = false)
                                                 var matchedProbe = association.popMatchingProbe(correlationKey)
+                                                var isStrictCorrelation = matchedProbe != null
                                                 if (matchedProbe == null && correlationKey == null) {
-                                                    matchedProbe = association.popMatchingQuicShortHeader(inPacket.data, inPacket.offset, inPacket.length)
+                                                    val quicMatch = association.popMatchingQuicShortHeader(inPacket.data, inPacket.offset, inPacket.length)
+                                                    if (quicMatch != null) {
+                                                        matchedProbe = quicMatch
+                                                        isStrictCorrelation = true
+                                                    } else {
+                                                        matchedProbe = association.popProbe() // FIFO fallback
+                                                        isStrictCorrelation = false
+                                                    }
                                                 }
                                                 if (matchedProbe != null) {
                                                     val latency = (System.currentTimeMillis() - matchedProbe.sentTime).coerceAtLeast(1L)
-                                                    DpiStrategySelector.recordResult(
-                                                        strategy = matchedProbe.strategy,
-                                                        success = true,
-                                                        transport = TransportType.UDP,
-                                                        latencyMs = latency,
-                                                        host = matchedProbe.host,
-                                                        quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
-                                                        requestedStrategy = matchedProbe.strategy,
-                                                        effectiveStrategy = matchedProbe.strategy
-                                                    )
+                                                    if (isStrictCorrelation) {
+                                                        DpiStrategySelector.recordResult(
+                                                            strategy = matchedProbe.strategy,
+                                                            success = true,
+                                                            transport = TransportType.UDP,
+                                                            latencyMs = latency,
+                                                            host = matchedProbe.host,
+                                                            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                                                            requestedStrategy = matchedProbe.strategy,
+                                                            effectiveStrategy = matchedProbe.strategy
+                                                        )
+                                                    }
                                                 }
                                             } catch (e: Exception) {
                                                 if (e !is CancellationException) Log.v("UdpTransport", "Inbound UDP error for $sessionKey: ${e.message}")

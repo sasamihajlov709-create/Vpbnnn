@@ -9,8 +9,19 @@ import java.util.concurrent.ThreadLocalRandom
 object BypassApplier {
 
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String, isFirstPacket: Boolean = true) {
-        val rnd = ThreadLocalRandom.current()
         val strategy = config.strategy
+        
+        // Final policy invariant: Never execute a strategy without explicit PolicyGate approval.
+        StrategyPolicyGate.requireAllowed(
+            strategy,
+            CandidateEngine.SelectionContext(
+                host = host,
+                transport = TransportType.TCP,
+                profileId = NetworkProfileManager.currentProfile.value.id
+            )
+        )
+        
+        val rnd = ThreadLocalRandom.current()
         if (strategy == BypassStrategy.DIRECT) {
             output.write(data, 0, length); output.flush(); return
         }
@@ -92,8 +103,19 @@ object BypassApplier {
     }
 
     suspend fun applyUdpBypass(socket: DatagramSocket, packet: DatagramPacket, config: SessionConfig, host: String) {
-        val rnd = ThreadLocalRandom.current()
         val strategy = config.strategy
+        
+        // Final policy invariant: Never execute a strategy without explicit PolicyGate approval.
+        StrategyPolicyGate.requireAllowed(
+            strategy,
+            CandidateEngine.SelectionContext(
+                host = host,
+                transport = TransportType.UDP,
+                profileId = NetworkProfileManager.currentProfile.value.id
+            )
+        )
+        
+        val rnd = ThreadLocalRandom.current()
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(packet); return
         }

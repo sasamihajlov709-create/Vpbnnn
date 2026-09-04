@@ -21,9 +21,6 @@ object CandidateEngine {
     fun isEligible(strategy: BypassStrategy, context: SelectionContext, ignoreHostBlacklist: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
         
-        // 0. Implementation Status (Skip STUB in dynamic selection)
-        if (strategy.implementationStatus == ImplementationStatus.STUB) return false
-        
         // 0.1 Strict Mode Gatekeeper for AutoTuningMode.STABLE
         if (BypassConfig.isAutoTuning && BypassConfig.autoTuningMode == AutoTuningMode.STABLE) {
             val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)

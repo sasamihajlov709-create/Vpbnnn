@@ -33,6 +33,11 @@ object StrategyPolicyGate {
         if (BypassConfig.isStrictBypassMode && strategy == BypassStrategy.DIRECT) {
             return false
         }
+        
+        // 2.5 Packet Engine capability enforcement (we do not have a real packet engine yet)
+        if (strategy.manipulationLevel == ManipulationLevel.PACKET_LEVEL) {
+            return false
+        }
 
         // 3. Delegate to unified CandidateEngine policy logic
         return CandidateEngine.isEligible(strategy, context, ignoreHostBlacklist)
@@ -116,4 +121,20 @@ object StrategyPolicyGate {
             BypassStrategy.DIRECT
         }
     }
+
+    /**
+     * Asserts that the given strategy is allowed, throwing an exception if not.
+     * This acts as the final runtime invariant before actual socket execution.
+     */
+    fun requireAllowed(
+        strategy: BypassStrategy,
+        context: CandidateEngine.SelectionContext,
+        ignoreHostBlacklist: Boolean = false
+    ) {
+        if (!isAllowed(strategy, context, ignoreHostBlacklist)) {
+            throw PolicyViolationException("Strategy $strategy is prohibited by PolicyGate for transport ${context.transport} (host=${context.host})")
+        }
+    }
 }
+
+class PolicyViolationException(message: String) : RuntimeException(message)

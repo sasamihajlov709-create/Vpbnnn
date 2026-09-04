@@ -117,11 +117,20 @@ object CensorshipExpert {
             BypassStrategy.TCP_DATA_DESYNC,
             BypassStrategy.TCP_COMBINED_NUCLEAR,
             BypassStrategy.SOCKET_BUFFER_SKEW
-        ).filter { StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) }
+        )
         
         coroutineScope {
             probeTargets.forEach { (testHost, category) ->
-                strategiesToTest.shuffled().take(5).forEach { strategy ->
+                val context = CandidateEngine.SelectionContext(
+                    host = testHost,
+                    transport = TransportType.TCP,
+                    profileId = NetworkProfileManager.currentProfile.value.id
+                )
+                val eligibleStrategies = strategiesToTest.filter {
+                    StrategyPolicyGate.isAllowed(it, context, ignoreHostBlacklist = true)
+                }
+                
+                eligibleStrategies.shuffled().take(5).forEach { strategy ->
                     launch {
                         val start = System.currentTimeMillis()
                         var probeSocket: Socket? = null
