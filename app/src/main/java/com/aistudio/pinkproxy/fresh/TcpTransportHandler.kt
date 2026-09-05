@@ -459,14 +459,12 @@ object TcpTransportHandler {
             attemptedStrategies.add(currentStrategy)
             val config = BypassConfig.getSessionConfig(targetHost, currentStrategy, rtt, TransportType.TCP)
             val rs = TcpTransportManager.connectToBestIp(resolved, port, vpnService, config, targetHost) ?: run {
-                val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
+                currentStrategy = StrategyPolicyGate.resolveNextEscalation(
                     failedStrategy = currentStrategy,
                     reason = FailureReason.CONNECTION_REFUSED,
-                    transport = TransportType.TCP,
-                    host = targetHost,
-                    category = category
-                ) ?: DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
-                currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
+                    context = config.selectionContext ?: CandidateEngine.SelectionContext(TransportType.TCP, host = targetHost, category = category, profileId = NetworkProfileManager.currentProfile.value.id),
+                    attemptedStrategies = attemptedStrategies
+                )
                 continue
             }
 
@@ -536,14 +534,12 @@ object TcpTransportHandler {
                     Log.w("TcpTransport", "Watchdog triggered for $targetHost with $currentStrategy (attempt #${attemptIndex + 1}). Fast failover to next strategy.")
                     try { rs.close() } catch (e: Exception) {}
 
-                    val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
+                    currentStrategy = StrategyPolicyGate.resolveNextEscalation(
                         failedStrategy = currentStrategy,
                         reason = failureReason,
-                        transport = TransportType.TCP,
-                        host = targetHost,
-                        category = category
-                    ) ?: DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
-                    currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
+                        context = config.selectionContext ?: CandidateEngine.SelectionContext(TransportType.TCP, host = targetHost, category = category, profileId = NetworkProfileManager.currentProfile.value.id),
+                        attemptedStrategies = attemptedStrategies
+                    )
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) {
@@ -585,14 +581,12 @@ object TcpTransportHandler {
                 android.util.Log.w("TcpTransport", "Connection error on strategy $currentStrategy for $targetHost: ${e.message}. Rescuing with fallback.")
                 try { rs.close() } catch (ex: Exception) {}
 
-                val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
+                currentStrategy = StrategyPolicyGate.resolveNextEscalation(
                     failedStrategy = currentStrategy,
                     reason = reason,
-                    transport = TransportType.TCP,
-                    host = targetHost,
-                    category = category
-                ) ?: DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
-                currentStrategy = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(currentStrategy, TransportType.TCP)
+                    context = config.selectionContext ?: CandidateEngine.SelectionContext(TransportType.TCP, host = targetHost, category = category, profileId = NetworkProfileManager.currentProfile.value.id),
+                    attemptedStrategies = attemptedStrategies
+                )
             }
         }
         return null

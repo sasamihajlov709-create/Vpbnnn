@@ -91,6 +91,7 @@ object BypassConfig {
 
     @Volatile var isAutoTuning = true
     @Volatile var isDiagnosticMode = false
+    @Volatile var isBenchmarkModeEnabled = false
     private val _autoTuningMode = MutableStateFlow(AutoTuningMode.STABLE)
     val autoTuningModeFlow: StateFlow<AutoTuningMode> = _autoTuningMode.asStateFlow()
     var autoTuningMode: AutoTuningMode

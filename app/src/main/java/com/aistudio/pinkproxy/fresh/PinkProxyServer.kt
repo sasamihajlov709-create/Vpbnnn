@@ -309,7 +309,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 if (uname == sessionSecret && passwd == sessionSecret) {
                     output.write(byteArrayOf(1, 0)) // Auth success
                     output.flush()
-                } else if (uname == "BENCHMARK" || uname.startsWith("BENCHMARK_SESSION")) {
+                } else if ((uname == "BENCHMARK" || uname.startsWith("BENCHMARK_SESSION")) && BypassConfig.isBenchmarkModeEnabled) {
                     try {
                         benchmarkForcedStrategy = BypassStrategy.valueOf(passwd)
                         output.write(byteArrayOf(1, 0)) // Auth success
@@ -344,7 +344,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
                 val uname = String(usernameBytes, java.nio.charset.StandardCharsets.UTF_8)
                 val passwd = String(passwordBytes, java.nio.charset.StandardCharsets.UTF_8)
 
-                if (uname == "BENCHMARK" || uname.startsWith("BENCHMARK_SESSION")) {
+                if ((uname == "BENCHMARK" || uname.startsWith("BENCHMARK_SESSION")) && BypassConfig.isBenchmarkModeEnabled) {
                     try {
                         benchmarkForcedStrategy = BypassStrategy.valueOf(passwd)
                         output.write(byteArrayOf(1, 0))
@@ -420,7 +420,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
             }
             
             val activeHost = host ?: ""
-            val forcedStrategy = benchmarkForcedStrategy ?: if (com.aistudio.pinkproxy.fresh.BypassConfig.isHostDirect(activeHost)) com.aistudio.pinkproxy.fresh.BypassStrategy.DIRECT else null
+            val forcedStrategy = benchmarkForcedStrategy ?: if (!com.aistudio.pinkproxy.fresh.BypassConfig.isStrictBypassMode && com.aistudio.pinkproxy.fresh.BypassConfig.isHostDirect(activeHost)) com.aistudio.pinkproxy.fresh.BypassStrategy.DIRECT else null
             
             val flowContext = FlowContext(
                 host = activeHost,

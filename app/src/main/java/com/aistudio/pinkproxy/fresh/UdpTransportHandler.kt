@@ -165,7 +165,7 @@ object UdpTransportHandler {
                                                             transport = TransportType.UDP,
                                                             latencyMs = latency,
                                                             host = matchedProbe.host,
-                                                            quality = ObservationQuality.APPLICATION_DATA_EXCHANGED,
+                                                            quality = ObservationQuality.TLS_RECORD_RECEIVED,
                                                             requestedStrategy = matchedProbe.strategy,
                                                             effectiveStrategy = matchedProbe.strategy
                                                         )
@@ -180,7 +180,12 @@ object UdpTransportHandler {
                                     association.readerJob = readerJob
                                 }
                                 
-                                if (udpStrat != BypassStrategy.DIRECT && udpStrat.implementationStatus != ImplementationStatus.UNSUPPORTED && udpStrat.implementationStatus != ImplementationStatus.SIMULATED) {
+                                val udpContext = CandidateEngine.SelectionContext(
+                                    host = host,
+                                    transport = TransportType.UDP,
+                                    profileId = NetworkProfileManager.currentProfile.value.id
+                                )
+                                if (udpStrat != BypassStrategy.DIRECT && StrategyPolicyGate.isAllowed(udpStrat, udpContext)) {
                                     val correlationKey = extractCorrelationKey(payload, 0, payload.size, port, isOutbound = true)
                                     val pendingProbe = UdpPendingProbe(
                                         host = host,

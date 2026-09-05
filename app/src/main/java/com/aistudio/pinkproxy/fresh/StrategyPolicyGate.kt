@@ -66,6 +66,29 @@ object StrategyPolicyGate {
     }
 
     /**
+     * Resolves the next strategy in case of a failure, utilizing StrategyEscalationGraph and DpiStrategySelector,
+     * while guaranteeing that the returned strategy is policy-approved and has not been attempted.
+     */
+    fun resolveNextEscalation(
+        failedStrategy: BypassStrategy,
+        reason: FailureReason,
+        context: CandidateEngine.SelectionContext,
+        attemptedStrategies: Set<BypassStrategy>
+    ): BypassStrategy {
+        val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
+            failedStrategy = failedStrategy,
+            reason = reason,
+            transport = context.transport,
+            host = context.host ?: "",
+            category = context.category
+        ) ?: DpiStrategySelector.getFallbackStrategy(failedStrategy, context.transport, context)
+
+        val candidate = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(failedStrategy, context.transport, context)
+
+        return resolveOrFallback(candidate, context)
+    }
+
+    /**
      * Returns the highest-priority guaranteed eligible fallback strategy for the given context.
      */
     fun getEligibleFallback(

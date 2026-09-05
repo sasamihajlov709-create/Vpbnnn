@@ -31,6 +31,8 @@ object BenchmarkManager {
         _isRunning.value = true
         _progress.value = 0f
         
+        BypassConfig.isBenchmarkModeEnabled = true
+        
         val strategies = BypassStrategy.entries.filter { 
             it != BypassStrategy.DIRECT && 
             StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) 
@@ -99,6 +101,7 @@ object BenchmarkManager {
             } catch (e: Exception) {
                 Log.e("BenchmarkManager", "Benchmark failed", e)
             } finally {
+                BypassConfig.isBenchmarkModeEnabled = false
                 _isRunning.value = false
                 _progress.value = 1f
             }
@@ -107,6 +110,7 @@ object BenchmarkManager {
 
     fun stopBenchmark() {
         benchmarkJob?.cancel()
+        BypassConfig.isBenchmarkModeEnabled = false
         _isRunning.value = false
     }
 }
