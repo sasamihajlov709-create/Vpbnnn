@@ -81,11 +81,38 @@ object StrategyPolicyGate {
             transport = context.transport,
             host = context.host ?: "",
             category = context.category
-        ) ?: DpiStrategySelector.getFallbackStrategy(failedStrategy, context.transport, context)
+        )
+        
+        if (nextStrat != null && nextStrat !in attemptedStrategies && isAllowed(nextStrat, context)) {
+            return nextStrat
+        }
 
-        val candidate = if (nextStrat !in attemptedStrategies) nextStrat else DpiStrategySelector.getFallbackStrategy(failedStrategy, context.transport, context)
+        val eligibleCandidates = CandidateEngine.getEligibleCandidates(context)
+            .filter { it !in attemptedStrategies && isAllowed(it, context) }
+        
+        val firstEligible = eligibleCandidates.firstOrNull()
+        if (firstEligible != null) {
+            return firstEligible
+        }
 
-        return resolveOrFallback(candidate, context)
+        if (!context.isDiagnosticMode && context.host != null) {
+            val diagnosticContext = context.copy(isDiagnosticMode = true)
+            val nonBlacklisted = CandidateEngine.getEligibleCandidates(diagnosticContext)
+                .filter { it !in attemptedStrategies && isAllowed(it, diagnosticContext) }
+            val firstNonBlacklisted = nonBlacklisted.firstOrNull()
+            if (firstNonBlacklisted != null) {
+                return firstNonBlacklisted
+            }
+        }
+
+        if (BypassConfig.isStrictBypassMode) {
+            throw NoEligibleStrategyException("No eligible unattempted strategy available for transport ${context.transport}")
+        } else {
+            if (BypassStrategy.DIRECT !in attemptedStrategies && isAllowed(BypassStrategy.DIRECT, context)) {
+                return BypassStrategy.DIRECT
+            }
+            throw NoEligibleStrategyException("No unattempted strategy available and DIRECT is exhausted/disallowed.")
+        }
     }
 
     /**

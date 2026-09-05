@@ -124,4 +124,37 @@ class StrategyPolicyGateTest {
             StrategyStateRepository.circuitBreakers.clear()
         }
     }
+
+    @Test
+    fun testResolveNextEscalationPreventsLoops() {
+        BypassConfig.isStrictBypassMode = true
+        val context = CandidateEngine.SelectionContext(TransportType.TCP)
+        
+        // Try to escalate from SNI_SPLIT
+        val attempted = mutableSetOf(BypassStrategy.SNI_SPLIT)
+        val nextStrat = StrategyPolicyGate.resolveNextEscalation(
+            failedStrategy = BypassStrategy.SNI_SPLIT,
+            reason = FailureReason.CONNECTION_REFUSED,
+            context = context,
+            attemptedStrategies = attempted
+        )
+        
+        // Ensure it gives us something new
+        assertNotEquals(BypassStrategy.SNI_SPLIT, nextStrat)
+        assertTrue(nextStrat !in attempted)
+        
+        // Now let's try to exhaust all possibilities to trigger the exception
+        val allStrategies = BypassStrategy.entries.toSet()
+        try {
+            StrategyPolicyGate.resolveNextEscalation(
+                failedStrategy = BypassStrategy.SNI_SPLIT,
+                reason = FailureReason.CONNECTION_REFUSED,
+                context = context,
+                attemptedStrategies = allStrategies
+            )
+            fail("Expected NoEligibleStrategyException because all strategies have been attempted")
+        } catch (e: NoEligibleStrategyException) {
+            // Expected
+        }
+    }
 }

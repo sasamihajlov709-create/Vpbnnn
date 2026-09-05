@@ -209,7 +209,16 @@ object BypassConfig {
         delay1 = prefs.getLong("delay1", 20L)
         fakeTtl = prefs.getInt("fakeTtl", 0)
         val savedStrat = prefs.getString("global_strategy", BypassStrategy.SNI_SPLIT.name)
-        _strategy.value = try { BypassStrategy.valueOf(savedStrat ?: BypassStrategy.SNI_SPLIT.name) } catch (e: Exception) { BypassStrategy.SNI_SPLIT }
+        val parsedStrat = try { BypassStrategy.valueOf(savedStrat ?: BypassStrategy.SNI_SPLIT.name) } catch (e: Exception) { BypassStrategy.SNI_SPLIT }
+        val ctx = CandidateEngine.SelectionContext(
+            transport = TransportType.TCP,
+            profileId = NetworkProfileManager.currentProfile.value.id
+        )
+        _strategy.value = try {
+            StrategyPolicyGate.resolveOrFallback(parsedStrat, ctx)
+        } catch (e: Exception) {
+            BypassStrategy.SNI_SPLIT
+        }
         
         val savedDns = prefs.getString("dns_strategy_type", DnsType.AUTO.name)
         dnsType = try { DnsType.valueOf(savedDns ?: DnsType.AUTO.name) } catch(e: Exception) { DnsType.AUTO }
@@ -403,33 +412,23 @@ object BypassConfig {
         host: String? = null,
         category: HostCategory? = null
     ): BypassStrategy {
-        if (reason != null && host != null && category != null) {
-            val esc = StrategyEscalationGraph.getEscalatedStrategy(
-                failedStrategy = current,
-                reason = reason,
-                transport = transport,
-                category = category,
-                host = host
-            )
-            if (esc != null) return esc
-        }
-        val fallback = DpiStrategySelector.getFallbackStrategy(strategy = current, transport = transport) ?: when (transport) {
-            TransportType.TCP -> when (current.family) {
-                StrategyFamily.TLS -> BypassStrategy.TLS_SNI_GREASE
-                StrategyFamily.HTTP -> BypassStrategy.HTTP_METHOD_CASE_MANGLE
-                StrategyFamily.TCP -> BypassStrategy.TCP_WINDOW_SHRINK
-                StrategyFamily.FRAGMENTATION -> BypassStrategy.FRAGMENT_MULTI
-                else -> BypassStrategy.SNI_SPLIT
-            }
-            TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
-            TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
-        }
         val ctx = CandidateEngine.SelectionContext(
             host = host,
             transport = transport,
             profileId = NetworkProfileManager.currentProfile.value.id
         )
-        return if (StrategyPolicyGate.isAllowed(fallback, ctx)) fallback else StrategyPolicyGate.getEligibleFallback(ctx)
+        return try {
+            StrategyPolicyGate.resolveNextEscalation(
+                failedStrategy = current,
+                reason = reason ?: FailureReason.TARGET_UNAVAILABLE,
+                context = ctx,
+                attemptedStrategies = setOf(current)
+            )
+        } catch (e: NoEligibleStrategyException) {
+            // If strictly nothing available, return the default ultimate fallback from selector just to not crash, 
+            // though it shouldn't be executed due to runtime policy gate.
+            BypassStrategy.DIRECT
+        }
     }
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) = 
         BypassApplier.applyBypass(socket, output, data, length, config, host)

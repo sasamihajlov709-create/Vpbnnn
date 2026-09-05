@@ -13,40 +13,31 @@ object DpiStrategySelector {
     }
 
     fun getDefaultFallback(transport: TransportType, context: CandidateEngine.SelectionContext? = null): BypassStrategy {
+        val effectiveContext = context ?: CandidateEngine.SelectionContext(transport)
         val target = when (transport) {
             TransportType.TCP -> BypassStrategy.SNI_SPLIT
             TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
             TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
         }
-        val effectiveContext = context ?: CandidateEngine.SelectionContext(transport)
-        if (CandidateEngine.isEligible(target, effectiveContext)) {
+        
+        if (StrategyPolicyGate.isAllowed(target, effectiveContext)) {
             return target
         }
+        
         val candidates = CandidateEngine.getEligibleCandidates(effectiveContext)
-        val firstEligible = candidates.firstOrNull()
+        val firstEligible = candidates.firstOrNull { StrategyPolicyGate.isAllowed(it, effectiveContext) }
         if (firstEligible != null) {
             return firstEligible
         }
 
-        // In Strict Bypass Mode, DIRECT is strictly forbidden by policy
         if (BypassConfig.isStrictBypassMode) {
-            val safeNonDirect = BypassStrategy.entries.firstOrNull { s ->
-                s != BypassStrategy.DIRECT &&
-                isFamilyCompatible(s.family, transport) &&
-                s.implementationStatus != ImplementationStatus.UNSUPPORTED &&
-                s.implementationStatus != ImplementationStatus.STUB
-            }
-            if (safeNonDirect != null) {
-                return safeNonDirect
-            }
-            return when (transport) {
-                TransportType.TCP -> BypassStrategy.SNI_SPLIT
-                TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
-                TransportType.DNS -> BypassStrategy.DNS_OVER_TCP
-            }
+            throw NoEligibleStrategyException("No policy-approved fallback strategy available for transport $transport in Strict Mode")
         }
 
-        return BypassStrategy.DIRECT
+        if (StrategyPolicyGate.isAllowed(BypassStrategy.DIRECT, effectiveContext)) {
+            return BypassStrategy.DIRECT
+        }
+        throw NoEligibleStrategyException("No policy-approved fallback strategy available for transport $transport")
     }
 
     fun getDefaultExtremeFallback(transport: TransportType, context: CandidateEngine.SelectionContext? = null): BypassStrategy {

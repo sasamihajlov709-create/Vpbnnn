@@ -165,7 +165,7 @@ object UdpTransportHandler {
                                                             transport = TransportType.UDP,
                                                             latencyMs = latency,
                                                             host = matchedProbe.host,
-                                                            quality = ObservationQuality.TLS_RECORD_RECEIVED,
+                                                            quality = ObservationQuality.VALID_PROTOCOL_RESPONSE,
                                                             requestedStrategy = matchedProbe.strategy,
                                                             effectiveStrategy = matchedProbe.strategy
                                                         )
