@@ -149,18 +149,13 @@ object StrategyEscalationGraph {
             if (candidate == failedStrategy) continue
             if (!StrategyPolicyGate.isAllowed(candidate, ctx)) continue
             
-            // Check host-specific blacklist
-            if (host != null) {
-                val blKey = HostStrategyBlacklistKey(host, transport, profileId, candidate)
-                val bl = StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L
-                if (bl >= now) continue
-            }
+
 
             return candidate
         }
 
         // Fallback to diverse extreme strategy if all chain members are exhausted or blocked
-        val fallback = DpiStrategySelector.getFallbackStrategy(failedStrategy, transport)
+        val fallback = DpiStrategySelector.getFallbackStrategy(failedStrategy, transport, ctx)
         return if (StrategyPolicyGate.isAllowed(fallback, ctx)) fallback else null
     }
 

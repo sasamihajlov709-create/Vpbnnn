@@ -40,11 +40,11 @@ class CandidateEngineIntegrationTest {
         StrategyStateRepository.hostStrategyBlacklist[blKey] = System.currentTimeMillis() + 10000
 
         // Normal mode should block it
-        assertFalse(CandidateEngine.isEligible(strategy, ctx))
+        assertFalse(StrategyPolicyGate.isAllowed(strategy, ctx))
 
-        // Diagnostic mode should allow it
-        val diagCtx = ctx.copy(isDiagnosticMode = true)
-        assertTrue(CandidateEngine.isEligible(strategy, diagCtx))
+        // ignoreHostBlacklist mode should allow it
+        val diagCtx = ctx.copy(ignoreHostBlacklist = true)
+        assertTrue(StrategyPolicyGate.isAllowed(strategy, diagCtx))
     }
 
     @Test

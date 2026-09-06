@@ -419,7 +419,8 @@ object BypassConfig {
         val ctx = CandidateEngine.SelectionContext(
             host = host,
             transport = transport,
-            profileId = NetworkProfileManager.currentProfile.value.id
+            profileId = NetworkProfileManager.currentProfile.value.id,
+            category = category ?: HostCategory.OTHER
         )
         return try {
             StrategyPolicyGate.resolveNextEscalation(

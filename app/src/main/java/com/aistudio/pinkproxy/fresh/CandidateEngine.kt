@@ -13,50 +13,9 @@ object CandidateEngine {
         val host: String? = null,
         val category: HostCategory = HostCategory.OTHER,
         val currentStrategy: BypassStrategy? = null,
-        val isDiagnosticMode: Boolean = false
+        val isDiagnosticMode: Boolean = false,
+        val ignoreHostBlacklist: Boolean = false
     )
-
-    /**
-     * Evaluates whether a strategy is currently allowed to execute under the given context.
-     */
-    fun isEligible(strategy: BypassStrategy, context: SelectionContext): Boolean {
-        val now = System.currentTimeMillis()
-        
-        // 0.1 Strict Mode Gatekeeper for AutoTuningMode.STABLE
-        if (BypassConfig.isAutoTuning && BypassConfig.autoTuningMode == AutoTuningMode.STABLE) {
-            val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)
-            val isVerified = strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED
-            val hasHighConfidenceEvidence = state.verifiedSuccessCount.get() >= 5 && state.failureCount.get() == 0
-            if (!isVerified && !hasHighConfidenceEvidence) {
-                return false
-            }
-        }
-        
-        // 1. Check Family Compatibility
-        if (!DpiStrategySelector.isFamilyCompatible(strategy.family, context.transport)) return false
-        
-        // 2. Check Executor Registration
-        if (!StrategyExecutionRegistry.isExecutorSupported(strategy, context.transport)) return false
-        
-        // 3. Global Strict Mode
-        if (BypassConfig.isStrictBypassMode && strategy == BypassStrategy.DIRECT) return false
-
-        // 4. Panic Mode Check
-        val isPanic = BypassConfig.isPanicModeForTransport(context.transport) || BypassConfig.getIntensityForTransport(context.transport) > 92
-        if (isPanic && (strategy.group == StrategyGroup.LIGHT || strategy.group == StrategyGroup.MEDIUM)) return false
-        
-        // 5. Global Circuit Breakers (By Profile + Transport)
-        val cbKey = CircuitBreakerKey(context.profileId, context.transport, strategy)
-        if ((StrategyStateRepository.circuitBreakers[cbKey] ?: 0L) > now) return false
-        
-        // 6. Host-Specific Blacklists
-        if (!context.isDiagnosticMode && context.host != null) {
-            val blKey = HostStrategyBlacklistKey(context.host, context.transport, context.profileId, strategy)
-            if ((StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L) > now) return false
-        }
-        
-        return true
-    }
 
     /**
      * Returns a list of all strategies that are eligible for the given context.
@@ -65,7 +24,7 @@ object CandidateEngine {
         context: SelectionContext, 
         baseList: List<BypassStrategy> = BypassStrategy.entries
     ): List<BypassStrategy> {
-        return baseList.filter { isEligible(it, context) && StrategyPolicyGate.isAllowed(it, context) }
+        return baseList.filter { StrategyPolicyGate.isAllowed(it, context) }
     }
     
     /**

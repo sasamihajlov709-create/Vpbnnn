@@ -74,8 +74,8 @@ object ProactiveAutoTuner {
 
         // Auto-Tuner 2.0: Rank and select top candidate strategies (Current best + Thompson dynamic top + robust diverse fallback)
         val profileId = NetworkProfileManager.currentProfile.value.id
-        val diverseExtreme = DpiStrategySelector.getFallbackStrategy(strategy = currentBest, transport = TransportType.TCP)
-        val ctx = CandidateEngine.SelectionContext(TransportType.TCP, profileId, host, category)
+        val ctx = CandidateEngine.SelectionContext(TransportType.TCP, profileId, host, category, isDiagnosticMode = true)
+        val diverseExtreme = DpiStrategySelector.getFallbackStrategy(strategy = currentBest, transport = TransportType.TCP, context = ctx)
         val baseList = listOf(
             currentBest,
             BypassStrategy.SNI_SPLIT,

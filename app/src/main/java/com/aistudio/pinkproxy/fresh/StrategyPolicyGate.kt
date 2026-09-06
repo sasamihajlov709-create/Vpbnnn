@@ -16,7 +16,7 @@ object StrategyPolicyGate {
 
     /**
      * Checks if the given strategy is allowed to be executed within the given context.
-     * Enforces CandidateEngine eligibility, implementation status, and strict mode.
+     * Enforces all eligibility rules, implementation status, and strict mode.
      */
     fun isAllowed(
         strategy: BypassStrategy,
@@ -35,14 +35,45 @@ object StrategyPolicyGate {
         if (BypassConfig.isStrictBypassMode && strategy == BypassStrategy.DIRECT) {
             return false
         }
-        
+            
         // 2.5 Packet Engine capability enforcement (we do not have a real packet engine yet)
         if (strategy.manipulationLevel == ManipulationLevel.PACKET_LEVEL) {
             return false
         }
 
-        // 3. Delegate to unified CandidateEngine policy logic
-        return CandidateEngine.isEligible(strategy, context)
+        val now = System.currentTimeMillis()
+        
+        // 3. Strict Mode Gatekeeper for AutoTuningMode.STABLE
+        if (BypassConfig.isAutoTuning && BypassConfig.autoTuningMode == AutoTuningMode.STABLE) {
+            val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)
+            val isVerified = strategy.validationStatus == ValidationStatus.DEVICE_VERIFIED
+            val hasHighConfidenceEvidence = state.verifiedSuccessCount.get() >= 5 && state.failureCount.get() == 0
+            if (!isVerified && !hasHighConfidenceEvidence) {
+                return false
+            }
+        }
+        
+        // 4. Check Family Compatibility
+        if (!DpiStrategySelector.isFamilyCompatible(strategy.family, context.transport)) return false
+        
+        // 5. Check Executor Registration
+        if (!StrategyExecutionRegistry.isExecutorSupported(strategy, context.transport)) return false
+        
+        // 6. Panic Mode Check
+        val isPanic = BypassConfig.isPanicModeForTransport(context.transport) || BypassConfig.getIntensityForTransport(context.transport) > 92
+        if (isPanic && (strategy.group == StrategyGroup.LIGHT || strategy.group == StrategyGroup.MEDIUM)) return false
+        
+        // 7. Global Circuit Breakers (By Profile + Transport)
+        val cbKey = CircuitBreakerKey(context.profileId, context.transport, strategy)
+        if ((StrategyStateRepository.circuitBreakers[cbKey] ?: 0L) > now) return false
+        
+        // 8. Host-Specific Blacklists
+        if (!context.ignoreHostBlacklist && context.host != null) {
+            val blKey = HostStrategyBlacklistKey(context.host, context.transport, context.profileId, strategy)
+            if ((StrategyStateRepository.hostStrategyBlacklist[blKey] ?: 0L) > now) return false
+        }
+        
+        return true
     }
 
     /**
@@ -98,24 +129,20 @@ object StrategyPolicyGate {
             return firstEligible
         }
 
-        if (!context.isDiagnosticMode && context.host != null) {
-            val diagnosticContext = context.copy(isDiagnosticMode = true)
-            val nonBlacklisted = CandidateEngine.getEligibleCandidates(diagnosticContext)
-                .filter { it !in attemptedStrategies && isAllowed(it, diagnosticContext) }
+        if (!context.ignoreHostBlacklist && context.host != null) {
+            val fallbackContext = context.copy(ignoreHostBlacklist = true)
+            val nonBlacklisted = CandidateEngine.getEligibleCandidates(fallbackContext)
+                .filter { it !in attemptedStrategies && isAllowed(it, fallbackContext) }
             val firstNonBlacklisted = nonBlacklisted.firstOrNull()
             if (firstNonBlacklisted != null) {
                 return firstNonBlacklisted
             }
         }
 
-        if (BypassConfig.isStrictBypassMode) {
-            throw NoEligibleStrategyException("No eligible unattempted strategy available for transport ${context.transport}")
-        } else {
-            if (BypassStrategy.DIRECT !in attemptedStrategies && isAllowed(BypassStrategy.DIRECT, context)) {
-                return BypassStrategy.DIRECT
-            }
-            throw NoEligibleStrategyException("No unattempted strategy available and DIRECT is exhausted/disallowed.")
+        if (BypassStrategy.DIRECT !in attemptedStrategies && isAllowed(BypassStrategy.DIRECT, context)) {
+            return BypassStrategy.DIRECT
         }
+        throw NoEligibleStrategyException("No unattempted strategy available for transport ${context.transport}")
     }
 
     /**
@@ -153,20 +180,19 @@ object StrategyPolicyGate {
         }
 
         // 4. In extreme cases where all are filtered (e.g., severe panic/blacklist), retry ignoring host blacklist
-        if (!context.isDiagnosticMode && context.host != null) {
-            val diagnosticContext = context.copy(isDiagnosticMode = true)
-            val nonBlacklisted = CandidateEngine.getEligibleCandidates(diagnosticContext).firstOrNull()
+        if (!context.ignoreHostBlacklist && context.host != null) {
+            val fallbackContext = context.copy(ignoreHostBlacklist = true)
+            val nonBlacklisted = CandidateEngine.getEligibleCandidates(fallbackContext).firstOrNull()
             if (nonBlacklisted != null) {
                 return nonBlacklisted
             }
         }
 
         // 5. Ultimate fallback compliant with strict bypass mode
-        if (BypassConfig.isStrictBypassMode) {
-            throw NoEligibleStrategyException("No policy-approved strategy available for transport ${context.transport} (host=${context.host})")
-        } else {
+        if (isAllowed(BypassStrategy.DIRECT, context)) {
             return BypassStrategy.DIRECT
         }
+        throw NoEligibleStrategyException("No policy-approved strategy available for transport ${context.transport} (host=${context.host})")
     }
 
     /**

@@ -30,9 +30,6 @@ object DpiStrategySelector {
             return firstEligible
         }
 
-        if (BypassConfig.isStrictBypassMode) {
-            throw NoEligibleStrategyException("No policy-approved fallback strategy available for transport $transport in Strict Mode")
-        }
 
         if (StrategyPolicyGate.isAllowed(BypassStrategy.DIRECT, effectiveContext)) {
             return BypassStrategy.DIRECT
@@ -150,13 +147,12 @@ object DpiStrategySelector {
     fun getFallbackStrategy(
         strategy: BypassStrategy, 
         transport: TransportType,
-        context: CandidateEngine.SelectionContext? = null
+        context: CandidateEngine.SelectionContext
     ): BypassStrategy {
-        val ctx = context ?: CandidateEngine.SelectionContext(transport)
         val fallback = StrategyEscalationGraph.strategyChains[strategy]
-            ?.takeIf { StrategyPolicyGate.isAllowed(it, ctx) }
-            ?: getDefaultFallback(transport, ctx)
-        return if (StrategyPolicyGate.isAllowed(fallback, ctx)) fallback else StrategyPolicyGate.getEligibleFallback(ctx)
+            ?.takeIf { StrategyPolicyGate.isAllowed(it, context) }
+            ?: getDefaultFallback(transport, context)
+        return if (StrategyPolicyGate.isAllowed(fallback, context)) fallback else StrategyPolicyGate.getEligibleFallback(context)
     }
 
     fun recordResult(
