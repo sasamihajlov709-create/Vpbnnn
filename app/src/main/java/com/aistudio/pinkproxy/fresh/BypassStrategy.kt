@@ -254,7 +254,8 @@ enum class BypassStrategy(
     UDP_RACING(StrategyFamily.QUIC, 6, 5, StrategyGroup.EXTREME, ImplementationStatus.SIMULATED, ValidationStatus.UNVERIFIED, ManipulationLevel.STREAM_LEVEL),
     UDP_FAKE_PACKET(StrategyFamily.UDP, 3, 3, StrategyGroup.HEAVY, ImplementationStatus.UNSUPPORTED, ValidationStatus.UNVERIFIED, ManipulationLevel.PACKET_LEVEL),
     UDP_FRAGMENTATION(StrategyFamily.UDP, 4, 3, StrategyGroup.HEAVY, ImplementationStatus.UNSUPPORTED, ValidationStatus.UNVERIFIED, ManipulationLevel.STREAM_LEVEL),
-    DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT, ImplementationStatus.IMPLEMENTED, ValidationStatus.DEVICE_VERIFIED, ManipulationLevel.STREAM_LEVEL);
+    DIRECT(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT, ImplementationStatus.IMPLEMENTED, ValidationStatus.DEVICE_VERIFIED, ManipulationLevel.STREAM_LEVEL),
+    BLOCK_TRAFFIC(StrategyFamily.DIRECT, 0, 0, StrategyGroup.LIGHT, ImplementationStatus.IMPLEMENTED, ValidationStatus.DEVICE_VERIFIED, ManipulationLevel.STREAM_LEVEL);
 
     val isPacketLevel: Boolean get() = manipulationLevel == ManipulationLevel.PACKET_LEVEL
     val isProtocolLevel: Boolean get() = manipulationLevel == ManipulationLevel.PROTOCOL_LEVEL

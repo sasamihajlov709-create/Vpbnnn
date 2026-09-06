@@ -47,14 +47,14 @@ object DpiStrategySelector {
             TransportType.DNS -> BypassStrategy.DNS_OVER_TCP_FORCE
         }
         val effectiveContext = context ?: CandidateEngine.SelectionContext(transport)
-        if (CandidateEngine.isEligible(target, effectiveContext)) {
+        if (StrategyPolicyGate.isAllowed(target, effectiveContext)) {
             return target
         }
         val extremeCandidates = CandidateEngine.getEligibleCandidates(
             effectiveContext,
             BypassStrategy.entries.filter { it.group == StrategyGroup.EXTREME }
         )
-        val firstExtreme = extremeCandidates.firstOrNull()
+        val firstExtreme = extremeCandidates.firstOrNull { StrategyPolicyGate.isAllowed(it, effectiveContext) }
         if (firstExtreme != null) {
             return firstExtreme
         }
@@ -79,7 +79,7 @@ object DpiStrategySelector {
                 if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
                     val strategy = lastMem.strategy
                     val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category, currentStrategy = strategy)
-                    if (CandidateEngine.isEligible(strategy, ctx)) {
+                    if (StrategyPolicyGate.isAllowed(strategy, ctx)) {
                         return strategy
                     }
                 }
@@ -93,7 +93,7 @@ object DpiStrategySelector {
                     host = host,
                     category = category
                 )
-                if (escalated != null && CandidateEngine.isEligible(escalated, ctx)) {
+                if (escalated != null && StrategyPolicyGate.isAllowed(escalated, ctx)) {
                     return escalated
                 }
             } else if (hostFails > 3) {
@@ -109,14 +109,14 @@ object DpiStrategySelector {
             if (ageMs < maxAge && mem.confidence >= 0.3) {
                 val strategy = mem.strategy
                 val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
-                if (CandidateEngine.isEligible(strategy, ctx)) {
+                if (StrategyPolicyGate.isAllowed(strategy, ctx)) {
                     return strategy
                 }
             }
         }
 
         val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
-        val validStrategies = CandidateEngine.getEligibleCandidates(ctx)
+        val validStrategies = CandidateEngine.getEligibleCandidates(ctx).filter { StrategyPolicyGate.isAllowed(it, ctx) }
         
         if (validStrategies.isEmpty()) {
             if (host != null) {

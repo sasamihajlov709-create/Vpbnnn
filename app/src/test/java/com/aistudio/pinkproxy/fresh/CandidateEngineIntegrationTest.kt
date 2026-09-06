@@ -21,10 +21,8 @@ class CandidateEngineIntegrationTest {
         BypassConfig.isStrictBypassMode = false
         BypassConfig.isAutoTuning = false
         BypassConfig.autoTuningMode = AutoTuningMode.EXPLORATION
-        StrategyStateRepository.circuitBreakers.clear()
-        StrategyStateRepository.hostStrategyBlacklist.clear()
-        StrategyStateRepository.contextualHostMemory.clear()
-        StrategyStateRepository.consecutiveFailuresByHost.clear()
+        StrategyStateRepository.clearProfileState(NetworkProfileManager.currentProfile.value.id)
+        StrategyStateRepository.clearProfileState("DEFAULT")
     }
 
     @Test
@@ -83,10 +81,10 @@ class CandidateEngineIntegrationTest {
         val allStrategies = BypassStrategy.entries.toSet()
 
         // We can't easily mock the 'attemptedStrategies' list since it's internal to getFallbackStrategy
-        // But we can block all of them in the host blacklist
+        // But we can block all of them using global circuit breakers which are not bypassed by diagnostic mode
         allStrategies.forEach { strategy ->
-            val blKey = HostStrategyBlacklistKey(host, TransportType.TCP, NetworkProfileManager.currentProfile.value.id, strategy)
-            StrategyStateRepository.hostStrategyBlacklist[blKey] = System.currentTimeMillis() + 10000
+            val cbKey = CircuitBreakerKey(NetworkProfileManager.currentProfile.value.id, TransportType.TCP, strategy)
+            StrategyStateRepository.circuitBreakers[cbKey] = System.currentTimeMillis() + 10000
         }
 
         assertThrows(NoEligibleStrategyException::class.java) {

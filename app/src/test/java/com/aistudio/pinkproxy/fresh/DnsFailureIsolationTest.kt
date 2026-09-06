@@ -16,7 +16,8 @@ class DnsFailureIsolationTest {
 
     @Before
     fun setup() {
-        StrategyStateRepository.getAllContextStates()
+        StrategyStateRepository.clearProfileState(NetworkProfileManager.currentProfile.value.id)
+        StrategyStateRepository.clearProfileState("DEFAULT")
     }
 
     @Test

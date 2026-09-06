@@ -217,7 +217,11 @@ object BypassConfig {
         _strategy.value = try {
             StrategyPolicyGate.resolveOrFallback(parsedStrat, ctx)
         } catch (e: Exception) {
-            BypassStrategy.SNI_SPLIT
+            try {
+                StrategyPolicyGate.getEligibleFallback(ctx)
+            } catch (e2: Exception) {
+                BypassStrategy.BLOCK_TRAFFIC
+            }
         }
         
         val savedDns = prefs.getString("dns_strategy_type", DnsType.AUTO.name)

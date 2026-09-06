@@ -22,10 +22,13 @@ object StrategyPolicyGate {
         strategy: BypassStrategy,
         context: CandidateEngine.SelectionContext
     ): Boolean {
-        // 1. Implementation readiness check
-        if (strategy.implementationStatus == ImplementationStatus.STUB ||
-            strategy.implementationStatus == ImplementationStatus.UNSUPPORTED) {
-            return false
+        // 1. Implementation readiness check (Strict allowlist)
+        when (strategy.implementationStatus) {
+            ImplementationStatus.IMPLEMENTED -> { /* Allowed */ }
+            ImplementationStatus.SIMULATED -> {
+                if (!context.isDiagnosticMode) return false
+            }
+            else -> return false
         }
 
         // 2. Strict Bypass Mode enforcement

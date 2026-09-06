@@ -65,7 +65,7 @@ object CandidateEngine {
         context: SelectionContext, 
         baseList: List<BypassStrategy> = BypassStrategy.entries
     ): List<BypassStrategy> {
-        return baseList.filter { isEligible(it, context) }
+        return baseList.filter { isEligible(it, context) && StrategyPolicyGate.isAllowed(it, context) }
     }
     
     /**

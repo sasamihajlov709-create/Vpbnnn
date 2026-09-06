@@ -93,7 +93,10 @@ object RuntimeCoordinator {
     ): BypassStrategy {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
         val strategyToExclude = failedStrategy
-        val best = CandidateEngine.selectBest(ctx, excludeCurrent = strategyToExclude) ?: DpiStrategySelector.getDefaultFallback(transport, ctx)
+
+        val bestCandidate = CandidateEngine.selectBest(ctx, excludeCurrent = strategyToExclude)
+        val best = bestCandidate?.let { StrategyPolicyGate.resolveOrFallback(it, ctx) }
+            ?: StrategyPolicyGate.getEligibleFallback(ctx)
         
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
         
