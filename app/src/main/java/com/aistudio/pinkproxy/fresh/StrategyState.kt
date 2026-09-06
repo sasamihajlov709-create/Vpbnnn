@@ -96,7 +96,14 @@ class StrategyState(
                 }
             }
         } else {
-            failureCount.incrementAndGet()
+            val isEnvironmentalFailure = obs.failureReason == FailureReason.DNS_RESOLUTION_FAILED || 
+                                         obs.failureReason == FailureReason.NETWORK_LOST || 
+                                         obs.failureReason == FailureReason.LOCAL_SOCKET_ERROR
+            
+            if (!isEnvironmentalFailure) {
+                failureCount.incrementAndGet()
+            }
+            
             val penalty = when (obs.failureReason) {
                 // Strategy Failures (High Penalty)
                 FailureReason.TCP_RESET, FailureReason.SSL_HANDSHAKE_ERROR, FailureReason.CENSORSHIP_STALL, FailureReason.DNS_POISONED, FailureReason.PROTOCOL_ERROR -> 1000L // 1.0 weight

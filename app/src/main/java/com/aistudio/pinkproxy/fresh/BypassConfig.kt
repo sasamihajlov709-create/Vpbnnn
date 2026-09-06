@@ -425,9 +425,7 @@ object BypassConfig {
                 attemptedStrategies = setOf(current)
             )
         } catch (e: NoEligibleStrategyException) {
-            // If strictly nothing available, return the default ultimate fallback from selector just to not crash, 
-            // though it shouldn't be executed due to runtime policy gate.
-            BypassStrategy.DIRECT
+            throw e
         }
     }
     suspend fun applyBypass(socket: Socket, output: OutputStream, data: ByteArray, length: Int, config: SessionConfig, host: String) = 

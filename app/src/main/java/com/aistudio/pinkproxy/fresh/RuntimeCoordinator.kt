@@ -93,7 +93,7 @@ object RuntimeCoordinator {
     ): BypassStrategy {
         val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
         val strategyToExclude = failedStrategy
-        val best = CandidateEngine.selectBest(ctx, excludeCurrent = strategyToExclude) ?: DpiStrategySelector.getDefaultFallback(transport)
+        val best = CandidateEngine.selectBest(ctx, excludeCurrent = strategyToExclude) ?: DpiStrategySelector.getDefaultFallback(transport, ctx)
         
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
         
@@ -121,7 +121,11 @@ object RuntimeCoordinator {
     ): Job {
         val targetScope = sessionScope ?: (VpnSessionManager.currentSession?.controlPlaneScope ?: ProxyDispatcher.globalScope)
         return targetScope.launch {
-            rotateGlobalStrategy(transport, reason, category, profileId, host, failedStrategy)
+            try {
+                rotateGlobalStrategy(transport, reason, category, profileId, host, failedStrategy)
+            } catch (e: NoEligibleStrategyException) {
+                Log.e(TAG, "No eligible strategy found during rotation for $transport: ${e.message}")
+            }
         }
     }
 

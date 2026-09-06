@@ -152,7 +152,7 @@ object UdpTransportHandler {
                                                         matchedProbe = quicMatch
                                                         isStrictCorrelation = true
                                                     } else {
-                                                        matchedProbe = association.popProbe() // FIFO fallback
+                                                        association.popProbe() // Silently consume but do NOT attribute
                                                         isStrictCorrelation = false
                                                     }
                                                 }
