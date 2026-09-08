@@ -239,6 +239,14 @@ object StrategyStateRepository {
         contextStates.entries.removeIf { it.key.profileId == profileId && (now - it.value.lastUsedTimestamp.get()) > expiredThreshold }
     }
     
+    fun cleanupExpiredEntries() {
+        val now = System.currentTimeMillis()
+        synchronized(hostStrategyBlacklist) {
+            hostStrategyBlacklist.entries.removeIf { it.value < now }
+        }
+        circuitBreakers.entries.removeIf { it.value < now }
+    }
+    
     fun clearProfileState(profileId: String) {
         contextStates.entries.removeIf { it.key.profileId == profileId }
         networkStrategyMemory.remove(profileId)

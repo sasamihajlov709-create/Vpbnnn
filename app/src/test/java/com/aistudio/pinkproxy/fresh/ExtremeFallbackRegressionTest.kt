@@ -33,7 +33,8 @@ class ExtremeFallbackRegressionTest {
         assertNotEquals(simulatedExtreme, result)
         
         val fallback = DpiStrategySelector.getDefaultExtremeFallback(
-            transport = TransportType.UDP
+            transport = TransportType.UDP,
+            context = CandidateEngine.SelectionContext(TransportType.UDP)
         )
         assertNotEquals(simulatedExtreme, fallback)
     }

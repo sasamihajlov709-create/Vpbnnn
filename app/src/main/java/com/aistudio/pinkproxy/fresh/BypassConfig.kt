@@ -27,9 +27,9 @@ object BypassConfig {
         return DpiPolicyEngine.transportPolicies[transport]?.calculatedIntensity ?: ProxyStats.censorshipIntensity.value
     }
 
-    private val _strategy = kotlinx.coroutines.flow.MutableStateFlow(BypassStrategy.SNI_SPLIT)
-    private val _strat = MutableStateFlow(BypassStrategy.SNI_SPLIT)
-    val strategy: StateFlow<BypassStrategy> = _strategy.asStateFlow()
+    private val _strategy = kotlinx.coroutines.flow.MutableStateFlow<BypassStrategy?>(null)
+    private val _strat = MutableStateFlow<BypassStrategy?>(null)
+    val strategy: StateFlow<BypassStrategy?> = _strategy.asStateFlow()
     
     /**
      * Public API for UI / settings changes: delegates to RuntimeCoordinator for safe validation and single-point mutation.
@@ -251,7 +251,7 @@ object BypassConfig {
             putInt("frag1", frag1)
             putLong("delay1", delay1)
             putInt("fakeTtl", fakeTtl)
-            putString("global_strategy", _strategy.value.name)
+            putString("global_strategy", _strategy.value?.name ?: BypassStrategy.DIRECT.name)
         }
     }
 
@@ -273,7 +273,7 @@ object BypassConfig {
         }
         
         if (!isAutoTuning) {
-            val base = _strategy.value
+            val base = _strategy.value ?: BypassStrategy.DIRECT
             return StrategyPolicyGate.resolveOrFallback(base, context)
         }
         

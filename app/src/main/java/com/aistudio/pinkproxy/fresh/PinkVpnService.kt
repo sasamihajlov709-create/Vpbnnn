@@ -90,7 +90,7 @@ class PinkVpnService : VpnService() {
             ) { strat, flows, intensity ->
                 val activeCount = flows.size
                 val panic = if (intensity > 50) " | PANIC" else ""
-                val subtext = "Str: ${strat.name} | Active: $activeCount$panic"
+                val subtext = "Str: ${strat?.name ?: "Pending"} | Active: $activeCount$panic"
                 subtext
             }.collectLatest { subtext ->
                 if (_isRunning.value) {

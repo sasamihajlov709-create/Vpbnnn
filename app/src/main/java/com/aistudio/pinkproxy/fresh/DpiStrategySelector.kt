@@ -12,8 +12,8 @@ object DpiStrategySelector {
         }
     }
 
-    fun getDefaultFallback(transport: TransportType, context: CandidateEngine.SelectionContext? = null): BypassStrategy {
-        val effectiveContext = context ?: CandidateEngine.SelectionContext(transport)
+    fun getDefaultFallback(transport: TransportType, context: CandidateEngine.SelectionContext): BypassStrategy {
+        val effectiveContext = context
         val target = when (transport) {
             TransportType.TCP -> BypassStrategy.SNI_SPLIT
             TransportType.UDP -> BypassStrategy.UDP_COMBINED_HYBRID
@@ -37,13 +37,13 @@ object DpiStrategySelector {
         throw NoEligibleStrategyException("No policy-approved fallback strategy available for transport $transport")
     }
 
-    fun getDefaultExtremeFallback(transport: TransportType, context: CandidateEngine.SelectionContext? = null): BypassStrategy {
+    fun getDefaultExtremeFallback(transport: TransportType, context: CandidateEngine.SelectionContext): BypassStrategy {
         val target = when (transport) {
             TransportType.TCP -> BypassStrategy.ZAPRET_EXTREME
             TransportType.UDP -> BypassStrategy.UDP_COMBINED_NUCLEAR
             TransportType.DNS -> BypassStrategy.DNS_OVER_TCP_FORCE
         }
-        val effectiveContext = context ?: CandidateEngine.SelectionContext(transport)
+        val effectiveContext = context
         if (StrategyPolicyGate.isAllowed(target, effectiveContext)) {
             return target
         }
@@ -86,9 +86,7 @@ object DpiStrategySelector {
                 val escalated = StrategyEscalationGraph.getEscalatedStrategy(
                     failedStrategy = baseStrategy,
                     reason = FailureReason.CENSORSHIP_STALL,
-                    transport = transport,
-                    host = host,
-                    category = category
+                    context = ctx
                 )
                 if (escalated != null && StrategyPolicyGate.isAllowed(escalated, ctx)) {
                     return escalated
@@ -116,12 +114,6 @@ object DpiStrategySelector {
         val validStrategies = CandidateEngine.getEligibleCandidates(ctx).filter { StrategyPolicyGate.isAllowed(it, ctx) }
         
         if (validStrategies.isEmpty()) {
-            if (host != null) {
-                StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { 
-                    it.key.host == host && it.key.transport == transport && it.key.profileId == profileId 
-                }
-            }
-            StrategyStateRepository.circuitBreakers.entries.removeIf { it.value < now }
             return getDefaultFallback(transport, ctx)
         }
 

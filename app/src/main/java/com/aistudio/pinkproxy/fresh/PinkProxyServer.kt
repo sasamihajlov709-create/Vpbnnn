@@ -36,6 +36,7 @@ class PinkProxyServer(private val vpnService: VpnService, private val port: Int,
         this.scope = newScope
         val scope = newScope
         
+        StrategyStateRepository.cleanupExpiredEntries()
         ProxyStats.startSpeedMonitor(scope)
         
         // Connection Watchdog to monitor connections

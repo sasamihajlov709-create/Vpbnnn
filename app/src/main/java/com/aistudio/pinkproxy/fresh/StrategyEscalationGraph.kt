@@ -122,21 +122,17 @@ object StrategyEscalationGraph {
     fun getEscalatedStrategy(
         failedStrategy: BypassStrategy,
         reason: FailureReason? = null,
-        transport: TransportType,
-        host: String? = null,
-        category: HostCategory? = null
+        context: CandidateEngine.SelectionContext
     ): BypassStrategy? {
-        val chain = selectChainForContext(reason, transport)
+        val chain = selectChainForContext(reason, context.transport)
         val index = chain.indexOf(failedStrategy)
-        val now = System.currentTimeMillis()
-        val profileId = NetworkProfileManager.currentProfile.value.id
 
         // Check if failed strategy is in the dedicated chain
         val candidates = if (index >= 0 && index < chain.size - 1) {
             chain.subList(index + 1, chain.size)
         } else {
             // If not directly in chain, look at fallback from targetMap or tail of chain
-            val nextDirect = StrategyEscalationGraph.strategyChains[failedStrategy]
+            val nextDirect = strategyChains[failedStrategy]
             if (nextDirect != null) {
                 listOf(nextDirect) + chain
             } else {
@@ -144,19 +140,16 @@ object StrategyEscalationGraph {
             }
         }
 
-        val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category ?: (host?.let { HostClassifier.classify(it) } ?: HostCategory.OTHER))
         for (candidate in candidates) {
             if (candidate == failedStrategy) continue
-            if (!StrategyPolicyGate.isAllowed(candidate, ctx)) continue
+            if (!StrategyPolicyGate.isAllowed(candidate, context)) continue
             
-
-
             return candidate
         }
 
         // Fallback to diverse extreme strategy if all chain members are exhausted or blocked
-        val fallback = DpiStrategySelector.getFallbackStrategy(failedStrategy, transport, ctx)
-        return if (StrategyPolicyGate.isAllowed(fallback, ctx)) fallback else null
+        val fallback = DpiStrategySelector.getFallbackStrategy(failedStrategy, context.transport, context)
+        return if (StrategyPolicyGate.isAllowed(fallback, context)) fallback else null
     }
 
     private fun selectChainForContext(reason: FailureReason?, transport: TransportType): List<BypassStrategy> {

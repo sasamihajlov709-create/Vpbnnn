@@ -112,9 +112,7 @@ object StrategyPolicyGate {
         val nextStrat = StrategyEscalationGraph.getEscalatedStrategy(
             failedStrategy = failedStrategy,
             reason = reason,
-            transport = context.transport,
-            host = context.host ?: "",
-            category = context.category
+            context = context
         )
         
         if (nextStrat != null && nextStrat !in attemptedStrategies && isAllowed(nextStrat, context)) {

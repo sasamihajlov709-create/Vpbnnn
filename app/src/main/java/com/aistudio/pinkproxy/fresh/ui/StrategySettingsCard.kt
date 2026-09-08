@@ -27,7 +27,7 @@ import com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink
 
 @Composable
 fun StrategySettingsCard(context: Context, onSettingsChanged: () -> Unit) {
-    val strategy by BypassConfig.strategy.collectAsStateWithLifecycle()
+    val strategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = null)
     var showDialog by remember { mutableStateOf(false) }
 
     Card(
@@ -77,7 +77,7 @@ fun StrategySettingsCard(context: Context, onSettingsChanged: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(40.dp)
             ) {
                 Text(
-                    text = "${stringResource(R.string.label_current_strategy)}: ${strategy.name}",
+                    text = "${stringResource(R.string.label_current_strategy)}: ${strategy?.name ?: "PENDING"}",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = GentleLightPink
@@ -88,7 +88,7 @@ fun StrategySettingsCard(context: Context, onSettingsChanged: () -> Unit) {
 
     if (showDialog) {
         StrategySelectionDialog(
-            currentStrategy = strategy,
+            currentStrategy = strategy ?: BypassStrategy.DIRECT,
             onDismiss = { showDialog = false },
             onSelect = { newStrategy ->
                 RuntimeCoordinator.transitionGlobalStrategy(newStrategy, com.aistudio.pinkproxy.fresh.TransportType.TCP, "UI User Selection")

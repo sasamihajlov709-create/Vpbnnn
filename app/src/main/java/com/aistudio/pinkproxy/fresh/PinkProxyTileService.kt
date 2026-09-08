@@ -27,7 +27,7 @@ class PinkProxyTileService : TileService() {
             ) { running, strat ->
                 Pair(running, strat)
             }.collectLatest { (running, strat) ->
-                updateTile(running, strat.name)
+                updateTile(running, strat?.name ?: "Pending")
             }
         }
     }
@@ -95,7 +95,7 @@ class PinkProxyTileService : TileService() {
                 }
             }
         }
-        updateTile(PinkVpnService.isRunning.value, BypassConfig.strategy.value.name)
+        updateTile(PinkVpnService.isRunning.value, BypassConfig.strategy.value?.name ?: "Pending")
     }
 
     private fun updateTile(isActive: Boolean, strat: String = "Active") {

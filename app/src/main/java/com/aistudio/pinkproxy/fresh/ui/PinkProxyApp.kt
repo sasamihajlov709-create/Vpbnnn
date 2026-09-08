@@ -148,7 +148,7 @@ fun DashboardTab(
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
     val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
     
-    val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = BypassStrategy.SNI_SPLIT)
+    val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = null)
     val testingStrategies by BypassConfig.testingStrategies.collectAsStateWithLifecycle(initialValue = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.SNI_TRIPLE, BypassStrategy.BYEBYEDPI_SIM))
     val signalQuality by ProxyStats.signalQuality.collectAsStateWithLifecycle(initialValue = 100)
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
@@ -251,7 +251,7 @@ fun DashboardTab(
             Spacer(modifier = Modifier.height(20.dp))
 
             StrategyDisplayWidget(
-                activeStrategy = activeStrategy,
+                activeStrategy = activeStrategy ?: BypassStrategy.DIRECT,
                 testingStrategies = testingStrategies,
                 isProbing = isProbing,
                 isActive = isActive,
@@ -303,7 +303,7 @@ fun BypassTab(
     onRestart: () -> Unit
 ) {
     val context = LocalContext.current
-    val currentStrategy by BypassConfig.strategy.collectAsStateWithLifecycle()
+    val currentStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = null)
     val metrics by BypassConfig.strategyMetrics.collectAsStateWithLifecycle(initialValue = emptyList<StrategyMetric>())
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle()
     
@@ -322,7 +322,7 @@ fun BypassTab(
         )
 
         StrategyWidget(
-            currentStrategy = currentStrategy,
+            currentStrategy = currentStrategy ?: BypassStrategy.DIRECT,
             metrics = metrics,
             onSelect = { 
                 RuntimeCoordinator.transitionGlobalStrategy(it, TransportType.TCP, "UI Bypass Tab Selection")
