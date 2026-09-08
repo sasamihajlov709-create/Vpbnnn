@@ -72,15 +72,19 @@ object DpiStrategySelector {
             val ctxKey = HostContextKey(host, transport, profileId)
             val lastMem = StrategyStateRepository.contextualHostMemory[ctxKey] 
 
-            if (hostFails == 0) {
-                if (lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
-                    val strategy = lastMem.strategy
-                    val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category, currentStrategy = strategy)
-                    if (StrategyPolicyGate.isAllowed(strategy, ctx)) {
-                        return strategy
-                    }
+            val isLastMemBlacklisted = if (lastMem != null) {
+                (StrategyStateRepository.hostStrategyBlacklist[HostStrategyBlacklistKey(host, transport, profileId, lastMem.strategy)] ?: 0L) > now
+            } else false
+
+            if (!isLastMemBlacklisted && lastMem != null && (lastMem.successCount >= 2 || (now - lastMem.timestamp < 300_000L)) && (now - lastMem.timestamp < 24 * 3600 * 1000L)) {
+                val strategy = lastMem.strategy
+                val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category, currentStrategy = strategy)
+                if (StrategyPolicyGate.isAllowed(strategy, ctx)) {
+                    return strategy
                 }
-            } else if (hostFails in 1..3) {
+            }
+            
+            if (hostFails in 1..3) {
                 val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
                 val baseStrategy = lastMem?.strategy ?: getDefaultFallback(transport, ctx)
                 val escalated = StrategyEscalationGraph.getEscalatedStrategy(
@@ -189,7 +193,10 @@ object DpiStrategySelector {
                     val lastCount = StrategyStateRepository.contextualHostMemory[ctxKey]?.successCount ?: 0
                     val newMem = HostMemory(strategy, now, lastCount + 1, transport, profileId, confidence)
                     StrategyStateRepository.contextualHostMemory[ctxKey] = newMem
-                    StrategyStateRepository.consecutiveFailuresByHost.remove(HostFailureKey(profileId, host))
+                    val failsCounter = StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(profileId, host)]
+                    if (failsCounter != null && failsCounter.get() > 0) {
+                        failsCounter.decrementAndGet() // Gradual recovery
+                    }
                     // Remove only this specific strategy from the blacklist
                     StrategyStateRepository.hostStrategyBlacklist.remove(
                         HostStrategyBlacklistKey(host, transport, profileId, strategy)

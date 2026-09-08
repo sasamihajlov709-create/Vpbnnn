@@ -21,6 +21,7 @@ object StrategyExecutionRegistry {
     private val strategyExecutorMap: Map<BypassStrategy, Pair<ExecutorType, Set<TransportType>>> = mapOf(
         // Direct
         BypassStrategy.DIRECT to (ExecutorType.DIRECT to setOf(TransportType.TCP, TransportType.UDP, TransportType.DNS)),
+        BypassStrategy.BLOCK_TRAFFIC to (ExecutorType.DIRECT to setOf(TransportType.TCP, TransportType.UDP, TransportType.DNS)),
 
         // TLS Handler (TCP)
         BypassStrategy.SNI_MANGLE to (ExecutorType.TLS_HANDLER to setOf(TransportType.TCP)),
@@ -300,7 +301,7 @@ object StrategyExecutionRegistry {
         return strategyExecutorMap.containsKey(strategy)
     }
 
-    fun getSupportedStrategiesForTransport(transport: TransportType): List<BypassStrategy> {
+    fun getExecutorCompatibleStrategies(transport: TransportType): List<BypassStrategy> {
         return BypassStrategy.entries.filter { isExecutorSupported(it, transport) }
     }
 }
