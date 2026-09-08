@@ -3,6 +3,7 @@ package com.aistudio.pinkproxy.fresh
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -11,6 +12,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], manifest = Config.NONE)
 class PolicyGateSimulatedTest {
+
+    @Before
+    fun setup() {
+        BypassConfig.isAutoTuning = false // Avoid STABLE mode strict check for this test
+    }
 
     @Test
     fun `test SIMULATED strategy is rejected in normal mode`() {

@@ -190,10 +190,10 @@ object DpiStrategySelector {
                     val newMem = HostMemory(strategy, now, lastCount + 1, transport, profileId, confidence)
                     StrategyStateRepository.contextualHostMemory[ctxKey] = newMem
                     StrategyStateRepository.consecutiveFailuresByHost.remove(HostFailureKey(profileId, host))
-                    // Remove all blacklist entries for this host + transport + profile
-                    StrategyStateRepository.hostStrategyBlacklist.entries.removeIf { 
-                        it.key.host == host && it.key.transport == transport && it.key.profileId == profileId 
-                    }
+                    // Remove only this specific strategy from the blacklist
+                    StrategyStateRepository.hostStrategyBlacklist.remove(
+                        HostStrategyBlacklistKey(host, transport, profileId, strategy)
+                    )
                 }
             }
             if (quality.minLevelForHostMemory) {
