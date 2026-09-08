@@ -383,8 +383,8 @@ class PinkVpnService : VpnService() {
                     isExcludeMode = isExcludeMode,
                     selectedPackages = selectedPackages,
                     appPackageName = packageName,
-                    allowBypass = !BypassConfig.isKillSwitchEnabled.value,
-                    isBlocking = BypassConfig.isKillSwitchEnabled.value
+                    allowBypass = BypassConfig.allowBypass.value,
+                    isBlocking = true // Always blocking for tun2socks
                 ) ?: throw java.io.IOException("Failed to establish tunnel interface")
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -400,8 +400,8 @@ class PinkVpnService : VpnService() {
                     isExcludeMode = isExcludeMode,
                     selectedPackages = selectedPackages,
                     appPackageName = packageName,
-                    allowBypass = !BypassConfig.isKillSwitchEnabled.value,
-                    isBlocking = BypassConfig.isKillSwitchEnabled.value
+                    allowBypass = BypassConfig.allowBypass.value,
+                    isBlocking = true // Always blocking for tun2socks
                 ) ?: throw e
             }
 
@@ -432,10 +432,7 @@ class PinkVpnService : VpnService() {
 
             // Perform Data-Plane readiness check through proxy
             val dataPlaneReady = performDataPlaneHealthProbe(PROXY_PORT, proxySecret)
-            if (!dataPlaneReady) {
-                Log.i("PinkVpnService", "Data-plane probe completed with fallback status, proceeding with adaptive tuning.")
-            }
-
+            
             _isRunning.value = true
 
             // 7. Now that proxy & tun2socks are fully running, start health checkers & monitors
@@ -445,9 +442,15 @@ class PinkVpnService : VpnService() {
             healthMonitor?.start(session.controlPlaneScope)
 
             startSessionWarmup()
-
-            VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
-            VpnRuntimeState.clearError()
+            
+            if (!dataPlaneReady) {
+                Log.w("PinkVpnService", "Data-plane probe failed, setting state to DEGRADED.")
+                VpnRuntimeState.updateState(VpnLifecycleState.DEGRADED, "Data Plane Unverified")
+            } else {
+                Log.i("PinkVpnService", "Data-plane probe passed!")
+                VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
+                VpnRuntimeState.clearError()
+            }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e("PinkVpnService", "Error starting VPN", e)

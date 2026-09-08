@@ -105,24 +105,24 @@ fun ExpertSettingsCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val isKillSwitchEnabled by BypassConfig.isKillSwitchEnabled.collectAsStateWithLifecycle()
+                    val allowBypass by BypassConfig.allowBypass.collectAsStateWithLifecycle()
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "SYSTEM-LEVEL KILL SWITCH",
+                            text = "ALLOW EXPLICIT BYPASS",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFFE57373)
                         )
                         Text(
-                            text = "Блокировать весь трафик вне VPN туннеля (предотвращает утечки)",
+                            text = "Разрешить другим приложениям обход VPN через bindProcessToNetwork()",
                             fontSize = 9.sp,
                             color = Color(0xFFE57373).copy(alpha = 0.6f)
                         )
                     }
                     Switch(
-                        checked = isKillSwitchEnabled,
+                        checked = allowBypass,
                         onCheckedChange = {
-                            BypassConfig.setKillSwitch(it, context)
+                            BypassConfig.setAllowBypass(it, context)
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color(0xFFE57373),

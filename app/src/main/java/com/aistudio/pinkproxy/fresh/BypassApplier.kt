@@ -89,6 +89,7 @@ object BypassApplier {
         try {
             executor.executeTcp(tcpContext)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             if (e is UnsupportedStrategyException) throw e
             if (e is java.net.ConnectException || e is java.net.NoRouteToHostException) {
                 throw TransportException("Transport failed during TCP strategy", e)
@@ -139,6 +140,7 @@ object BypassApplier {
         try {
             executor.executeUdp(udpContext)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             if (e is UnsupportedStrategyException) throw e
             if (e is java.net.PortUnreachableException || e is java.net.NoRouteToHostException) {
                 throw TransportException("Transport failed during UDP strategy", e)

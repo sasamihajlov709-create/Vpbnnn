@@ -167,9 +167,11 @@ object AutoTtlProber {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.v("AutoTtlProber", "MTU probe failed for $host: ${e.message}")
             return 1400
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e("AutoTtlProber", "Critical MTU probe error for $host", e)
             return 1400
         } finally {
@@ -207,9 +209,11 @@ object AutoTtlProber {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                 false
             } finally {
-                try { socket?.close() } catch (e: Exception) {}
+                try { socket?.close() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; }
             }
         }
     }
@@ -245,9 +249,11 @@ object AutoTtlProber {
             
             return finalTtl
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.v("AutoTtlProber", "TTL probe failed for $host: ${e.message}")
             return 64
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e("AutoTtlProber", "Critical TTL probe error for $host", e)
             return 64
         } finally {
@@ -276,9 +282,11 @@ object AutoTtlProber {
                 socket.receive(java.net.DatagramPacket(buffer, buffer.size))
                 true
             } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                 false
             } finally {
-                try { socket?.close() } catch (e: Exception) {}
+                try { socket?.close() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; }
             }
         }
     }
@@ -339,7 +347,8 @@ object AutoTtlProber {
                     
                     val buffer = ByteArray(512)
                     socket.soTimeout = 600
-                    val read = try { input.read(buffer) } catch (e: Exception) { -2 }
+                    val read = try { input.read(buffer) } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; -2 }
                     
                     if (read > 0) {
                         val content = String(buffer, 0, read.coerceAtMost(64), Charsets.US_ASCII).lowercase()
@@ -350,10 +359,12 @@ object AutoTtlProber {
                 } catch (e: java.net.SocketTimeoutException) {
                     // No response within TTL is normal for non-censor hop
                 } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                     val msg = e.message?.lowercase() ?: ""
                     if (msg.contains("reset") || msg.contains("closed") || msg.contains("pipe")) return@withContext true
                 } finally {
-                    try { socket?.close() } catch (e: Exception) {}
+                    try { socket?.close() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; }
                 }
                 delay(ThreadLocalRandom.current().nextLong(10, 50))
             }
@@ -395,6 +406,7 @@ object AutoTtlProber {
             }
             editor.apply()
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.v("AutoTtlProber", "saveTtlMtuState error: ${e.message}")
         }
     }
@@ -421,6 +433,7 @@ object AutoTtlProber {
                 }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.v("AutoTtlProber", "loadTtlMtuState error: ${e.message}")
         }
     }
@@ -434,9 +447,11 @@ object AutoTtlProber {
                 socket.connect(InetSocketAddress(addr, port), 1200)
                 true
             } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                 false
             } finally {
-                try { socket?.close() } catch (e: Exception) {}
+                try { socket?.close() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; }
             }
         }
     }

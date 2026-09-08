@@ -39,10 +39,12 @@ object TcpRaceConnector {
                 val res = runSingleAttempt(ips, port, vpnService, host, strat1, firstPacket, firstPacketLen, bufferSize, requestedStrategy = requestedStrategy, effectiveStrategy = strat1)
                 if (res != null) {
                     if (!resultChannel.trySend(res).isSuccess) {
-                        try { res.socket.close() } catch (e: Exception) {}
+                        try { res.socket.close() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; }
                     }
                 }
             } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.v("TcpRaceConnector", "Attempt 1 failed for $host with $strat1: ${e.message}")
             }
         }
@@ -53,10 +55,12 @@ object TcpRaceConnector {
                 val res = runSingleAttempt(ips, port, vpnService, host, strat2, firstPacket, firstPacketLen, bufferSize, requestedStrategy = requestedStrategy, effectiveStrategy = strat2)
                 if (res != null) {
                     if (!resultChannel.trySend(res).isSuccess) {
-                        try { res.socket.close() } catch (e: Exception) {}
+                        try { res.socket.close() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; }
                     }
                 }
             } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.v("TcpRaceConnector", "Attempt 2 failed for $host with $strat2: ${e.message}")
             }
         }
@@ -67,6 +71,7 @@ object TcpRaceConnector {
                 resultChannel.receive()
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.v("TcpRaceConnector", "Race timeout for $host")
         } finally {
             job1.cancel()
@@ -83,6 +88,7 @@ object TcpRaceConnector {
                             try { other.socket.setSoLinger(true, 0) } catch (ignored: Exception) {}
                             other.socket.close() 
                         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                             Log.v("TcpRaceConnector", "Failed to close loser socket: ${e.message}")
                         }
                     }
@@ -125,6 +131,7 @@ object TcpRaceConnector {
                 try {
                     rsIn.read(responseBuf)
                 } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
                     -1
                 }
             } ?: -1
@@ -169,10 +176,12 @@ object TcpRaceConnector {
                     requestedStrategy = requestedStrategy,
                     effectiveStrategy = effectiveStrategy
                 )
-                try { rs.close() } catch (e: Exception) {}
+                try { rs.close() } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e; }
                 return null
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             val reason = if (e.message?.contains("reset", ignoreCase = true) == true || e.message?.contains("broken pipe", ignoreCase = true) == true) {
                 FailureReason.TCP_RESET
             } else {

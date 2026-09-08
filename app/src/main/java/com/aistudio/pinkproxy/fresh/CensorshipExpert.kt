@@ -158,6 +158,7 @@ object CensorshipExpert {
                                         readBytes = probeSocket.getInputStream().read(buffer)
                                         readBytes > 0 && buffer[0] == 0x16.toByte()
                                     } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
                                         false
                                     }
                                 }
@@ -188,6 +189,7 @@ object CensorshipExpert {
                             Log.v("CensorshipExpert", "Probe $strategy timed out on $testHost")
                             DpiStrategySelector.recordResult(host = testHost, strategy = strategy, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.TIMEOUT)
                         } catch (e: Exception) {
+                            if (e is CancellationException) throw e
                             Log.v("CensorshipExpert", "Probe $strategy unexpected error on $testHost: ${e.message}")
                             DpiStrategySelector.recordResult(host = testHost, strategy = strategy, success = false, transport = TransportType.TCP, quality = ObservationQuality.CONNECT_ONLY, reason = FailureReason.UNKNOWN)
                         } finally {

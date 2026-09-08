@@ -65,12 +65,13 @@ object BypassConfig {
     private val _isPanicModeFlow = MutableStateFlow(false)
     val isPanicModeFlow: StateFlow<Boolean> = _isPanicModeFlow.asStateFlow()
 
-    private val _isKillSwitchEnabled = MutableStateFlow(false)
-    val isKillSwitchEnabled: StateFlow<Boolean> = _isKillSwitchEnabled.asStateFlow()
-    fun setKillSwitch(enabled: Boolean, context: Context) {
-        _isKillSwitchEnabled.value = enabled
+    private val _allowBypass = MutableStateFlow(false)
+    val allowBypass: StateFlow<Boolean> = _allowBypass.asStateFlow()
+    
+    fun setAllowBypass(enabled: Boolean, context: Context) {
+        _allowBypass.value = enabled
         context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE).edit {
-            putBoolean("kill_switch_enabled", enabled)
+            putBoolean("allow_bypass_enabled", enabled)
         }
     }
 
@@ -227,7 +228,7 @@ object BypassConfig {
         val savedDns = prefs.getString("dns_strategy_type", DnsType.AUTO.name)
         dnsType = try { DnsType.valueOf(savedDns ?: DnsType.AUTO.name) } catch(e: Exception) { DnsType.AUTO }
         customDnsUrl = prefs.getString("custom_dns_url", "https://dns.google/dns-query") ?: "https://dns.google/dns-query"
-        _isKillSwitchEnabled.value = prefs.getBoolean("kill_switch_enabled", false)
+        _allowBypass.value = prefs.getBoolean("allow_bypass_enabled", false)
     }
 
     fun saveDnsSettings(context: Context, type: DnsType, customUrl: String? = null) {
