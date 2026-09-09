@@ -100,6 +100,51 @@ fun ExpertSettingsCard(
                     modifier = Modifier.padding(vertical = 12.dp)
                 )
 
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .background(Color(0xFFE57373).copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = "SYSTEM KILL SWITCH (ALWAYS-ON VPN)",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFE57373)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Надежная защита от утечек трафика (fail-closed lockdown) при падении или перезапуске туннеля обеспечивается только средствами операционной системы Android. Программная блокировка не дает полной гарантии.",
+                        fontSize = 9.sp,
+                        lineHeight = 12.sp,
+                        color = Color(0xFFE57373).copy(alpha = 0.8f)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            val intent = Intent("android.net.vpn.SETTINGS").apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                // Fallback for some devices
+                                val fallbackIntent = Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(fallbackIntent)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373).copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().height(32.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text("ОТКРЫТЬ НАСТРОЙКИ ANDROID", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE57373))
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,

@@ -14,7 +14,8 @@ data class CircuitBreakerKey(
 
 data class HostFailureKey(
     val profileId: String,
-    val host: String
+    val host: String,
+    val transport: TransportType
 )
 data class StrategyContextKey(
     val strategy: BypassStrategy,

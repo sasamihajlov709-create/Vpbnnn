@@ -68,7 +68,7 @@ object DpiStrategySelector {
         }
 
         if (host != null) {
-            val hostFails = StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(profileId, host)]?.get() ?: 0
+            val hostFails = StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(profileId, host, transport)]?.get() ?: 0
             val ctxKey = HostContextKey(host, transport, profileId)
             val lastMem = StrategyStateRepository.contextualHostMemory[ctxKey] 
 
@@ -193,7 +193,7 @@ object DpiStrategySelector {
                     val lastCount = StrategyStateRepository.contextualHostMemory[ctxKey]?.successCount ?: 0
                     val newMem = HostMemory(strategy, now, lastCount + 1, transport, profileId, confidence)
                     StrategyStateRepository.contextualHostMemory[ctxKey] = newMem
-                    val failsCounter = StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(profileId, host)]
+                    val failsCounter = StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(profileId, host, transport)]
                     if (failsCounter != null && failsCounter.get() > 0) {
                         failsCounter.decrementAndGet() // Gradual recovery
                     }
@@ -216,7 +216,11 @@ object DpiStrategySelector {
                 ProxyStats.recordCensorshipEvent(true, transport = transport)
             }
             
-            val fails = StrategyStateRepository.consecutiveFailures.getOrPut(CircuitBreakerKey(profileId, transport, strategy)) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+            val fails = if (reason != FailureReason.UNKNOWN) {
+                StrategyStateRepository.consecutiveFailures.getOrPut(CircuitBreakerKey(profileId, transport, strategy)) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+            } else {
+                StrategyStateRepository.consecutiveFailures[CircuitBreakerKey(profileId, transport, strategy)]?.get() ?: 0
+            }
             
             if (fails >= 4 || (fails >= 2 && reason == FailureReason.TCP_RESET)) {
                 val duration = if (reason == FailureReason.TCP_RESET || reason == FailureReason.CENSORSHIP_STALL) 600_000L else 300_000L
@@ -224,7 +228,7 @@ object DpiStrategySelector {
                 StrategyStateRepository.consecutiveFailures.remove(CircuitBreakerKey(profileId, transport, strategy))
             }
             if (host != null) {
-                val hostFailCount = StrategyStateRepository.consecutiveFailuresByHost.getOrPut(HostFailureKey(profileId, host)) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+                val hostFailCount = StrategyStateRepository.consecutiveFailuresByHost.getOrPut(HostFailureKey(profileId, host, transport)) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
                 if (hostFailCount >= 2) {
                     val ctxKey = HostContextKey(host, transport, profileId)
                     StrategyStateRepository.contextualHostMemory.remove(ctxKey)

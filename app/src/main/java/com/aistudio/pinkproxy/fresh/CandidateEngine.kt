@@ -53,7 +53,7 @@ object CandidateEngine {
             StrategyStateRepository.contextualHostMemory[HostContextKey(it, context.transport, context.profileId)] 
         }
         val hostFails = context.host?.let {
-            StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(context.profileId, it)]?.get()
+            StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(context.profileId, it, context.transport)]?.get()
         } ?: 0
 
         val currentActive = context.currentStrategy ?: BypassConfig.strategy.value
