@@ -30,7 +30,7 @@ class FallbackExecutionRegressionTest {
         assertTrue(StrategyPolicyGate.isAllowed(strategy, ctx))
         
         // Assert registry maps it
-        assertTrue(StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.TCP))
+        assertTrue(CapabilityMatrix.isExecutorSupported(strategy, TransportType.TCP))
         
         // Execute it and expect IOException for TCP
         var caughtException = false

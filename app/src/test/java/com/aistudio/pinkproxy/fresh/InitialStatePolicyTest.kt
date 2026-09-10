@@ -45,7 +45,7 @@ class InitialStatePolicyTest {
         
         BypassConfig.loadTuningSettings(app)
         
-        val loaded = BypassConfig.strategy.value
+        val loaded = BypassConfig.tcpStrategy.value
         assertTrue("Loaded strategy must not be extreme in STABLE mode", loaded?.group != StrategyGroup.EXTREME)
     }
 }

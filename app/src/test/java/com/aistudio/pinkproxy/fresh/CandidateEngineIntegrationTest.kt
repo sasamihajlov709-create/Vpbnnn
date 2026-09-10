@@ -59,7 +59,7 @@ class CandidateEngineIntegrationTest {
         // Exhaust all TCP strategies by putting them in attempted strategies
         val allStrategies = BypassStrategy.entries.filter { 
             DpiStrategySelector.isFamilyCompatible(it.family, TransportType.TCP) &&
-            StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP)
+            CapabilityMatrix.isExecutorSupported(it, TransportType.TCP)
         }.toSet()
 
         assertThrows(NoEligibleStrategyException::class.java) {

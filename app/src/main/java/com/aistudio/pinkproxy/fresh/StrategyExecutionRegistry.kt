@@ -265,44 +265,17 @@ object StrategyExecutionRegistry {
         BypassStrategy.DOH_OVER_QUIC to (ExecutorType.DNS_OVER_TCP to setOf(TransportType.DNS)),
     )
 
-    private val executorsByType: Map<ExecutorType, StrategyExecutor> = mapOf(
-        ExecutorType.DIRECT to StrategyExecutorDirect,
-        ExecutorType.TLS_HANDLER to TlsStrategyHandler,
-        ExecutorType.HTTP_HANDLER to HttpStrategyHandler,
-        ExecutorType.TCP_BASIC_HANDLER to TcpBasicStrategyHandler,
-        ExecutorType.FRAGMENTATION_HANDLER to FragmentationStrategyHandler,
-        ExecutorType.ADAPTIVE_HANDLER to AdaptiveStrategyHandler,
-        ExecutorType.TIMING_HANDLER to TimingStrategyHandler,
-        ExecutorType.UDP_HANDLER to UdpStrategyHandler,
-        ExecutorType.DNS_OVER_TCP to StrategyExecutorDns
-    )
+
+    fun getStrategyEntry(strategy: BypassStrategy): Pair<ExecutorType, Set<TransportType>>? {
+        return strategyExecutorMap[strategy]
+    }
 
     fun getExecutor(strategy: BypassStrategy): StrategyExecutor {
         val type = getExecutorType(strategy) ?: throw UnsupportedOperationException("No executor type mapped for strategy: $strategy")
-        return executorsByType[type] ?: throw UnsupportedOperationException("No executor instance registered for type: $type")
-    }
-
-    fun getExecutorByType(type: ExecutorType): StrategyExecutor {
-        return executorsByType[type] ?: throw UnsupportedOperationException("No executor instance registered for type: $type")
-    }
-
-    fun isExecutorSupported(strategy: BypassStrategy, transport: TransportType): Boolean {
-        val entry = strategyExecutorMap[strategy] ?: return false
-        if (!entry.second.contains(transport)) return false
-        val executor = executorsByType[entry.first] ?: return false
-        return executor.supportsStrategy(strategy)
+        return ExecutorFactory.getExecutor(type)
     }
 
     fun getExecutorType(strategy: BypassStrategy): ExecutorType? {
         return strategyExecutorMap[strategy]?.first
     }
-
-    fun isActuallyImplemented(strategy: BypassStrategy): Boolean {
-        return strategyExecutorMap.containsKey(strategy)
-    }
-
-    fun getExecutorCompatibleStrategies(transport: TransportType): List<BypassStrategy> {
-        return BypassStrategy.entries.filter { isExecutorSupported(it, transport) }
-    }
 }
-

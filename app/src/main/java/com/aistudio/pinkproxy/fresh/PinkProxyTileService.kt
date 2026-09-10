@@ -23,7 +23,7 @@ class PinkProxyTileService : TileService() {
         listenJob = scope.launch {
             kotlinx.coroutines.flow.combine(
                 PinkVpnService.isRunning,
-                BypassConfig.strategy
+                BypassConfig.tcpStrategy
             ) { running, strat ->
                 Pair(running, strat)
             }.collectLatest { (running, strat) ->
@@ -95,7 +95,7 @@ class PinkProxyTileService : TileService() {
                 }
             }
         }
-        updateTile(PinkVpnService.isRunning.value, BypassConfig.strategy.value?.name ?: "Pending")
+        updateTile(PinkVpnService.isRunning.value, BypassConfig.tcpStrategy.value?.name ?: "Pending")
     }
 
     private fun updateTile(isActive: Boolean, strat: String = "Active") {

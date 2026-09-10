@@ -1,34 +1,8 @@
+with open('app/src/main/java/com/aistudio/pinkproxy/fresh/DiagnosticManager.kt', 'r') as f:
+    text = f.read()
 
-package com.aistudio.pinkproxy.fresh
-
-import android.util.Log
-import kotlinx.coroutines.*
-import java.net.InetSocketAddress
-import java.net.Socket
-import java.util.concurrent.atomic.AtomicInteger
-
-object DiagnosticManager {
-
-    enum class HealthLevel {
-        L0_DEAD,           // Process or essential components dead
-        L1_TUN_ALIVE,      // TUN interface is up
-        L2_PROXY_ALIVE,    // Internal SOCKS/HTTP proxy is reachable
-        L3_UPSTREAM_OK,    // Can resolve DNS (upstream connection exists)
-        L4_TCP_REACHABLE,  // Can establish TCP connection to target
-        L5_PROTOCOL_OK,    // Valid TLS/HTTP response received
-        L6_APP_SUCCESS     // Application data exchanged successfully
-    }
-
-    data class HealthStatus(
-        val level: HealthLevel,
-        val dnsOk: Boolean,
-        val tcpOk: Boolean,
-        val censorshipIntensity: Int,
-        val bestStrategy: String,
-        val recommendation: String
-    )
-
-suspend fun runFullDiagnostic(): HealthStatus = withContext(ProxyDispatcher.io) {
+replacement = '''
+    suspend fun runFullDiagnostic(): HealthStatus = withContext(ProxyDispatcher.io) {
         val dnsSuccess = AtomicInteger(0)
         val tcpSuccess = AtomicInteger(0)
         
@@ -71,7 +45,7 @@ suspend fun runFullDiagnostic(): HealthStatus = withContext(ProxyDispatcher.io) 
                     out.flush()
                     val connAck = ByteArray(10)
                     if (input.read(connAck) >= 10 && connAck[1] == 0x00.toByte()) {
-                        out.write("GET / HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n".toByteArray())
+                        out.write("GET / HTTP/1.1\\r\\nHost: 1.1.1.1\\r\\nConnection: close\\r\\n\\r\\n".toByteArray())
                         out.flush()
                         val resp = ByteArray(16)
                         if (input.read(resp) > 0) {
@@ -140,4 +114,11 @@ suspend fun runFullDiagnostic(): HealthStatus = withContext(ProxyDispatcher.io) 
             recommendation = rec
         )
     }
-}
+'''
+
+import re
+pattern = re.compile(r'    suspend fun runFullDiagnostic\(\): HealthStatus = withContext\(ProxyDispatcher.io\) \{.*    \}', re.DOTALL)
+text = pattern.sub(replacement.strip(), text)
+
+with open('app/src/main/java/com/aistudio/pinkproxy/fresh/DiagnosticManager.kt', 'w') as f:
+    f.write(text)

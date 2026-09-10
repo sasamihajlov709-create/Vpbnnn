@@ -34,7 +34,7 @@ class BypassConfigTest {
         // The key is that it shouldn't just forcefully assign SNI_SPLIT directly if the string is invalid.
         // Alternatively, if there is a strict fallback, it's not simply SNI_SPLIT.
         // The safest assertion is that the saved string parsing didn't explicitly return SNI_SPLIT unless it's the gate's choice.
-        val strategy = BypassConfig.strategy.value
+        val strategy = BypassConfig.tcpStrategy.value
         
         // If the gate defaults to SNI_SPLIT for some reason, we can't assertNotEquals.
         // But we CAN assert that saving it back does not hardcode DIRECT.

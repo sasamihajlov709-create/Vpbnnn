@@ -68,7 +68,7 @@ object BypassApplier {
             }
         }
 
-        if (!StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.TCP)) {
+        if (!CapabilityMatrix.isExecutorSupported(strategy, TransportType.TCP)) {
             android.util.Log.e("BypassApplier", "Strategy $strategy is not supported by executor on TCP. Throwing exception to trigger recovery.")
             throw UnsupportedStrategyException(strategy, StrategyExecutionRegistry.getExecutorType(strategy) ?: StrategyExecutionRegistry.ExecutorType.DIRECT)
         }
@@ -120,7 +120,7 @@ object BypassApplier {
         if (strategy == BypassStrategy.DIRECT) {
             socket.send(packet); return
         }
-        if (!StrategyExecutionRegistry.isExecutorSupported(strategy, TransportType.UDP)) {
+        if (!CapabilityMatrix.isExecutorSupported(strategy, TransportType.UDP)) {
             android.util.Log.e("BypassApplier", "Strategy $strategy is not supported by executor on UDP. Throwing exception to trigger recovery.")
             throw UnsupportedStrategyException(strategy, StrategyExecutionRegistry.getExecutorType(strategy) ?: StrategyExecutionRegistry.ExecutorType.DIRECT)
         }

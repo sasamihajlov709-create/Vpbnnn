@@ -39,15 +39,15 @@ object RecoveryManager {
         val signal: RecoverySignal = when (event) {
             RecoveryEvent.DPI_DETECTED -> RecoverySignal.DpiDetected(ProxyStats.currentDpiType.value, transport = TransportType.TCP)
             RecoveryEvent.TUNNEL_STALL -> RecoverySignal.TunnelStall(15000L, ProxyStats.activeConnections.value, transport = TransportType.TCP)
-            RecoveryEvent.TCP_STALL -> RecoverySignal.TcpStall("", BypassConfig.strategy.value ?: BypassStrategy.DIRECT, transport = TransportType.TCP)
-            RecoveryEvent.SSL_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value ?: BypassStrategy.DIRECT, transport = TransportType.TCP)
+            RecoveryEvent.TCP_STALL -> RecoverySignal.TcpStall("", BypassConfig.tcpStrategy.value ?: BypassStrategy.DIRECT, transport = TransportType.TCP)
+            RecoveryEvent.SSL_STALL -> RecoverySignal.SslStall("", BypassConfig.tcpStrategy.value ?: BypassStrategy.DIRECT, transport = TransportType.TCP)
             RecoveryEvent.DNS_FAILURE -> RecoverySignal.DnsFailure("", isPoisoned = false)
             RecoveryEvent.DNS_POISONED -> RecoverySignal.DnsFailure("", isPoisoned = true)
             RecoveryEvent.PROXY_UNREACHABLE -> RecoverySignal.ProxyUnresponsive(details, transport = TransportType.TCP)
             RecoveryEvent.MTU_EXCEEDED -> RecoverySignal.TunnelStall(5000L, 1, transport = TransportType.TCP)
             RecoveryEvent.HIGH_RTT -> RecoverySignal.ExtremeLatency(ProxyStats.lastLatency.value, transport = TransportType.TCP)
             RecoveryEvent.HANDSHAKE_FAILURE -> RecoverySignal.HealthDegraded("Handshake failure: $details", transport = TransportType.TCP)
-            RecoveryEvent.CENSORSHIP_STALL -> RecoverySignal.SslStall("", BypassConfig.strategy.value ?: BypassStrategy.DIRECT, transport = TransportType.TCP)
+            RecoveryEvent.CENSORSHIP_STALL -> RecoverySignal.SslStall("", BypassConfig.tcpStrategy.value ?: BypassStrategy.DIRECT, transport = TransportType.TCP)
         }
         return RecoveryStateMachine.postSignal(signal)
     }

@@ -44,6 +44,7 @@ object TtlHelper {
         }
     }
 
+    @androidx.annotation.Keep
     private fun setsockoptInt(fd: FileDescriptor, level: Int, option: Int, value: Int) {
         try {
             android.system.Os.setsockoptInt(fd, level, option, value)
@@ -163,6 +164,7 @@ object TtlHelper {
         }
     }
 
+    @androidx.annotation.Keep
     private fun getsockoptInt(fd: FileDescriptor, level: Int, option: Int): Int {
         return try {
             val structOsClass = Class.forName("android.system.Os")

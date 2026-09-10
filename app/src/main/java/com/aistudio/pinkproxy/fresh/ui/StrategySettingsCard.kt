@@ -27,7 +27,7 @@ import com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink
 
 @Composable
 fun StrategySettingsCard(context: Context, onSettingsChanged: () -> Unit) {
-    val strategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = null)
+    val strategy by BypassConfig.tcpStrategy.collectAsStateWithLifecycle(initialValue = null)
     var showDialog by remember { mutableStateOf(false) }
 
     Card(

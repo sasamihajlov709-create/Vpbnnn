@@ -110,6 +110,7 @@ object UdpTransportHandler {
                                     
                                     val readerJob = launch(ProxyDispatcher.udpRelay) {
                                         val inBuffer = ByteArray(65535)
+                                        val fullRespBuffer = ByteArray(65535 + 32)
                                         while (isActive) {
                                             try {
                                                 val inPacket = DatagramPacket(inBuffer, inBuffer.size)
@@ -118,27 +119,26 @@ object UdpTransportHandler {
                                                 val remoteAddr = inPacket.address.address
                                                 val remotePort = inPacket.port
                                                 
-                                                val socksHeader = if (remoteAddr.size == 4) {
-                                                    val h = ByteArray(10)
-                                                    h[0]=0; h[1]=0; h[2]=0; h[3]=1
-                                                    System.arraycopy(remoteAddr, 0, h, 4, 4)
-                                                    h[8] = (remotePort shr 8).toByte()
-                                                    h[9] = remotePort.toByte()
-                                                    h
+                                                var headerSize = 0
+                                                if (remoteAddr.size == 4) {
+                                                    headerSize = 10
+                                                    fullRespBuffer[0]=0; fullRespBuffer[1]=0; fullRespBuffer[2]=0; fullRespBuffer[3]=1
+                                                    System.arraycopy(remoteAddr, 0, fullRespBuffer, 4, 4)
+                                                    fullRespBuffer[8] = (remotePort shr 8).toByte()
+                                                    fullRespBuffer[9] = remotePort.toByte()
                                                 } else if (remoteAddr.size == 16) {
-                                                    val h = ByteArray(22)
-                                                    h[0]=0; h[1]=0; h[2]=0; h[3]=4
-                                                    System.arraycopy(remoteAddr, 0, h, 4, 16)
-                                                    h[20] = (remotePort shr 8).toByte()
-                                                    h[21] = remotePort.toByte()
-                                                    h
+                                                    headerSize = 22
+                                                    fullRespBuffer[0]=0; fullRespBuffer[1]=0; fullRespBuffer[2]=0; fullRespBuffer[3]=4
+                                                    System.arraycopy(remoteAddr, 0, fullRespBuffer, 4, 16)
+                                                    fullRespBuffer[20] = (remotePort shr 8).toByte()
+                                                    fullRespBuffer[21] = remotePort.toByte()
                                                 } else continue
                                                 
-                                                val fullResp = ByteArray(socksHeader.size + inPacket.length)
-                                                System.arraycopy(socksHeader, 0, fullResp, 0, socksHeader.size)
-                                                System.arraycopy(inPacket.data, inPacket.offset, fullResp, socksHeader.size, inPacket.length)
+                                                System.arraycopy(inPacket.data, inPacket.offset, fullRespBuffer, headerSize, inPacket.length)
+                                                val totalLen = headerSize + inPacket.length
                                                 
-                                                udpSocket.send(DatagramPacket(fullResp, fullResp.size, sessionKey.clientAddress, sessionKey.clientPort))
+                                                udpSocket.send(DatagramPacket(fullRespBuffer, totalLen, sessionKey.clientAddress, sessionKey.clientPort))
+
                                                 ProxyStats.recordStats("udp_inbound", 0, inPacket.length.toLong())
                                                 
                                                 UdpAssociationTable.touchSession(sessionKey, receivedBytes = inPacket.length.toLong())

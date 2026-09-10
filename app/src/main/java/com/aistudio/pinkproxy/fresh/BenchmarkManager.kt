@@ -35,7 +35,7 @@ object BenchmarkManager {
         
         val strategies = BypassStrategy.entries.filter { 
             it != BypassStrategy.DIRECT && 
-            StrategyExecutionRegistry.isExecutorSupported(it, TransportType.TCP) 
+            CapabilityMatrix.isExecutorSupported(it, TransportType.TCP) 
         }
         _results.value = strategies.map { BenchmarkResult(it) }
 

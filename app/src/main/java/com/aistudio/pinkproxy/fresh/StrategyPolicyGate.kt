@@ -57,7 +57,7 @@ object StrategyPolicyGate {
         if (!DpiStrategySelector.isFamilyCompatible(strategy.family, context.transport)) return false
         
         // 5. Check Executor Registration
-        if (!StrategyExecutionRegistry.isExecutorSupported(strategy, context.transport)) return false
+        if (!CapabilityMatrix.isExecutorSupported(strategy, context.transport)) return false
         
         // 6. Panic Mode Check
         val isPanic = BypassConfig.isPanicModeForTransport(context.transport) || BypassConfig.getIntensityForTransport(context.transport) > 92

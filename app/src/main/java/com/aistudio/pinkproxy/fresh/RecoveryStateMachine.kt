@@ -62,6 +62,19 @@ sealed class RecoverySignal {
 object RecoveryStateMachine {
     private const val TAG = "RecoveryStateMachine"
 
+    private val recoveryTimestamps = java.util.concurrent.ConcurrentLinkedQueue<Long>()
+    private fun checkRecoveryBudget(): Boolean {
+        val now = System.currentTimeMillis()
+        recoveryTimestamps.removeIf { now - it > 60_000L }
+        if (recoveryTimestamps.size >= 4) {
+            Log.w(TAG, "Recovery budget exceeded (4+ per min). Suppressing escalation to prevent loops.")
+            return false
+        }
+        recoveryTimestamps.add(now)
+        return true
+    }
+
+
     private val _currentState = MutableStateFlow(RecoveryState.IDLE)
     val currentState: StateFlow<RecoveryState> = _currentState.asStateFlow()
 
@@ -269,6 +282,11 @@ object RecoveryStateMachine {
 
     private suspend fun processSocketStall(signal: RecoverySignal) {
         _currentState.value = RecoveryState.DEGRADED
+        if (!checkRecoveryBudget()) {
+            triggerActiveProbeAsync(5000L)
+            return
+        }
+
         
         val transport = signal.transport ?: TransportType.TCP
         val targetHost = (signal as? RecoverySignal.HostLevelRecoverySignal)?.host
@@ -368,12 +386,16 @@ object RecoveryStateMachine {
 
     private suspend fun processExtremeLatency(latencyMs: Long, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
+        if (!checkRecoveryBudget()) return
+
         RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Recovery: Extreme Latency ($latencyMs ms)", HostCategory.OTHER)
         escalationLevel.set((escalationLevel.get() + 1).coerceAtMost(2))
     }
 
     private suspend fun processHealthDegraded(details: String, transport: TransportType) {
         _currentState.value = RecoveryState.DEGRADED
+        if (!checkRecoveryBudget()) return
+
         RuntimeCoordinator.requestGlobalStrategyRotation(transport, "Recovery: Health Degraded ($details)", HostCategory.OTHER)
     }
 

@@ -56,7 +56,7 @@ object CandidateEngine {
             StrategyStateRepository.consecutiveFailuresByHost[HostFailureKey(context.profileId, it, context.transport)]?.get()
         } ?: 0
 
-        val currentActive = context.currentStrategy ?: BypassConfig.strategy.value
+        val currentActive = context.currentStrategy ?: BypassConfig.getStrategyForTransport(context.transport).value
 
         val scored = candidates.map { strategy ->
             // Level 3: Global Prior for this transport + profile (aggregate across all categories)

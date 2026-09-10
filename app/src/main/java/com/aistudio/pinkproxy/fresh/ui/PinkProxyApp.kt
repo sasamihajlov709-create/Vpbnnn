@@ -148,7 +148,7 @@ fun DashboardTab(
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
     val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
     
-    val activeStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = null)
+    val activeStrategy by BypassConfig.tcpStrategy.collectAsStateWithLifecycle(initialValue = null)
     val testingStrategies by BypassConfig.testingStrategies.collectAsStateWithLifecycle(initialValue = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.SNI_TRIPLE, BypassStrategy.BYEBYEDPI_SIM))
     val signalQuality by ProxyStats.signalQuality.collectAsStateWithLifecycle(initialValue = 100)
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
@@ -303,7 +303,7 @@ fun BypassTab(
     onRestart: () -> Unit
 ) {
     val context = LocalContext.current
-    val currentStrategy by BypassConfig.strategy.collectAsStateWithLifecycle(initialValue = null)
+    val currentStrategy by BypassConfig.tcpStrategy.collectAsStateWithLifecycle(initialValue = null)
     val metrics by BypassConfig.strategyMetrics.collectAsStateWithLifecycle(initialValue = emptyList<StrategyMetric>())
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle()
     

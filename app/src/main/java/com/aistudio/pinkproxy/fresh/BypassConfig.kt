@@ -27,8 +27,13 @@ object BypassConfig {
         return DpiPolicyEngine.transportPolicies[transport]?.calculatedIntensity ?: ProxyStats.censorshipIntensity.value
     }
 
-    private val _strategy = kotlinx.coroutines.flow.MutableStateFlow<BypassStrategy?>(null)
-    val strategy: StateFlow<BypassStrategy?> = _strategy.asStateFlow()
+    private val _tcpStrategy = kotlinx.coroutines.flow.MutableStateFlow<BypassStrategy?>(null)
+    val tcpStrategy: StateFlow<BypassStrategy?> = _tcpStrategy.asStateFlow()
+    private val _udpStrategy = kotlinx.coroutines.flow.MutableStateFlow<BypassStrategy?>(null)
+    val udpStrategy: StateFlow<BypassStrategy?> = _udpStrategy.asStateFlow()
+    private val _dnsStrategy = kotlinx.coroutines.flow.MutableStateFlow<BypassStrategy?>(null)
+    val dnsStrategy: StateFlow<BypassStrategy?> = _dnsStrategy.asStateFlow()
+    fun getStrategyForTransport(transport: TransportType): StateFlow<BypassStrategy?> { return when(transport) { TransportType.TCP -> tcpStrategy; TransportType.UDP -> udpStrategy; TransportType.DNS -> dnsStrategy } }
     
     /**
      * Public API for UI / settings changes: delegates to RuntimeCoordinator for safe validation and single-point mutation.
@@ -41,7 +46,7 @@ object BypassConfig {
      * Internal mutation called solely by RuntimeCoordinator after validation.
      */
     internal fun applyInternalStrategy(new: BypassStrategy, transport: TransportType = TransportType.TCP) {
-        if (transport == TransportType.TCP) { _strategy.value = new }
+        when (transport) { TransportType.TCP -> _tcpStrategy.value = new; TransportType.UDP -> _udpStrategy.value = new; TransportType.DNS -> _dnsStrategy.value = new }
     }
     
     private val _testingStrategies = MutableStateFlow<List<BypassStrategy>>(
@@ -208,13 +213,13 @@ object BypassConfig {
         frag1 = prefs.getInt("frag1", 1)
         delay1 = prefs.getLong("delay1", 20L)
         fakeTtl = prefs.getInt("fakeTtl", 0)
-        val savedStrat = prefs.getString("global_strategy", null)
+        val savedStrat = prefs.getString("global_tcpStrategy", null)
         val parsedStrat = try { savedStrat?.let { BypassStrategy.valueOf(it) } } catch (e: Exception) { null }
         val ctx = CandidateEngine.SelectionContext(
             transport = TransportType.TCP,
             profileId = NetworkProfileManager.currentProfile.value.id
         )
-        _strategy.value = try {
+        _tcpStrategy.value = try {
             parsedStrat?.let { StrategyPolicyGate.resolveOrFallback(it, ctx) }
                 ?: StrategyPolicyGate.getEligibleFallback(ctx)
         } catch (e: Exception) {
@@ -225,7 +230,7 @@ object BypassConfig {
             }
         }
         
-        val savedDns = prefs.getString("dns_strategy_type", DnsType.AUTO.name)
+        val savedDns = prefs.getString("dns_tcpStrategy_type", DnsType.AUTO.name)
         dnsType = try { DnsType.valueOf(savedDns ?: DnsType.AUTO.name) } catch(e: Exception) { DnsType.AUTO }
         customDnsUrl = prefs.getString("custom_dns_url", "https://dns.google/dns-query") ?: "https://dns.google/dns-query"
         _allowBypass.value = prefs.getBoolean("allow_bypass_enabled", false)
@@ -235,7 +240,7 @@ object BypassConfig {
         dnsType = type
         if (customUrl != null) customDnsUrl = customUrl
         context.getSharedPreferences("pink_proxy_settings", Context.MODE_PRIVATE).edit {
-            putString("dns_strategy_type", type.name)
+            putString("dns_tcpStrategy_type", type.name)
             putString("custom_dns_url", customDnsUrl)
         }
     }
@@ -252,10 +257,10 @@ object BypassConfig {
             putInt("frag1", frag1)
             putLong("delay1", delay1)
             putInt("fakeTtl", fakeTtl)
-            if (_strategy.value != null) {
-                putString("global_strategy", _strategy.value!!.name)
+            if (_tcpStrategy.value != null) {
+                putString("global_tcpStrategy", _tcpStrategy.value!!.name)
             } else {
-                remove("global_strategy")
+                remove("global_tcpStrategy")
             }
         }
     }
@@ -278,7 +283,7 @@ object BypassConfig {
         }
         
         if (!isAutoTuning) {
-            val base = _strategy.value ?: BypassStrategy.DIRECT
+            val base = getStrategyForTransport(transport).value ?: BypassStrategy.DIRECT
             return StrategyPolicyGate.resolveOrFallback(base, context)
         }
         

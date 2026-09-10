@@ -30,7 +30,7 @@ class VpnNotificationController(private val service: Service) {
         
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                service.startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                service.startForeground(1, notification, 1024 /* FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED */)
             } else {
                 service.startForeground(1, notification)
             }
