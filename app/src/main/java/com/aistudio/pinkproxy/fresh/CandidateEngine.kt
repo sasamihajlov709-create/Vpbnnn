@@ -77,13 +77,15 @@ object CandidateEngine {
 
             // Level 2: Category-specific Prior (e.g. STREAMING, SOCIAL)
             val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)
-            alpha += (state.weightedSuccess.get() / 1000.0)
-            beta += (state.weightedFailure.get() / 1000.0) 
+            val lastUsed = state.lastUsedTimestamp.get()
+            val timeDecay = if (lastUsed > 0) Math.max(0.1, 1.0 - ((System.currentTimeMillis() - lastUsed) / (24.0 * 3600.0 * 1000.0)) * 0.05) else 1.0
+            alpha += (state.weightedSuccess.get() / 1000.0) * timeDecay
+            beta += (state.weightedFailure.get() / 1000.0) * timeDecay 
             
             // Level 1: Apply Host Memory bonus if the strategy matches the known best host strategy and no active host failures
             if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0 && hostFails == 0) {
-                val decay = Math.max(0.1, 1.0 - (System.currentTimeMillis() - hostMemory.timestamp) / (24.0 * 3600.0 * 1000.0))
-                val boost = Math.min(50.0, hostMemory.successCount * hostMemory.confidence * 5.0) * decay
+                val hostDecay = Math.max(0.1, 1.0 - (System.currentTimeMillis() - hostMemory.timestamp) / (24.0 * 3600.0 * 1000.0))
+                val boost = Math.min(50.0, hostMemory.successCount * hostMemory.confidence * 5.0) * hostDecay
                 alpha += boost
             }
 
@@ -99,12 +101,17 @@ object CandidateEngine {
             val sampledProb = ThompsonSampler.sampleBeta(alpha, beta)
             
             // Stage 3 Utility Function Calibration
-            // Dynamic Risk and Cost based on observedFailureRate and observedLatency
+            // Phase 4: Dynamic Risk and Cost based on observedFailureRate, observedLatency, and Sample Confidence
             val observedLatency = state.getP95Latency().toDouble()
             val totalSamples = state.sampleCount.get().toDouble()
+            
+            val confidence = if (totalSamples > 0) Math.min(1.0, totalSamples / 30.0) else 0.0
             val observedFailureRate = if (totalSamples > 0) state.failureCount.get().toDouble() / totalSamples else 0.0
             
-            val dynamicRisk = strategy.risk.toDouble() + (observedFailureRate * 5.0)
+            // If we have few samples, we assume moderate risk (1.5). As samples grow, we trust the actual observed failure rate.
+            val riskPenalty = (observedFailureRate * 5.0) * confidence + (1.0 - confidence) * 1.5
+            val dynamicRisk = strategy.risk.toDouble() + riskPenalty
+            
             val normalizedLatency = (observedLatency / 200.0).coerceIn(0.0, 5.0)
             val dynamicCost = strategy.cost.toDouble() + normalizedLatency
 

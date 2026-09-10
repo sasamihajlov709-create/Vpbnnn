@@ -168,20 +168,17 @@ object TtlHelper {
             val structOsClass = Class.forName("android.system.Os")
             val method = structOsClass.getMethod("getsockoptInt", FileDescriptor::class.java, Int::class.java, Int::class.java)
             method.invoke(null, fd, level, option) as Int
-        } catch (e: NoSuchMethodException) {
-            // getsockoptInt is hidden in some API levels, fallback to libcore
+        } catch (t: Throwable) {
             try {
                 val libcoreClass = Class.forName("libcore.io.Libcore")
                 val osField = libcoreClass.getField("os")
                 val osObj = osField.get(null)
                 val method = osObj.javaClass.getMethod("getsockoptInt", FileDescriptor::class.java, Int::class.java, Int::class.java)
                 method.invoke(osObj, fd, level, option) as Int
-            } catch (e2: Exception) {
+            } catch (t2: Throwable) {
+                Log.v("TtlHelper", "getsockoptInt reflection failed: ${t2.message}")
                 BypassConfig.currentTtl
             }
-        } catch (e: Exception) {
-            Log.v("TtlHelper", "getsockoptInt failed: ${e.message}")
-            BypassConfig.currentTtl
         }
     }
 

@@ -73,13 +73,9 @@ object DpiEngine {
             DpiStorage.saveProfileScores(it, oldProfile.id)
             DpiStorage.loadScores(it)
         }
-        resetStrategyScoresForNetworkChange()
+        
     }
 
-    private fun resetStrategyScoresForNetworkChange() {
-        Log.i("DpiEngine", "Resetting profile states due to network change.")
-        DpiPolicyEngine.resetProfileEngineStates(NetworkProfileManager.currentProfile.value.id)
-    }
 
     fun markSuccess(strat: BypassStrategy, transport: TransportType, host: String, latencyMs: Long = 0, quality: ObservationQuality) {
         if (latencyMs > 0) {

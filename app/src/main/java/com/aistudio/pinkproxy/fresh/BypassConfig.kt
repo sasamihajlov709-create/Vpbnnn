@@ -28,7 +28,6 @@ object BypassConfig {
     }
 
     private val _strategy = kotlinx.coroutines.flow.MutableStateFlow<BypassStrategy?>(null)
-    private val _strat = MutableStateFlow<BypassStrategy?>(null)
     val strategy: StateFlow<BypassStrategy?> = _strategy.asStateFlow()
     
     /**
@@ -41,8 +40,8 @@ object BypassConfig {
     /**
      * Internal mutation called solely by RuntimeCoordinator after validation.
      */
-    internal fun applyInternalStrategy(new: BypassStrategy) {
-        _strategy.value = new
+    internal fun applyInternalStrategy(new: BypassStrategy, transport: TransportType = TransportType.TCP) {
+        if (transport == TransportType.TCP) { _strategy.value = new }
     }
     
     private val _testingStrategies = MutableStateFlow<List<BypassStrategy>>(

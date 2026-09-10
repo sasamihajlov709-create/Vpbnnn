@@ -270,6 +270,20 @@ object StrategyStateRepository {
         DpiEngine.eventHistory.entries.removeIf { it.key.profileId == profileId }
     }
 
+    fun softResetProfile(profileId: String) {
+        // Soft recovery: Decay historical weights, reset failures, but preserve Bayesian knowledge
+        contextStates.entries.forEach { (key, state) ->
+            if (key.profileId == profileId) {
+                state.weightedFailure.set((state.weightedFailure.get() * 0.1).toLong()) // 90% decay on failures
+                state.weightedSuccess.set((state.weightedSuccess.get() * 0.5).toLong()) // 50% decay on successes
+                state.failureCount.set(0)
+            }
+        }
+        circuitBreakers.entries.removeIf { it.key.profileId == profileId }
+        consecutiveFailures.entries.removeIf { it.key.profileId == profileId }
+        consecutiveFailuresByHost.entries.removeIf { it.key.profileId == profileId }
+    }
+
     fun restoreStates(states: Map<StrategyContextKey, StrategyMetricState>) {
         states.forEach { (key, metric) ->
             val state = getStrategyState(key.strategy, key.transport, key.category, key.profileId)

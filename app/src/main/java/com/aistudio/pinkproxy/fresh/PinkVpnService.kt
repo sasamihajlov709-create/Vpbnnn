@@ -94,7 +94,7 @@ class PinkVpnService : VpnService() {
                 subtext
             }.collectLatest { subtext ->
                 if (_isRunning.value) {
-                    notificationController.showNotification("Engine Active", subtext)
+                    notificationController.showNotification("Engine Active", subtext, isUpdate = true)
                 }
             }
         }
@@ -224,7 +224,7 @@ class PinkVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        notificationController.showNotification()
+        try { notificationController.showNotification() } catch(e: Exception) { Log.e("PinkVpnService", "startForeground failure", e); serviceScope.launch { stopVpnInternal() }; stopSelf() }
         val action = intent?.action
         if (action == "STOP") {
             saveVpnState(this, false)
@@ -249,7 +249,7 @@ class PinkVpnService : VpnService() {
             serviceScope.launch {
                 try {
                     ProxyStats.logRecovery("Strategy Changed: Applied dynamically & instantly")
-                    notificationController.showNotification()
+                    try { notificationController.showNotification() } catch(e: Exception) { Log.e("PinkVpnService", "startForeground failure", e); serviceScope.launch { stopVpnInternal() }; stopSelf() }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -266,7 +266,7 @@ class PinkVpnService : VpnService() {
                         ProxyStats.logRecovery("Core System Re-Started")
                         stopVpnInternal()
                         delay(500)
-                        notificationController.showNotification()
+                        try { notificationController.showNotification() } catch(e: Exception) { Log.e("PinkVpnService", "startForeground failure", e); serviceScope.launch { stopVpnInternal() }; stopSelf() }
                         startVpnInternal()
                     } catch (e: CancellationException) {
                         throw e
@@ -565,15 +565,15 @@ class PinkVpnService : VpnService() {
         var dupFd: ParcelFileDescriptor? = null
         var rawFd = -1
         try {
-            engine.Engine.touch()
-            val key = engine.Key()
+            try { engine.Engine.touch() } catch (t: Throwable) { Log.e("PinkVpnService", "tun2socks native engine missing: ${t.message}", t) }
+            val key = try { engine.Key() } catch (t: Throwable) { throw Exception("Native Key init failed", t) }
             key.setProxy("socks5://$proxySecret:$proxySecret@127.0.0.1:$proxyPort")
             dupFd = vpnInterface.dup()
             rawFd = dupFd.detachFd()
             try { vpnInterface.close() } catch (ignored: Exception) {} // Close original to prevent FD leak
             key.setDevice("fd://$rawFd")
             key.setLogLevel("error")
-            engine.Engine.insert(key)
+            try { engine.Engine.insert(key) } catch (t: Throwable) { throw Exception("Native insert failed", t) }
             
             val startAck = CompletableDeferred<Unit>()
             serviceScope.launch {
@@ -581,7 +581,7 @@ class PinkVpnService : VpnService() {
                     // Launch native engine start
                     val startJob = launch(Dispatchers.IO) {
                         try {
-                            engine.Engine.start()
+                            try { engine.Engine.start() } catch (t: Throwable) { throw Exception("Native start failed", t) }
                             Log.i("PinkVpnService", "tun2socks stopped naturally")
                         } catch (e: Exception) {
                             if (!startAck.isCompleted) {

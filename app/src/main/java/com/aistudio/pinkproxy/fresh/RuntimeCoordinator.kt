@@ -78,7 +78,7 @@ object RuntimeCoordinator {
         val targetStrategy = StrategyPolicyGate.resolveOrFallback(newStrategy, context)
 
         Log.i(TAG, "Transitioning strategy for $transport to $targetStrategy. Reason: $reason (requested: ${newStrategy.name})")
-        BypassConfig.applyInternalStrategy(targetStrategy)
+        BypassConfig.applyInternalStrategy(targetStrategy, transport)
         VpnRuntimeState.updateStrategy(targetStrategy.name, DpiStrategySelector.getSelectionReasoning(targetStrategy))
         return true
     }
@@ -101,7 +101,7 @@ object RuntimeCoordinator {
         Log.i(TAG, "Rotating strategy for $transport [$category/$profileId] to $best. Reason: $reason")
         
         if (host == null) {
-            BypassConfig.applyInternalStrategy(best)
+            BypassConfig.applyInternalStrategy(best, transport)
             VpnRuntimeState.updateStrategy(best.name, DpiStrategySelector.getSelectionReasoning(best))
             ProxyStats.logRecovery("Global Strategy rotated for $transport ($category): ${best.name} ($reason)")
         } else {

@@ -109,7 +109,7 @@ object DpiPolicyEngine {
 
 
         if (decision.shouldReset) {
-            resetProfileEngineStates(NetworkProfileManager.currentProfile.value.id)
+            softResetProfileEngineStates(NetworkProfileManager.currentProfile.value.id)
         }
     }
 
@@ -129,9 +129,9 @@ object DpiPolicyEngine {
             ProxyStats.updateCensorshipIntensity(globalIntensity)
         }
     }
-    fun resetProfileEngineStates(profileId: String) {
+    fun softResetProfileEngineStates(profileId: String) {
         Log.w("DpiPolicyEngine", "Executing state reset for profile $profileId due to critical network anomaly policy trigger.")
-        StrategyStateRepository.resetProfile(profileId)
+        StrategyStateRepository.softResetProfile(profileId)
         // DpiEngine maps usually use strategy as key, so it might need some other clearance, but clear() affects everything.
         // For now let's just clear for the specific strategy if possible, or clear circuit breakers since they are transient anyway.
         }

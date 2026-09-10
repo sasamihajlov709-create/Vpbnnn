@@ -8,3 +8,4 @@
 # Keep SOCKS5 library
 -keep class com.ooimi.library.** { *; }
 -dontwarn com.ooimi.library.**
+-keep class engine.** { *; }
