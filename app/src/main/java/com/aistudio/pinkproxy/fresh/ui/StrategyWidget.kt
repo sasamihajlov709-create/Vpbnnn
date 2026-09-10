@@ -38,6 +38,9 @@ fun StrategyDisplayWidget(
     isActive: Boolean,
     onSelectStrategy: () -> Unit
 ) {
+    var showTelemetryDialog by remember { mutableStateOf(false) }
+    val latestTelemetry by com.aistudio.pinkproxy.fresh.VpnRuntimeState.latestTelemetry.collectAsStateWithLifecycle()
+
     val infiniteTransition = rememberInfiniteTransition(label = "strat_pulse")
     val pulseAlpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
@@ -51,6 +54,13 @@ fun StrategyDisplayWidget(
         StrategyGroup.MEDIUM -> GentleLightPink
         StrategyGroup.HEAVY -> Color(0xFFFFB74D)
         StrategyGroup.EXTREME -> Color(0xFFE57373)
+    }
+
+    if (showTelemetryDialog && latestTelemetry != null) {
+        ExplainableTelemetryDialog(
+            telemetry = latestTelemetry!!,
+            onDismiss = { showTelemetryDialog = false }
+        )
     }
 
     Surface(
@@ -146,13 +156,31 @@ fun StrategyDisplayWidget(
             }
 
             val reasoning by com.aistudio.pinkproxy.fresh.VpnRuntimeState.strategySelectionReasoning.collectAsStateWithLifecycle()
-            Text(
-                text = reasoning,
-                fontSize = 11.sp,
-                color = com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .clickable { if (latestTelemetry != null) showTelemetryDialog = true },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = reasoning,
+                    fontSize = 11.sp,
+                    color = com.aistudio.pinkproxy.fresh.ui.theme.GentleMediumPink,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                
+                if (latestTelemetry != null) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Explain Telemetry",
+                        tint = GentleMediumPink,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(14.dp))
             HorizontalDivider(color = GentleMediumPink.copy(alpha = 0.12f), thickness = 1.dp)

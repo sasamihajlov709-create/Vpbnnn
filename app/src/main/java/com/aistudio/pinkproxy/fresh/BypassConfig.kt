@@ -209,14 +209,15 @@ object BypassConfig {
         frag1 = prefs.getInt("frag1", 1)
         delay1 = prefs.getLong("delay1", 20L)
         fakeTtl = prefs.getInt("fakeTtl", 0)
-        val savedStrat = prefs.getString("global_strategy", BypassStrategy.SNI_SPLIT.name)
-        val parsedStrat = try { BypassStrategy.valueOf(savedStrat ?: BypassStrategy.SNI_SPLIT.name) } catch (e: Exception) { BypassStrategy.SNI_SPLIT }
+        val savedStrat = prefs.getString("global_strategy", null)
+        val parsedStrat = try { savedStrat?.let { BypassStrategy.valueOf(it) } } catch (e: Exception) { null }
         val ctx = CandidateEngine.SelectionContext(
             transport = TransportType.TCP,
             profileId = NetworkProfileManager.currentProfile.value.id
         )
         _strategy.value = try {
-            StrategyPolicyGate.resolveOrFallback(parsedStrat, ctx)
+            parsedStrat?.let { StrategyPolicyGate.resolveOrFallback(it, ctx) }
+                ?: StrategyPolicyGate.getEligibleFallback(ctx)
         } catch (e: Exception) {
             try {
                 StrategyPolicyGate.getEligibleFallback(ctx)
@@ -252,7 +253,11 @@ object BypassConfig {
             putInt("frag1", frag1)
             putLong("delay1", delay1)
             putInt("fakeTtl", fakeTtl)
-            putString("global_strategy", _strategy.value?.name ?: BypassStrategy.DIRECT.name)
+            if (_strategy.value != null) {
+                putString("global_strategy", _strategy.value!!.name)
+            } else {
+                remove("global_strategy")
+            }
         }
     }
 

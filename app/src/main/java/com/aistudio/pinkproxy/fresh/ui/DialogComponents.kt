@@ -270,6 +270,8 @@ fun StrategySelectionDialog(
     onDismiss: () -> Unit,
     onSelect: (BypassStrategy) -> Unit
 ) {
+    var showAdvanced by remember { mutableStateOf(BypassConfig.autoTuningMode == AutoTuningMode.DIAGNOSTIC) }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -283,20 +285,43 @@ fun StrategySelectionDialog(
             border = BorderStroke(1.dp, GentleMediumPink.copy(alpha = 0.2f))
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    text = "ВЫБОР СТРАТЕГИИ ОБХОДА",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Black,
-                    color = GentleLightPink,
-                    letterSpacing = 1.sp,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ВЫБОР СТРАТЕГИИ ОБХОДА",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Black,
+                        color = GentleLightPink,
+                        letterSpacing = 1.sp
+                    )
+                    
+                    if (BypassConfig.autoTuningMode != AutoTuningMode.DIAGNOSTIC) {
+                        Text(
+                            text = if (showAdvanced) "СКРЫТЬ" else "ВСЕ",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = GentleMediumPink,
+                            modifier = Modifier.clickable { showAdvanced = !showAdvanced }.padding(4.dp)
+                        )
+                    }
+                }
                 
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(BypassStrategy.entries.filter { it.implementationStatus == ImplementationStatus.IMPLEMENTED || it.implementationStatus == ImplementationStatus.EXPERIMENTAL }) { strategy ->
+                    // Always show DIRECT and the currently active strategy
+                    val strategies = if (showAdvanced) {
+                        BypassStrategy.entries.filter { it.implementationStatus == ImplementationStatus.IMPLEMENTED || it.implementationStatus == ImplementationStatus.EXPERIMENTAL }
+                    } else {
+                        val autoOptimized = BypassConfig.testingStrategies.value.take(5)
+                        listOf(BypassStrategy.DIRECT, currentStrategy).plus(autoOptimized).distinct()
+                    }
+
+                    items(strategies) { strategy ->
                         val isSelected = strategy == currentStrategy
                         val color = when (strategy.group) {
                             StrategyGroup.LIGHT -> Color(0xFF81C784)
@@ -588,5 +613,71 @@ fun DnsSelectionDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun ExplainableTelemetryDialog(
+    telemetry: ExplainableTelemetry,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            color = PureBlack,
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.dp, GentleMediumPink.copy(alpha = 0.3f))
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text("AI TELEMETRY", fontSize = 16.sp, fontWeight = FontWeight.Black, color = GentleLightPink, letterSpacing = 1.sp)
+                Text("Why was ${telemetry.strategyName} selected?", fontSize = 12.sp, color = GentleMediumPink)
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                TelemetryRow("Alpha (Success Prior)", String.format("%.2f", telemetry.alpha), Color(0xFF81C784))
+                TelemetryRow("Beta (Failure Prior)", String.format("%.2f", telemetry.beta), Color(0xFFE57373))
+                TelemetryRow("Thompson Sample Prob", String.format("%.2f%%", telemetry.sampledProbability * 100), GentleLightPink)
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = GentleMediumPink.copy(alpha = 0.2f))
+                
+                TelemetryRow("Host Memory Bonus", String.format("+%.1f", telemetry.hostMemoryBonus), Color(0xFF81C784))
+                TelemetryRow("Verification Bonus", String.format("+%.1f", telemetry.verificationBonus), Color(0xFF81C784))
+                TelemetryRow("Anti-Flapping (Hysteresis)", String.format("+%.1f", telemetry.hysteresisBonus), Color(0xFF81C784))
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = GentleMediumPink.copy(alpha = 0.2f))
+                
+                TelemetryRow("Dynamic Risk Penalty", String.format("-%.1f", telemetry.dynamicRisk * 0.2), Color(0xFFFFB74D))
+                TelemetryRow("Dynamic Cost Penalty", String.format("-%.1f", telemetry.dynamicCost * 0.2), Color(0xFFFFB74D))
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Surface(color = GentleDarkPink, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("TOTAL UTILITY SCORE", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleLightPink)
+                        Text(String.format("%.1f", telemetry.totalUtility), fontSize = 14.sp, fontWeight = FontWeight.Black, color = Color(0xFF81C784))
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = GentleMediumPink)
+                ) {
+                    Text("ЗАКРЫТЬ", fontWeight = FontWeight.Bold, color = PureBlack)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TelemetryRow(label: String, value: String, valueColor: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 12.sp, color = GentleMediumPink)
+        Text(value, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = valueColor, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
     }
 }

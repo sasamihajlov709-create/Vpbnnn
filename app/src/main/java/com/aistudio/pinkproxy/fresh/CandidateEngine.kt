@@ -64,9 +64,16 @@ object CandidateEngine {
             val globalSuccess = allStatesForStrategy.sumOf { it.weightedSuccess.get() } / 1000.0
             val globalFailure = allStatesForStrategy.sumOf { it.weightedFailure.get() } / 1000.0
 
+            val transportHealth = StrategyStateRepository.getTransportHealth(context.profileId, context.transport)
+
             // Base priors start at 1.0, plus 20% of the aggregated global knowledge
             var alpha = 1.0 + (globalSuccess * 0.2)
             var beta = 1.0 + (globalFailure * 0.2)
+            
+            // If the transport is globally failing, artificially inflate beta to suppress exploration
+            if (transportHealth < 0.2) {
+                beta += 50.0 * (0.2 - transportHealth)
+            }
 
             // Level 2: Category-specific Prior (e.g. STREAMING, SOCIAL)
             val state = StrategyStateRepository.getStrategyState(strategy, context.transport, context.category, context.profileId)
@@ -112,19 +119,41 @@ object CandidateEngine {
             // Prefer the currently active strategy if it is healthy, avoiding gratuitous churn across flows
             val isCurrent = strategy == currentActive
             val stateFailures = state.failureCount.get()
+            // Increase hysteresis bonus to prevent 1-2 ms differences from causing churn
             val hysteresisBonus = if (isCurrent && hostFails == 0 && stateFailures == 0) {
                 when (BypassConfig.autoTuningMode) {
-                    AutoTuningMode.STABLE -> 15.0
-                    AutoTuningMode.EXPLORATION -> 5.0
-                    AutoTuningMode.DIAGNOSTIC -> 0.0
+                    AutoTuningMode.STABLE -> 35.0 // Strong margin required to switch
+                    AutoTuningMode.EXPLORATION -> 15.0 // Moderate margin required
+                    AutoTuningMode.DIAGNOSTIC -> 5.0
                 }
             } else 0.0
 
             val expectedBandwidth = (10.0 - dynamicCost).coerceAtLeast(1.0)
             val utility = (sampledProb * 100.0) + hostMemoryBonus + verificationBonus + hysteresisBonus + (expectedBandwidth * 0.5) - (dynamicRisk * 0.2 + dynamicCost * 0.2)
             
-            Pair(strategy, utility)
+            val telemetry = ExplainableTelemetry(
+                strategyName = strategy.name,
+                alpha = alpha,
+                beta = beta,
+                sampledProbability = sampledProb,
+                hostMemoryBonus = hostMemoryBonus,
+                verificationBonus = verificationBonus,
+                hysteresisBonus = hysteresisBonus,
+                dynamicRisk = dynamicRisk,
+                dynamicCost = dynamicCost,
+                expectedBandwidth = expectedBandwidth,
+                totalUtility = utility
+            )
+            
+            Pair(strategy, Pair(utility, telemetry))
         }
-        return scored.sortedByDescending { it.second }.map { it.first }
+        val sorted = scored.sortedByDescending { it.second.first }
+        
+        // Push telemetry for the winner to the UI
+        if (sorted.isNotEmpty() && !context.isDiagnosticMode) {
+            VpnRuntimeState.updateTelemetry(sorted.first().second.second)
+        }
+        
+        return sorted.map { it.first }
     }
 }

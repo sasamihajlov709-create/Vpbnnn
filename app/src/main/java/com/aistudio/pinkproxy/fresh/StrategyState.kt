@@ -285,4 +285,16 @@ object StrategyStateRepository {
             state.lastUsedTimestamp.set(metric.lastUsedTimestamp)
         }
     }
+
+    fun getTransportHealth(profileId: String, transport: TransportType): Double {
+        val states = getStates(profileId = profileId, transport = transport)
+        if (states.isEmpty()) return 1.0 // Healthy by default
+        
+        val totalSuccess = states.sumOf { it.weightedSuccess.get() }.toDouble()
+        val totalFailure = states.sumOf { it.weightedFailure.get() }.toDouble()
+        
+        if (totalSuccess + totalFailure < 20.0) return 1.0 // Not enough data
+        
+        return totalSuccess / (totalSuccess + totalFailure)
+    }
 }

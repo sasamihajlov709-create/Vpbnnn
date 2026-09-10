@@ -278,12 +278,12 @@ object StrategyExecutionRegistry {
     )
 
     fun getExecutor(strategy: BypassStrategy): StrategyExecutor {
-        val type = getExecutorType(strategy) ?: return StrategyExecutorDirect
-        return executorsByType[type] ?: StrategyExecutorDirect
+        val type = getExecutorType(strategy) ?: throw UnsupportedOperationException("No executor type mapped for strategy: $strategy")
+        return executorsByType[type] ?: throw UnsupportedOperationException("No executor instance registered for type: $type")
     }
 
     fun getExecutorByType(type: ExecutorType): StrategyExecutor {
-        return executorsByType[type] ?: StrategyExecutorDirect
+        return executorsByType[type] ?: throw UnsupportedOperationException("No executor instance registered for type: $type")
     }
 
     fun isExecutorSupported(strategy: BypassStrategy, transport: TransportType): Boolean {

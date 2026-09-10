@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aistudio.pinkproxy.fresh.BypassConfig
 import com.aistudio.pinkproxy.fresh.BypassStrategy
 import com.aistudio.pinkproxy.fresh.VpnLifecycleState
 import com.aistudio.pinkproxy.fresh.DpiEngine
@@ -49,18 +50,13 @@ import com.aistudio.pinkproxy.fresh.ui.theme.PureBlack
 
 @Composable
 fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean) {
-    val color = when {
-        !isInternet -> Color(0xFF9E9E9E)
-        isProbing -> GentleMediumPink
-        isHealthy -> Color(0xFF81C784)
-        else -> Color(0xFFE57373)
-    }
-    
-    val text = when {
-        !isInternet -> stringResource(R.string.status_no_internet)
-        isProbing -> stringResource(R.string.status_probing)
-        !isHealthy -> stringResource(R.string.status_recovering)
-        else -> stringResource(R.string.status_protected)
+    val autoMode = BypassConfig.autoTuningMode
+
+    val (color, text) = when {
+        !isInternet -> Color(0xFF9E9E9E) to stringResource(R.string.status_no_internet)
+        isProbing || autoMode == com.aistudio.pinkproxy.fresh.AutoTuningMode.EXPLORATION -> GentleMediumPink to "ОПТИМИЗАЦИЯ СЕТИ"
+        isHealthy -> Color(0xFF81C784) to "СТАБИЛЬНО (AUTO)"
+        else -> Color(0xFFE57373) to "ДЕГРАДАЦИЯ (СБОЙ)"
     }
 
     Surface(

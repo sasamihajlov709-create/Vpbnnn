@@ -69,8 +69,20 @@ object DpiStorage {
     fun saveProfileScores(context: Context, profileId: String) {
         val state = captureStrategyProfileState(profileId)
         val jsonStr = state.toJson()
-        val v2Prefs = context.getSharedPreferences("dpi_profile_v2_$profileId", Context.MODE_PRIVATE)
-        v2Prefs.edit().putString("state_json", jsonStr).apply()
+        
+        val file = java.io.File(context.filesDir, "dpi_profile_v2_$profileId.json")
+        val atomicFile = android.util.AtomicFile(file)
+        var outStream: java.io.FileOutputStream? = null
+        try {
+            outStream = atomicFile.startWrite()
+            outStream.write(jsonStr.toByteArray(Charsets.UTF_8))
+            outStream.flush()
+            // fsync happens inside finishWrite
+            atomicFile.finishWrite(outStream)
+        } catch (e: Exception) {
+            atomicFile.failWrite(outStream)
+            android.util.Log.e("DpiStorage", "Failed to atomic save profile $profileId", e)
+        }
 
         AutoTtlProber.saveTtlMtuState(context, profileId)
         updateProfileRegistry(context, profileId)
@@ -79,8 +91,27 @@ object DpiStorage {
     fun loadProfileScores(context: Context, profileId: String) {
         AutoTtlProber.loadTtlMtuState(context, profileId)
 
-        val v2Prefs = context.getSharedPreferences("dpi_profile_v2_$profileId", Context.MODE_PRIVATE)
-        val jsonStr = v2Prefs.getString("state_json", null)
+        val file = java.io.File(context.filesDir, "dpi_profile_v2_$profileId.json")
+        val atomicFile = android.util.AtomicFile(file)
+        var jsonStr: String? = null
+        
+        if (file.exists()) {
+            try {
+                val bytes = atomicFile.readFully()
+                jsonStr = String(bytes, Charsets.UTF_8)
+            } catch (e: Exception) {
+                android.util.Log.e("DpiStorage", "Failed to read profile $profileId", e)
+            }
+        } else {
+            // Migration from SharedPreferences if AtomicFile doesn't exist yet
+            val v2Prefs = context.getSharedPreferences("dpi_profile_v2_$profileId", Context.MODE_PRIVATE)
+            jsonStr = v2Prefs.getString("state_json", null)
+            if (!jsonStr.isNullOrBlank()) {
+                // Async save to AtomicFile for future
+                Thread { saveProfileScores(context, profileId) }.start()
+            }
+        }
+
         if (!jsonStr.isNullOrBlank()) {
             val state = StrategyProfileState.fromJson(jsonStr)
             if (state != null) {
@@ -107,6 +138,10 @@ object DpiStorage {
                     editor.remove("ts_$oldest")
                     context.getSharedPreferences("dpi_scores_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
                     context.getSharedPreferences("dpi_profile_v2_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
+                    val oldFile = java.io.File(context.filesDir, "dpi_profile_v2_$oldest.json")
+                    if (oldFile.exists()) oldFile.delete()
+                    val oldBak = java.io.File(context.filesDir, "dpi_profile_v2_$oldest.json.bak")
+                    if (oldBak.exists()) oldBak.delete()
                     context.getSharedPreferences("dpi_host_mem_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
                     context.getSharedPreferences("dpi_host_bl_$oldest", Context.MODE_PRIVATE).edit().clear().apply()
                 }

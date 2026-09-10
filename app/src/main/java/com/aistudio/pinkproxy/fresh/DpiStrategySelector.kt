@@ -100,12 +100,15 @@ object DpiStrategySelector {
             }
         }
 
+        // LKG (Last-Known-Good) Fast Start Mechanism
+        // If we have a very high confidence strategy for this network and category, use it immediately
+        // bypassing Bayesian exploration for faster connection establishment.
         val netMem = StrategyStateRepository.networkStrategyMemory[profileId]?.get(category)
         netMem?.let { mem ->
             val nowMs = System.currentTimeMillis()
             val ageMs = nowMs - mem.timestamp
             val maxAge = 6 * 3600 * 1000L
-            if (ageMs < maxAge && mem.confidence >= 0.3) {
+            if (ageMs < maxAge && mem.confidence >= 0.85) {
                 val strategy = mem.strategy
                 val ctx = CandidateEngine.SelectionContext(transport, profileId, host, category)
                 if (StrategyPolicyGate.isAllowed(strategy, ctx)) {

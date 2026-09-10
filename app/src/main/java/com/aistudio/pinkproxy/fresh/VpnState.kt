@@ -17,6 +17,21 @@ enum class VpnLifecycleState {
     ERROR
 }
 
+data class ExplainableTelemetry(
+    val strategyName: String,
+    val alpha: Double,
+    val beta: Double,
+    val sampledProbability: Double,
+    val hostMemoryBonus: Double,
+    val verificationBonus: Double,
+    val hysteresisBonus: Double,
+    val dynamicRisk: Double,
+    val dynamicCost: Double,
+    val expectedBandwidth: Double,
+    val totalUtility: Double,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 object VpnRuntimeState {
     private val _lifecycleState = MutableStateFlow(VpnLifecycleState.IDLE)
     val lifecycleState: StateFlow<VpnLifecycleState> = _lifecycleState.asStateFlow()
@@ -33,6 +48,9 @@ object VpnRuntimeState {
     private val _strategySelectionReasoning = MutableStateFlow("Optimal choice for network")
     val strategySelectionReasoning: StateFlow<String> = _strategySelectionReasoning.asStateFlow()
 
+    private val _latestTelemetry = MutableStateFlow<ExplainableTelemetry?>(null)
+    val latestTelemetry: StateFlow<ExplainableTelemetry?> = _latestTelemetry.asStateFlow()
+
     fun updateState(newState: VpnLifecycleState, error: String? = null) {
         if (error != null) _lastError.value = error
         _lifecycleState.value = newState
@@ -45,6 +63,10 @@ object VpnRuntimeState {
     fun updateStrategy(strategy: String, reason: String? = null) {
         _currentStrategy.value = strategy
         if (reason != null) _strategySelectionReasoning.value = reason
+    }
+
+    fun updateTelemetry(telemetry: ExplainableTelemetry) {
+        _latestTelemetry.value = telemetry
     }
 
     fun updateDpi(dpi: String) {
