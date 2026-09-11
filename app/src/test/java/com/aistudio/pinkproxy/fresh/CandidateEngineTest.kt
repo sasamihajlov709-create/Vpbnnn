@@ -55,13 +55,17 @@ class CandidateEngineTest {
             quality = ObservationQuality.CONNECT_ONLY
         ))
 
-        val candidates = listOf(strategyGood, strategyBad)
-        val ranked = CandidateEngine.rankCandidatesBayesian(candidates, ctx)
+val candidates = listOf(strategyGood, strategyBad)
+        var goodWins = 0
+        val runs = 1000
+        for (i in 0 until runs) {
+            val ranked = CandidateEngine.rankCandidatesBayesian(candidates, ctx)
+            if (ranked.first() == strategyGood) {
+                goodWins++
+            }
+        }
         
-        assertTrue(ranked.isNotEmpty())
-        // Since Thompson Sampling is probabilistic, with a huge difference, good should almost always win.
-        // We can just check that it runs and ranks them without crashing.
-        assertNotNull(ranked.first())
+        assertTrue("Good strategy should win significantly more often (won $goodWins/$runs)", goodWins > 900)
     }
 
     @Test

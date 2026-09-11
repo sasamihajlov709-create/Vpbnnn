@@ -146,10 +146,16 @@ fun DashboardTab(
     val speedHistory by ProxyStats.speedHistory.collectAsStateWithLifecycle(initialValue = emptyList<Long>())
     val isProxyHealthy by ServiceChecker.proxyHealth.collectAsStateWithLifecycle(initialValue = true)
     val isInternetUp by ServiceChecker.internetAvailable.collectAsStateWithLifecycle(initialValue = true)
-    val isProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
+    val isServiceProbing by ServiceChecker.isProbingState.collectAsStateWithLifecycle(initialValue = false)
+    val isEngineProbing by VpnRuntimeState.isEngineProbing.collectAsStateWithLifecycle(initialValue = false)
+    val isProbing = isServiceProbing || isEngineProbing
     
     val activeStrategy by BypassConfig.tcpStrategy.collectAsStateWithLifecycle(initialValue = null)
-    val testingStrategies by BypassConfig.testingStrategies.collectAsStateWithLifecycle(initialValue = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.SNI_TRIPLE, BypassStrategy.BYEBYEDPI_SIM))
+    val metrics by BypassConfig.strategyMetrics.collectAsStateWithLifecycle(initialValue = emptyList())
+    val staticTesting by BypassConfig.testingStrategies.collectAsStateWithLifecycle(initialValue = listOf(BypassStrategy.SNI_SPLIT, BypassStrategy.SNI_TRIPLE, BypassStrategy.BYEBYEDPI_SIM))
+    val testingStrategies = remember(metrics, staticTesting) {
+        if (metrics.isEmpty()) staticTesting else metrics.take(6).map { it.strategy }
+    }
     val signalQuality by ProxyStats.signalQuality.collectAsStateWithLifecycle(initialValue = 100)
     val isPanicMode by BypassConfig.isPanicModeFlow.collectAsStateWithLifecycle(initialValue = false)
     val stabilityScore by ProxyStats.stabilityScore.collectAsStateWithLifecycle(initialValue = 100)

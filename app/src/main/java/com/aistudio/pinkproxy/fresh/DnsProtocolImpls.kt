@@ -459,7 +459,12 @@ object DotDnsProtocols {
             plainSocket.tcpNoDelay = true
             plainSocket.connect(java.net.InetSocketAddress(dotIp, 853), 4000)
             
-            socket = socketFactory.createSocket(plainSocket, dotIp, 853, true)
+            val sslSocket = socketFactory.createSocket(plainSocket, dotIp, 853, true) as javax.net.ssl.SSLSocket
+            val sslParams = sslSocket.sslParameters
+            sslParams.endpointIdentificationAlgorithm = "HTTPS"
+            sslSocket.sslParameters = sslParams
+            sslSocket.startHandshake()
+            socket = sslSocket
             plainSocket = null // Ownership transferred to SSLSocket with autoClose = true
             socket.soTimeout = 4000
             

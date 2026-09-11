@@ -200,7 +200,12 @@ object UdpTransportHandler {
                                             UdpAssociationTable.touchSession(sessionKey, sentBytes = payload.size.toLong())
                                             val config = BypassConfig.getSessionConfig(host, udpStrat, 50, TransportType.UDP)
                                             val outPacket = DatagramPacket(payload, payload.size, association.targetInet, port)
-                                            BypassApplier.applyUdpBypass(association.outSocket!!, outPacket, config, host)
+                                            val outSock = association.outSocket
+                                            if (outSock == null) {
+                                                Log.w("UdpTransport", "udpPacketDroppedSessionClosed: Socket already closed")
+                                                return@launch
+                                            }
+                                            BypassApplier.applyUdpBypass(outSock, outPacket, config, host)
                                             ProxyStats.recordStats("udp_outbound", 0, payload.size.toLong())
                                         } catch (e: Exception) {
                                             if (e !is CancellationException) Log.v("UdpTransport", "UDP Strategy execution failed: ${e.message}")

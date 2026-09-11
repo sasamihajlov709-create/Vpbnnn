@@ -195,6 +195,7 @@ object CandidateEngine {
 
         // Push telemetry for the winner to the UI
         VpnRuntimeState.updateTelemetry(winner.second.second)
+        VpnRuntimeState.triggerEngineProbing()
         
         // Put the winner at the top of the list, followed by the rest
         val finalRanked = mutableListOf(winner.first)

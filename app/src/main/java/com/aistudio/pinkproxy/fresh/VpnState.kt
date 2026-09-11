@@ -1,5 +1,6 @@
 package com.aistudio.pinkproxy.fresh
 
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -51,6 +52,20 @@ object VpnRuntimeState {
 
     private val _latestTelemetry = MutableStateFlow<ExplainableTelemetry?>(null)
     val latestTelemetry: StateFlow<ExplainableTelemetry?> = _latestTelemetry.asStateFlow()
+
+    private val _isEngineProbing = MutableStateFlow(false)
+    val isEngineProbing: StateFlow<Boolean> = _isEngineProbing.asStateFlow()
+    
+    private var engineProbingJob: kotlinx.coroutines.Job? = null
+    
+    fun triggerEngineProbing() {
+        engineProbingJob?.cancel()
+        _isEngineProbing.value = true
+        engineProbingJob = kotlinx.coroutines.GlobalScope.launch {
+            kotlinx.coroutines.delay(2500)
+            _isEngineProbing.value = false
+        }
+    }
 
     fun updateState(newState: VpnLifecycleState, error: String? = null) {
         if (error != null) _lastError.value = error

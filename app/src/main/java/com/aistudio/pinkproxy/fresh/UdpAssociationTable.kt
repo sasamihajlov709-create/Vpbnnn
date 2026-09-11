@@ -4,6 +4,7 @@ import java.net.InetAddress
 import java.net.DatagramSocket
 import kotlinx.coroutines.Job
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentLinkedQueue
 
 data class UdpSessionKey(
@@ -22,16 +23,17 @@ data class UdpPendingProbe(
 )
 
 class UdpAssociation(
-    val key: UdpSessionKey,
+val key: UdpSessionKey,
     val socksSessionId: String = "",
     val createdAt: Long = System.currentTimeMillis(),
-    @Volatile var lastActivity: Long = System.currentTimeMillis(),
-    @Volatile var packetsSent: Long = 0L,
-    @Volatile var packetsReceived: Long = 0L,
-    @Volatile var bytesSent: Long = 0L,
-    @Volatile var bytesReceived: Long = 0L,
     @Volatile var strategy: BypassStrategy
 ) {
+    val lastActivity = AtomicLong(System.currentTimeMillis())
+    val packetsSent = AtomicLong(0L)
+    val packetsReceived = AtomicLong(0L)
+    val bytesSent = AtomicLong(0L)
+    val bytesReceived = AtomicLong(0L)
+
     var outSocket: DatagramSocket? = null
     var targetInet: InetAddress? = null
     var readerJob: Job? = null
@@ -154,7 +156,7 @@ object UdpAssociationTable {
         return sessions.computeIfAbsent(key) {
             UdpAssociation(key = it, socksSessionId = sessionId, strategy = strategy)
         }.also {
-            it.lastActivity = System.currentTimeMillis()
+            it.lastActivity.set(System.currentTimeMillis())
         }
     }
 
@@ -180,14 +182,14 @@ object UdpAssociationTable {
 
     fun touchSession(key: UdpSessionKey, sentBytes: Long = 0L, receivedBytes: Long = 0L) {
         val entry = sessions[key] ?: return
-        entry.lastActivity = System.currentTimeMillis()
+        entry.lastActivity.set(System.currentTimeMillis())
         if (sentBytes > 0) {
-            entry.packetsSent++
-            entry.bytesSent += sentBytes
+            entry.packetsSent.incrementAndGet()
+            entry.bytesSent.addAndGet(sentBytes)
         }
         if (receivedBytes > 0) {
-            entry.packetsReceived++
-            entry.bytesReceived += receivedBytes
+            entry.packetsReceived.incrementAndGet()
+            entry.bytesReceived.addAndGet(receivedBytes)
         }
     }
 
@@ -197,7 +199,7 @@ object UdpAssociationTable {
         val iterator = sessions.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
-            if (now - entry.value.lastActivity > maxIdleDurationMs) {
+            if (now - entry.value.lastActivity.get() > maxIdleDurationMs) {
                 entry.value.close()
                 iterator.remove()
                 removedCount++

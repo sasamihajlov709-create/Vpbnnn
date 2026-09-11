@@ -80,7 +80,7 @@ fun PowerButton(
             ),
             modifier = Modifier
                 .size(140.dp)
-                .clickable(enabled = !isConnecting) { onToggle() }
+                
         ) {
             Box(contentAlignment = Alignment.Center) {
                 if (isConnecting) {
