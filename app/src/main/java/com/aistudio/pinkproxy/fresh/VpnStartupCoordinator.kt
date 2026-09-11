@@ -67,6 +67,7 @@ class VpnStartupCoordinator(
 
             // 4. Establish TUN interface
             VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Configuring TUN interface...")
+            var isTunFallback = false
             val pfd = try {
                 vpnTunnelManager.establish(
                     sessionName = "PinkProxy VPN",
@@ -84,7 +85,8 @@ class VpnStartupCoordinator(
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.w("VpnStartupCoordinator", "Emergency fallback TUN activated! Reason: ${e.message}")
-                VpnRuntimeState.updateState(VpnLifecycleState.STARTING, "Fallback tunnel mode activated (IPv4-only)")
+                isTunFallback = true
+                VpnRuntimeState.updateState(VpnLifecycleState.TUN_FALLBACK, "Fallback tunnel mode activated (IPv4-only)")
                 vpnTunnelManager.establish(
                     sessionName = "PinkProxy VPN",
                     mtu = 1400,
@@ -136,7 +138,7 @@ if (diagnostic.level < DiagnosticManager.HealthLevel.L4_TCP_REACHABLE) {
                 VpnRuntimeState.updateState(VpnLifecycleState.DEGRADED, diagnostic.recommendation)
             } else {
                 Log.i("VpnStartupCoordinator", "Data-plane probe passed (Level ${diagnostic.level})!")
-                VpnRuntimeState.updateState(VpnLifecycleState.RUNNING)
+                VpnRuntimeState.updateState(if (isTunFallback) VpnLifecycleState.TUN_FALLBACK else VpnLifecycleState.RUNNING)
                 VpnRuntimeState.clearError()
             }
             

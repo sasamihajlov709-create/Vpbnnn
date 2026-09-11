@@ -14,7 +14,8 @@ enum class VpnLifecycleState {
     STOPPING,
     FAILED,
     RECOVERING,
-    ERROR
+    ERROR,
+    TUN_FALLBACK
 }
 
 data class ExplainableTelemetry(

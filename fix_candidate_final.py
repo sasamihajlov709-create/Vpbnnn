@@ -1,4 +1,4 @@
-package com.aistudio.pinkproxy.fresh
+text = """package com.aistudio.pinkproxy.fresh
 
 /**
  * CandidateEngine unifies the strategy filtering and ranking rules across the entire app.
@@ -205,3 +205,8 @@ object CandidateEngine {
         return finalRanked
     }
 }
+"""
+
+with open('app/src/main/java/com/aistudio/pinkproxy/fresh/CandidateEngine.kt', 'w') as f:
+    f.write(text)
+

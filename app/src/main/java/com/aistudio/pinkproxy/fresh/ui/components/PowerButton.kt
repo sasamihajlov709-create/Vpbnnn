@@ -28,7 +28,7 @@ fun PowerButton(
     onToggle: () -> Unit,
     infiniteTransition: InfiniteTransition
 ) {
-    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
+    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING || vpnState == VpnLifecycleState.TUN_FALLBACK
     val isConnecting = vpnState == VpnLifecycleState.STARTING || vpnState == VpnLifecycleState.STOPPING
     
     val pulseScale by infiniteTransition.animateFloat(

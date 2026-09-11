@@ -77,7 +77,7 @@ fun StatusBadge(isHealthy: Boolean, isInternet: Boolean, isProbing: Boolean) {
 
 @Composable
 fun PowerButton(state: VpnLifecycleState, onToggle: () -> Unit, transition: InfiniteTransition) {
-    val isActive = state == VpnLifecycleState.RUNNING || state == VpnLifecycleState.RECOVERING
+    val isActive = state == VpnLifecycleState.RUNNING || state == VpnLifecycleState.RECOVERING || state == VpnLifecycleState.TUN_FALLBACK
     val isProcessing = state == VpnLifecycleState.STARTING || state == VpnLifecycleState.STOPPING || state == VpnLifecycleState.RECOVERING
     val isError = state == VpnLifecycleState.FAILED || state == VpnLifecycleState.ERROR
 

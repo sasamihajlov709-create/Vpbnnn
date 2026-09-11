@@ -51,7 +51,7 @@ fun PinkProxyApp(
     onRestart: () -> Unit,
     onDismissError: () -> Unit
 ) {
-    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
+    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING || vpnState == VpnLifecycleState.TUN_FALLBACK
     var selectedTab by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
 
@@ -126,7 +126,7 @@ fun DashboardTab(
     onToggle: () -> Unit,
     onDismissError: () -> Unit
 ) {
-    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
+    val isActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING || vpnState == VpnLifecycleState.TUN_FALLBACK
     val bgColor1 = Color(0xFF000000)
     val bgColor2 = Color(0xFF070305)
     val bgColor3 = Color(0xFF000000)
@@ -217,7 +217,7 @@ fun DashboardTab(
             Spacer(modifier = Modifier.height(24.dp))
 
             when (vpnState) {
-                VpnLifecycleState.RUNNING -> StatusBadge(isProxyHealthy, isInternetUp, isProbing)
+                VpnLifecycleState.RUNNING, VpnLifecycleState.TUN_FALLBACK -> StatusBadge(isProxyHealthy, isInternetUp, isProbing)
                 VpnLifecycleState.RECOVERING -> Text("RECOVERING CONNECTION...", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFB74D), letterSpacing = 2.sp)
                 VpnLifecycleState.STARTING -> Text("STARTING ENGINES...", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleMediumPink, letterSpacing = 2.sp)
                 VpnLifecycleState.STOPPING -> Text("STOPPING SECURELY...", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GentleDarkPink, letterSpacing = 2.sp)

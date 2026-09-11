@@ -1,52 +1,9 @@
-package com.aistudio.pinkproxy.fresh
+with open('app/src/main/java/com/aistudio/pinkproxy/fresh/CandidateEngine.kt', 'r') as f:
+    text = f.read()
 
-/**
- * CandidateEngine unifies the strategy filtering and ranking rules across the entire app.
- * It replaces scattered `.filter { ... }` blocks with a single source of truth for
- * circuit breakers, blacklists, transport compatibility, and strict mode checks.
- */
-object CandidateEngine {
-
-    data class SelectionContext(
-        val transport: TransportType,
-        val profileId: String = NetworkProfileManager.currentProfile.value.id,
-        val host: String? = null,
-        val category: HostCategory = HostCategory.OTHER,
-        val currentStrategy: BypassStrategy? = null,
-        val isDiagnosticMode: Boolean = false,
-        val ignoreHostBlacklist: Boolean = false
-    )
-
-    /**
-     * Returns a list of all strategies that are eligible for the given context.
-     */
-    fun getEligibleCandidates(
-        context: SelectionContext, 
-        baseList: List<BypassStrategy> = BypassStrategy.entries
-    ): List<BypassStrategy> {
-        return baseList.filter { StrategyPolicyGate.isAllowed(it, context) }
-    }
-
-    /**
-     * Unified method for selecting the best strategy, replacing scattered logic.
-     */
-    fun selectBest(
-        context: SelectionContext,
-        excludeCurrent: BypassStrategy? = null
-    ): BypassStrategy? {
-        val candidates = getEligibleCandidates(context)
-        val filtered = if (excludeCurrent != null) candidates.filter { it != excludeCurrent } else candidates
-        if (filtered.isEmpty()) return null
-        val ranked = rankCandidatesBayesian(filtered, context)
-        return ranked.firstOrNull()
-    }
-
-    /**
-     * Ranks the given eligible candidates using Bayesian Thompson Sampling based on the context.
-     */
-    fun rankCandidatesBayesian(
+replacement = """    fun rankCandidatesBayesian(
         candidates: List<BypassStrategy>,
-        context: SelectionContext
+        context: TunerContext
     ): List<BypassStrategy> {
         // Hierarchical Prior Learning
         // Level 1: Host-specific memory (Highest Confidence)
@@ -121,7 +78,7 @@ object CandidateEngine {
 
             // Memory Bonus Normalization [0..1]
             val memoryScore = if (hostMemory != null && hostMemory.strategy == strategy && hostMemory.successCount > 0 && hostFails == 0) {
-                1.0 * (hostMemory.successCount.toDouble() / (hostMemory.successCount + hostFails).coerceAtLeast(1))
+                1.0 * (hostMemory.successCount.toDouble() / (hostMemory.successCount + hostMemory.failureCount).coerceAtLeast(1))
             } else if (hostMemory != null && hostFails > 0 && hostMemory.strategy == strategy) {
                 -1.0
             } else 0.0
@@ -205,3 +162,17 @@ object CandidateEngine {
         return finalRanked
     }
 }
+"""
+
+idx1 = text.find("    fun rankCandidatesBayesian")
+if idx1 == -1:
+    idx1 = text.find("fun rankCandidatesBayesian")
+    
+if idx1 != -1:
+    text = text[:idx1] + replacement
+    with open('app/src/main/java/com/aistudio/pinkproxy/fresh/CandidateEngine.kt', 'w') as f:
+        f.write(text)
+    print("Patched successfully")
+else:
+    print("Could not find function")
+

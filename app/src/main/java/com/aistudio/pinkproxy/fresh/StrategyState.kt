@@ -78,9 +78,13 @@ class StrategyState(
         if (last > 0 && now > last) {
             val elapsedMinutes = (now - last) / 60000.0
             val decayFactor = Math.pow(0.9, elapsedMinutes / 10.0).coerceIn(0.1, 1.0)
-            if (decayFactor < 0.95) {
+if (decayFactor < 0.95) {
                 weightedSuccess.set((weightedSuccess.get() * decayFactor).toLong())
                 weightedFailure.set((weightedFailure.get() * decayFactor).toLong())
+                sampleCount.set((sampleCount.get() * decayFactor).toInt())
+                successCount.set((successCount.get() * decayFactor).toInt())
+                failureCount.set((failureCount.get() * decayFactor).toInt())
+                verifiedSuccessCount.set((verifiedSuccessCount.get() * decayFactor).toInt())
             }
         }
         
@@ -289,8 +293,11 @@ object StrategyStateRepository {
         // Soft recovery: Decay historical weights, reset failures, but preserve Bayesian knowledge
         contextStates.entries.forEach { (key, state) ->
             if (key.profileId == profileId) {
-                state.weightedFailure.set((state.weightedFailure.get() * 0.1).toLong()) // 90% decay on failures
+state.weightedFailure.set((state.weightedFailure.get() * 0.1).toLong()) // 90% decay on failures
                 state.weightedSuccess.set((state.weightedSuccess.get() * 0.5).toLong()) // 50% decay on successes
+                state.sampleCount.set((state.sampleCount.get() * 0.3).toInt()) // Average 70% decay on samples
+                state.successCount.set((state.successCount.get() * 0.5).toInt())
+                state.verifiedSuccessCount.set((state.verifiedSuccessCount.get() * 0.5).toInt())
                 state.failureCount.set(0)
             }
         }

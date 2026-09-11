@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val vpnState by VpnRuntimeState.lifecycleState.collectAsStateWithLifecycle()
             val vpnError by VpnRuntimeState.lastError.collectAsStateWithLifecycle()
-            val isVpnActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING
+            val isVpnActive = vpnState == VpnLifecycleState.RUNNING || vpnState == VpnLifecycleState.RECOVERING || vpnState == VpnLifecycleState.TUN_FALLBACK
             
             LaunchedEffect(Unit) {
                 if (autoConnect && vpnState == VpnLifecycleState.IDLE) {
